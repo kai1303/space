@@ -1,15 +1,19 @@
+import { NavigatorSettings, NavigatorSuggestions, ThreadAgentSubscription, agentMention } from './Navigator.js';
 import { MessageTimeline, type TimelineHandle } from './MessageTimeline.js';
 import { useMessageHistory } from './useMessageHistory.js';
 import { AssetAttachments } from './AssetAttachments.js';
 import { ChannelFiles } from './ChannelFiles.js';
 import { ChannelMemory } from './ChannelMemory.js';
 import { SourceMessage } from './SourceMessage.js';
+import { AgentMessageBody, readAgentResponse } from './AgentMessageBody.js';
+import { AgentResponse } from '@space/ui';
+import { AgentTaskCard, AgentTaskWorkspace, taskEventStatus } from './AgentTaskWorkspace.js';
 import { WorkspaceMembers } from './WorkspaceMembers.js';
 import { ChannelDetails } from './ChannelDetails.js';
 import { useEffect, useMemo, useRef, useState, useId, type CSSProperties, type FormEvent } from 'react';
 import { io, type Socket } from 'socket.io-client';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
-import type { AgentInstallation, ChatEvent, ChatHistory, ChatMessage, ChannelSummary } from '@space/contracts';
+import type { NavigatorCandidate, AgentInstallation, ChatEvent, ChatHistory, ChatMessage, ChannelSummary } from '@space/contracts';
 import { AgentApproval, Badge, Button, Dialog, IconButton, Message, RichComposer, RichContent, WorkspaceSearch, WorkspaceSidebar, SidePanel, Reveal, motionTransition, searchMessages, useMessageArrivals, type Attachment, type RichDocument } from '@space/ui';
 import { Archive, ArrowLeft, BookOpen, ChatCircle, Hash, Lock, MagnifyingGlass, Paperclip, Plus, Sparkle, Users, X } from '@phosphor-icons/react';
 import { command, listAll, mergeEvents, messageSender, request, type MessageAttempt } from './chat-client.js';
@@ -302,11 +306,28 @@ function ChannelRoom({ uploads, profile, channel, onChannelChange, onLeft, draft
   const [attachmentRevision, setAttachmentRevision] = useState('0');
   const [thread, setThread] = useState<string>(), [socket, setSocket] = useState<Socket>();
   const [agents, setAgents] = useState<AgentInstallation[]>([]);
+  const [navCandidates,setNavCandidates]=useState<NavigatorCandidate[]>([]);
+  const agentTags=[...new Set(navCandidates.map(c=>agentMention(c,navCandidates)))];
   const [channelSearchOpen, setChannelSearchOpen] = useState(false), [searchQuery, setSearchQuery] = useState<string | null>(null), [detailsOpen, setDetailsOpen] = useState(false);
   const [detailsTab, setDetailsTab] = useState('about');
   const showDetails = (tab = 'about') => { setDetailsTab(tab); setDetailsOpen(true); };
   const [filesOpen, setFilesOpen] = useState(false);
   const filesButton = useRef<HTMLButtonElement>(null);
+  const [agentWorkspace, setAgentWorkspace] = useState<{ id: string; owner: string }>();
+  useEffect(() => { if (thread) setAgentWorkspace(undefined); }, [thread]);
+  const workspaceOpener = useRef<HTMLElement | null>(null);
+  function openAgentWorkspace(event: { payload: { task_id: string; owner_id: string } }) {
+    workspaceOpener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    setThread(undefined); setSearchQuery(null); setFilesOpen(false);
+    setAgentWorkspace({ id: event.payload.task_id, owner: event.payload.owner_id });
+  }
+  function closeAgentWorkspace() {
+    setAgentWorkspace(undefined);
+    requestAnimationFrame(() => {
+      if (workspaceOpener.current?.isConnected) workspaceOpener.current.focus();
+      else document.getElementById('chat-messages')?.focus();
+    });
+  }
   const [memoryOpen, setMemoryOpen] = useState(false), [memoryMessage, setMemoryMessage] = useState<{ id: string; text: string }>();
   const [sourceId, setSourceId] = useState(() => {
     const params = new URLSearchParams(window.location.search);
@@ -314,11 +335,11 @@ function ChannelRoom({ uploads, profile, channel, onChannelChange, onLeft, draft
   });
   useEffect(() => {
     if (!composeRequest) return;
-    setThread(undefined); setSearchQuery(null); setFilesOpen(false);
+    setThread(undefined); setSearchQuery(null); setFilesOpen(false); setAgentWorkspace(undefined);
     const frame = requestAnimationFrame(() => document.querySelector<HTMLElement>('#chat-messages .ql-editor')?.focus());
     return () => cancelAnimationFrame(frame);
   }, [composeRequest]);
-  useEffect(() => { if (searchOpen || channelSearchOpen) setFilesOpen(false); }, [searchOpen, channelSearchOpen]);
+  useEffect(() => { if (searchOpen || channelSearchOpen) { setFilesOpen(false); setAgentWorkspace(undefined); } }, [searchOpen, channelSearchOpen]);
   const accessLost = useRef(onAccessLost); accessLost.current = onAccessLost;
   const revokeAccess = useRef<(reason: unknown) => void>(() => {});
   const cursor = useRef('0'), accessVersion = useRef(0);
@@ -333,7 +354,7 @@ function ChannelRoom({ uploads, profile, channel, onChannelChange, onLeft, draft
     const client = io({ transports: ['websocket'], withCredentials: true, autoConnect: false });
     setSocket(client);
     let terminal = false, retryDelay = 500, reconnectTimer: ReturnType<typeof setTimeout> | undefined;
-    const revoke = (reason: unknown) => { if (terminal) return; if (reason instanceof Error && reason.message === 'unauthorized') window.dispatchEvent(new Event('space:session-expired')); terminal = true; accessVersion.current++; if (active) { accessLost.current(); setError(errorText(reason)); setReady(false); history.clear(); setEvents([]); setAgents([]); setThread(undefined); setFilesOpen(false); setSourceId(null); setMemoryOpen(false); setMemoryMessage(undefined); setStatus('Disconnected'); } client.disconnect(); };
+    const revoke = (reason: unknown) => { if (terminal) return; if (reason instanceof Error && reason.message === 'unauthorized') window.dispatchEvent(new Event('space:session-expired')); terminal = true; accessVersion.current++; if (active) { accessLost.current(); setError(errorText(reason)); setReady(false); history.clear(); setEvents([]); setAgents([]); setThread(undefined); setFilesOpen(false); setAgentWorkspace(undefined); setSourceId(null); setMemoryOpen(false); setMemoryMessage(undefined); setStatus('Disconnected'); } client.disconnect(); };
     revokeAccess.current = revoke;
     const reconnect = () => {
       if (!active || terminal || reconnectTimer) return;
@@ -359,7 +380,7 @@ function ChannelRoom({ uploads, profile, channel, onChannelChange, onLeft, draft
       }).catch(e => { if (terminalError(e.message)) revoke(e); client.disconnect(); reconnect(); });
     });
     client.on('disconnect', reason => { if (active && !terminal) { setStatus('Reconnecting'); setReady(false); if (reason === 'io server disconnect') reconnect(); } });
-    client.on('connect_error', e => { if (e.message === 'unauthorized') { revoke(e); client.disconnect(); } else if (active) setStatus('Reconnecting'); });
+    client.on('connect_error', e => { if (e.message === 'unauthorized') { revoke(e); client.disconnect(); } else if (active) { setStatus('Reconnecting'); setReady(false); if (!client.active) reconnect(); } });
     client.on('chat.error', (e: { error: string }) => { if (terminalError(e.error)) revoke(new Error(e.error)); });
     void Promise.all([history.load('latest'), request<ChatHistory>(`/channels/${channel.id}/history`)]).then(([page, replay]) => {
       if (!active || terminal || !page) return;
@@ -381,12 +402,13 @@ function ChannelRoom({ uploads, profile, channel, onChannelChange, onLeft, draft
     setSearchQuery(null);
     setThread(undefined);
     setFilesOpen(false);
+    setAgentWorkspace(undefined);
     requestAnimationFrame(() => timeline.current?.reveal(id));
   }
   function closeFiles() { setFilesOpen(false); requestAnimationFrame(() => filesButton.current?.focus()); }
   function toggleFiles() {
     if (filesOpen) { closeFiles(); return; }
-    setThread(undefined); setSearchQuery(null); setFilesOpen(true);
+    setThread(undefined); setSearchQuery(null); setAgentWorkspace(undefined); setFilesOpen(true);
   }
   function fileMessage(id: string) {
     if (messages.some(message => message.id === id)) reveal(id);
@@ -403,40 +425,47 @@ function ChannelRoom({ uploads, profile, channel, onChannelChange, onLeft, draft
   const activity = new Map<string, ChatEvent & { type: 'task.event' }>();
   for (const event of events) if (event.type === 'task.event') activity.set(event.payload.task_id, event);
   const messageEvents: ChatEvent[] = messages.map(message => ({ type: 'message.created', channel_id: channel.id, thread_id: message.thread_id, sequence: message.sequence!, occurred_at: message.created_at, payload: message }));
-  const visibleEvents = mergeEvents(messageEvents, [...activity.values()].filter(event => (!history.page?.has_older || BigInt(event.sequence) >= BigInt(history.page.older_cursor ?? '0')) && (!history.page?.has_newer || BigInt(event.sequence) <= BigInt(history.page.newer_cursor ?? '0'))));
+  const savedResponses = new Set(messages.filter(message => message.agent_response).map(message => message.task_id));
+  const visibleEvents = mergeEvents(messageEvents, [...activity.values()].filter(event => !savedResponses.has(event.payload.task_id) && (!history.page?.has_older || BigInt(event.sequence) >= BigInt(history.page.older_cursor ?? '0')) && (!history.page?.has_newer || BigInt(event.sequence) <= BigInt(history.page.newer_cursor ?? '0'))));
   const send = useMemo(() => socket ? messageSender(socket, channel.id, undefined, uploads.attempt(channel.id)) : async () => { throw new Error('Connecting'); }, [socket, channel.id]);
   function message(m: ChatMessage, inThread = false) {
     const replies = conversations.get(m.thread_id) ?? [];
-    return <div key={m.id} id={`${inThread ? 'thread' : 'chat'}-message-${m.id}`} tabIndex={-1} className="chat-message-anchor"><Message author={m.author.name} initials={m.author.name.slice(0, 2).toUpperCase()} agent={m.author.kind === 'agent'} tone={m.author.kind === 'agent' ? 'green' : m.author.id === profile.id ? 'blue' : 'purple'} arrival={!inThread && arrivals.has(m.id)} time={new Date(m.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} actions={{ copyMessage: () => navigator.clipboard.writeText(m.text), saveMemory: () => { setMemoryMessage({ id: m.id, text: m.text }); setMemoryOpen(true); } }} onReply={inThread ? undefined : () => { setThread(m.thread_id); setSearchQuery(null); setFilesOpen(false); }} replyCount={!inThread && replies[0]?.id === m.id ? replies.length - 1 : 0}>
-      {m.document ? <RichContent document={m.document} /> : <span className="chat-message-text">{m.text}</span>}
+    return <div key={m.id} id={`${inThread ? 'thread' : 'chat'}-message-${m.id}`} tabIndex={-1} className="chat-message-anchor"><Message author={m.author.name} initials={m.author.name.slice(0, 2).toUpperCase()} agent={m.author.kind === 'agent'} tone={m.author.kind === 'agent' ? 'green' : m.author.id === profile.id ? 'blue' : 'purple'} arrival={!inThread && arrivals.has(m.id)} time={new Date(m.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} actions={{ copyMessage: () => navigator.clipboard.writeText(m.text), saveMemory: () => { setMemoryMessage({ id: m.id, text: m.text }); setMemoryOpen(true); } }} onReply={inThread ? undefined : () => { setThread(m.thread_id); setSearchQuery(null); setFilesOpen(false); setAgentWorkspace(undefined); }} replyCount={!inThread && replies[0]?.id === m.id ? replies.length - 1 : 0}>
+      <AgentMessageBody message={m} />
       {!!m.attachments?.length && <AssetAttachments assets={m.attachments} />}
+      {m.agent_response && m.task_id && <div className="chat-actions"><Button size="sm" onClick={() => openAgentWorkspace({ payload: { task_id: m.task_id!, owner_id: activity.get(m.task_id!)?.payload.owner_id ?? '' } })}>Open workspace</Button></div>}
     </Message></div>;
   }
   return <motion.div initial={false} animate={{ opacity: reduced || historyLoaded || status === 'Disconnected' ? 1 : .65 }} transition={motionTransition(reduced)} className={`chat-conversation ${thread ? 'chat-conversation--thread' : ''} ${searchQuery ? 'chat-conversation--search' : ''} ${filesOpen ? 'chat-conversation--files' : ''}`}><main className="chat-channel" id="chat-messages" tabIndex={-1}><header className="chat-channel-header"><button className="chat-channel-title" aria-label={`Channel details for #${channel.name}`} onClick={() => showDetails()}>{channel.private ? <Lock size={20} weight="bold" /> : <Hash size={22} weight="bold" />}<h1>{channel.name}</h1></button>{channel.topic && <button className="chat-channel-topic" title={channel.topic} onClick={() => showDetails()}>{channel.topic}</button>}<div className="chat-header-actions"><button className="chat-channel-member-button" aria-label="View channel members" onClick={() => showDetails('members')}><Users size={18} /> Members</button><Badge tone={ready ? 'success' : 'warning'} dot>{status}</Badge><IconButton label={`Search in ${channel.name}`} onClick={() => setChannelSearchOpen(true)}><MagnifyingGlass size={20} /></IconButton></div></header>
-    <div className="chat-channel-tabs"><span><ChatCircle size={15} /> Messages</span><button ref={filesButton} className="chat-files-tab" aria-expanded={filesOpen} disabled={!historyLoaded || status === 'Disconnected'} onClick={toggleFiles}><Paperclip size={15} /> Files</button><button disabled={status === 'Disconnected'} onClick={() => { setMemoryMessage(undefined); setMemoryOpen(true); }}><BookOpen size={15} /> Memory</button><span className="chat-channel-privacy">{channel.archived_at ? <><Archive size={14} /> Archived</> : channel.private ? 'Private channel' : 'Public channel'}</span></div>
+    <div className="chat-channel-tabs"><span><ChatCircle size={15} /> Messages</span><button ref={filesButton} className="chat-files-tab" aria-expanded={filesOpen} disabled={!historyLoaded || status === 'Disconnected'} onClick={toggleFiles}><Paperclip size={15} /> Files</button><button disabled={status === 'Disconnected'} onClick={() => { setMemoryMessage(undefined); setMemoryOpen(true); }}><BookOpen size={15} /> Memory</button><NavigatorSettings channel={channel.id} onCandidates={setNavCandidates} /><span className="chat-channel-privacy">{channel.archived_at ? <><Archive size={14} /> Archived</> : channel.private ? 'Private channel' : 'Public channel'}</span></div>
     {error && <p className="chat-error" role="alert">{error}{!historyLoaded && status !== 'Disconnected' && <Button size="sm" disabled={!!history.loading} onClick={() => { setError(''); history.clear(); setHistoryAttempt(value => value + 1); }}>Retry loading messages</Button>}</p>}
-    <MessageTimeline label={`Messages in ${channel.name}`} items={visibleEvents} page={history.page} loading={history.loading} latestVersion={history.latestVersion} load={history.load} pinned={stickToBottom} handle={timeline} busy={!historyLoaded && status !== 'Disconnected'} render={(event, index) => <>{(!index || new Date(visibleEvents[index - 1]!.occurred_at).toDateString() !== new Date(event.occurred_at).toDateString()) && <div className="chat-date-divider"><span>{new Date(event.occurred_at).toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' })}</span></div>}{event.type === 'message.created' ? message(event.payload) : <TaskActivity event={event} profile={profile} onThread={() => { setThread(event.thread_id); setSearchQuery(null); setFilesOpen(false); }} />}</>}>
+    <MessageTimeline label={`Messages in ${channel.name}`} items={visibleEvents} page={history.page} loading={history.loading} latestVersion={history.latestVersion} load={history.load} pinned={stickToBottom} handle={timeline} busy={!historyLoaded && status !== 'Disconnected'} render={(event, index) => <>{(!index || new Date(visibleEvents[index - 1]!.occurred_at).toDateString() !== new Date(event.occurred_at).toDateString()) && <div className="chat-date-divider"><span>{new Date(event.occurred_at).toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' })}</span></div>}{event.type === 'message.created' ? message(event.payload) : <TaskActivity event={event} profile={profile} onOpenWorkspace={() => openAgentWorkspace(event)} onThread={() => { setThread(event.thread_id); setSearchQuery(null); setFilesOpen(false); setAgentWorkspace(undefined); }} />}</>}>
       {!historyLoaded && status !== 'Disconnected' ? <><p className="chat-loading-status" role="status" aria-label="Loading messages">Loading messages…</p><ConversationSkeleton /></> : !messages.length && <div className="chat-channel-welcome"><div className="chat-empty-icon"><Hash size={38} /></div><h2>{ready ? `This is the beginning of #${channel.name}` : status === 'Disconnected' ? 'This conversation is unavailable' : `Opening #${channel.name}`}</h2><p>{ready ? 'A shared space for your team’s ideas, questions, and progress. Send the first message.' : status === 'Disconnected' ? 'Your access may have changed. Select another conversation to continue.' : 'Getting your conversation ready…'}</p></div>}
-    </MessageTimeline>{channel.archived_at ? <div className="chat-channel-archived"><strong>This channel is archived</strong>Its messages are available to read.<br /><Button size="sm" onClick={() => showDetails('settings')}>View channel settings</Button></div> : status !== 'Disconnected' && <div className="chat-compose"><RichComposer attachmentsEnabled={uploads.enabled} attachments={uploads.drafts[channel.id] ?? []} onAttachmentsChange={files => uploads.change(channel.id, channel.id, files)} onRetryAttachment={id => uploads.retry(channel.id, channel.id, id)} channel={channel.name} acknowledgedDocument={uploads.acknowledged[channel.id]} defaultValue={drafts[channel.id]} onDraftChange={document => onDraftChange(channel.id, document)} onSend={async (text, document, files) => { await send(text, document, files.map(file => file.id)); uploads.sent(channel.id, document, files); }} /></div>}</main>
+    </MessageTimeline>{!thread&&!channel.archived_at&&status!=='Disconnected'&&<NavigatorSuggestions channel={channel.id} onThread={id=>{setThread(id);setSearchQuery(null);setFilesOpen(false);}} />}{channel.archived_at ? <div className="chat-channel-archived"><strong>This channel is archived</strong>Its messages are available to read.<br /><Button size="sm" onClick={() => showDetails('settings')}>View channel settings</Button></div> : status !== 'Disconnected' && <div className="chat-compose"><RichComposer mentions={agentTags} attachmentsEnabled={uploads.enabled} attachments={uploads.drafts[channel.id] ?? []} onAttachmentsChange={files => uploads.change(channel.id, channel.id, files)} onRetryAttachment={id => uploads.retry(channel.id, channel.id, id)} channel={channel.name} acknowledgedDocument={uploads.acknowledged[channel.id]} defaultValue={drafts[channel.id]} onDraftChange={document => onDraftChange(channel.id, document)} onSend={async (text, document, files) => { await send(text, document, files.map(file => file.id)); uploads.sent(channel.id, document, files); }} /></div>}</main>
     {status !== 'Disconnected' && <AnimatePresence>{thread && <SidePanel key="thread" role="region" className="chat-thread" aria-label="Thread"><header className="chat-channel-header"><div className="chat-thread-title"><ChatCircle size={20} /><h2>Thread</h2><span>#{channel.name}</span></div><IconButton label="Close thread" onClick={() => setThread(undefined)}><X size={20} /></IconButton></header>
-      <ThreadHistory key={thread} thread={thread} channel={channel.id} live={threadLive} renderMessage={m => message(m, true)} activity={[...activity.values()].filter(event => event.thread_id === thread)} profile={profile} onAccessLost={reason => revokeAccess.current(reason)} />
+      <ThreadHistory key={thread} thread={thread} channel={channel.id} live={threadLive} renderMessage={m => message(m, true)} activity={[...activity.values()].filter(event => event.thread_id === thread)} profile={profile} onOpenWorkspace={openAgentWorkspace} onAccessLost={reason => revokeAccess.current(reason)} />
+      <NavigatorSuggestions channel={channel.id} thread={thread} /><ThreadAgentSubscription thread={thread} />
       {!channel.archived_at && <AgentRequest key={`agent:${thread}`} workspace={channel.workspace_id} thread={thread} agents={agents} />}
-      {socket && !channel.archived_at && <ThreadComposer key={`reply:${thread}`} uploads={uploads} socket={socket} channel={channel.id} thread={thread} draft={drafts[`thread:${channel.id}:${thread}`]} onDraftChange={document => onDraftChange(`thread:${channel.id}:${thread}`, document)} />}
+      {socket && !channel.archived_at && <ThreadComposer key={`reply:${thread}`} mentions={agentTags} uploads={uploads} socket={socket} channel={channel.id} thread={thread} draft={drafts[`thread:${channel.id}:${thread}`]} onDraftChange={document => onDraftChange(`thread:${channel.id}:${thread}`, document)} />}
     </SidePanel>}</AnimatePresence>}
     {status !== 'Disconnected' && <AnimatePresence>{searchQuery && <SidePanel key="search" className="chat-search-results" aria-label="Search results"><header className="chat-channel-header"><h2>Search results</h2><IconButton label="Close search results" onClick={() => setSearchQuery(null)}><X size={20} /></IconButton></header><div className="chat-search-summary"><strong>{results.length} {results.length === 1 ? 'result' : 'results'} for “{searchQuery}”</strong><p>Loaded messages in #{channel.name}</p></div><div className="chat-search-list">{results.map(result => <button key={result.id} onClick={() => reveal(result.id)}><strong>{result.author}</strong><p>{result.text}</p><span>Jump to message <ArrowLeft size={13} /></span></button>)}{!results.length && <div className="chat-empty"><MagnifyingGlass size={30} /><h3>No messages found</h3><p>Try a different phrase, or load older history to search more of this conversation.</p></div>}</div></SidePanel>}</AnimatePresence>}
     {status !== 'Disconnected' && <AnimatePresence>{filesOpen && <ChannelFiles key={channel.id} channel={channel.id} name={channel.name} revision={fileRevision} onClose={closeFiles} onMessage={fileMessage} onAccessLost={() => revokeAccess.current(new Error('not_found'))} />}</AnimatePresence>}
-    <WorkspaceSearch open={searchOpen || channelSearchOpen} scope={`Search loaded messages in #${channel.name}. Load older history to include earlier messages.`} onClose={() => { setChannelSearchOpen(false); onSearchClose(); }} messages={searchable} channel={channel.name} currentUser={profile.display_name} initialQuery={channelSearchOpen ? `in:${channel.name} ` : ''} onSearch={query => { setSearchQuery(query); setThread(undefined); setFilesOpen(false); }} onSelect={result => reveal(result.id)} />
+    {status !== 'Disconnected' && <AnimatePresence>{agentWorkspace && <AgentTaskWorkspace key={agentWorkspace.id} taskId={agentWorkspace.id} ownerId={agentWorkspace.owner} viewerId={profile.id} channelName={channel.name} revision={activity.get(agentWorkspace.id)?.sequence} onClose={closeAgentWorkspace} onAccessLost={closeAgentWorkspace} />}</AnimatePresence>}
+    <WorkspaceSearch open={searchOpen || channelSearchOpen} scope={`Search loaded messages in #${channel.name}. Load older history to include earlier messages.`} onClose={() => { setChannelSearchOpen(false); onSearchClose(); }} messages={searchable} channel={channel.name} currentUser={profile.display_name} initialQuery={channelSearchOpen ? `in:${channel.name} ` : ''} onSearch={query => { setSearchQuery(query); setThread(undefined); setFilesOpen(false); setAgentWorkspace(undefined); }} onSelect={result => reveal(result.id)} />
     <ChannelDetails channel={channel} viewer={profile.id} open={detailsOpen} initialTab={detailsTab} onClose={() => setDetailsOpen(false)} onChange={onChannelChange} onLeft={onLeft} />
     {status !== 'Disconnected' && <ChannelMemory channel={channel.id} name={channel.name} open={memoryOpen} message={memoryMessage} onClose={() => { setMemoryOpen(false); setMemoryMessage(undefined); }} />}
     {sourceId && status !== 'Disconnected' && <SourceMessage key={sourceId} channel={channel.id} name={channel.name} messageId={sourceId} onUnavailable={checkSourceAccess} onClose={() => { setSourceId(null); const url = new URL(window.location.href); url.searchParams.delete('message'); window.history.replaceState({}, '', url); }} />}
   </motion.div>;
 }
 function recentTasks(events: ChatEvent[]): ChatEvent[] {
-  const tasks = new Map<string, ChatEvent>();
-  for (const event of events) if (event.type === 'task.event') tasks.set(event.payload.task_id, event);
+  const tasks = new Map<string, ChatEvent & { type: 'task.event' }>();
+  for (const event of events) if (event.type === 'task.event') {
+    const previous = tasks.get(event.payload.task_id);
+    tasks.set(event.payload.task_id, { ...event, payload: { ...event.payload, data: { ...previous?.payload.data, ...event.payload.data } } });
+  }
   return [...tasks.values()].slice(-100);
 }
-function ThreadHistory({ thread, channel, live, renderMessage, activity, profile, onAccessLost }: { thread: string; channel: string; live: { current: ((messages: ChatMessage[]) => void) | null }; renderMessage: (message: ChatMessage) => React.ReactNode; activity: ChatEvent[]; profile: Profile; onAccessLost: (reason: unknown) => void }) {
+function ThreadHistory({ thread, channel, live, renderMessage, activity, profile, onAccessLost, onOpenWorkspace }: { thread: string; channel: string; live: { current: ((messages: ChatMessage[]) => void) | null }; renderMessage: (message: ChatMessage) => React.ReactNode; activity: ChatEvent[]; profile: Profile; onAccessLost: (reason: unknown) => void; onOpenWorkspace: (event: ChatEvent & { type: 'task.event' }) => void }) {
   const pinned = useRef(true);
   const [error, setError] = useState('');
   const history = useMessageHistory(`/threads/${thread}/history`, reason => {
@@ -449,25 +478,28 @@ function ThreadHistory({ thread, channel, live, renderMessage, activity, profile
     return () => { live.current = null; history.clear(); };
   }, [thread]);
   const messageEvents: ChatEvent[] = (history.page?.messages ?? []).map(message => ({ type: 'message.created', channel_id: channel, thread_id: thread, sequence: message.sequence!, occurred_at: message.created_at, payload: message }));
-  const items = mergeEvents(messageEvents, activity.filter(event => (!history.page?.has_older || BigInt(event.sequence) >= BigInt(history.page.older_cursor ?? '0')) && (!history.page?.has_newer || BigInt(event.sequence) <= BigInt(history.page.newer_cursor ?? '0'))));
-  return <>{error && <p role="alert">{error} <Button size="sm" onClick={() => { setError(''); void history.load('latest'); }}>Retry thread history</Button></p>}<MessageTimeline label="Thread messages" items={items} page={history.page} loading={history.loading} latestVersion={history.latestVersion} load={history.load} pinned={pinned} render={event => event.type === 'message.created' ? renderMessage(event.payload) : <TaskActivity event={event} profile={profile} />}>{!history.page && !error && <p role="status">Loading thread…</p>}</MessageTimeline></>;
+  const savedResponses = new Set((history.page?.messages ?? []).filter(message => message.agent_response).map(message => message.task_id));
+  const items = mergeEvents(messageEvents, activity.filter(event => (event.type !== 'task.event' || !savedResponses.has(event.payload.task_id)) && (!history.page?.has_older || BigInt(event.sequence) >= BigInt(history.page.older_cursor ?? '0')) && (!history.page?.has_newer || BigInt(event.sequence) <= BigInt(history.page.newer_cursor ?? '0'))));
+  return <>{error && <p role="alert">{error} <Button size="sm" onClick={() => { setError(''); void history.load('latest'); }}>Retry thread history</Button></p>}<MessageTimeline label="Thread messages" items={items} page={history.page} loading={history.loading} latestVersion={history.latestVersion} load={history.load} pinned={pinned} render={event => event.type === 'message.created' ? renderMessage(event.payload) : <TaskActivity event={event} profile={profile} onOpenWorkspace={() => onOpenWorkspace(event)} />}>{!history.page && !error && <p role="status">Loading thread…</p>}</MessageTimeline></>;
 }
-function ThreadComposer({ uploads, socket, channel, thread, draft, onDraftChange }: { uploads: UploadDrafts; socket: Socket; channel: string; thread: string; draft?: RichDocument; onDraftChange: (document: RichDocument) => void }) {
+function ThreadComposer({ mentions, uploads, socket, channel, thread, draft, onDraftChange }: { mentions: string[]; uploads: UploadDrafts; socket: Socket; channel: string; thread: string; draft?: RichDocument; onDraftChange: (document: RichDocument) => void }) {
   const send = useMemo(() => messageSender(socket, channel, thread, uploads.attempt(`thread:${channel}:${thread}`)), [socket, channel, thread]);
-  return <div className="chat-compose"><RichComposer attachmentsEnabled={uploads.enabled} attachments={uploads.drafts[`thread:${channel}:${thread}`] ?? []} onAttachmentsChange={files => uploads.change(`thread:${channel}:${thread}`, channel, files)} onRetryAttachment={id => uploads.retry(`thread:${channel}:${thread}`, channel, id)} channel="thread" acknowledgedDocument={uploads.acknowledged[`thread:${channel}:${thread}`]} defaultValue={draft} onDraftChange={onDraftChange} onSend={async (text, document, files) => { await send(text, document, files.map(file => file.id)); uploads.sent(`thread:${channel}:${thread}`, document, files); }} /></div>;
+  return <div className="chat-compose"><RichComposer mentions={mentions} attachmentsEnabled={uploads.enabled} attachments={uploads.drafts[`thread:${channel}:${thread}`] ?? []} onAttachmentsChange={files => uploads.change(`thread:${channel}:${thread}`, channel, files)} onRetryAttachment={id => uploads.retry(`thread:${channel}:${thread}`, channel, id)} channel="thread" acknowledgedDocument={uploads.acknowledged[`thread:${channel}:${thread}`]} defaultValue={draft} onDraftChange={onDraftChange} onSend={async (text, document, files) => { await send(text, document, files.map(file => file.id)); uploads.sent(`thread:${channel}:${thread}`, document, files); }} /></div>;
 }
-function TaskActivity({ event, profile, onThread }: { event: ChatEvent & { type: 'task.event' }; profile: Profile; onThread?: () => void }) {
+function TaskActivity({ event, profile, onThread, onOpenWorkspace }: { event: ChatEvent & { type: 'task.event' }; profile: Profile; onThread?: () => void; onOpenWorkspace: () => void }) {
   const [decision, setDecision] = useState<'pending' | 'approved' | 'rejected'>('pending');
   async function decide(action: 'approve' | 'reject') {
     await request(`/tasks/${event.payload.task_id}/${action}`, {});
     setDecision(action === 'approve' ? 'approved' : 'rejected');
   }
-  if (event.payload.type === 'task.proposed' && event.payload.owner_id === profile.id) return <div className="chat-task chat-task--approval"><AgentApproval requestId={event.payload.task_id} title="Run this agent task?" agent="Agent" scope="This conversation" status={decision} approveLabel="Approve task" rejectLabel="Reject" onDecide={value => decide(value === 'approved' ? 'approve' : 'reject')}><p>{String(event.payload.data.goal ?? 'Review the requested task before allowing it to run.')}</p></AgentApproval>{onThread && <Button size="sm" variant="ghost" onClick={onThread}>Open thread</Button>}</div>;
-  return <article className="chat-task"><Badge tone="accent">Agent task</Badge><strong>{event.payload.type.replaceAll('.', ' · ')}</strong>
-    <p>{String(event.payload.data.text ?? event.payload.data.goal ?? event.payload.data.result ?? event.payload.data.error ?? event.payload.data.code ?? '')}</p>
-    {onThread && <Button size="sm" variant="ghost" onClick={onThread}>Open thread</Button>}
-    {event.payload.type === 'task.proposed' && <small>Waiting for the agent owner’s approval.</small>}
+  const response = readAgentResponse(event.payload.data.response);
+  if (response) return <article className="chat-task"><AgentResponse response={response} fallback={String(event.payload.data.result ?? event.payload.data.text ?? '')} streaming={!/\.(completed|failed)$/.test(event.payload.type)} />
+    {event.payload.type.endsWith('.failed') && <p role="alert">{String(event.payload.data.error ?? event.payload.data.code ?? 'The agent run failed.')}</p>}
+    <div className="chat-actions"><Button size="sm" onClick={onOpenWorkspace}>Open workspace</Button>{onThread && <Button size="sm" variant="ghost" onClick={onThread}>Open thread</Button>}</div>
   </article>;
+  if(event.payload.data.conversational && event.payload.type!=='task.proposed')return null;
+  if (event.payload.type === 'task.proposed' && event.payload.owner_id === profile.id) return <div className="chat-task chat-task--approval"><AgentApproval requestId={event.payload.task_id} title="Run this agent task?" agent="Agent" scope="This conversation" status={decision} approveLabel="Approve task" rejectLabel="Reject" onDecide={value => decide(value === 'approved' ? 'approve' : 'reject')}><p>{String(event.payload.data.goal ?? 'Review the requested task before allowing it to run.')}</p></AgentApproval><div className="chat-actions"><Button size="sm" onClick={onOpenWorkspace}>Open workspace</Button>{onThread && <Button size="sm" variant="ghost" onClick={onThread}>Open thread</Button>}</div></div>;
+  return <div className="chat-task"><AgentTaskCard title={String(event.payload.data.goal ?? 'Agent task')} status={decision === 'approved' ? 'queued' : decision === 'rejected' ? 'rejected' : taskEventStatus(event.payload.type)} detail={String(event.payload.data.text ?? event.payload.data.result ?? event.payload.data.error ?? event.payload.data.code ?? (event.payload.type === 'task.proposed' ? 'Waiting for the agent owner’s approval.' : ''))} onOpen={onOpenWorkspace} onThread={onThread} /></div>;
 }
 function AgentRequest({ workspace, thread, agents }: { workspace: string; thread: string; agents: AgentInstallation[] }) {
   const [open, setOpen] = useState(false);

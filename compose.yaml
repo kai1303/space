@@ -84,13 +84,22 @@ services:
     build: .
     environment:
       <<: *database
-      REDIS_URL: redis://redis:6379
+      NAVIGATOR_L1_PROVIDER: ${NAVIGATOR_L1_PROVIDER:-compatible}
+      TYPESAFE_API_KEY: ${TYPESAFE_API_KEY:-}
+      NAVIGATOR_L1_YES_THRESHOLD: ${NAVIGATOR_L1_YES_THRESHOLD:-0.7}
+      NAVIGATOR_L1_NO_THRESHOLD: ${NAVIGATOR_L1_NO_THRESHOLD:-0.3}
+      NAVIGATOR_L1_URL: ${NAVIGATOR_L1_URL:-}
+      NAVIGATOR_L1_MODEL: ${NAVIGATOR_L1_MODEL:-}
+      NAVIGATOR_L1_API_KEY: ${NAVIGATOR_L1_API_KEY:-}
+      NAVIGATOR_L2_URL: ${NAVIGATOR_L2_URL:-}
+      NAVIGATOR_L2_MODEL: ${NAVIGATOR_L2_MODEL:-}
+      NAVIGATOR_L2_API_KEY: ${NAVIGATOR_L2_API_KEY:-}
+      AG_UI_URL: ${AG_UI_URL:-}
+      AG_UI_TOKEN: ${AG_UI_TOKEN:-}
     command: ["node", "apps/worker/dist/main.js"]
     depends_on:
       migrate:
         condition: service_completed_successfully
-      redis:
-        condition: service_healthy
 volumes:
   postgres_data:
   seaweedfs_data:

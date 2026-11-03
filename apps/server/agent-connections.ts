@@ -59,5 +59,5 @@ export function registerAgentConnections(app: FastifyInstance, io: Server, store
     }, 10_000);
     timer.unref();
   });
-  app.addHook('preClose', async () => { clearInterval(timer); agents.disconnectSockets(true); });
+  app.addHook('preClose', async () => { clearInterval(timer); agents.local.disconnectSockets(true); });
 }

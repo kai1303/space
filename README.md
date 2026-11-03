@@ -12,7 +12,7 @@ Run it locally, keep channel memory in Markdown, and connect your local Codex in
 <p align="center">
   <a href="https://github.com/kai1303/space/actions/workflows/ci.yaml?query=branch%3Amain"><img src="https://img.shields.io/github/actions/workflow/status/kai1303/space/ci.yaml?branch=main&amp;style=for-the-badge&amp;label=CI" alt="CI checks status" /></a>
   <a href="#project-status"><img src="https://img.shields.io/badge/status-early%20development-orange?style=for-the-badge" alt="Project status: early development" /></a>
-  <a href="#license"><img src="https://img.shields.io/badge/license-not%20selected-lightgrey?style=for-the-badge" alt="License: not yet selected" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue?style=for-the-badge" alt="MIT License" /></a>
 </p>
 
 <p align="center">
@@ -36,9 +36,8 @@ Run it locally, keep channel memory in Markdown, and connect your local Codex in
 ---
 
 > **Early development.** Chat, files, channel memory, and local connector pairing
-> are implemented. Real agent task execution is still being built; the current
-> task approval and result flow uses a mock connector. A project license has not
-> yet been selected.
+> are implemented. Local Codex task execution is still being built; the task
+> flow defaults to a mock connector, with an optional AG-UI backend.
 
 <p align="center">
   <img src="assets/brand/verification/portal-main-page.png" alt="Space local development screenshot showing channel navigation, a conversation, rich messages, threaded replies, and the composer" width="1064" />
@@ -239,6 +238,7 @@ These are the connections implemented in this checkout and their current boundar
 | **File storage** | SeaweedFS through its S3-compatible API | Private uploads, access-checked downloads, and previews. |
 | **Shared memory** | Markdown files | Built-in provider with imports, source links, search, and export. Custom providers have an adapter interface; third-party adapters do not ship yet. |
 | **Task demo** | Mock connector | Experimental approval, progress, and result flow through the local worker. |
+| **Agent responses** | AG-UI HTTP backend | Optional task execution with streaming Markdown, tool activity, result cards, and tables. Requires a configured backend and channel grant. [Setup](docs/architecture/ag-ui.md). |
 
 See [connector setup](apps/connector/README.md),
 [memory MCP](docs/architecture/memory-mcp.md), and
@@ -248,9 +248,9 @@ See [connector setup](apps/connector/README.md),
 
 **Implemented:** workspace accounts and roles, channel conversations and threaded
 replies, durable history and reconnect catch-up, file uploads and previews, opt-in
-channel memory, scoped memory MCP access, and local connector enrollment/status.
+channel memory, scoped memory MCP access, rules-first Navigator suggestions, agent mention/thread routing, and local connector enrollment/status.
 
-**Still ahead:** real agent task dispatch, Navigator, direct messages, presence,
+**Still ahead:** real agent task dispatch, direct messages, presence,
 message editing/deletion, email invitations, and additional agent adapters.
 The [module roadmap](docs/architecture/module-roadmap.md) tracks the broader scope.
 
@@ -282,6 +282,8 @@ More guides:
 - [Authentication and session setup](docs/architecture/authentication.md)
 - [Workspaces, users, and roles](docs/architecture/workspace-users.md)
 - [Memory MCP access](docs/architecture/memory-mcp.md)
+- [Navigator and thread routing](docs/architecture/navigator.md)
+- [Native Jev setup](docs/architecture/jev-navigator.md)
 - [Chat storage and partitioning](docs/architecture/chat-partitioning.md)
 - [Foundation contracts and grants](docs/architecture/foundation.md)
 - [Design system](docs/design-system.md)
@@ -366,8 +368,7 @@ Thanks to everyone who helps improve Space. See the
 
 ## License
 
-A license has not yet been selected, and this repository currently has no
-`LICENSE` file. Public source availability does not grant an open-source license.
+Space is licensed under the [MIT License](LICENSE).
 
 ---
 

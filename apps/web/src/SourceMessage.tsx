@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { ChatMessage } from '@space/contracts';
-import { Dialog, RichContent } from '@space/ui';
+import { Dialog } from '@space/ui';
+import { AgentMessageBody } from './AgentMessageBody.js';
 import { request } from './chat-client.js';
 import { AssetAttachments } from './AssetAttachments.js';
 
@@ -14,7 +15,7 @@ export function SourceMessage({ channel, name, messageId, onClose, onUnavailable
   }, [channel, messageId]);
   return <Dialog open title={`Original message in #${name}`} onClose={onClose}><div className="channel-memory">
     {error ? <p role="alert">{error}</p> : message ? <><strong>{message.author.name}</strong><small>{new Date(message.created_at).toLocaleString()}</small>
-      {message.document ? <RichContent document={message.document} /> : <p className="chat-message-text">{message.text}</p>}
+      <AgentMessageBody message={message} />
       {!!message.attachments?.length && <AssetAttachments assets={message.attachments} />}
     </> : <p role="status">Loading original message…</p>}
   </div></Dialog>;

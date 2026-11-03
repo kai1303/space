@@ -115,6 +115,15 @@ test('real API serves safe private previews for images, PDF, source and media wi
           const invalid = await app.inject({ method: 'GET', url: `/v1/assets/${asset.id}/content`, headers: { ...headers, range: `bytes=${bytes.length}-` } });
           assert.equal(invalid.statusCode, 416);
           assert.equal(invalid.headers['content-range'], `bytes */${bytes.length}`);
+          const thumbnail = await app.inject({ method: 'GET', url: `/v1/assets/${asset.id}/thumbnail`, headers });
+          assert.equal(thumbnail.statusCode, 302, thumbnail.body);
+          const rendered = await fetch(thumbnail.headers.location!);
+          assert.equal(rendered.headers.get('content-type'), 'image/webp');
+          assert.ok(Buffer.from(await rendered.arrayBuffer()).subarray(8, 12).equals(Buffer.from('WEBP')));
+          const anonymousThumb = new URL(thumbnail.headers.location!); anonymousThumb.search = '';
+          assert.equal((await fetch(anonymousThumb)).status, 403);
+          const cached = await app.inject({ method: 'GET', url: `/v1/assets/${asset.id}/preview`, headers });
+          assert.equal(cached.json().thumbnail, true);
           continue;
         }
         assert.equal(content.statusCode, 302);

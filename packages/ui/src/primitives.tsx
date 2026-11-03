@@ -191,6 +191,8 @@ export function Tabs({
   label: string;
 }) {
   const refs = useRef(new Map<string, HTMLButtonElement>());
+  const indicatorId = useId();
+  const reduced = useReducedMotion();
   return (
     <div className="sp-tabs" role="tablist" aria-label={label}>
       {items.map((item, index) => (
@@ -228,6 +230,14 @@ export function Tabs({
         >
           {item.icon}
           {item.label}
+          {item.id === value && (
+            <motion.span
+              aria-hidden="true"
+              className="sp-tab-indicator"
+              layoutId={indicatorId}
+              transition={motionTransition(reduced)}
+            />
+          )}
         </button>
       ))}
     </div>

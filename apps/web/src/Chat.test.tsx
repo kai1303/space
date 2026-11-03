@@ -4,6 +4,26 @@ import userEvent from '@testing-library/user-event';
 import { Chat } from './Chat.js';
 import type { ChatMessage, MessagePage } from '@space/contracts';
 
+it('renders live structured agent responses and replaces activity with one saved response', async () => {
+  const root = paginatedMessage('Root message', '1');
+  mockPaginatedChat(() => messagePage([root]), '1');
+  render(<Chat />);
+  await screen.findByText(root.text);
+  const socket = mocks.sockets.at(-1);
+  const response = { messages: [{ id: 'm', text: '**Streaming result**', status: 'streaming' }], tools: [], components: [{ id: 'c', type: 'card', title: 'Churn analysis', body: 'Down 2%' }] };
+  const activity = { channel_id: 'first', thread_id: 'thread', sequence: '2', occurred_at: root.created_at, type: 'task.event', payload: { task_id: 'task', type: 'execution.progress', actor_id: 'agent', installation_id: 'agent', owner_id: 'user', data: { text: 'Working', response } } };
+  await act(async () => { socket.receive('chat.events', { channel_id: 'first', cursor: '2', events: [activity] }, vi.fn()); });
+  expect((await screen.findByText('Streaming result')).tagName).toBe('STRONG');
+  expect(screen.getByText('Down 2%')).toBeTruthy();
+  const saved = { ...paginatedMessage('Final result', '3'), task_id: 'task', text: '**Streaming result**', agent_response: { ...response, messages: [{ id: 'm', text: '**Streaming result**', status: 'complete' }] }, author: { kind: 'agent', id: 'agent', name: 'Research agent' } };
+  await act(async () => { socket.receive('chat.events', { channel_id: 'first', cursor: '4', events: [
+    { type: 'message.created', channel_id: 'first', thread_id: 'thread', sequence: '3', occurred_at: root.created_at, payload: saved },
+    { ...activity, sequence: '4', payload: { ...activity.payload, type: 'task.completed', data: { result: saved.text, response: saved.agent_response } } },
+  ] }, vi.fn()); });
+  expect(screen.getAllByText('Streaming result')).toHaveLength(1);
+  expect(screen.getAllByText('Down 2%')).toHaveLength(1);
+});
+
 it('clears revoked private drafts when channel discovery refreshes before socket revocation', async () => {
   let revoked = false;
   const privateChannel = { id: 'private', name: 'private', private: true, joined: true, workspace_id: 'workspace' };
@@ -789,4 +809,61 @@ it('retries a failed initial message request and connects after both snapshots r
   expect(recoveredSocket.requests.find((request: any) => request.name === 'channel.subscribe').data.after).toBe('99');
   expect(screen.queryByRole('button', { name: 'Retry loading messages' })).toBeNull();
   expect(screen.queryByRole('status', { name: 'Loading messages' })).toBeNull();
+});
+
+it('retries a transient handshake failure without clearing the draft or accepted history', async () => {
+  mockPaginatedChat(() => messagePage([paginatedMessage('Saved conversation', '42')]));
+  render(<Chat />);
+  await screen.findByText('Saved conversation');
+  const editor = await screen.findByRole('textbox', { name: 'Message first' });
+  await userEvent.type(editor, 'Keep my unsent work');
+  const socket = mocks.sockets.at(-1);
+  act(() => { socket.connected = false; socket.receive('connect_error', new Error('internal_error')); });
+  await waitFor(() => expect(socket.requests.filter((request: any) => request.name === 'channel.subscribe')).toHaveLength(2));
+  expect(editor.textContent).toContain('Keep my unsent work');
+  expect(screen.getByText('Saved conversation')).toBeTruthy();
+  expect(socket.requests.at(-1).data.after).toBe('42');
+});
+
+it('opens the agent workspace from a task, restores focus, and clears it after revocation', async () => {
+  mockPaginatedChat(() => messagePage([paginatedMessage('Conversation with an agent task', '1')]));
+  const original = vi.mocked(fetch).getMockImplementation()!;
+  const task = { id: 'workspace-task', workspace_id: 'workspace', thread_id: 'thread', installation_id: 'agent', goal: 'Build the result viewer', skill: 'demo.echo', requester_id: 'user', approved_by: 'user', status: 'completed', session_id: 'session', active_execution_id: 'execution', revision: 4, result: 'The result is saved.' };
+  vi.mocked(fetch).mockImplementation(async (...args) => {
+    if (String(args[0]).startsWith('/v1/tasks/workspace-task')) return { ok: true, json: async () => String(args[0]).includes('/events') ? [] : task } as Response;
+    return original(...args);
+  });
+  render(<Chat />);
+  await screen.findByText('Conversation with an agent task');
+  const socket = mocks.sockets.at(-1);
+  await act(async () => { socket.receive('chat.events', { channel_id: 'first', cursor: '2', events: [{
+    channel_id: 'first', thread_id: 'thread', sequence: '2', occurred_at: '2026-11-03T08:00:00.000Z', type: 'task.event',
+    payload: { task_id: task.id, type: 'task.completed', owner_id: 'user', actor_id: 'agent', installation_id: 'agent', data: { goal: task.goal, result: task.result } },
+  }] }, vi.fn()); });
+  const open = await screen.findByRole('button', { name: 'Open workspace' });
+  await userEvent.click(open);
+  const workspace = await screen.findByRole('region', { name: 'Agent workspace' });
+  await within(workspace).findByText('No preview attached');
+  await userEvent.click(within(workspace).getByRole('button', { name: 'Close agent workspace' }));
+  await waitFor(() => expect(screen.queryByRole('region', { name: 'Agent workspace' })).toBeNull());
+  await waitFor(() => expect(document.activeElement).toBe(open));
+  await userEvent.click(open);
+  await screen.findByRole('region', { name: 'Agent workspace' });
+  await act(async () => { socket.receive('chat.error', { error: 'not_found' }); });
+  await waitFor(() => expect(screen.queryByRole('region', { name: 'Agent workspace' })).toBeNull());
+  expect(screen.queryByText('Conversation with an agent task')).toBeNull();
+});
+
+it('keeps the workspace available on a saved structured agent response', async () => {
+  const saved = { ...paginatedMessage('Saved agent result', '3'), task_id: 'saved-task', author: { kind: 'agent' as const, id: 'agent', name: 'Research agent' }, agent_response: { messages: [{ id: 'm', text: 'The report is ready.', status: 'complete' as const }], tools: [], components: [] } };
+  mockPaginatedChat(() => messagePage([saved]));
+  const original = vi.mocked(fetch).getMockImplementation()!;
+  vi.mocked(fetch).mockImplementation(async (...args) => {
+    if (String(args[0]).startsWith('/v1/tasks/saved-task')) return { ok: true, json: async () => String(args[0]).includes('/events') ? [] : { id: 'saved-task', goal: 'Research the report', status: 'completed', result: 'Saved report result', skill: 'demo.echo' } } as Response;
+    return original(...args);
+  });
+  render(<Chat />);
+  await screen.findByText('The report is ready.');
+  await userEvent.click(screen.getByRole('button', { name: 'Open workspace' }));
+  await within(await screen.findByRole('region', { name: 'Agent workspace' })).findByText('No preview attached');
 });

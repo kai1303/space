@@ -32,7 +32,17 @@ export async function highlightCode(code: string, language: string): Promise<Cod
     ] }],
   }));
   const engine = await highlighter;
-  if (!loading.has(lang)) loading.set(lang, loader().then((grammar) => engine.loadLanguage(grammar.default)));
+  if (!loading.has(lang)) loading.set(lang, loader().then(async (grammar) => {
+    await engine.loadLanguage(grammar.default);
+    const loaded = engine.getLanguage(lang);
+    const tokenize = loaded.tokenizeLine2.bind(loaded);
+    loaded.tokenizeLine2 = (...args) => {
+      const result = tokenize(...args);
+      // A partial grammar state can incorrectly color every following line.
+      if (result.stoppedEarly) throw new Error("syntax_highlight_timeout");
+      return result;
+    };
+  }));
   await loading.get(lang);
   return engine.codeToTokens(code, { lang, theme: "space-slackbot" }).tokens.map((line) => line.map((token) => ({
     content: token.content, role: colors[token.color?.toLowerCase() ?? ""],

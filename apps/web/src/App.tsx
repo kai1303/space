@@ -69,6 +69,8 @@ const groups: {
       { id: "code-block", label: "Code block" },
       { id: "tool-execution", label: "Agent communication" },
       { id: "agent-approval", label: "Agent approval" },
+      { id: "agent-workspace", label: "Agent workspace" },
+      { id: "agent-response", label: "Rich agent response" },
     ],
   },
   {

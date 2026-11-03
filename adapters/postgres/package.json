@@ -11,6 +11,10 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "exports": {
+    "./chat-outbox": {
+      "types": "./dist/chat-outbox.d.ts",
+      "default": "./dist/chat-outbox.js"
+    },
     "./provisioning": {
       "types": "./dist/provisioning.d.ts",
       "default": "./dist/provisioning.js"
@@ -66,6 +70,10 @@
     "./memory": {
       "types": "./dist/memory.d.ts",
       "default": "./dist/memory.js"
+    },
+    "./navigator": {
+      "types": "./dist/navigator.d.ts",
+      "default": "./dist/navigator.js"
     }
   },
   "dependencies": {

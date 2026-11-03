@@ -12,7 +12,7 @@
     "test:contracts": "tsx --test contracts/*.test.ts",
     "test:foundation": "tsx --test contracts/*.test.ts integration/foundation.test.ts",
     "test:workspace": "tsx --test contracts/workspace.test.ts integration/workspace.test.ts integration/user-provisioning.test.ts integration/workspace-isolation.test.ts",
-    "test:chat": "tsx --test integration/chat.test.ts",
+    "test:chat": "tsx --test integration/chat.test.ts integration/chat-outbox.test.ts integration/chat-partitions.test.ts integration/redis-adapter.test.ts",
     "test:auth": "tsx --test integration/auth.test.ts",
     "test:assets": "tsx --test integration/assets.test.ts storage/assets.test.ts"
   },

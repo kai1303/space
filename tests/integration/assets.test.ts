@@ -50,6 +50,48 @@ async function upload(seed: Awaited<ReturnType<typeof bootstrap>>, token = seed.
   return { created, asset };
 }
 
+test('PDF thumbnails are private, generated once on demand, and cache conversion failures', async () => {
+  const outsider = await bootstrap(pool);
+  for (const valid of [true, false]) {
+    const a = await bootstrap(pool);
+    const bytes = valid ? await readFile(new URL('../fixtures/preview/two-pages.pdf', import.meta.url)) : Buffer.from('%PDF-1.7\ninvalid');
+    const created = (await api(a.owner_token, 'POST', `/channels/${a.channel_id}/assets`, { name: 'report.pdf', size: bytes.length }, 201)).json();
+    objects.set(created.upload.fields.key, bytes.length); contents.set(created.upload.fields.key, bytes);
+    await api(a.owner_token, 'POST', `/assets/${created.asset.id}/complete`, {});
+    const url = `/assets/${created.asset.id}/thumbnail`;
+    const before = reads;
+    await api(outsider.owner_token, 'GET', url, undefined, 404);
+    assert.equal(reads, before, 'unauthorized requests do not read storage');
+    assert.equal(contents.has(`previews/${created.asset.id}/thumbnail.webp`), false, 'upload and metadata do not convert PDFs');
+    const statuses = await Promise.all([api(a.owner_token, 'GET', url, undefined, valid ? 302 : 415), api(a.owner_token, 'GET', url, undefined, valid ? 302 : 415)]);
+    assert.equal(reads, before + 1, 'concurrent requests share one conversion');
+    if (valid) assert.match(statuses[0].headers.location!, /thumbnail\.webp$/);
+    assert.equal((await api(a.owner_token, 'GET', `/assets/${created.asset.id}/preview`)).json().thumbnail, valid);
+    await api(a.owner_token, 'GET', url, undefined, valid ? 302 : 415);
+    assert.equal(reads, before + 1, 'persisted result avoids repeated conversion');
+    await api(a.owner_token, 'POST', `/channels/${a.channel_id}/messages`, { client_message_id: randomUUID(), text: '', asset_ids: [created.asset.id] }, 201);
+    await api(a.collaborator_token, 'GET', url, undefined, valid ? 302 : 415);
+    await new WorkspaceStore(pool).removeMember(a.owner_id, a.workspace_id, a.collaborator_id);
+    await api(a.collaborator_token, 'GET', url, undefined, 404);
+  }
+});
+
+test('PDF thumbnail access is rechecked after conversion if membership is revoked during storage read', async () => {
+  const a = await bootstrap(pool), bytes = await readFile(new URL('../fixtures/preview/two-pages.pdf', import.meta.url));
+  const created = (await api(a.owner_token, 'POST', `/channels/${a.channel_id}/assets`, { name: 'report.pdf', size: bytes.length }, 201)).json();
+  objects.set(created.upload.fields.key, bytes.length); contents.set(created.upload.fields.key, bytes);
+  await api(a.owner_token, 'POST', `/assets/${created.asset.id}/complete`, {});
+  await api(a.owner_token, 'POST', `/channels/${a.channel_id}/messages`, { client_message_id: randomUUID(), text: '', asset_ids: [created.asset.id] }, 201);
+  const read = storage.read;
+  storage.read = async (...args) => {
+    const data = await read(...args);
+    await new WorkspaceStore(pool).removeMember(a.owner_id, a.workspace_id, a.collaborator_id);
+    return data;
+  };
+  try { await api(a.collaborator_token, 'GET', `/assets/${created.asset.id}/thumbnail`, undefined, 404); }
+  finally { storage.read = read; }
+});
+
 test('uploads are channel scoped, completed before send, persisted in replay and downloadable by members', async () => {
   const a = await bootstrap(pool), b = await bootstrap(pool);
   assert.equal((await api(a.owner_token, 'GET', '/assets/config')).json().enabled, true);

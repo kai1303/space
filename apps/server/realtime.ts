@@ -3,12 +3,10 @@ import type { FastifyInstance } from 'fastify';
 import { AppError, chatCursor, record, uuid } from '@space/contracts';
 import type { IncomingHttpHeaders } from 'node:http';
 import type { ChatStore } from '@space/postgres/chat';
+import { relayChatOutbox } from '@space/postgres/chat-outbox';
+import type { RedisSocketAdapter } from '@space/redis';
 
-export interface ChatSignals {
-  listen(wake: () => void): Promise<void>;
-  publish(): Promise<void>;
-}
-export interface RealtimeOptions { signals?: ChatSignals; reconcileMs?: number; allowedOrigins?: string[]; strictOrigins?: boolean }
+export interface RealtimeOptions { adapter?: RedisSocketAdapter; reconcileMs?: number; outboxMs?: number; allowedOrigins?: string[]; strictOrigins?: boolean }
 const failure = (error: unknown) => ({ error: error instanceof AppError ? error.code : 'internal_error' });
 
 export function registerRealtime(app: FastifyInstance, authenticate: (headers: IncomingHttpHeaders, socketToken?: unknown) => Promise<string>, chat: ChatStore, options: RealtimeOptions = {}) {
@@ -21,22 +19,36 @@ export function registerRealtime(app: FastifyInstance, authenticate: (headers: I
       done(null, allowed);
     },
   });
-  const pumps = new Set<() => void>();
-  const wake = () => { for (const pump of pumps) pump(); };
-  const notify = async () => { wake(); await options.signals?.publish(); };
+  const pumps = new Set<(channels?: (string | null)[]) => void>();
+  const wake = (channels?: (string | null)[]) => { for (const pump of pumps) pump(channels); };
+  io.on('chat.outbox', (channels: (string | null)[], ack: () => void) => { wake(channels); ack(); });
+  const publish = async (channels: (string | null)[]) => {
+    if (options.adapter && !options.adapter.isReady) throw new Error('redis_unavailable');
+    wake(channels);
+    if (!options.adapter) return;
+    // Adapter acknowledgement is required; emit() alone does not confirm publication.
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        io.serverSideEmitWithAck('chat.outbox', channels),
+        new Promise<never>((_, reject) => { timeout = setTimeout(() => reject(new Error('adapter_timeout')), 3000); }),
+      ]);
+    } finally { clearTimeout(timeout); }
+  };
   io.use(async (socket, next) => {
     try {
       const token: unknown = socket.handshake.auth.token;
       socket.data.actor = await authenticate(socket.handshake.headers, token);
       socket.data.token = token;
       next();
-    } catch { next(new Error('unauthorized')); }
+    } catch (error) { next(new Error(failure(error).error)); }
   });
   io.on('connection', socket => {
     let subscription: { channel: string; cursor: string } | undefined;
     let running = false, pending = false, command = false;
     let windowStart = Date.now(), commands = 0;
-    const pump = () => {
+    const pump = (channels?: (string | null)[]) => {
+      if (channels && !channels.includes(null) && (!subscription || !channels.includes(subscription.channel))) return;
       pending = true;
       if (running) return;
       running = true;
@@ -85,28 +97,46 @@ export function registerRealtime(app: FastifyInstance, authenticate: (headers: I
       const channel = uuid(v.channel_id), cursor = chatCursor(v.after);
       await chat.events(socket.data.actor, channel, cursor);
       subscription = { channel, cursor };
-      setImmediate(pump);
+      setImmediate(() => pump());
       return { channel_id: channel, cursor };
     });
     handle('message.send', async input => {
       const v = record(input, ['channel_id', 'client_message_id', 'text', 'thread_id', 'document', 'asset_ids']);
       const { channel_id, ...message } = v;
-      const saved = await chat.send(socket.data.actor, uuid(channel_id), message);
-      await notify();
-      return saved;
+      return chat.send(socket.data.actor, uuid(channel_id), message);
     });
   });
   let timer: ReturnType<typeof setInterval> | undefined;
+  let outboxTimer: ReturnType<typeof setInterval> | undefined;
+  let stopped = false, publishing: Promise<void> | undefined;
+  const drain = () => {
+    if (stopped || publishing) return;
+    publishing = (async () => {
+      try {
+        // Bound each pass so a busy outbox still yields to shutdown and API traffic.
+        for (let page = 0; page < 10 && !stopped; page++) {
+          if (await relayChatOutbox(chat.pool, publish) < 100) break;
+        }
+      } catch { app.log.warn('chat_outbox_publish_failed'); }
+      finally { publishing = undefined; }
+    })();
+  };
   app.addHook('onReady', async () => {
-    await options.signals?.listen(wake);
-    timer = setInterval(wake, options.reconcileMs ?? 10_000);
+    if (options.adapter) io.adapter(options.adapter.adapter);
+    timer = setInterval(() => wake(), options.reconcileMs ?? 10_000);
     timer.unref();
+    outboxTimer = setInterval(drain, options.outboxMs ?? 250);
+    outboxTimer.unref();
+    drain();
   });
-  app.addHook('preClose', async () => { clearInterval(timer); io.disconnectSockets(true); });
-  app.addHook('onClose', async () => { io.close(); });
-  // Includes membership/token changes and task mutations committed through HTTP.
-  app.addHook('onResponse', async (request, reply) => {
-    if (['POST', 'PATCH', 'DELETE'].includes(request.method) && reply.statusCode < 400) await notify();
+  app.addHook('preClose', async () => {
+    stopped = true; clearInterval(timer); clearInterval(outboxTimer);
+    await publishing;
+    io.local.disconnectSockets(true);
   });
-  return { notify, io };
+  app.addHook('onClose', async () => {
+    await new Promise<void>(resolve => { io.close(() => resolve()); });
+    await options.adapter?.close();
+  });
+  return { io };
 }

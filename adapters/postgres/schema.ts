@@ -1,5 +1,5 @@
 import { pgTable, primaryKey, uuid, text, boolean, integer, bigint, jsonb, timestamp } from 'drizzle-orm/pg-core';
-import type { AgentCapabilities, AgentEvent, TaskStatus, MemberRole, RichDocument, AssetAttachment, AssetPreview } from '@space/contracts';
+import type { AgentCapabilities, AgentEvent, AgentResponse, TaskStatus, MemberRole, RichDocument, AssetAttachment, AssetPreview } from '@space/contracts';
 
 // Query mappings for the existing database. Reviewed SQL migrations remain the DDL
 // source of truth, including composite foreign keys, indexes, checks and audit triggers.
@@ -62,8 +62,10 @@ export const messages = pgTable('messages', {
   // The insert trigger replaces this placeholder under the channel row lock.
   sequence: bigint({ mode: 'bigint' }).notNull().default(0n),
   id: uuid().notNull(), workspace_id: uuid().notNull(), channel_id: uuid().notNull(), thread_id: uuid().notNull(), task_id: uuid(), installation_id: uuid(),
+  agent_milestone: boolean().notNull().default(false),
   author_type: text().$type<'human' | 'agent'>().notNull().default('agent'), user_id: uuid(), client_message_id: uuid(), request_hash: text(),
   text: text().notNull(), document: jsonb().$type<RichDocument>(), attachments: jsonb().$type<AssetAttachment[]>().notNull().default([]), created_at: time(),
+  agent_response: jsonb().$type<AgentResponse>(),
 }, table => [primaryKey({ columns: [table.channel_id, table.id] })]);
 export const messageIdentities = pgTable('message_identities', {
   id: id(), workspace_id: uuid().notNull(), channel_id: uuid().notNull(), task_id: uuid(),

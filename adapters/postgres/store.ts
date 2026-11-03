@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type { Pool } from 'pg';
 import { and, eq, gt, inArray, sql, getTableColumns } from 'drizzle-orm';
-import { AppError, assertTransition, parseAgentEvent, parseTaskInput, text, uuid, type Task, type AgentInstallation, type WorkplaceEvent } from '@space/contracts';
+import { AppError, assertTransition, parseAgentEvent, parseAgentResponse, parseTaskInput, text, uuid, type Task, type AgentInstallation, type WorkplaceEvent } from '@space/contracts';
 import { assertEligible, assertApprover } from '@space/core/policy';
 import type { Delivery, DeliveryStore, PreparedDelivery } from '@space/core/ports';
 import { database, type DbSession } from './database.js';
@@ -11,14 +11,10 @@ import { hasThreadAccess } from './access.js';
 import { FoundationStore } from './foundation.js';
 const notFound = () => new AppError(404, 'not_found');
 const now = sql`now()`;
+async function navigatorPresent(c: DbSession) { return Boolean((await c.execute<{present:boolean}>(sql`SELECT to_regclass('navigator_decisions') IS NOT NULL AS present`)).rows[0]?.present); }
 export class PostgresStore implements DeliveryStore {
   readonly db;
-  constructor(readonly pool: Pool, public onChange?: () => Promise<void>) { this.db = database(pool); }
-  private async changed<T>(work: Promise<T>): Promise<T> {
-    const result = await work;
-    await this.onChange?.().catch(() => {});
-    return result;
-  }
+  constructor(readonly pool: Pool) { this.db = database(pool); }
   async health(): Promise<void> { await this.db.execute(sql`SELECT 1`); }
   async authenticate(token: string): Promise<string> {
     const [row] = await this.db.select().from(s.humanCredentials).where(eq(s.humanCredentials.token_hash, tokenHash(token)));
@@ -57,18 +53,21 @@ export class PostgresStore implements DeliveryStore {
     return installation;
   }
   private async append(c: DbSession, task: Task, type: string, actor: string, payload: Record<string, unknown>, causationId: string | null = null): Promise<void> {
+    const conversational=await navigatorPresent(c)&&(await c.execute(sql`SELECT 1 FROM agent_thread_subscriptions WHERE task_id=${task.id} UNION ALL SELECT 1 FROM navigator_decisions WHERE decision->>'task_id'=${task.id} LIMIT 1`)).rows.length>0;
     await c.insert(s.taskEvents).values({
       id: randomUUID(), type, workspace_id: task.workspace_id, actor_id: actor,
       resource_id: type.startsWith('execution.') ? task.active_execution_id! : task.id,
       correlation_id: task.id, causation_id: causationId,
-      sequence: sql`(SELECT coalesce(max(sequence),0)+1 FROM task_events WHERE correlation_id=${task.id})`, payload,
+      sequence: sql`(SELECT coalesce(max(sequence),0)+1 FROM task_events WHERE correlation_id=${task.id})`, payload: conversational?{...payload,conversational:true}:payload,
     });
   }
   async createTask(actor: string, rawInput: unknown, key: string): Promise<Task> {
     const input = parseTaskInput(rawInput);
     text(key, 128);
     const hash = createHash('sha256').update(JSON.stringify(input)).digest('hex');
-    return this.changed(this.db.transaction(async c => {
+    return this.db.transaction(c => this.createTaskIn(c, actor, input, key, hash));
+  }
+  async createTaskIn(c: DbSession, actor: string, input: ReturnType<typeof parseTaskInput>, key: string, hash = createHash('sha256').update(JSON.stringify(input)).digest('hex')): Promise<Task> {
       if (!await hasThreadAccess(c, actor, input.thread_id)) throw notFound();
       const [thread] = await c.select().from(s.threads).where(eq(s.threads.id, input.thread_id));
       if (thread?.workspace_id !== input.workspace_id) throw notFound();
@@ -82,33 +81,38 @@ export class PostgresStore implements DeliveryStore {
       const [task] = await c.insert(s.tasks).values({ id: randomUUID(), ...input, requester_id: actor, status: 'awaiting_approval', idempotency_key: key, request_hash: hash }).returning();
       await this.append(c, task!, 'task.proposed', actor, { goal: task!.goal });
       return task!;
-    }));
   }
   async approveTask(actor: string, id: string): Promise<Task> {
-    return this.changed(this.db.transaction(async c => {
+    return this.db.transaction(c => this.approveTaskIn(c, actor, id));
+  }
+  async approveTaskIn(c: DbSession, actor: string, id: string, reuseSession?: string): Promise<Task> {
       const task = await this.visibleTask(c, actor, id);
       const installation = await this.eligible(c, task);
       assertApprover(actor, task, installation);
       if (task.status === 'queued') return task;
       assertTransition(task.status, 'queued');
-      const sessionId = randomUUID(), executionId = randomUUID();
-      await c.insert(s.agentSessions).values({ id: sessionId, workspace_id: task.workspace_id, installation_id: task.installation_id, origin_thread_id: task.thread_id });
+      const sessionId = reuseSession ?? randomUUID(), executionId = randomUUID();
+      if (reuseSession) {
+        const found = await c.select().from(s.agentSessions).where(and(eq(s.agentSessions.id, reuseSession), eq(s.agentSessions.origin_thread_id, task.thread_id), eq(s.agentSessions.installation_id, task.installation_id)));
+        if (!found.length) throw new AppError(409, 'invalid_session');
+      } else await c.insert(s.agentSessions).values({ id: sessionId, workspace_id: task.workspace_id, installation_id: task.installation_id, origin_thread_id: task.thread_id });
       await c.insert(s.executions).values({ id: executionId, workspace_id: task.workspace_id, task_id: task.id, installation_id: task.installation_id, session_id: sessionId, status: 'queued' });
       const [result] = await c.update(s.tasks).set({ status: 'queued', approved_by: actor, session_id: sessionId, active_execution_id: executionId, revision: sql`${s.tasks.revision}+1`, updated_at: now }).where(eq(s.tasks.id, id)).returning();
       await c.insert(s.outbox).values({ id: randomUUID(), task_id: task.id, execution_id: executionId });
       await this.append(c, result!, 'task.approved', actor, { execution_id: executionId });
+      if(await navigatorPresent(c))await c.execute(sql`UPDATE agent_thread_subscriptions SET session_id=${sessionId},approved_by=${actor} WHERE task_id=${id} AND status='active'`);
       return result!;
-    }));
   }
   async rejectTask(actor: string, id: string): Promise<Task> {
-    return this.changed(this.db.transaction(async c => {
+    return this.db.transaction(async c => {
       const task = await this.visibleTask(c, actor, id);
       assertApprover(actor, task, await this.installation(c, task.installation_id));
       assertTransition(task.status, 'rejected');
       const [result] = await c.update(s.tasks).set({ status: 'rejected', revision: sql`${s.tasks.revision}+1`, updated_at: now }).where(eq(s.tasks.id, id)).returning();
       await this.append(c, result!, 'task.rejected', actor, {});
+      if(await navigatorPresent(c))await c.execute(sql`UPDATE agent_thread_subscriptions SET status='closed' WHERE task_id=${id}`);
       return result!;
-    }));
+    });
   }
   async readTask(actor: string, id: string): Promise<Task> { return this.db.transaction(c => this.visibleTask(c, actor, id)); }
   async events(actor: string, id: string, after: number): Promise<WorkplaceEvent[]> {
@@ -147,12 +151,15 @@ export class PostgresStore implements DeliveryStore {
       const lease = await c.select({ id: s.outbox.id }).from(s.outbox).where(this.liveLease(delivery));
       if (!lease.length) throw new AppError(409, 'stale_lease');
       const installation = await this.eligible(c, task);
-      return { installation, request: { schema_version: '1.0', task_id: task.id, session_id: task.session_id!, execution_id: delivery.execution_id, idempotency_key: delivery.execution_id, goal: task.goal, skill: task.skill } };
+      const [origin]=await navigatorPresent(c)?(await c.execute<{through_sequence:string}>(sql`SELECT through_sequence::text FROM navigator_decisions WHERE decision->>'task_id'=${task.id} LIMIT 1`)).rows:[];
+      const thread=(await c.select().from(s.threads).where(eq(s.threads.id,task.thread_id)))[0]!;
+      const context=origin?(await c.execute<{id:string;text:string;author_type:'human'|'agent'}>(sql`SELECT id,left(text,1000) AS text,author_type FROM messages WHERE channel_id=${thread.channel_id} AND thread_id=${task.thread_id} AND sequence<=${origin.through_sequence}::bigint AND length(btrim(text))>0 ORDER BY sequence DESC LIMIT 16`)).rows.reverse():undefined;
+      return { installation, request: { schema_version: '1.0', task_id: task.id, session_id: task.session_id!, execution_id: delivery.execution_id, idempotency_key: delivery.execution_id, goal: task.goal, skill: task.skill, ...(context?{context:{thread_id:task.thread_id,messages:context}}:{}) } };
     });
   }
   async acceptEvent(installationId: string, raw: unknown): Promise<void> {
     const event = parseAgentEvent(raw);
-    await this.changed(this.db.transaction(async c => {
+    await this.db.transaction(async c => {
       const [ref] = await c.select().from(s.executions).where(and(eq(s.executions.id, event.execution_id), eq(s.executions.installation_id, installationId)));
       if (!ref) throw notFound();
       const task = await this.task(c, ref.task_id);
@@ -162,6 +169,7 @@ export class PostgresStore implements DeliveryStore {
         if (!previous.same) throw new AppError(409, 'event_id_conflict');
         return;
       }
+      await this.eligible(c,task);
       if (task.active_execution_id !== event.execution_id || !['queued', 'running'].includes(task.status)) throw new AppError(409, 'stale_execution');
       const execution = (await c.select().from(s.executions).where(eq(s.executions.id, event.execution_id)).for('update'))[0]!;
       if (event.sequence !== execution.last_sequence + 1) throw new AppError(409, 'event_out_of_order');
@@ -172,12 +180,16 @@ export class PostgresStore implements DeliveryStore {
       await c.update(s.executions).set({ status: next, last_sequence: event.sequence }).where(eq(s.executions.id, event.execution_id));
       await c.update(s.tasks).set({ status: next, result: next === 'completed' ? event.payload.text : null, revision: sql`${s.tasks.revision}+1`, updated_at: now }).where(eq(s.tasks.id, task.id));
       await this.append(c, task, event.type, installationId, { ...event.payload, agent_event_id: event.id, agent_sequence: event.sequence, agent_occurred_at: event.occurred_at }, event.id);
+      const conversational = await navigatorPresent(c)?await c.execute(sql`SELECT 1 FROM navigator_decisions WHERE route IN ('mention','subscription','accepted') AND decision->>'task_id'=${task.id} LIMIT 1`):{rows:[]};
+      if (conversational.rows.length && (event.type === 'execution.progress'||event.type==='execution.failed') && !event.payload.response) {
+        await c.insert(s.messages).values({ id: randomUUID(), workspace_id: task.workspace_id, channel_id: (await c.select().from(s.threads).where(eq(s.threads.id, task.thread_id)))[0]!.channel_id, thread_id: task.thread_id, task_id: task.id, installation_id: installationId, text: event.payload.text, agent_milestone:true });
+      }
       if (next === 'completed') {
         const thread = (await c.select().from(s.threads).where(eq(s.threads.id, task.thread_id)))[0]!;
-        await c.insert(s.messages).values({ id: randomUUID(), channel_id: thread.channel_id, workspace_id: task.workspace_id, thread_id: task.thread_id, task_id: task.id, installation_id: installationId, text: event.payload.text });
-        await this.append(c, task, 'task.completed', installationId, { result: event.payload.text }, event.id);
-      } else if (next === 'failed') await this.append(c, task, 'task.failed', installationId, { error: event.payload.text }, event.id);
-    }));
+        await c.insert(s.messages).values({ id: randomUUID(), channel_id: thread.channel_id, workspace_id: task.workspace_id, thread_id: task.thread_id, task_id: task.id, installation_id: installationId, text: event.payload.text, agent_response: event.payload.response });
+        await this.append(c, task, 'task.completed', installationId, { result: event.payload.text, ...(event.payload.response ? { response: event.payload.response } : {}) }, event.id);
+      } else if (next === 'failed') await this.append(c, task, 'task.failed', installationId, { error: event.payload.text, ...(event.payload.response ? { response: event.payload.response } : {}) }, event.id);
+    });
   }
   private liveLease(delivery: Delivery) {
     return and(eq(s.outbox.id, delivery.id), eq(s.outbox.lease_token, delivery.lease_token), eq(s.outbox.state, 'delivering'), gt(s.outbox.lease_until, now));
@@ -189,7 +201,7 @@ export class PostgresStore implements DeliveryStore {
     return (await this.db.select({ id: s.executions.id }).from(s.executions).where(and(eq(s.executions.id, id), inArray(s.executions.status, ['completed', 'failed'])))).length > 0;
   }
   async failDelivery(delivery: Delivery, code: string, permanent = false): Promise<void> {
-    await this.changed(this.db.transaction(async c => {
+    await this.db.transaction(async c => {
       const task = await this.task(c, delivery.task_id);
       const dead = permanent || delivery.attempts >= 3;
       const row = await c.update(s.outbox).set({ state: dead ? 'dead' : 'pending', last_error: code, lease_until: null, available_at: sql`now()+(${2 ** delivery.attempts} * interval '1 second')` }).where(this.liveLease(delivery)).returning({ id: s.outbox.id });
@@ -197,8 +209,17 @@ export class PostgresStore implements DeliveryStore {
       assertTransition(task.status, 'failed');
       await c.update(s.executions).set({ status: 'failed' }).where(eq(s.executions.id, delivery.execution_id));
       await c.update(s.tasks).set({ status: 'failed', revision: sql`${s.tasks.revision}+1`, updated_at: now }).where(eq(s.tasks.id, task.id));
-      await this.append(c, task, 'execution.failed', task.installation_id, { code });
-      await this.append(c, task, 'task.failed', task.installation_id, { code });
-    }));
+      const [latest] = await c.select({ payload: s.taskEvents.payload }).from(s.taskEvents)
+        .where(eq(s.taskEvents.correlation_id, task.id)).orderBy(sql`${s.taskEvents.sequence} DESC`).limit(1);
+      const response = latest?.payload.response ? parseAgentResponse(latest.payload.response) : undefined;
+      if (response) {
+        response.messages.forEach(message => { message.status = 'complete'; });
+        response.tools.forEach(tool => { if (tool.status !== 'completed') tool.status = 'interrupted'; });
+        delete response.step;
+      }
+      const payload = { code, ...(response ? { response } : {}) };
+      await this.append(c, task, 'execution.failed', task.installation_id, payload);
+      await this.append(c, task, 'task.failed', task.installation_id, payload);
+    });
   }
 }

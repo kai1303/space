@@ -2,19 +2,19 @@
 
 Implemented locally on 2026-11-03. Authentication is now provided by Better Auth;
 see [authentication setup](authentication.md) for required environment variables and
-account/session behavior. The original development-token login has been replaced. Fastify + Socket.IO over WebSocket; Redis Pub/Sub
-carries update notifications. PostgreSQL + Drizzle stores permanent messages, threads
+account/session behavior. The original development-token login has been replaced. Fastify + Socket.IO over WebSocket; the Socket.IO Redis adapter
+connects API instances. A PostgreSQL transactional outbox schedules delivery. PostgreSQL + Drizzle stores permanent messages, threads
 and channel history. No Centrifugo or PostgreSQL LISTEN/NOTIFY is used for chat.
 
 ```mermaid
 flowchart LR
   UI[React chat] <-->|Socket.IO / WebSocket| API[Fastify API]
   UI -->|History, channels, task approvals| API
-  API -->|Drizzle transactions| DB[(PostgreSQL history)]
-  API -->|Committed update hint| Redis[(Redis Pub/Sub)]
-  Worker[Agent worker] -->|Trusted agent events| DB
-  Worker -->|Committed update hint| Redis
-  Redis -->|Wake subscribed API instances| API
+  API -->|Message, event and outbox in one transaction| DB[(PostgreSQL)]
+  Worker[Agent worker] -->|Trusted agent events and outbox| DB
+  DB -->|Claim pending delivery| Publisher[In-process outbox publisher]
+  Publisher -->|Acknowledged inter-server event| Redis[Socket.IO Redis adapter]
+  Redis -->|Schedule channel delivery on API instances| API
   API -->|Authorize and read newer history| DB
 ```
 
@@ -25,10 +25,10 @@ pnpm install --frozen-lockfile
 docker compose up -d postgres redis
 export DATABASE_URL=postgres://workplace:local_demo_only@127.0.0.1:55438/workplace
 export REDIS_URL=redis://127.0.0.1:56380
-pnpm migrate
+pnpm migrate                     # includes migration 019; run before restarting API/worker
 # Set BETTER_AUTH_SECRET / BETTER_AUTH_URL as described in authentication.md
 pnpm server                     # terminal 1
-pnpm worker                     # terminal 2, export the same URLs
+pnpm worker                     # terminal 2, DATABASE_URL required; no Redis connection
 pnpm web                        # terminal 3; open /chat
 ```
 
@@ -140,12 +140,26 @@ The full composer sends an optional structured `document: {ops: [{insert, attrib
 
 - Message/task writes and channel history are committed in the same PostgreSQL
   transaction. A per-channel locked counter makes cursor order match commit order.
-- Redis carries only a generic wake-up hint. Every API instance reads the authorized
-  history for its connected subscribers. The worker publishes after committed task
-  mutations. This is a small initial deployment design, not a large-scale benchmark.
-- Redis Pub/Sub is not durable. Server reconciliation every 10 seconds repairs lost
-  hints and commit-to-publish crashes. Reconnection resumes after the last accepted
-  cursor. PostgreSQL is the history source, not the realtime message broker.
+- Migration 019 enqueues a `chat_delivery_outbox` row whenever a channel event is inserted,
+  in the same transaction. Human messages, agent results and task events all use it.
+  Membership and credential/session changes enqueue authorization invalidations as well.
+- Every API runs a small publisher every 250 ms. It claims at most 100 pending rows with
+  `FOR UPDATE SKIP LOCKED`, coalesces channel IDs and uses the official Socket.IO Redis
+  adapter's acknowledged `serverSideEmitWithAck` to schedule delivery on peer instances.
+  Each instance rechecks identity/membership and reads its local subscribers' cursors.
+  Only channel IDs cross the adapter for chat delivery; message bodies remain in the
+  authorized replay path. Cross-instance room operations also use the installed adapter.
+- Pending rows are deleted only after local delivery is scheduled and the peer instances
+  acknowledge scheduling. Failure rolls back the claim; restart or another publisher
+  retries it. A crash after publication can repeat a notification, which is harmless.
+  Publication waits are bounded to three seconds. Writers do not wait for Redis; an
+  unavailable adapter leaves the rows pending. No custom Redis topic or post-commit
+  publish hook remains, and the agent worker no longer connects to Redis.
+- Redis Pub/Sub is still transient. A peer disconnected from Redis is not necessarily
+  counted in adapter acknowledgments. Reconciliation every 10 seconds and reconnect
+  replay repair missed delivery; acknowledgment does not promise every client received
+  a message. On shutdown, an API drains its active publication and closes only its own
+  sockets. This is locally verified behavior, not a production load benchmark.
 - Network delivery is not exactly-once. Clients deduplicate channel sequence values;
   message IDs and client request IDs prevent duplicate durable sends. Sequence values
   are decimal strings to preserve bigint precision in JavaScript.
@@ -155,9 +169,10 @@ The full composer sends an optional structured `document: {ops: [{insert, attrib
   from its accepted cursor; authorization failures remain terminal. Payloads are
   limited to 128 KiB for inbound socket frames and HTTP message bodies (other HTTP bodies remain 32 KiB); plain text to 16,000 characters; sockets accept at most 30 commands/s
   with one command executing at a time.
-- HTTP membership changes notify connected servers. Direct database changes, lost
-  notifications and credential deletion are caught on the next reconciliation or
-  command. Already delivered content cannot be recalled from a client.
+- Membership and credential/session revocation triggers enqueue delivery invalidations,
+  including direct SQL changes. Reconciliation and commands recheck access as a fallback.
+  Already delivered content cannot be recalled from a client. Infrastructure errors during
+  authentication are retryable; invalid credentials remain terminal and clear cached access.
 - Migration 005 preserves and backfills old result messages. Earlier task activity
   remains available through the task-event API; it is not invented in chat history.
 
@@ -176,11 +191,15 @@ pnpm typecheck
 pnpm build
 ```
 
-Chat integration tests use a disposable schema and unique Redis topic. They cover
+Chat integration tests use a disposable schema and unique Socket.IO adapter key. They cover
 cross-tenant access, private membership, idempotency, trusted agent authors,
-Redis-only cross-instance delivery, missed-notification reconciliation, reconnect
+Redis-adapter cross-instance delivery, missed-notification reconciliation, reconnect
 replay, >200-message history, malformed commands, Origin checks and revocation.
-UI tests cover event deduplication, bigint ordering, retry IDs, offline sends,
+Outbox tests cover transactional rollback, failed publication, concurrent claims,
+publication-before-crash retries and API restart recovery. Shutdown tests ensure closing
+one API does not disconnect other instances. A child-process regression disconnects Redis
+between adapter server-count and publication, proving the rejected command does not crash
+Node. UI tests cover event deduplication, bigint ordering, retry IDs, offline sends,
 channel-switch isolation and history clearing on revoked access. Browser smoke checks
 cover a human send, agent task approval/result, saved history after reload and a
 390px layout. These are local checks, not production load or security certification.

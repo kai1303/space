@@ -3,6 +3,7 @@ import { AppError, MAX_ASSET_BYTES, MAX_MESSAGE_ASSETS, record, uuid } from '@sp
 import { AssetStore, assetAttachment } from '@space/postgres/assets';
 import type { AssetStorage } from './storage.js';
 import { generateAssetPreview } from './previews.js';
+import { generatePdfThumbnail } from './pdf-thumbnail.js';
 
 function pdfRange(value: string, size: number): { start: number; end: number } | undefined {
   const match = /^bytes=(\d*)-(\d*)$/.exec(value);
@@ -73,6 +74,12 @@ export function registerAssetRoutes(app: FastifyInstance, assets: AssetStore, st
     record(r.query, []);
     const backend = enabled(), id = uuid(r.params.assetId);
     const preview = await previewFor(r.actorId, id);
+    if (preview.kind === 'pdf') {
+      const ready = await assets.pdfThumbnail(r.actorId, id, row => generatePdfThumbnail(backend, row.id, row.object_key, row.size));
+      if (!ready) throw new AppError(415, 'preview_unavailable');
+      await assets.download(r.actorId, id);
+      return reply.redirect(await backend.inline(`previews/${id}/thumbnail.webp`, 'image/webp'));
+    }
     if (preview.kind !== 'image') throw new AppError(415, 'preview_unavailable');
     const file = preview.mime === 'image/webp' && preview.width <= 360 && preview.height <= 240 ? 'display.webp' : 'thumbnail.webp';
     return reply.redirect(await backend.inline(`previews/${id}/${file}`, 'image/webp'));

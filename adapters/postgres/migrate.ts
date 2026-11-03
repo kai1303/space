@@ -10,6 +10,9 @@ export async function migrate(pool: Pool): Promise<void> {
   files.push('015_channel_files.sql', '016_message_history.sql');
   files.push('017_channel_management.sql');
   files.push('018_chat_partitions.sql');
+  files.push('019_chat_delivery_outbox.sql');
+  files.push('020_navigator.sql');
+  files.push('021_agent_responses.sql');
   const migrations = await Promise.all(files.map(file => readFile(new URL(`./migrations/${file}`, import.meta.url), 'utf8')));
   await database(pool).transaction(async tx => {
     await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(current_schema() || ':migrations'))`);

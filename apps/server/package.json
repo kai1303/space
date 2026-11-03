@@ -11,7 +11,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "start": "node dist/main.js",
     "dev": "node dist/main.js",
-    "test": "pnpm build && node --test storage.test.mjs previews.test.mjs memory.test.mjs",
+    "test": "pnpm build && node --test storage.test.mjs previews.test.mjs pdf-thumbnail.test.mjs memory.test.mjs",
     "test:storage": "pnpm build && node --test storage.integration.test.mjs"
   },
   "exports": {

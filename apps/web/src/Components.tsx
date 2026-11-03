@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { useAnimate, useReducedMotion } from "motion/react";
 import {
   Avatar,
   Badge,
@@ -14,6 +15,7 @@ import {
   RichComposer,
   RichContent,
   documentText,
+  motionTransition,
   type RichDocument,
   type Reaction,
 } from "@space/ui";
@@ -35,6 +37,13 @@ export function Components({ notify }: { notify: (text: string) => void }) {
   const [notifications, setNotifications] = useState(true);
   const [suggestions, setSuggestions] = useState(false);
   const [tab, setTab] = useState("messages");
+  const [tabPanel, animateTabPanel] = useAnimate<HTMLDivElement>();
+  const reduced = useReducedMotion();
+  useEffect(() => {
+    if (!tabPanel.current || reduced) return;
+    const animation = animateTabPanel(tabPanel.current, { opacity: [0, 1] }, motionTransition(reduced));
+    return () => animation.stop();
+  }, [tab, reduced, tabPanel, animateTabPanel]);
   const [dialog, setDialog] = useState(false);
   const [name, setName] = useState("");
   const [submitted, setSubmitted] = useState(false);
@@ -221,6 +230,7 @@ export function Components({ notify }: { notify: (text: string) => void }) {
             ]}
           />
           <div
+            ref={tabPanel}
             id="sample-tab-panel"
             role="tabpanel"
             aria-label={tab}

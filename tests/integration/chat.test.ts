@@ -5,7 +5,7 @@ import { readFile, readdir } from 'node:fs/promises';
 import { setTimeout as delay } from 'node:timers/promises';
 import { Pool } from 'pg';
 import { io } from 'socket.io-client';
-import { RedisChatSignals } from '@space/redis';
+import { RedisSocketAdapter } from '@space/redis';
 import { bootstrap } from '@space/postgres/bootstrap';
 import { migrate } from '@space/postgres/migrate';
 import { PostgresStore } from '@space/postgres/store';
@@ -20,18 +20,18 @@ if (!url) throw new Error('TEST_DATABASE_URL is required');
 const schema = `chat_${randomBytes(8).toString('hex')}`;
 const admin = new Pool({ connectionString: url });
 const pool = new Pool({ connectionString: url, options: `-c search_path=${schema}`, max: 20 });
-const signals = new RedisChatSignals(process.env.TEST_REDIS_URL, schema);
-const otherSignals = new RedisChatSignals(process.env.TEST_REDIS_URL, schema);
-const store = new PostgresStore(pool, () => signals.publish()), app = createApi(store, { allowDevelopmentTokens: true, realtime: { signals, reconcileMs: 60_000 } });
-const second = createApi(new PostgresStore(pool), { allowDevelopmentTokens: true, realtime: { signals: otherSignals, reconcileMs: 60_000 } });
+const adapter = new RedisSocketAdapter(process.env.TEST_REDIS_URL, schema);
+const otherAdapter = new RedisSocketAdapter(process.env.TEST_REDIS_URL, schema);
+const store = new PostgresStore(pool), app = createApi(store, { allowDevelopmentTokens: true, realtime: { adapter, reconcileMs: 60_000 } });
+const second = createApi(new PostgresStore(pool), { allowDevelopmentTokens: true, realtime: { adapter: otherAdapter, reconcileMs: 60_000 } });
 let address: string, secondAddress: string;
 before(async () => {
-  await Promise.all([signals.connect(), otherSignals.connect()]);
+  await Promise.all([adapter.connect(), otherAdapter.connect()]);
   await admin.query(`CREATE SCHEMA ${schema}`); await migrate(pool);
   address = await app.listen({ host: '127.0.0.1', port: 0 });
   secondAddress = await second.listen({ host: '127.0.0.1', port: 0 });
 });
-after(async () => { await app.close(); await second.close(); signals.close(); otherSignals.close(); await pool.end(); await admin.query(`DROP SCHEMA ${schema} CASCADE`); await admin.end(); });
+after(async () => { await app.close(); await second.close(); await pool.end(); await admin.query(`DROP SCHEMA ${schema} CASCADE`); await admin.end(); });
 async function api(token: string, method: 'GET' | 'POST' | 'DELETE', path: string, body?: object, status = 200) {
   const response = await app.inject({ method, url: `/v1${path}`, headers: { authorization: `Bearer ${token}` }, ...(body ? { payload: body } : {}) });
   assert.equal(response.statusCode, status, `${path}: ${response.body}`);
@@ -131,7 +131,7 @@ test('formatted messages and replies retain their documents in acknowledgments, 
   } finally { client.ws.disconnect(); }
 });
 
-test('two API instances deliver WebSocket messages, acknowledgment and reconnect catch-up once', async () => {
+test('Socket.IO Redis adapter delivers across two API instances and reconnect catches up once', async () => {
   const a = await bootstrap(pool);
   const one = await socket(a.owner_token), two = await socket(a.collaborator_token, secondAddress);
   try {
@@ -170,7 +170,6 @@ test('socket authorization rejects cross-channel subscriptions and revokes activ
     client.send({ type: 'subscribe', channel_id: a.channel_id, after: '0' });
     await client.wait('subscribed');
     await new WorkspaceStore(pool).removeMember(a.owner_id, a.workspace_id, a.collaborator_id);
-    await signals.publish();
     const closed = new Promise(resolve => client.ws.once('disconnect', resolve));
     await Promise.race([closed, delay(5000).then(() => { throw new Error('revocation did not close socket'); })]);
     assert.ok(!client.frames.some(frame => frame.type === 'events'));
@@ -250,7 +249,6 @@ test('Socket.IO rejects bad credentials and disallowed origins, validates comman
     client.send({ type: 'subscribe', channel_id: a.channel_id, after: '0' }); await client.wait('subscribed');
     const closed = new Promise(resolve => client.ws.once('disconnect', resolve));
     await pool.query('DELETE FROM human_credentials WHERE user_id=$1', [a.collaborator_id]);
-    await signals.publish();
     await Promise.race([closed, delay(3000).then(() => { throw new Error('revoked credential kept connection'); })]);
   } finally { client.ws.disconnect(); }
 });
@@ -424,4 +422,35 @@ test('replay and socket subscriptions tolerate reserved sequence gaps from direc
     const recovered = await client.wait('events');
     assert.equal(recovered.cursor, '3'); assert.equal(recovered.events[0].payload.id, next.id);
   } finally { client.ws.disconnect(); }
+});
+
+test('closing one API instance does not disconnect clients on another instance', async () => {
+  const temporaryAdapter = new RedisSocketAdapter(process.env.TEST_REDIS_URL, schema);
+  await temporaryAdapter.connect();
+  const temporary = createApi(new PostgresStore(pool), { allowDevelopmentTokens: true, realtime: { adapter: temporaryAdapter, reconcileMs: 60_000 } });
+  await temporary.listen({ host:'127.0.0.1',port:0 });
+  const a = await bootstrap(pool), client = await socket(a.owner_token,secondAddress);
+  try {
+    client.send({type:'subscribe',channel_id:a.channel_id,after:'0'}); await client.wait('subscribed');
+    await temporary.close();
+    await delay(100);
+    assert.equal(client.ws.connected,true);
+    const saved = await new ChatStore(pool).send(a.owner_id,a.channel_id,{client_message_id:randomUUID(),text:'Other instance is still live'});
+    assert.equal((await client.wait('events')).events[0].payload.id,saved.id);
+  } finally { client.ws.disconnect(); await temporary.close(); }
+});
+
+test('a transient authentication store failure is retryable rather than unauthorized', async () => {
+  const temporaryStore = new PostgresStore(pool), original = temporaryStore.authenticate.bind(temporaryStore);
+  let unavailable = true;
+  temporaryStore.authenticate = async token => { if (unavailable) throw new Error('database connection timeout'); return original(token); };
+  const temporary = createApi(temporaryStore,{allowDevelopmentTokens:true});
+  const base = await temporary.listen({host:'127.0.0.1',port:0});
+  const a = await bootstrap(pool);
+  try {
+    await assert.rejects(socket(a.owner_token,base),/^Error: internal_error$/);
+    unavailable = false;
+    const connected = await socket(a.owner_token,base);
+    connected.ws.disconnect();
+  } finally { await temporary.close(); }
 });

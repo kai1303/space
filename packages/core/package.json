@@ -11,6 +11,10 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "exports": {
+    "./ag-ui": {
+      "types": "./dist/ag-ui.d.ts",
+      "default": "./dist/ag-ui.js"
+    },
     "./policy": {
       "types": "./dist/policy.d.ts",
       "default": "./dist/policy.js"
@@ -26,13 +30,32 @@
     "./memory": {
       "types": "./dist/memory.d.ts",
       "default": "./dist/memory.js"
+    },
+    "./navigator": {
+      "types": "./dist/navigator.d.ts",
+      "default": "./dist/navigator.js"
+    },
+    "./navigator-provider": {
+      "types": "./dist/navigator-provider.d.ts",
+      "default": "./dist/navigator-provider.js"
+    },
+    "./jev-navigator": {
+      "types": "./dist/jev-navigator.d.ts",
+      "default": "./dist/jev-navigator.js"
+    },
+    "./navigator-providers": {
+      "types": "./dist/navigator-providers.d.ts",
+      "default": "./dist/navigator-providers.js"
     }
   },
   "dependencies": {
-    "@space/contracts": "workspace:*"
+    "@ag-ui/client": "1.0.3",
+    "@ag-ui/core": "1.0.3",
+    "@space/contracts": "workspace:*",
+    "zod": "^4"
   },
   "devDependencies": {
-    "typescript": "^7.0.2",
-    "@types/node": "22"
+    "@types/node": "22",
+    "typescript": "^7.0.2"
   }
 }

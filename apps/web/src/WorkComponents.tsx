@@ -6,6 +6,8 @@ import {
 } from "@space/ui";
 import { SectionHeading } from "./Foundations.js";
 import { Sample } from "./Components.js";
+import { AgentWorkspaceExample } from './AgentWorkspaceExample.js';
+import { AgUiExample } from './AgUiExample.js';
 
 const exampleCode = `type Ticket = {
   id: string;
@@ -127,6 +129,8 @@ export function WorkComponents() {
             <Button size="sm" disabled={approval !== "pending"} onClick={() => setApproval("expired")}>Expire request</Button>
           </div>
         </Sample>
+        <AgentWorkspaceExample />
+        <AgUiExample />
         <div className="work-composed-example ds-card">
           <div className="sample-heading"><div><h3>In a conversation</h3><p>The same cards, inside a message.</p></div><Badge>COMPOSED</Badge></div>
           <Message author="Triage agent" initials="TA" agent tone="green" time="Just now">

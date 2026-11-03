@@ -107,6 +107,17 @@ export class AssetStore {
       return preview;
     });
   }
+  async pdfThumbnail(actor: string, id: string, generate: (asset: Asset) => Promise<boolean>): Promise<boolean> {
+    return this.db.transaction(async c => {
+      const [row] = await c.select().from(assets).where(eq(assets.id, uuid(id))).for('update');
+      await this.assertAccess(c, actor, row);
+      if (row!.preview?.kind !== 'pdf') throw new AppError(415, 'preview_unavailable');
+      if (row!.preview.thumbnail !== undefined) return row!.preview.thumbnail;
+      const thumbnail = await generate(row!);
+      await c.update(assets).set({ preview: { ...row!.preview, thumbnail } }).where(eq(assets.id, id));
+      return thumbnail;
+    });
+  }
   async cleanup(remove: (key: string) => Promise<void>, limit = 20): Promise<number> {
     let cleaned = 0;
     for (let i = 0; i < limit; i++) {

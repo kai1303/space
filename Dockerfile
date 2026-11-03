@@ -10,6 +10,7 @@ RUN pnpm --filter @space/server deploy --prod /runtime/apps/server \
 
 FROM node:22-alpine
 WORKDIR /app
+RUN apk add --no-cache poppler-utils util-linux-misc font-liberation
 ENV NODE_ENV=production
 COPY --from=build --chown=node:node /runtime/ ./
 RUN mkdir -p /app/.space-memory && chown node:node /app/.space-memory && chmod 700 /app/.space-memory

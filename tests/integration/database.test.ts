@@ -28,7 +28,7 @@ test('Drizzle rolls back on failure, reuses the pool, binds text and preserves m
     await migrate(pool);
     assert.equal((await db.select().from(users))[0]?.id, id);
     assert.equal((await db.select().from(agentDefinitions))[0]?.name, name);
-    assert.equal((await pool.query('SELECT * FROM schema_migrations')).rowCount, 18);
+    assert.equal((await pool.query('SELECT * FROM schema_migrations')).rowCount, 21);
   } finally {
     await pool.end();
     await admin.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);

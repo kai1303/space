@@ -36,7 +36,7 @@ test('legacy upgrade preserves membership without granting ownership; operator a
     await initializeWorkspaceOwner(pool, workspace, user);
     assert.equal((await workspaces.read(user, workspace)).role, 'owner');
     await assert.rejects(initializeWorkspaceOwner(pool, workspace, other), { code: 'owner_already_initialized' });
-    assert.equal((await pool.query('SELECT * FROM schema_migrations')).rowCount, 18);
+    assert.equal((await pool.query('SELECT * FROM schema_migrations')).rowCount, 21);
   } finally {
     await pool.end();
     await admin.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);
@@ -105,7 +105,7 @@ test('version-three upgrade preserves workspace identities, roles, inactive memb
     assert.deepEqual((await pool.query('SELECT * FROM workspace_events WHERE id=$1', [event])).rows[0], oldEvent);
     assert.deepEqual((await pool.query('SELECT * FROM tasks WHERE id=$1', [task])).rows[0], oldTask);
     await assert.rejects(pool.query('UPDATE workspace_events SET type=$1 WHERE id=$2', ['changed', event]), /append-only/);
-    assert.equal((await pool.query('SELECT * FROM schema_migrations')).rowCount, 18);
+    assert.equal((await pool.query('SELECT * FROM schema_migrations')).rowCount, 21);
   } finally {
     await pool.end();
     await admin.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);
@@ -160,8 +160,8 @@ test('version-thirteen upgrade preserves workspace history and roles without res
     assert.deepEqual((await pool.query('SELECT workspace_id,user_id,role,joined_at FROM workspace_members ORDER BY user_id')).rows, oldMemberships);
     for (const table of retainedTables) {
       const rows = (await pool.query(`SELECT * FROM ${table}`)).rows;
-      // Ignore only columns introduced by 016/017; all original values must stay identical.
-      const originalRows = table === 'messages' ? rows.map(({ sequence, ...message }) => message)
+      // Ignore only new columns introduced by 016/017/020/021; all original values must stay identical.
+      const originalRows = table === 'messages' ? rows.map(({ sequence, agent_milestone, agent_response, ...message }) => message)
         : table === 'channels' ? rows.map(({ topic, description, archived_at, ...channel }) => channel) : rows;
       assert.deepEqual(originalRows, before.get(table), `${table} history changed`);
     }
@@ -184,7 +184,7 @@ test('version-thirteen upgrade preserves workspace history and roles without res
     assert.equal((await new PostgresStore(pool).readTask(owner, task)).id, task);
     assert.equal((await pool.query("SELECT * FROM information_schema.tables WHERE table_schema=current_schema() AND table_name IN ('organizations','organization_members','organization_events')")).rowCount, 0);
     assert.equal((await pool.query("SELECT * FROM information_schema.columns WHERE table_schema=current_schema() AND column_name='organization_id'")).rowCount, 0);
-    assert.equal((await pool.query('SELECT * FROM schema_migrations')).rowCount, 18);
+    assert.equal((await pool.query('SELECT * FROM schema_migrations')).rowCount, 21);
     await assert.rejects(pool.query('UPDATE workspace_events SET type=$1 WHERE id=$2', ['changed', event]), /append-only/);
   } finally {
     await pool.end();

@@ -310,3 +310,48 @@ browser checks above. Full-suite attempts also encountered unrelated concurrent
 profile/memory/UI changes, stale migration-count expectations and a memory MCP
 input mismatch; they do not establish a clean full suite. No live application
 deployment was performed.
+
+## Inline PDF message thumbnails
+
+PDF cards now show a lazy first-page image below their filename and PDF label.
+Filenames open the shared viewer; original download has a separate labeled
+control. Image cards respect natural dimensions within their existing bounds.
+Malformed or unavailable thumbnails leave the PDF icon, viewer and download
+usable. The viewer still fetches authenticated PDF ranges only after activation.
+
+The first authorized PDF `/thumbnail` request reads the sealed original once,
+renders page 1 with Poppler and stores `previews/{id}/thumbnail.webp` at at most
+360×240. PDF preview JSON records `thumbnail: true` or `false`. A database row
+lock deduplicates simultaneous requests, including across API instances. Failed
+document conversion is cached; storage outages and missing/busy renderers remain
+retryable. Access is checked again after conversion before signing the result.
+This JSON-only extension requires no migration and supports existing PDF assets.
+
+Conversion admits two jobs per API, a 25MiB input, first-page-only 720px raster,
+8s wall timeout and temporary-directory cleanup. Linux uses `prlimit` with
+512MiB address space, 5 CPU seconds and 4MiB output-file size. The Docker runtime
+installs `poppler-utils`, `util-linux-misc` and `font-liberation`; rebuild the
+server image to activate them. Native development needs `pdftoppm` and fonts on
+PATH, plus `prlimit` on Linux. Unsupported, encrypted and over-budget documents
+retain the icon/viewer/download path. Office conversion remains outside scope.
+
+Verification: 26 server, 19 asset API and 32 frontend preview tests passed,
+plus 2 real API/SeaweedFS tests, typecheck and server/web builds. The Alpine
+runtime rendered visible first-page text as a non-root user under the resource
+limits. An initial missing-font check produced a blank page, which the runtime
+font package corrected. One cold macOS invocation exceeded the wall limit;
+subsequent native conversion checks passed without raising that limit.
+
+The isolated production-bundle browser showed the thumbnail, opened the PDF
+from its filename, navigated to page 2, returned focus, and fit at 390px without
+horizontal overflow. A 1,104-byte fixture required one original read for
+conversion and one range read for the activated viewer; eight thumbnail requests
+and a page reload caused no additional original reads. This is cache behavior
+evidence, not a general bandwidth or billing benchmark. Artifacts are retained
+at `/Users/kai/.codex-artifacts/space-inline-file-render-2026-11-03/`.
+
+The broad suite was not clean: chat startup, a connector timeout and migration
+count assertions failed while unrelated outbox/migration work changed the shared
+checkout. Affected asset/preview checks above passed after the final change.
+
+![Inline PDF card](/Users/kai/.codex/visualizations/2026/11/03/01a1a08d-7f31-73b1-8a25-65404ae51560/channel-inline-pdf.png)

@@ -17,7 +17,7 @@ it('shows server-approved image thumbnails and navigates files in a shared viewe
   previews({ a: { kind: 'image', mime: 'image/webp', width: 1200, height: 600 }, b: { kind: 'image', mime: 'image/gif', width: 500, height: 800 } });
   render(<AssetAttachments assets={[asset('a'), asset('b')]} />);
   expect((await screen.findByRole('img', { name: 'a.png' })).getAttribute('src')).toBe('/v1/assets/a/thumbnail');
-  expect(screen.getByRole('link', { name: 'a.png 1 KB · Download' }).getAttribute('href')).toBe('/v1/assets/a/download');
+  expect(screen.getByRole('link', { name: 'Download a.png' }).getAttribute('href')).toBe('/v1/assets/a/download');
   const opener = screen.getByRole('button', { name: 'Preview a.png' });
   await userEvent.click(opener);
   const dialog = await screen.findByRole('dialog', { name: 'a.png' });
@@ -35,6 +35,21 @@ it('shows server-approved image thumbnails and navigates files in a shared viewe
   await userEvent.click(within(dialog).getByRole('button', { name: 'Close dialog' }));
   await waitFor(() => expect(document.activeElement).toBe(opener));
   expect(screen.queryByRole('dialog')).toBeNull();
+});
+it('shows a lazy PDF first-page thumbnail without loading the PDF and keeps preview and download separate', async () => {
+  previews({ pdf: { kind: 'pdf', mime: 'application/pdf' } });
+  render(<AssetAttachments assets={[asset('pdf', 'report.pdf')]} />);
+  const image = await screen.findByRole('img', { name: 'First page of report.pdf' });
+  expect(image.getAttribute('src')).toBe('/v1/assets/pdf/thumbnail');
+  expect(image.getAttribute('loading')).toBe('lazy');
+  expect(document.querySelector('canvas,iframe,object')).toBeNull();
+  expect(vi.mocked(fetch)).toHaveBeenCalledTimes(1);
+  expect(screen.getByRole('button', { name: 'Open report.pdf' })).toBeTruthy();
+  expect(screen.getByRole('link', { name: 'Download report.pdf' }).getAttribute('href')).toBe('/v1/assets/pdf/download');
+  fireEvent.error(image);
+  expect(screen.queryByRole('img', { name: 'First page of report.pdf' })).toBeNull();
+  expect(screen.getByRole('button', { name: 'Preview report.pdf' })).toBeTruthy();
+  expect(screen.queryByText('Preview unavailable')).toBeNull();
 });
 it('renders HTML as bounded source text, shows truncation, and leaves unsupported files downloadable', async () => {
   const text = '<script>window.bad = true</script>\n' + 'x'.repeat(4000);

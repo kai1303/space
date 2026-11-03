@@ -36,20 +36,25 @@ function NativeMedia({ asset, kind, onError }: { asset: AssetAttachment; kind: '
 }
 function AttachmentCard({ asset, onOpen, onPreview }: { asset: AssetAttachment; onOpen: (element: HTMLElement) => void; onPreview: (id: string, preview?: AssetPreview) => void }) {
   const { preview, failed, fail } = usePreview(asset.id);
+  const [thumbnailFailed, setThumbnailFailed] = useState(false);
   useEffect(() => {
     onPreview(asset.id, preview);
     return () => onPreview(asset.id);
   }, [asset.id, preview, onPreview]);
-  return <div className={`asset-card ${preview?.kind === 'image' ? 'asset-card--image' : ''}`}>
+  return <div className={`asset-card ${preview?.kind === 'image' ? 'asset-card--image' : ''}`} style={preview?.kind === 'image' ? { width: Math.max(160, Math.min(360, preview.width, 320 * preview.width / preview.height)) } : undefined}>
     {preview?.kind === 'image' && <button type="button" className="asset-image-button" aria-label={`Preview ${asset.name}`} onClick={event => onOpen(event.currentTarget)}>
       <img src={assetUrl(asset.id, 'thumbnail')} alt={asset.name} width={preview.width} height={preview.height} loading="lazy" onError={fail} />
     </button>}
     {(preview?.kind === 'video' || preview?.kind === 'audio') && <NativeMedia asset={asset} kind={preview.kind} onError={fail} />}
     <div className="asset-card-info">
       {preview?.kind !== 'image' && <span className={`asset-file-icon asset-file-icon--${preview?.kind ?? 'file'}`}><FileSymbol kind={preview?.kind} /></span>}
-      <a className="asset-download" href={assetUrl(asset.id, 'download')}><span>{asset.name}</span><small>{Math.max(1, Math.round(asset.size / 1024))} KB · Download</small></a>
+      <button type="button" className="asset-filename" aria-label={`Open ${asset.name}`} onClick={event => onOpen(event.currentTarget)}><span>{asset.name}</span><small>{Math.max(1, Math.round(asset.size / 1024))} KB{preview?.kind === 'pdf' ? ' · PDF' : ''}</small></button>
+      <a className="asset-card-download sp-button sp-button--ghost sp-button--sm sp-icon-button" aria-label={`Download ${asset.name}`} title={`Download ${asset.name}`} href={assetUrl(asset.id, 'download')}><DownloadSimple size={18} aria-hidden="true" /></a>
       {preview?.kind !== 'image' && <IconButton label={`Preview ${asset.name}`} size="sm" onClick={event => onOpen(event.currentTarget)}><span aria-hidden="true">↗</span></IconButton>}
     </div>
+    {preview?.kind === 'pdf' && preview.thumbnail !== false && !thumbnailFailed && <button type="button" className="asset-pdf-thumbnail" aria-label={`Preview first page of ${asset.name}`} onClick={event => onOpen(event.currentTarget)}>
+      <img src={assetUrl(asset.id, 'thumbnail')} alt={`First page of ${asset.name}`} loading="lazy" width={360} height={240} onError={() => setThumbnailFailed(true)} />
+    </button>}
     {preview?.kind === 'text' && <div className="asset-snippet"><span className="asset-preview-label">Text preview</span><CodeBlock code={preview.text.slice(0, 1800).split('\n').slice(0, 8).join('\n')} language={preview.language} /></div>}
     {(failed || preview?.kind === 'unsupported') && <p className="asset-unavailable">Preview unavailable</p>}
   </div>;

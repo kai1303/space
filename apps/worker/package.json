@@ -15,8 +15,7 @@
   "dependencies": {
     "@space/core": "workspace:*",
     "@space/postgres": "workspace:*",
-    "@space/mock": "workspace:*",
-    "@space/redis": "workspace:*"
+    "@space/mock": "workspace:*"
   },
   "devDependencies": {
     "typescript": "^7.0.2",

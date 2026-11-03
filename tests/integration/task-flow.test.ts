@@ -2,7 +2,7 @@ import { test, before, after, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID, randomBytes } from 'node:crypto';
 import { Pool } from 'pg';
-import { setTimeout as delay } from 'node:timers/promises';
+import { setImmediate as nextTurn, setTimeout as delay } from 'node:timers/promises';
 import { migrate } from '@space/postgres/migrate';
 import { PostgresStore } from '@space/postgres/store';
 import { bootstrap } from '@space/postgres/bootstrap';
@@ -183,19 +183,21 @@ test('HTTP boundary authenticates, validates requests and returns unsupported co
 });
 
 
-test('connector discovery is bounded by the invocation timeout', async () => {
+test('connector discovery is bounded by the invocation timeout', { timeout: 5000 }, async t => {
   const { input, owner } = await fixture();
   const task = await store.createTask(owner, input, randomUUID());
   await store.approveTask(owner, task.id);
   const connector = new MockConnector();
-  connector.discover = async () => { await delay(250); return { skills: ['demo.echo'], controls: { progress_stream: true, active_steer: false, queued_followup: false, cancel: false } }; };
+  let releaseDiscovery!: () => void;
+  const discovery = new Promise<void>(resolve => { releaseDiscovery = resolve; });
+  t.after(() => releaseDiscovery());
+  connector.discover = async () => { await discovery; return { skills: ['demo.echo'], controls: { progress_stream: true, active_steer: false, queued_followup: false, cancel: false } }; };
   let invoked = false;
   connector.invoke = async () => { invoked = true; throw new Error('must not invoke after timeout'); };
-  const delivery = deliverOne(store, [connector], 10);
-  const bounded = await Promise.race([delivery.then(() => true), delay(100).then(() => false)]);
-  await delivery;
-  assert.equal(bounded, true);
-  await delay(260);
+  // Completion must not depend on discovery finishing, regardless of database latency.
+  assert.equal(await deliverOne(store, [connector], 10), true);
+  releaseDiscovery();
+  await nextTurn();
   assert.equal(invoked, false);
   const row = await store.pool.query('SELECT last_error FROM outbox WHERE task_id=$1', [task.id]);
   assert.equal(row.rows[0].last_error, 'connector_timeout');

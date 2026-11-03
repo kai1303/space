@@ -84,3 +84,20 @@
   .sp-work-content { padding: 12px; }
   .sp-work-footer { padding: 10px 12px; }
 }
+.sp-agent-response { display: grid; gap: var(--sp-space-3); min-width: 0; }
+.sp-agent-markdown { min-width: 0; overflow-wrap: anywhere; }
+.sp-agent-markdown > :first-child { margin-top: 0; }
+.sp-agent-markdown > :last-child { margin-bottom: 0; }
+.sp-agent-markdown a { color: var(--sp-info); text-decoration: underline; }
+.sp-agent-response pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+.sp-agent-response .sp-code-block pre { white-space: pre; overflow-wrap: normal; }
+.sp-agent-table-scroll { max-width: 100%; overflow-x: auto; }
+.sp-agent-table-scroll table { width: 100%; border-collapse: collapse; text-align: left; }
+.sp-agent-table-scroll th, .sp-agent-table-scroll td { padding: var(--sp-space-2) var(--sp-space-3); border: 1px solid var(--sp-border); overflow-wrap: anywhere; }
+.sp-agent-table-scroll th, .sp-agent-table-scroll td { min-width: 6rem; }
+.sp-agent-table-scroll th { white-space: nowrap; }
+.sp-agent-table-scroll caption { text-align: left; font-weight: 700; padding-bottom: var(--sp-space-2); }
+.sp-agent-result { padding: var(--sp-space-3); }
+.sp-agent-result h4 { margin: 0 0 var(--sp-space-2); }
+.sp-agent-result p { margin: 0; white-space: pre-wrap; }
+.sp-agent-streaming { margin: 0; color: var(--sp-text-secondary); font-size: var(--sp-text-sm); }

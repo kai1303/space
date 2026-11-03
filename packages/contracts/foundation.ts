@@ -38,9 +38,11 @@ export function parseExecution(value: unknown): Execution {
   return { id: uuid(v.id), task_id: uuid(v.task_id), workspace_id: uuid(v.workspace_id), installation_id: uuid(v.installation_id), session_id: uuid(v.session_id), status: v.status as Execution['status'], last_sequence: v.last_sequence as number };
 }
 export function parseInvocation(value: unknown): InvocationRequest {
-  const v = record(value, ['schema_version', 'task_id', 'execution_id', 'session_id', 'idempotency_key', 'goal', 'skill']);
+  const v = record(value, ['schema_version', 'task_id', 'execution_id', 'session_id', 'idempotency_key', 'goal', 'skill', 'context']);
   if (v.schema_version !== '1.0') throw new AppError(400, 'unsupported_schema_version');
   const execution_id = uuid(v.execution_id);
   if (uuid(v.idempotency_key) !== execution_id) throw new AppError(400, 'invalid_idempotency_key');
-  return { schema_version: '1.0', task_id: uuid(v.task_id), execution_id, session_id: uuid(v.session_id), idempotency_key: execution_id, goal: text(v.goal), skill: text(v.skill, 80) };
+  let context:InvocationRequest['context'];
+  if(v.context!==undefined){const ctx=record(v.context,['thread_id','messages']);if(!Array.isArray(ctx.messages)||ctx.messages.length>16)throw new AppError(400,'invalid_context');context={thread_id:uuid(ctx.thread_id),messages:ctx.messages.map(raw=>{const m=record(raw,['id','text','author_type']);if(m.author_type!=='human'&&m.author_type!=='agent')throw new AppError(400,'invalid_context');return {id:uuid(m.id),text:text(m.text,1000),author_type:m.author_type};})};}
+  return { ...(context?{context}:{}), schema_version: '1.0', task_id: uuid(v.task_id), execution_id, session_id: uuid(v.session_id), idempotency_key: execution_id, goal: text(v.goal), skill: text(v.skill, 80) };
 }

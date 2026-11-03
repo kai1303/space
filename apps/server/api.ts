@@ -1,3 +1,5 @@
+import { NavigatorStore } from '@space/postgres/navigator';
+import { registerNavigatorRoutes } from './navigator.js';
 import { AgentConnectionStore } from '@space/postgres/agent-connections';
 import { registerAgentConnectionRoutes, registerAgentConnections } from './agent-connections.js';
 import type { IncomingHttpHeaders } from 'node:http';
@@ -104,6 +106,7 @@ export function createApi(store: PostgresStore, options: { logger?: boolean; rea
 
   const chat = new ChatStore(store.pool);
   registerChatRoutes(app, chat);
+  registerNavigatorRoutes(app, new NavigatorStore(store.pool));
   const memory = new MemoryStore(store.pool), memoryProviders = createMemoryProviders(options.memory);
   registerMemoryRoutes(app, memory, memoryProviders);
   registerMemoryMcp(app, memory, memoryProviders, options.auth?.origins, process.env.MEMORY_MCP_ALLOWED_HOSTS?.split(',').map(host => host.trim()).filter(Boolean));

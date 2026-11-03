@@ -1,12 +1,14 @@
 import { AppError, record, text, uuid } from './validation.js';
 import { parseRichDocument, type RichDocument } from './rich-text.js';
 import { parseAssetIds, type AssetAttachment } from './assets.js';
+import type { AgentResponse } from './agent-response.js';
 export interface ChatMessage {
   id: string; channel_id: string; thread_id: string; task_id: string | null;
   text: string; created_at: string; client_message_id: string | null;
   // Older immutable replay payloads omit this; their event sequence is identical.
   sequence?: string;
   document?: RichDocument | null;
+  agent_response?: AgentResponse | null;
   attachments?: AssetAttachment[];
   author: { kind: 'human' | 'agent'; id: string; name: string };
 }

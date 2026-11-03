@@ -55,6 +55,8 @@ it("reports clipboard failure without adding a filename or wrap toolbar", async 
 });
 
 it("renders Slackbot-style language, line numbers and syntax tokens", async () => {
+  // Test token rendering independently of the tokenizer's CPU time budget.
+  vi.spyOn(Date, "now").mockReturnValue(Date.now());
   const { container } = render(<CodeBlock code={'const value = "hello";\nconsole.log(value);'} language="typescript" />);
   expect(screen.getByRole("group", { name: "TypeScript code block" })).toBeTruthy();
   expect(container.querySelector(".sp-code-gutter")?.getAttribute("aria-hidden")).toBe("true");
