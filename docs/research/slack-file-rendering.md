@@ -112,6 +112,12 @@ Reference: [Slack: adding and finding files](https://slack.com/help/articles/201
 
 ## Implemented channel Files UI
 
+Visual comparison correction: a later user-approved inspection opened the actual
+channel Files & links tab. It occupies the main conversation area and uses
+All / Files / Media / Links filter buttons, centered search and Newest / Oldest
+sorting. The right-side layout below is a Space adaptation and does not match
+that observed shell. See [the live capture and comparison](slack-files-tab.md).
+
 The user approved the continuation above. Space now has the Files navigation
 button, responsive right-side file browser, server-side filename/kind filters,
 share sorting and pagination, uploader/date metadata, preview/download and source
