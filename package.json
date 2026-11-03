@@ -1,0 +1,36 @@
+{
+  "name": "agent-native-workplace",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@8.10.3",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "turbo run build",
+    "typecheck": "turbo run typecheck",
+    "test": "turbo run test",
+    "test:contracts": "turbo run test:contracts",
+    "test:foundation": "turbo run test:foundation",
+    "dev": "turbo watch dev",
+    "web": "pnpm --filter @space/ui build && pnpm --filter @space/web dev --host 127.0.0.1",
+    "test:ui": "pnpm --filter @space/ui --filter @space/web test",
+    "server": "turbo run start --filter=@space/server",
+    "worker": "turbo run start --filter=@space/worker",
+    "migrate": "turbo run migrate --filter=@space/tools",
+    "bootstrap": "turbo run bootstrap --filter=@space/tools",
+    "demo": "turbo run demo --filter=@space/tools",
+    "foundation:demo": "turbo run foundation:demo --filter=@space/tools",
+    "user:create": "turbo run user:create --filter=@space/tools",
+    "workspace:owner": "turbo run workspace:owner --filter=@space/tools",
+    "test:chat": "turbo run test:chat --filter=@space/tests",
+    "test:auth": "turbo run test:auth --filter=@space/tests",
+    "connector": "pnpm --filter @space/connector build && pnpm --filter @space/connector start",
+    "test:assets": "turbo run test:assets --filter=@space/tests",
+    "test:workspace": "turbo run test:workspace --filter=@space/tests"
+  },
+  "devDependencies": {
+    "turbo": "^2.11.10"
+  }
+}

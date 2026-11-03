@@ -1,0 +1,97 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: workplace
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-local_demo_only}
+      POSTGRES_DB: workplace
+    ports:
+      - "127.0.0.1:55438:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U workplace -d workplace"]
+      interval: 2s
+      timeout: 5s
+      retries: 20
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "127.0.0.1:56380:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 5s
+      retries: 20
+  seaweedfs:
+    image: chrislusf/seaweedfs:4.52
+    command: ["mini", "-dir=/data", "-ip=127.0.0.1", "-ip.bind=0.0.0.0", "-webdav=false", "-admin.ui=false", "-s3.port.iceberg=0", "-s3.port.lance=0"]
+    environment:
+      # Local development defaults. Supply separate secrets for a deployment.
+      AWS_ACCESS_KEY_ID: ${ASSET_STORAGE_ACCESS_KEY:-space_local_dev}
+      AWS_SECRET_ACCESS_KEY: ${ASSET_STORAGE_SECRET_KEY:-space_local_dev_secret}
+      S3_BUCKET: ${ASSET_STORAGE_BUCKET:-space-assets}
+    ports:
+      - "127.0.0.1:8333:8333"
+    volumes:
+      - seaweedfs_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:9333/cluster/status && nc -z 127.0.0.1 8333"]
+      interval: 3s
+      timeout: 5s
+      retries: 30
+      start_period: 5s
+  migrate:
+    build: .
+    environment: &database
+      DATABASE_URL: postgres://workplace:${POSTGRES_PASSWORD:-local_demo_only}@postgres:5432/workplace
+    command: ["node", "scripts/dist/migrate.js"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+  server:
+    build: .
+    environment:
+      <<: *database
+      HOST: 0.0.0.0
+      NODE_ENV: development
+      TRUSTED_PROXY_CIDRS: ${TRUSTED_PROXY_CIDRS:-}
+      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:-}
+      BETTER_AUTH_URL: ${BETTER_AUTH_URL:-http://127.0.0.1:5173}
+      AUTH_TRUSTED_ORIGINS: ${AUTH_TRUSTED_ORIGINS:-http://127.0.0.1:5173,http://127.0.0.1:5174}
+      ALLOW_DEVELOPMENT_TOKENS: ${ALLOW_DEVELOPMENT_TOKENS:-false}
+      MEMORY_DIRECTORY: /app/.space-memory
+      MEMORY_MCP_ALLOWED_HOSTS: ${MEMORY_MCP_ALLOWED_HOSTS:-}
+      REDIS_URL: redis://redis:6379
+      ASSET_STORAGE_ENDPOINT: http://seaweedfs:8333
+      ASSET_STORAGE_PUBLIC_ENDPOINT: ${ASSET_STORAGE_PUBLIC_ENDPOINT:-http://127.0.0.1:8333}
+      ASSET_STORAGE_BUCKET: ${ASSET_STORAGE_BUCKET:-space-assets}
+      ASSET_STORAGE_ACCESS_KEY: ${ASSET_STORAGE_ACCESS_KEY:-space_local_dev}
+      ASSET_STORAGE_SECRET_KEY: ${ASSET_STORAGE_SECRET_KEY:-space_local_dev_secret}
+      ASSET_STORAGE_ORIGINS: ${ASSET_STORAGE_ORIGINS:-http://127.0.0.1:5173,http://127.0.0.1:5174}
+    ports:
+      - "127.0.0.1:3000:3000"
+    volumes:
+      - memory_data:/app/.space-memory
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      seaweedfs:
+        condition: service_healthy
+  worker:
+    build: .
+    environment:
+      <<: *database
+      REDIS_URL: redis://redis:6379
+    command: ["node", "apps/worker/dist/main.js"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+volumes:
+  postgres_data:
+  seaweedfs_data:
+  memory_data:

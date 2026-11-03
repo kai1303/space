@@ -1,0 +1,205 @@
+{
+  "$schema": "https://turborepo.com/schema.json",
+  "globalDependencies": [
+    "tsconfig.base.json"
+  ],
+  "tasks": {
+    "build": {
+      "dependsOn": [
+        "^build"
+      ],
+      "outputs": [
+        "dist/**"
+      ]
+    },
+    "typecheck": {
+      "dependsOn": [
+        "^build"
+      ],
+      "outputs": []
+    },
+    "test": {
+      "dependsOn": [
+        "^build"
+      ],
+      "cache": false,
+      "passThroughEnv": [
+        "TEST_DATABASE_URL",
+        "TEST_REDIS_URL"
+      ]
+    },
+    "test:contracts": {
+      "dependsOn": [
+        "^build"
+      ],
+      "outputs": []
+    },
+    "test:foundation": {
+      "dependsOn": [
+        "^build"
+      ],
+      "cache": false,
+      "passThroughEnv": [
+        "TEST_DATABASE_URL"
+      ]
+    },
+    "dev": {
+      "dependsOn": [
+        "build"
+      ],
+      "cache": false,
+      "persistent": true,
+      "interruptible": true,
+      "passThroughEnv": [
+        "DATABASE_URL",
+        "HOST",
+        "PORT",
+        "REDIS_URL",
+        "BETTER_AUTH_SECRET",
+        "BETTER_AUTH_URL",
+        "AUTH_TRUSTED_ORIGINS",
+        "ALLOW_DEVELOPMENT_TOKENS",
+        "NODE_ENV",
+        "TRUSTED_PROXY_CIDRS",
+        "ASSET_STORAGE_ENDPOINT",
+        "ASSET_STORAGE_PUBLIC_ENDPOINT",
+        "ASSET_STORAGE_BUCKET",
+        "ASSET_STORAGE_ACCESS_KEY",
+        "ASSET_STORAGE_SECRET_KEY",
+        "ASSET_STORAGE_ORIGINS",
+        "MEMORY_DIRECTORY",
+        "MEMORY_MCP_ALLOWED_HOSTS"
+      ]
+    },
+    "start": {
+      "dependsOn": [
+        "build"
+      ],
+      "cache": false,
+      "persistent": true,
+      "passThroughEnv": [
+        "DATABASE_URL",
+        "HOST",
+        "PORT",
+        "REDIS_URL",
+        "BETTER_AUTH_SECRET",
+        "BETTER_AUTH_URL",
+        "AUTH_TRUSTED_ORIGINS",
+        "ALLOW_DEVELOPMENT_TOKENS",
+        "NODE_ENV",
+        "TRUSTED_PROXY_CIDRS",
+        "ASSET_STORAGE_ENDPOINT",
+        "ASSET_STORAGE_PUBLIC_ENDPOINT",
+        "ASSET_STORAGE_BUCKET",
+        "ASSET_STORAGE_ACCESS_KEY",
+        "ASSET_STORAGE_SECRET_KEY",
+        "ASSET_STORAGE_ORIGINS",
+        "MEMORY_DIRECTORY",
+        "MEMORY_MCP_ALLOWED_HOSTS"
+      ]
+    },
+    "migrate": {
+      "dependsOn": [
+        "build"
+      ],
+      "cache": false,
+      "passThroughEnv": [
+        "DATABASE_URL"
+      ]
+    },
+    "bootstrap": {
+      "dependsOn": [
+        "build"
+      ],
+      "cache": false,
+      "passThroughEnv": [
+        "DATABASE_URL",
+        "DEMO_ENV_FILE"
+      ]
+    },
+    "demo": {
+      "dependsOn": [
+        "build"
+      ],
+      "cache": false,
+      "passThroughEnv": [
+        "API_URL",
+        "DEMO_ENV_FILE"
+      ]
+    },
+    "foundation:demo": {
+      "dependsOn": [
+        "build"
+      ],
+      "cache": false,
+      "passThroughEnv": [
+        "DATABASE_URL"
+      ]
+    },
+    "user:create": {
+      "dependsOn": [
+        "build"
+      ],
+      "cache": false,
+      "passThroughEnv": [
+        "DATABASE_URL",
+        "USER_DISPLAY_NAME",
+        "USER_ENV_FILE"
+      ]
+    },
+    "workspace:owner": {
+      "dependsOn": [
+        "build"
+      ],
+      "cache": false,
+      "passThroughEnv": [
+        "DATABASE_URL",
+        "WORKSPACE_ID",
+        "OWNER_USER_ID"
+      ]
+    },
+    "test:chat": {
+      "dependsOn": [
+        "^build"
+      ],
+      "cache": false,
+      "passThroughEnv": [
+        "TEST_DATABASE_URL",
+        "TEST_REDIS_URL"
+      ]
+    },
+    "test:auth": {
+      "dependsOn": [
+        "^build"
+      ],
+      "cache": false,
+      "passThroughEnv": [
+        "TEST_DATABASE_URL"
+      ]
+    },
+    "test:assets": {
+      "dependsOn": [
+        "^build"
+      ],
+      "cache": false,
+      "passThroughEnv": [
+        "TEST_DATABASE_URL",
+        "ASSET_STORAGE_ENDPOINT",
+        "ASSET_STORAGE_PUBLIC_ENDPOINT",
+        "ASSET_STORAGE_BUCKET",
+        "ASSET_STORAGE_ACCESS_KEY",
+        "ASSET_STORAGE_SECRET_KEY",
+        "ASSET_STORAGE_ORIGINS"
+      ]
+    },
+    "test:workspace": {
+      "dependsOn": [
+        "^build"
+      ],
+      "cache": false,
+      "passThroughEnv": [
+        "TEST_DATABASE_URL"
+      ]
+    }
+  }
+}

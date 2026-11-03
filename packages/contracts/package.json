@@ -1,0 +1,31 @@
+{
+  "name": "@space/contracts",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./foundation": {
+      "types": "./dist/foundation.d.ts",
+      "default": "./dist/foundation.js"
+    },
+    "./validation": {
+      "types": "./dist/validation.d.ts",
+      "default": "./dist/validation.js"
+    }
+  },
+  "devDependencies": {
+    "typescript": "^7.0.2",
+    "@types/node": "22"
+  }
+}

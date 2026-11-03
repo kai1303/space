@@ -1,0 +1,82 @@
+{
+  "name": "@space/postgres",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json && mkdir -p dist/migrations && cp migrations/*.sql dist/migrations/",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "exports": {
+    "./provisioning": {
+      "types": "./dist/provisioning.d.ts",
+      "default": "./dist/provisioning.js"
+    },
+    "./access": {
+      "types": "./dist/access.d.ts",
+      "default": "./dist/access.js"
+    },
+    "./bootstrap": {
+      "types": "./dist/bootstrap.d.ts",
+      "default": "./dist/bootstrap.js"
+    },
+    "./foundation": {
+      "types": "./dist/foundation.d.ts",
+      "default": "./dist/foundation.js"
+    },
+    "./migrate": {
+      "types": "./dist/migrate.d.ts",
+      "default": "./dist/migrate.js"
+    },
+    "./store": {
+      "types": "./dist/store.d.ts",
+      "default": "./dist/store.js"
+    },
+    "./database": {
+      "types": "./dist/database.d.ts",
+      "default": "./dist/database.js"
+    },
+    "./schema": {
+      "types": "./dist/schema.d.ts",
+      "default": "./dist/schema.js"
+    },
+    "./workspace": {
+      "types": "./dist/workspace.d.ts",
+      "default": "./dist/workspace.js"
+    },
+    "./users": {
+      "types": "./dist/users.d.ts",
+      "default": "./dist/users.js"
+    },
+    "./chat": {
+      "types": "./dist/chat.d.ts",
+      "default": "./dist/chat.js"
+    },
+    "./agent-connections": {
+      "types": "./dist/agent-connections.d.ts",
+      "default": "./dist/agent-connections.js"
+    },
+    "./assets": {
+      "types": "./dist/assets.d.ts",
+      "default": "./dist/assets.js"
+    },
+    "./memory": {
+      "types": "./dist/memory.d.ts",
+      "default": "./dist/memory.js"
+    }
+  },
+  "dependencies": {
+    "@space/contracts": "workspace:*",
+    "@space/core": "workspace:*",
+    "drizzle-orm": "^0.45.4",
+    "pg": "^8.23.1"
+  },
+  "devDependencies": {
+    "@types/node": "22",
+    "@types/pg": "^8.23.1",
+    "typescript": "^7.0.2"
+  }
+}

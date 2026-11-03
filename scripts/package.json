@@ -1,0 +1,27 @@
+{
+  "name": "@space/tools",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "migrate": "cd .. && node scripts/dist/migrate.js",
+    "bootstrap": "cd .. && node scripts/dist/bootstrap.js",
+    "demo": "cd .. && node scripts/dist/demo.js",
+    "foundation:demo": "cd .. && node scripts/dist/foundation-demo.js",
+    "user:create": "cd .. && node scripts/dist/user-create.js",
+    "workspace:owner": "cd .. && node scripts/dist/workspace-owner.js"
+  },
+  "dependencies": {
+    "@space/contracts": "workspace:*",
+    "@space/postgres": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "^7.0.2",
+    "@types/node": "22"
+  }
+}

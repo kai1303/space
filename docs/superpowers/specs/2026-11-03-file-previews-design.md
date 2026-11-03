@@ -1,0 +1,13 @@
+# Slack-like attachment previews
+
+User approved reverse engineering Slack and fixing the current download-only attachments. Preserve the SeaweedFS upload lifecycle, authorization, sealed originals and download endpoint.
+
+Show type-specific inline previews and an accessible full viewer with filename, type, download, close, previous/next file and Escape navigation. Common raster images use server-generated thumbnails and sanitized display images. PDFs use the locally bundled PDF.js canvas renderer, with page navigation and zoom. Text/code previews are bounded UTF-8 and rendered as React text with the existing CodeBlock component. Supported audio/video containers use native controls; unavailable codecs show a download fallback. Office/archive/unknown files keep a clear unsupported preview state and working download. No external conversion/SaaS dependency or arbitrary HTML/SVG document execution.
+
+The backend determines preview kinds from actual bytes, not the browser MIME claim. Image decoding has pixel/frame limits and re-encodes preview representations. Signed inline content URLs are issued only for validated image/PDF/media types; originals continue downloading as octet-stream attachments. Preview metadata is persisted separately on assets so immutable message history does not need rewriting. Legacy attachments lazily acquire previews under an asset lock. Provider failures are retryable, and malformed/unsupported content gets a durable fallback without blocking its download.
+
+New routes: GET /v1/assets/:assetId/preview returns validated AssetPreview JSON; GET /v1/assets/:assetId/content serves the display representation; GET /v1/assets/:assetId/thumbnail serves raster thumbnails. Every route reuses current channel membership and uploader-only checks for unattached files. Lifecycle cleanup removes generated preview objects along with abandoned assets. Credentials remain server-side.
+
+Reverse-engineering evidence is retained outside the repo. Record loaded-source hashes, selected module ranges, actual REA results and observed versus inferred behaviors in docs/research/slack-file-rendering.md. The accessible Slack workspace contains no files, so media-specific live playback is not claimed.
+
+Verification: failing preview engine and route tests before implementation; image spoofing and pixel limits, escaped text, supported/unknown kinds; DB authorization and legacy backfill; actual Seaweed upload/preview/download and derivative cleanup; viewer keyboard/error/download tests; full suite/typecheck/build; browser smoke with synthetic image/PDF/text/media in an isolated QA schema.

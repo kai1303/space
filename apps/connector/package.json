@@ -1,0 +1,16 @@
+{
+  "name": "@space/connector",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "bin": { "space-connector": "dist/main.js" },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "start": "node dist/main.js",
+    "test": "pnpm build && node --test test/*.test.mjs"
+  },
+  "dependencies": { "socket.io-client": "^4.8.4", "jose": "^6.2.15" },
+  "devDependencies": { "@types/node": "22", "typescript": "^7.0.2", "socket.io": "^4.8.4" }
+}

@@ -1,0 +1,26 @@
+{
+  "name": "@space/mock",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "exports": {
+    "./connector": {
+      "types": "./dist/connector.d.ts",
+      "default": "./dist/connector.js"
+    }
+  },
+  "dependencies": {
+    "@space/contracts": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "^7.0.2",
+    "@types/node": "22"
+  }
+}

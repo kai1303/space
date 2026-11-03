@@ -1,0 +1,25 @@
+.space-logo {
+  display: block;
+  width: 114px;
+  height: 28px;
+  flex-shrink: 0;
+  overflow: hidden;
+}
+.space-logo--icon {
+  width: 28px;
+  height: 28px;
+}
+.chat-workspace-mark .space-logo--icon {
+  width: 80%;
+  height: 80%;
+}
+.space-logo--inverse,
+[data-theme="dark"] .chat-login .space-logo,
+[data-theme="dark"] .docs-footer .space-logo {
+  filter: brightness(0) invert(1);
+}
+.chat-login .space-logo {
+  width: 180px;
+  height: auto;
+  aspect-ratio: 2030 / 500;
+}

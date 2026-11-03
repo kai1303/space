@@ -1,0 +1,477 @@
+import {
+  useEffect,
+  useLayoutEffect,
+  useId,
+  useRef,
+  useState,
+  type ButtonHTMLAttributes,
+  type InputHTMLAttributes,
+  type ReactNode,
+} from "react";
+import { createPortal } from "react-dom";
+import { Check, CaretDown, X } from "@phosphor-icons/react";
+import { AnimatePresence, motion, useAnimate, useIsPresent, useReducedMotion } from "motion/react";
+import { motionTransition, surfaceMotion } from "./motion.js";
+
+export type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
+  variant?: "primary" | "secondary" | "ghost" | "danger";
+  size?: "sm" | "md" | "lg";
+  loading?: boolean;
+};
+export function Button({
+  variant = "secondary",
+  size = "md",
+  loading = false,
+  className = "",
+  children,
+  disabled,
+  type = "button",
+  ...props
+}: ButtonProps) {
+  return (
+    <button
+      {...props}
+      type={type}
+      disabled={disabled || loading}
+      aria-busy={loading || undefined}
+      className={`sp-button sp-button--${variant} sp-button--${size} ${className}`}
+    >
+      {loading && <span className="sp-spinner" aria-hidden="true" />}
+      {children}
+    </button>
+  );
+}
+export function IconButton({
+  label,
+  children,
+  className = "",
+  ...props
+}: Omit<ButtonProps, "children"> & { label: string; children: ReactNode }) {
+  return (
+    <Button
+      {...props}
+      variant={props.variant ?? "ghost"}
+      className={`sp-icon-button ${className}`}
+      aria-label={label}
+      title={label}
+    >
+      {children}
+    </Button>
+  );
+}
+export type Tone =
+  | "neutral"
+  | "accent"
+  | "success"
+  | "warning"
+  | "danger"
+  | "info";
+export function Badge({
+  children,
+  tone = "neutral",
+  dot = false,
+}: {
+  children: ReactNode;
+  tone?: Tone;
+  dot?: boolean;
+}) {
+  return (
+    <span className={`sp-badge sp-tone--${tone}`}>
+      {dot && <span className="sp-status-dot" aria-hidden="true" />}
+      {children}
+    </span>
+  );
+}
+export function Avatar({
+  name,
+  initials,
+  size = "md",
+  tone = "purple",
+  presence,
+}: {
+  name: string;
+  initials: string;
+  size?: "sm" | "md" | "lg";
+  tone?: "purple" | "blue" | "green" | "orange";
+  presence?: "online" | "away" | "offline";
+}) {
+  return (
+    <span
+      className={`sp-avatar sp-avatar--${size} sp-avatar--${tone}`}
+      role="img"
+      aria-label={`${name}${presence ? `, ${presence}` : ""}`}
+    >
+      <span aria-hidden="true">{initials}</span>
+      {presence && <span className={`sp-presence sp-presence--${presence}`} />}
+    </span>
+  );
+}
+export function TextField({
+  label,
+  hint,
+  error,
+  id: providedId,
+  className = "",
+  ...props
+}: InputHTMLAttributes<HTMLInputElement> & {
+  label: string;
+  hint?: string;
+  error?: string;
+}) {
+  const generatedId = useId();
+  const id = providedId ?? generatedId;
+  const description = error || hint;
+  return (
+    <div className={`sp-field ${className}`}>
+      <label htmlFor={id}>{label}</label>
+      <input
+        {...props}
+        id={id}
+        className="sp-input"
+        aria-invalid={error ? true : undefined}
+        aria-describedby={
+          description ? `${id}-description` : props["aria-describedby"]
+        }
+      />
+      {description && (
+        <span
+          id={`${id}-description`}
+          className={error ? "sp-field-error" : "sp-field-hint"}
+        >
+          {description}
+        </span>
+      )}
+    </div>
+  );
+}
+export function Switch({
+  label,
+  checked,
+  onChange,
+  disabled = false,
+}: {
+  label: string;
+  checked: boolean;
+  onChange: (value: boolean) => void;
+  disabled?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      className="sp-switch-row"
+      role="switch"
+      aria-checked={checked}
+      disabled={disabled}
+      onClick={() => onChange(!checked)}
+    >
+      <span>{label}</span>
+      <span className="sp-switch-track">
+        <span className="sp-switch-thumb">
+          {checked && <Check size={10} weight="bold" />}
+        </span>
+      </span>
+    </button>
+  );
+}
+export type TabItem = {
+  id: string;
+  label: string;
+  icon?: ReactNode;
+  panelId?: string;
+};
+export function Tabs({
+  items,
+  value,
+  onChange,
+  label,
+}: {
+  items: TabItem[];
+  value: string;
+  onChange: (id: string) => void;
+  label: string;
+}) {
+  const refs = useRef(new Map<string, HTMLButtonElement>());
+  return (
+    <div className="sp-tabs" role="tablist" aria-label={label}>
+      {items.map((item, index) => (
+        <button
+          key={item.id}
+          ref={(node) => {
+            if (node) refs.current.set(item.id, node);
+            else refs.current.delete(item.id);
+          }}
+          type="button"
+          role="tab"
+          aria-selected={item.id === value}
+          aria-controls={item.panelId}
+          tabIndex={item.id === value ? 0 : -1}
+          onClick={() => onChange(item.id)}
+          onKeyDown={(event) => {
+            const keys = ["ArrowRight", "ArrowLeft", "Home", "End"];
+            if (!keys.includes(event.key)) return;
+            event.preventDefault();
+            const next =
+              event.key === "Home"
+                ? 0
+                : event.key === "End"
+                  ? items.length - 1
+                  : (index +
+                      (event.key === "ArrowRight" ? 1 : -1) +
+                      items.length) %
+                    items.length;
+            const target = items[next];
+            if (target) {
+              onChange(target.id);
+              refs.current.get(target.id)?.focus();
+            }
+          }}
+        >
+          {item.icon}
+          {item.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+export function Menu({ label, items, trigger, className = "", menuLabel = label, floating = false, align = "end" }: {
+  label: string;
+  trigger?: ReactNode;
+  className?: string;
+  menuLabel?: string;
+  floating?: boolean;
+  align?: "start" | "end";
+  items: { label: string; icon?: ReactNode; onSelect: () => void; danger?: boolean; separatorBefore?: boolean }[];
+}) {
+  return <Popover label={label} panelLabel={menuLabel} role="menu" className={`sp-menu ${className}`}
+    panelClassName={`sp-menu-content ${className ? `${className}-content` : ""}`}
+    triggerClassName="sp-button sp-button--secondary sp-button--md" floating={floating} align={align}
+    trigger={trigger ?? <>{label}<CaretDown size={14} /></>}>
+    {close => items.map(item => <span key={item.label} className="sp-menu-item-group">
+      {item.separatorBefore && <hr role="separator" />}
+      <button type="button" role="menuitem" className={item.danger ? "sp-menu-danger" : ""} onClick={() => { item.onSelect(); close(); }}>{item.icon}{item.label}</button>
+    </span>)}
+  </Popover>;
+}
+
+export function Popover({ label, trigger, children, className = "", panelClassName = "", triggerClassName, panelLabel = label, role, floating = false, align = "end" }: {
+  label: string;
+  trigger: ReactNode;
+  children: (close: (restoreFocus?: boolean) => void) => ReactNode;
+  className?: string;
+  panelClassName?: string;
+  triggerClassName?: string;
+  panelLabel?: string;
+  role?: "menu";
+  floating?: boolean;
+  align?: "start" | "end";
+}) {
+  const ref = useRef<HTMLDetailsElement>(null);
+  const panel = useRef<HTMLDivElement>(null);
+  const id = useId();
+  const [open, setOpen] = useState(false);
+  const [expanded, setExpanded] = useState(false);
+  const reduced = useReducedMotion();
+  function show() { setExpanded(true); setOpen(true); }
+  const [position, setPosition] = useState({ top: 0, left: 0 });
+  function close(restoreFocus = false) {
+    setOpen(false);
+    if (restoreFocus) ref.current?.querySelector("summary")?.focus();
+  }
+  useEffect(() => {
+    const close = (event: PointerEvent) => {
+      if (!ref.current?.contains(event.target as Node) && !panel.current?.contains(event.target as Node))
+        setOpen(false);
+    };
+    document.addEventListener("pointerdown", close);
+    return () => document.removeEventListener("pointerdown", close);
+  }, []);
+  useLayoutEffect(() => {
+    if (!open || !floating) return;
+    const place = () => {
+      const anchor = ref.current?.getBoundingClientRect(), menu = panel.current?.getBoundingClientRect();
+      if (!anchor || !menu) return;
+      setPosition({
+        left: Math.max(8, Math.min(align === "start" ? anchor.left : anchor.right - menu.width, window.innerWidth - menu.width - 8)),
+        top: Math.max(8, anchor.bottom + menu.height + 6 > window.innerHeight ? anchor.top - menu.height - 6 : anchor.bottom + 6),
+      });
+    };
+    place();
+    window.addEventListener("resize", place);
+    window.addEventListener("scroll", place, true);
+    return () => { window.removeEventListener("resize", place); window.removeEventListener("scroll", place, true); };
+  }, [open, floating, align]);
+  function navigate(event: React.KeyboardEvent) {
+    if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); close(true); return; }
+    if (event.key === "Tab") { close(true); return; }
+    if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+    event.preventDefault(); event.stopPropagation();
+    show();
+    requestAnimationFrame(() => {
+      const buttons = [...(panel.current?.querySelectorAll<HTMLButtonElement>("button") ?? [])];
+      const current = buttons.indexOf(document.activeElement as HTMLButtonElement);
+      const next = event.key === "Home" ? 0 : event.key === "End" ? buttons.length - 1 : event.key === "ArrowUp" ? (current < 0 ? buttons.length - 1 : (current - 1 + buttons.length) % buttons.length) : (current + 1) % buttons.length;
+      buttons[next]?.focus();
+    });
+  }
+  const content = <AnimatePresence onExitComplete={() => setExpanded(false)}>
+    {open && <PopoverPanel key={id} panelRef={panel} id={id} role={role} aria-label={panelLabel} className={panelClassName}
+      style={{ ...(floating ? { position: "fixed", ...position, zIndex: 100 } : {}), transformOrigin: "center" }} onKeyDown={navigate} {...surfaceMotion(reduced)}>
+      {children((restoreFocus = true) => close(restoreFocus))}
+    </PopoverPanel>}
+  </AnimatePresence>;
+  return (
+    <details
+      ref={ref}
+      open={expanded}
+      className={className}
+      onKeyDown={navigate}
+    >
+      <summary role="button" className={triggerClassName} aria-label={label} aria-haspopup={role} aria-expanded={open} aria-controls={id} onClick={event => { event.preventDefault(); if (open) close(); else show(); }}>
+        {trigger}
+      </summary>
+      {floating ? createPortal(content, document.body) : content}
+    </details>
+  );
+}
+function PopoverPanel({ panelRef, ...props }: React.ComponentProps<typeof motion.div> & { panelRef: React.Ref<HTMLDivElement> }) {
+  const present = useIsPresent();
+  return <motion.div {...props} ref={panelRef} inert={!present} aria-hidden={!present || undefined} />;
+}
+
+export function SidePanel({ children, className, role, "aria-label": label }: {
+  children: ReactNode;
+  className: string;
+  role?: "region" | "dialog";
+  "aria-label"?: string;
+}) {
+  const reduced = useReducedMotion();
+  const present = useIsPresent();
+  return <motion.aside role={role} className={className} aria-label={label} aria-hidden={!present || undefined} inert={!present} {...surfaceMotion(reduced, "right")}>{children}</motion.aside>;
+}
+
+export function Dialog({
+  open,
+  onClose,
+  onBeforeClose,
+  title,
+  description,
+  children,
+}: {
+  open: boolean;
+  onClose: () => void;
+  onBeforeClose?: () => boolean;
+  title: string;
+  description?: string;
+  children: ReactNode;
+}) {
+  const [ref, animate] = useAnimate<HTMLDialogElement>();
+  const reduced = useReducedMotion();
+  const id = useId();
+  const [closing, setClosing] = useState(false);
+  useEffect(() => { if (!open) setClosing(false); }, [open]);
+  function requestClose() {
+    if (!closing && onBeforeClose?.() !== false) setClosing(true);
+  }
+  useEffect(() => {
+    const dialog = ref.current;
+    if (!dialog) return;
+    let active = true;
+    const visible = open && !closing;
+    const entering = visible && !dialog.open;
+    if (entering) dialog.showModal();
+    if (!dialog.open) return;
+    const preset = surfaceMotion(reduced, "modal");
+    const animation = animate(dialog, {
+      opacity: visible ? (entering ? [0, 1] : 1) : 0,
+      scale: visible ? (entering ? [preset.initial.scale!, 1] : 1) : preset.exit.scale!,
+      y: visible ? (entering ? [preset.initial.y!, 0] : 0) : preset.exit.y!,
+      "--sp-dialog-backdrop-opacity": visible ? (entering ? [0, 1] : 1) : 0,
+    }, motionTransition(reduced));
+    if (!visible) void animation.then(() => {
+      if (!active) return;
+      if (dialog.open) dialog.close();
+    });
+    return () => { active = false; animation.stop(); };
+  }, [open, closing, animate, reduced]);
+  return (
+    <dialog
+      ref={ref}
+      className="sp-dialog"
+      inert={closing || !open}
+      aria-labelledby={`${id}-title`}
+      aria-describedby={description ? `${id}-description` : undefined}
+      onClose={onClose}
+      onCancel={event => { event.preventDefault(); requestClose(); }}
+      onClick={(event) => {
+        if (event.target === event.currentTarget) {
+          const r = event.currentTarget.getBoundingClientRect();
+          if (
+            event.clientX < r.left ||
+            event.clientX > r.right ||
+            event.clientY < r.top ||
+            event.clientY > r.bottom
+          )
+            requestClose();
+        }
+      }}
+    >
+      <div className="sp-dialog-header">
+        <h2 id={`${id}-title`}>{title}</h2>
+        <IconButton label="Close dialog" onClick={requestClose}>
+          <X size={20} />
+        </IconButton>
+      </div>
+      {description && (
+        <p id={`${id}-description`} className="sp-dialog-description">
+          {description}
+        </p>
+      )}
+      {children}
+    </dialog>
+  );
+}
+export function Skeleton({
+  width = "100%",
+  height = 14,
+}: {
+  width?: string | number;
+  height?: number;
+}) {
+  return (
+    <span
+      className="sp-skeleton"
+      aria-hidden="true"
+      style={{ width, height }}
+    />
+  );
+}
+export function ChannelItem({
+  name,
+  selected = false,
+  unread = 0,
+  icon,
+  onClick,
+}: {
+  name: string;
+  selected?: boolean;
+  unread?: number;
+  icon: ReactNode;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      className={`sp-channel ${unread ? "sp-channel--unread" : ""}`}
+      aria-current={selected ? "page" : undefined}
+      onClick={onClick}
+    >
+      {icon}
+      <span>{name}</span>
+      {unread > 0 && (
+        <span className="sp-unread" aria-label={`${unread} unread`}>
+          {unread}
+        </span>
+      )}
+    </button>
+  );
+}

@@ -1,0 +1,28 @@
+Option 1 — Open space
+
+Use case: logo-brand. Edit the provided Space logo reference. The user likes the existing text and font and only wants the app-icon symbol redesigned.
+Invariants: Preserve the exact lowercase "space" wordmark from the reference: identical letter shapes, bold geometric font, weight, optical kerning, dark plum color, size, and baseline. Keep the existing horizontal composition with an app icon on the left and the wordmark on the right. Only replace the symbol on the left. Do not reinterpret the wordmark.
+Create one clean finished horizontal logo on a genuinely transparent background. Icon palette deep plum #611F69 with restrained lavender #B79AC8; text remains dark plum. Flat fills, crisp vector-like edges, excellent tiny-size recognition, generous negative space. Original software-brand design for a workplace connecting people and AI agents. Avoid gradients, shadows, 3D, texture, fine details, speckled alpha edges, slogans, option numbers, labels, presentation boards, stars, sparkles, rockets, planets, Slack hashes, and known-company marks.
+New icon direction: A minimal architectural open doorway / shared room, constructed from two thick opposing rounded corner brackets, with an offset inner opening that feels like an invitation into a shared workspace. A compact square silhouette, memorable and calm. One plum continuous rounded bracket forms the left and upper boundary, one small lavender bracket echoes the lower right. Keep it two-dimensional, clear and balanced, not a cube or a perspective drawing. This should be completely different from the current interlocked S ribbons.
+
+-----
+
+Option 2 — Connection
+
+Use case: logo-brand. Edit the provided Space logo reference. The user likes the existing text and font and only wants the app-icon symbol redesigned.
+Invariants: Preserve the exact lowercase "space" wordmark from the reference: identical letter shapes, bold geometric font, weight, optical kerning, dark plum color, size, and baseline. Keep the existing horizontal composition with an app icon on the left and the wordmark on the right. Only replace the symbol on the left. Do not reinterpret the wordmark.
+Create one clean finished horizontal logo on a genuinely transparent background. Icon palette deep plum #611F69 with restrained lavender #B79AC8; text remains dark plum. Flat fills, crisp vector-like edges, excellent tiny-size recognition, generous negative space. Original software-brand design for a workplace connecting people and AI agents. Avoid gradients, shadows, 3D, texture, fine details, speckled alpha edges, slogans, option numbers, labels, presentation boards, stars, sparkles, rockets, planets, Slack hashes, and known-company marks.
+New icon direction: Two compact rounded lozenge / soft-square forms meeting diagonally to share a small central connection, one plum and one lavender. Abstract collaboration between two equal participants. A bold simple unified app symbol with a clever shared negative-space notch at the junction. Think of a friendly, solid, sculpted geometric link rather than a chain-link outline, a ribbon, a heart, or an infinity sign. Distinctive silhouette, visually balanced, no additional decorative pieces. Completely replace the previous S icon.
+
+-----
+
+Option 3 — Geometric S
+
+Use case: logo-brand. Edit the provided Space logo reference. The user likes the existing text and font and only wants the app-icon symbol redesigned.
+Invariants: Preserve the exact lowercase "space" wordmark from the reference: identical letter shapes, bold geometric font, weight, optical kerning, dark plum color, size, and baseline. Keep the existing horizontal composition with an app icon on the left and the wordmark on the right. Only replace the symbol on the left. Do not reinterpret the wordmark.
+Create one clean finished horizontal logo on a genuinely transparent background. Icon palette deep plum #611F69 with restrained lavender #B79AC8; text remains dark plum. Flat fills, crisp vector-like edges, excellent tiny-size recognition, generous negative space. Original software-brand design for a workplace connecting people and AI agents. Avoid gradients, shadows, 3D, texture, fine details, speckled alpha edges, slogans, option numbers, labels, presentation boards, stars, sparkles, rockets, planets, Slack hashes, and known-company marks.
+New icon direction: An assertive compact geometric capital S monogram drawn as one broad continuous rounded zigzag pathway within a roughly square footprint. Top and bottom terminals have confident diagonal cuts, and inner negative spaces are open and generous. A single deep-plum flat silhouette; a tiny lavender inset accent is permissible only if structurally useful. Contemporary geometric, crisp and app-ready. No overlapping ribbons, no two loops, no figure-eight or chain imagery. Make a radically simpler single-piece S than the current symbol.
+
+Option 2 cleanup
+
+Use case: precise-object-edit. Clean up this logo asset. Preserve its exact composition, the two rounded connected plum/lavender tile icon silhouettes, and the exact lowercase "space" wordmark with unchanged typography, spacing, size and color. Change only the central cutout and edge quality: remove ALL magenta, pink, gray, white speckles, debris and visual noise inside the icon's central opening; that opening must be perfectly empty transparent negative space. All exterior negative space must also be clean transparent alpha. Render crisp smooth edges. Keep plum and lavender fills clean and smooth. No added text, no redesign, no background, no new elements.

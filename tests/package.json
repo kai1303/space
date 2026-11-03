@@ -1,0 +1,36 @@
+{
+  "name": "@space/tests",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "tsx --test contracts/*.test.ts integration/*.test.ts",
+    "test:contracts": "tsx --test contracts/*.test.ts",
+    "test:foundation": "tsx --test contracts/*.test.ts integration/foundation.test.ts",
+    "test:workspace": "tsx --test contracts/workspace.test.ts integration/workspace.test.ts integration/user-provisioning.test.ts integration/workspace-isolation.test.ts",
+    "test:chat": "tsx --test integration/chat.test.ts",
+    "test:auth": "tsx --test integration/auth.test.ts",
+    "test:assets": "tsx --test integration/assets.test.ts storage/assets.test.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/client": "2.4.0",
+    "@space/contracts": "workspace:*",
+    "@space/core": "workspace:*",
+    "@space/mock": "workspace:*",
+    "@space/postgres": "workspace:*",
+    "@space/redis": "workspace:*",
+    "@space/server": "workspace:*",
+    "pg": "^8.23.1",
+    "socket.io-client": "^4.8.4"
+  },
+  "devDependencies": {
+    "@types/node": "22",
+    "@types/pg": "^8.23.1",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2"
+  }
+}

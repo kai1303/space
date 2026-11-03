@@ -1,0 +1,25 @@
+{
+  "name": "@space/worker",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "start": "node dist/main.js",
+    "dev": "node dist/main.js"
+  },
+  "dependencies": {
+    "@space/core": "workspace:*",
+    "@space/postgres": "workspace:*",
+    "@space/mock": "workspace:*",
+    "@space/redis": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "^7.0.2",
+    "@types/node": "22"
+  }
+}

@@ -1,0 +1,49 @@
+Option 4 — Portal
+
+Use case: logo-brand.
+Create a NEW variant of the attached Space horizontal logo. Use the reference only for the lowercase geometric typeface character, clean spacing, plum/lavender family, and icon-left wordmark-right layout. Completely redesign the icon.
+CRITICAL REQUESTED TYPOGRAPHY CHANGE: the existing wordmark is far too bold. Render exact lowercase text "space" in a noticeably lighter REGULAR 400 weight, with graceful thinner strokes, large open counters and gentle geometric curves. Preserve the same family resemblance and single-storey a. Do not use bold, heavy or black weights. Also lighten the wordmark color to muted plum-gray #766B7D, still readable on white. Keep letters full opacity; do not simulate lightness with transparency. Typography must look elegant and airy, not heavy. Meticulous optical kerning.
+Icon palette: flat deep plum #611F69 with lavender #B79AC8. Restrained, refined, uncluttered software brand for people and AI agents sharing a workplace. Icon optically balanced with the lighter type; don't overwhelm the wordmark.
+One finished horizontal lockup only, wide landscape canvas, ample outer padding, centered. Icon on left, exact word "space" on right. Truly transparent alpha background, smooth crisp clean contours and perfectly empty negative space. No speckles or magenta edge debris.
+No slogans, labels, repeated logos, mockups, presentation board, gradients, textures, shadows, 3D, stock sparkles, rockets, planets, robot faces, Slack hash, or recognizable borrowed logos.
+Specific icon direction: A minimal circular portal formed by one thick plum almost-complete ring with a clean opening on the upper right, and one short lavender rounded segment sitting just outside that gap. Calm, open, inviting. Pure front-facing circular geometry, generous empty center. The detached segment represents a person or agent joining the shared space. No orbital lines, no planet, no arrow. Simple memorable silhouette.
+
+-----
+
+Option 5 — Shared room
+
+Use case: logo-brand.
+Create a NEW variant of the attached Space horizontal logo. Use the reference only for the lowercase geometric typeface character, clean spacing, plum/lavender family, and icon-left wordmark-right layout. Completely redesign the icon.
+CRITICAL REQUESTED TYPOGRAPHY CHANGE: the existing wordmark is far too bold. Render exact lowercase text "space" in a noticeably lighter REGULAR 400 weight, with graceful thinner strokes, large open counters and gentle geometric curves. Preserve the same family resemblance and single-storey a. Do not use bold, heavy or black weights. Also lighten the wordmark color to muted plum-gray #766B7D, still readable on white. Keep letters full opacity; do not simulate lightness with transparency. Typography must look elegant and airy, not heavy. Meticulous optical kerning.
+Icon palette: flat deep plum #611F69 with lavender #B79AC8. Restrained, refined, uncluttered software brand for people and AI agents sharing a workplace. Icon optically balanced with the lighter type; don't overwhelm the wordmark.
+One finished horizontal lockup only, wide landscape canvas, ample outer padding, centered. Icon on left, exact word "space" on right. Truly transparent alpha background, smooth crisp clean contours and perfectly empty negative space. No speckles or magenta edge debris.
+No slogans, labels, repeated logos, mockups, presentation board, gradients, textures, shadows, 3D, stock sparkles, rockets, planets, robot faces, Slack hash, or recognizable borrowed logos.
+Specific icon direction: Four L-shaped rounded corner pieces outline one open square room with substantial gaps midway along each side. Three plum corners and one lavender corner, one consistent thickness, soft but precise radii. Four participants defining a shared empty space. No cross at center, no hash symbol, no perspective. Compact, quiet architectural identity; clear even at app-icon size.
+
+-----
+
+Option 6 — Conversation
+
+Use case: logo-brand.
+Create a NEW variant of the attached Space horizontal logo. Use the reference only for the lowercase geometric typeface character, clean spacing, plum/lavender family, and icon-left wordmark-right layout. Completely redesign the icon.
+CRITICAL REQUESTED TYPOGRAPHY CHANGE: the existing wordmark is far too bold. Render exact lowercase text "space" in a noticeably lighter REGULAR 400 weight, with graceful thinner strokes, large open counters and gentle geometric curves. Preserve the same family resemblance and single-storey a. Do not use bold, heavy or black weights. Also lighten the wordmark color to muted plum-gray #766B7D, still readable on white. Keep letters full opacity; do not simulate lightness with transparency. Typography must look elegant and airy, not heavy. Meticulous optical kerning.
+Icon palette: flat deep plum #611F69 with lavender #B79AC8. Restrained, refined, uncluttered software brand for people and AI agents sharing a workplace. Icon optically balanced with the lighter type; don't overwhelm the wordmark.
+One finished horizontal lockup only, wide landscape canvas, ample outer padding, centered. Icon on left, exact word "space" on right. Truly transparent alpha background, smooth crisp clean contours and perfectly empty negative space. No speckles or magenta edge debris.
+No slogans, labels, repeated logos, mockups, presentation board, gradients, textures, shadows, 3D, stock sparkles, rockets, planets, robot faces, Slack hash, or recognizable borrowed logos.
+Specific icon direction: Two minimal horizontal rounded speech forms arranged as a compact staggered pair, top plum offset slightly left, lower lavender offset slightly right. Each has a single tiny integrated squared conversation tail; no dots or internal strokes. Together they form a distinctive balanced abstract conversation mark with generous breathing room between shapes. Avoid ordinary outlined chat bubbles; use two confident flat solid shapes. Friendly, lightweight, collaborative.
+
+-----
+
+Option 7 — Fold
+
+Use case: logo-brand.
+Create a NEW variant of the attached Space horizontal logo. Use the reference only for the lowercase geometric typeface character, clean spacing, plum/lavender family, and icon-left wordmark-right layout. Completely redesign the icon.
+CRITICAL REQUESTED TYPOGRAPHY CHANGE: the existing wordmark is far too bold. Render exact lowercase text "space" in a noticeably lighter REGULAR 400 weight, with graceful thinner strokes, large open counters and gentle geometric curves. Preserve the same family resemblance and single-storey a. Do not use bold, heavy or black weights. Also lighten the wordmark color to muted plum-gray #766B7D, still readable on white. Keep letters full opacity; do not simulate lightness with transparency. Typography must look elegant and airy, not heavy. Meticulous optical kerning.
+Icon palette: flat deep plum #611F69 with lavender #B79AC8. Restrained, refined, uncluttered software brand for people and AI agents sharing a workplace. Icon optically balanced with the lighter type; don't overwhelm the wordmark.
+One finished horizontal lockup only, wide landscape canvas, ample outer padding, centered. Icon on left, exact word "space" on right. Truly transparent alpha background, smooth crisp clean contours and perfectly empty negative space. No speckles or magenta edge debris.
+No slogans, labels, repeated logos, mockups, presentation board, gradients, textures, shadows, 3D, stock sparkles, rockets, planets, robot faces, Slack hash, or recognizable borrowed logos.
+Specific icon direction: A simple folded geometric lowercase-s-inspired symbol made from two opposing broad chevron-like rounded shapes, upper plum and lower lavender, with a clean diagonal negative-space channel. Compact square footprint, softly rounded outer corners, clean clipped inner ends. Suggest two pages or work surfaces coming together. Flat two-tone construction only; no shading, no infinity loops, no interlocking chain, no generic lightning bolt. Elegant and visibly different from the doorway, circular and chat concepts.
+
+Portal cleanup
+
+Use case: precise-object-edit. Clean up this exact Space logo. Preserve the thin lowercase wordmark "space" exactly: font, weight, letter shapes, spacing, muted gray-plum color, placement. Preserve the large plum open-ring icon. Replace ONLY the noisy lavender segment at the upper right of the ring with a single perfectly smooth clean lavender capsule-shaped arc following the circular ring. It must have a crisp silhouette, flat fill #B79AC8, consistent thickness matching the plum ring, and a small transparent gap at each end separating it from plum. Remove ALL blue, pink, magenta, gray or white speckles, halos, and visual debris around this segment. Empty areas must be perfectly transparent. Flat clean vector-style logo, no glow, no shadow, no texture, no gradients, no new elements. Genuinely transparent background.
