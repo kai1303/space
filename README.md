@@ -1,234 +1,379 @@
-# Agent-native workplace
+<div align="center">
 
-## Frontend
+<p align="center">
+  <img src="docs/images/space-wordmark.svg" alt="Space logo" width="360" />
+</p>
 
-The first frontend slice is a Slack-grounded design system, with reusable React
-components in `packages/ui` and an interactive gallery in `apps/web`. The main
-chat UI now uses these components with Better Auth, saved channel history,
-Socket.IO messages/replies, agent task approval, and channel creation.
+<h1>Space: A shared workplace for people and AI agents</h1>
 
-- `/` or `/chat`: the main authenticated chat UI (requires the API, PostgreSQL and Redis).
-- `/design-system`: the standalone component gallery (no backend required).
-- `/workspace`: the earlier synthetic workspace preview.
+<p>Bring team conversations, files, and shared knowledge into one workspace.<br />
+Run it locally, keep channel memory in Markdown, and connect your local Codex instance.</p>
 
-See [main chat UI verification](docs/main-chat-ui-qa.md) for the tested scope and current limits.
+<p align="center">
+  <a href="https://github.com/kai1303/space/actions/workflows/ci.yaml?query=branch%3Amain"><img src="https://img.shields.io/github/actions/workflow/status/kai1303/space/ci.yaml?branch=main&amp;style=for-the-badge&amp;label=CI" alt="CI checks status" /></a>
+  <a href="#project-status"><img src="https://img.shields.io/badge/status-early%20development-orange?style=for-the-badge" alt="Project status: early development" /></a>
+  <a href="#license"><img src="https://img.shields.io/badge/license-not%20selected-lightgrey?style=for-the-badge" alt="License: not yet selected" /></a>
+</p>
+
+<p align="center">
+  <a href="https://github.com/kai1303/space/stargazers"><img src="https://img.shields.io/github/stars/kai1303/space?style=flat-square&amp;label=Stars" alt="GitHub stars" /></a>
+  <a href="https://github.com/kai1303/space/issues"><img src="https://img.shields.io/github/issues/kai1303/space?style=flat-square&amp;label=Open%20issues" alt="Open GitHub issues" /></a>
+  <a href="https://github.com/kai1303/space/pulls"><img src="https://img.shields.io/github/issues-pr/kai1303/space?style=flat-square&amp;label=Pull%20requests" alt="Open pull requests" /></a>
+</p>
+
+<p align="center">
+  <strong>
+    <a href="#quick-start">Quick start</a> ·
+    <a href="#how-space-works">How it works</a> ·
+    <a href="#development">Docs</a> ·
+    <a href="#security">Security</a> ·
+    <a href="#contributing">Contribute</a>
+  </strong>
+</p>
+
+</div>
+
+---
+
+> **Early development.** Chat, files, channel memory, and local connector pairing
+> are implemented. Real agent task execution is still being built; the current
+> task approval and result flow uses a mock connector. A project license has not
+> yet been selected.
+
+<p align="center">
+  <img src="assets/brand/verification/portal-main-page.png" alt="Space local development screenshot showing channel navigation, a conversation, rich messages, threaded replies, and the composer" width="1064" />
+</p>
+<p align="center"><sub>Local development capture with sample conversation content. The core chat experience requires no model API key.</sub></p>
+
+## Table of contents
+
+- [Why Space?](#why-space)
+- [Quick start](#quick-start)
+- [How Space works](#how-space-works)
+- [Connect local Codex](#connect-local-codex)
+- [Architecture](#architecture)
+- [Integrations](#integrations)
+- [Project status](#project-status)
+- [Development](#development)
+- [Deployment and data](#deployment-and-data)
+- [Security](#security)
+- [Telemetry and privacy](#telemetry-and-privacy)
+- [Contributing](#contributing)
+- [License](#license)
+
+---
+
+## Why Space?
+
+Team decisions live in conversations. Agents need that context too, along with
+clear boundaries around what they can access and do. Space is being built to put
+people and independently operated agents in the same workplace.
+
+- **Conversations with context.** Channels, threaded replies, rich messages, and
+  saved history keep work together.
+- **Knowledge the team can maintain.** Save useful messages to channel memory,
+  edit shared notes, and import or export Markdown.
+- **Your own infrastructure.** PostgreSQL stores chat history, SeaweedFS stores
+  files, and channel memory lives on your filesystem.
+- **Explicit access.** Workspace roles, channel membership, and scoped agent
+  grants define access boundaries.
+
+---
+
+## Quick start
+
+### Before you begin
+
+Install **Node.js 22.12+**, **pnpm 8.10.3**, **Docker Compose**, and **OpenSSL**.
+The commands below use a POSIX shell on macOS or Linux. Docker Compose supplies
+PostgreSQL 16, Redis 7, and SeaweedFS for local development.
+
+### 1. Get the project
 
 ```sh
+git clone https://github.com/kai1303/space.git
+cd space
 pnpm install --frozen-lockfile
-pnpm web                  # http://127.0.0.1:5173; gallery at /design-system
-pnpm test:ui              # component interaction tests
+cp .env.example .env
+openssl rand -hex 32
 ```
 
-Explore light/dark tokens, typography, controls, dialogs, and a working local
-conversation/thread preview. See [the component guide](docs/design-system.md) for
-usage, source observations, accessibility behavior, and verification limits.
-Additional workplace screens remain in the backlog.
+Copy the generated value into `BETTER_AUTH_SECRET` in `.env`. Keep it private and
+reuse it between restarts. The other example values target the local services below.
 
-Frontend tooling requires Node.js 22.12+ or a newer supported Node release.
+### 2. Start the services and API
 
-The full-size [workplace preview](http://127.0.0.1:5173/workspace) adds a rich-text
-composer, scoped local search, a resizable conversation sidebar and a searchable
-color-token inspector. The gallery links to it. See the
-[Slack research report](docs/research/slack-workplace.md) for actual REA CLI evidence,
-source observations and reconstruction boundaries, and
-[workplace QA](docs/slack-workplace-qa.md) for verification.
+Run these commands from the repository root:
 
-The [standard channel/DM composer](http://127.0.0.1:5173/#chat-composer) is also
-available in the gallery. Its [REA research](docs/research/slack-composer.md)
-records the actual editor/toolbar/key-policy evidence and remaining fidelity gaps.
+```sh
+docker compose up -d postgres redis seaweedfs
 
-A workplace for humans and independently operated agents. The current completed
-backend implementation scope is **Foundation (W01–W04)** plus **workspace/users
-(U01–U04)** and the first **realtime chat** slice: profiles, workspaces, roles and membership/offboarding. Foundation
-includes contracts, access checks, catalog records and owner-managed grants. Task-flow code is an experimental compatibility
-consumer. Local Codex pairing and connection status are implemented; real task dispatch,
-cloud adapters, Navigator and remaining workplace screens are later modules. No model API key is required.
+# Export the configuration for migrations and the API.
+set -a
+. ./.env
+set +a
 
-Better Auth email/password login is available at `/chat`; see the
-[authentication guide](docs/architecture/authentication.md) for required secret/origin
-configuration. Workspace and user APIs are ready for backend development. Each workspace has its own members, roles and channels. See the [API and operator guide](docs/architecture/workspace-users.md)
-for permissions, development-user provisioning and legacy owner assignment.
+pnpm migrate
+pnpm server
+```
 
-## Connected chat
+Wait for the database to become ready before running migrations. Keep this terminal
+open. The API listens on port `3000`; the frontend proxies API and WebSocket traffic
+to it.
 
-`/chat` now connects to Fastify through Socket.IO over WebSocket. Redis distributes
-update notifications; PostgreSQL stores durable history. Channels, threaded replies,
-reconnect catch-up and mock-agent task approval/progress/results are implemented.
-See the [chat run guide and contract](docs/architecture/realtime-chat.md).
-Better Auth now provides email/password accounts and cookie sessions. The mock
-connector remains in place. See the [authentication setup guide](docs/architecture/authentication.md).
+### 3. Open Space
+
+In a second terminal, from the repository root:
+
+```sh
+pnpm web
+```
+
+Open [http://127.0.0.1:5173/chat](http://127.0.0.1:5173/chat), register an account,
+and create a workspace and channel. You can send messages, reply in threads, and
+upload a file. To keep shared notes, open **Memory** in a channel and enable it.
+
+Use the configured `5173` origin. If that port is occupied, free it or update the
+browser-facing URL and trusted origins in `.env` before restarting the API.
+
+To explore the UI without backend services, run `pnpm build` and then `pnpm web`
+after installing packages, and visit [/design-system](http://127.0.0.1:5173/design-system).
+The [/workspace](http://127.0.0.1:5173/workspace) route is a synthetic design preview.
+
+<details>
+<summary>Preview the sign-in screen</summary>
+
+<p align="center">
+  <img src="assets/brand/verification/portal-sign-in.png" alt="Space sign-in screen with email and password fields and a create-account link" width="560" />
+</p>
+
+</details>
+
+---
+
+## How Space works
+
+<p align="center">
+  <img src="docs/images/how-space-works.svg" alt="How Space works: people use channels, files, and memory through an authorized API backed by PostgreSQL, Redis, SeaweedFS, and Markdown. Local Codex currently supports pairing and readiness only." width="1064" />
+</p>
+
+1. **Sign in and choose a workspace.** Better Auth provides email/password accounts
+   and cookie sessions. Workspace roles and channel membership control access.
+2. **Talk in channels and threads.** The React client sends messages through the
+   Fastify API. PostgreSQL stores messages and their events in a transaction.
+3. **Stay in sync.** Redis notifies API instances about updates; each instance reads
+   authorized history from PostgreSQL and delivers it over Socket.IO. Reconnect
+   catch-up and periodic reconciliation recover missed notifications.
+4. **Share files.** The browser uploads directly to private SeaweedFS storage using
+   a signed form. The API validates and finalizes the upload, then checks current
+   access before issuing download links. Files are limited to 25 MiB each.
+5. **Keep useful context.** Channel memory is opt-in. Members can save messages
+   with source links, edit notes, search, and import or export text documents.
+   Scoped MCP keys let external tools read or update enabled channel memory.
+6. **Connect an agent.** A local connector pairs your computer with Space and
+   reports ChatGPT sign-in and Codex readiness. Pairing currently stops at
+   enrollment and status; it does not execute tasks or read conversations.
+
+See the [chat architecture](docs/architecture/realtime-chat.md),
+[file storage guide](docs/architecture/assets.md), and
+[channel memory guide](docs/architecture/channel-memory.md) for the full contracts.
+
+---
 
 ## Connect local Codex
 
-Open **Members → Connect Local Codex** in `/chat`. From this checkout, run the
-command shown in the dialog, paste its pairing code, and complete **Continue with
-ChatGPT** locally. No repository or channel selection is required.
+With the Codex CLI installed on your `PATH`, open **Members → Connect Local Codex**
+in Space. Run the command shown in the dialog from this checkout, for example:
 
 ```sh
-pnpm connector --url http://127.0.0.1:5174 --connect
+pnpm connector --url http://127.0.0.1:5173 --connect
 ```
 
-Use your actual web origin. The agent appears beside human members with connection
-and sign-in status. Its owner can disconnect it from the directory. This slice
-implements enrollment and readiness; it does not execute tasks or read conversations.
-See the [connection architecture](docs/architecture/local-codex-connection.md) and
-[connector guide](apps/connector/README.md) for setup and the local OSS account boundary.
+Enter the pairing code and complete **Continue with ChatGPT** in your browser.
+Keep the connector running to report its status. Use your actual Space origin.
 
-## Channel memory
+ChatGPT tokens stay in the connector's local state directory. Space receives its
+own connector credential and readiness status. Readiness does not establish that
+model inference or task execution works.
 
-Each channel can opt in to shared memory from **Memory** beside Messages. The default
-provider stores canonical `.md` files; channel members can edit notes, import text
-documents, save selected messages with source links, search and export. Managers
-control opt-in and can choose other server-installed memory providers. Memory is off
-by default. See the [channel memory guide](docs/architecture/channel-memory.md) for
-storage, permissions, provider adapters and API contracts.
+See the [connector guide](apps/connector/README.md) and
+[connection architecture](docs/architecture/local-codex-connection.md).
 
-Agents and Navigator can connect through the [memory MCP](docs/architecture/memory-mcp.md)
-to read channel context, search, save extracted knowledge with sources, and update
-memory. Channel managers create revocable read/write-scoped keys from the Memory panel.
+---
 
-## Chat files
+## Architecture
 
-Chat uploads use a private **SeaweedFS 4.52** bucket through its S3-compatible API.
-Files upload directly from the browser using a short-lived signed form. The API
-checks the stored byte count and copies the upload into a server-only object key
-before it can appear in a message. Downloads require current chat access and use
-an expiring attachment URL. The limit is **25 MiB per file**.
+Space is a TypeScript monorepo using pnpm workspaces and Turborepo.
 
-See the [asset storage guide](docs/architecture/assets.md) for configuration,
-permissions, local startup and backup boundaries. The complete Compose stack
-includes SeaweedFS; a host-run API needs all six `ASSET_STORAGE_*` values from
-`.env.example`. With all six unset, chat works with uploads disabled.
+<p align="center">
+  <img src="https://img.shields.io/badge/TypeScript-3178C6?style=flat-square&amp;logo=typescript&amp;logoColor=white" alt="TypeScript" />
+  <img src="https://img.shields.io/badge/React-20232A?style=flat-square&amp;logo=react&amp;logoColor=61DAFB" alt="React" />
+  <img src="https://img.shields.io/badge/Node.js-339933?style=flat-square&amp;logo=nodedotjs&amp;logoColor=white" alt="Node.js" />
+  <img src="https://img.shields.io/badge/PostgreSQL-4169E1?style=flat-square&amp;logo=postgresql&amp;logoColor=white" alt="PostgreSQL" />
+  <img src="https://img.shields.io/badge/Redis-DC382D?style=flat-square&amp;logo=redis&amp;logoColor=white" alt="Redis" />
+  <img src="https://img.shields.io/badge/Docker-2496ED?style=flat-square&amp;logo=docker&amp;logoColor=white" alt="Docker Compose" />
+</p>
 
-## Local setup
+| Area | Technology and responsibility | Source |
+| --- | --- | --- |
+| Web app | React, Vite, Socket.IO client | [`apps/web`](apps/web) |
+| Shared UI | Components, rich-text composer, design tokens | [`packages/ui`](packages/ui) |
+| API | Fastify, Better Auth, Socket.IO | [`apps/server`](apps/server) |
+| Persistence | PostgreSQL, Drizzle, versioned SQL migrations | [`adapters/postgres`](adapters/postgres) |
+| Realtime notifications | Redis Pub/Sub | [`adapters/redis`](adapters/redis) |
+| Contracts and policy | Shared validation, types, access and approval policy | [`packages/contracts`](packages/contracts), [`packages/core`](packages/core) |
+| Agent worker | Experimental task flow with a mock connector | [`apps/worker`](apps/worker), [`adapters/mock`](adapters/mock) |
+| Local connector | Pairing, local authorization, readiness reporting | [`apps/connector`](apps/connector) |
 
-Requires Node.js 22+, pnpm 8.10.3, PostgreSQL 16+ and Redis 7+ (or Docker Compose).
-SeaweedFS provides optional chat file storage.
+---
+
+## Integrations
+
+These are the connections implemented in this checkout and their current boundaries.
+
+| Category | Connection | Current scope |
+| --- | --- | --- |
+| **Local agent** | Codex CLI + ChatGPT sign-in | Computer pairing, local authorization, and readiness reporting. Real task execution is planned. |
+| **Agent context** | MCP | Revocable, channel-scoped keys for reading and updating enabled channel memory. |
+| **Authentication** | Better Auth | Email/password accounts and cookie sessions. Human social login and MFA are planned separately. |
+| **File storage** | SeaweedFS through its S3-compatible API | Private uploads, access-checked downloads, and previews. |
+| **Shared memory** | Markdown files | Built-in provider with imports, source links, search, and export. Custom providers have an adapter interface; third-party adapters do not ship yet. |
+| **Task demo** | Mock connector | Experimental approval, progress, and result flow through the local worker. |
+
+See [connector setup](apps/connector/README.md),
+[memory MCP](docs/architecture/memory-mcp.md), and
+[memory provider adapters](docs/architecture/channel-memory.md#other-memory-systems-and-databases).
+
+## Project status
+
+**Implemented:** workspace accounts and roles, channel conversations and threaded
+replies, durable history and reconnect catch-up, file uploads and previews, opt-in
+channel memory, scoped memory MCP access, and local connector enrollment/status.
+
+**Still ahead:** real agent task dispatch, Navigator, direct messages, presence,
+message editing/deletion, email invitations, and additional agent adapters.
+The [module roadmap](docs/architecture/module-roadmap.md) tracks the broader scope.
+
+Local checks and browser captures describe development behavior. They do not
+establish production reliability, security certification, or complete Slack parity.
+
+---
+
+## Development
+
+Run commands from the repository root. Integration tests require the database and
+Redis URLs exported from `.env` and a test database whose role can create schemas.
+They create and remove isolated schemas; use a development or test database.
 
 ```sh
-pnpm install --frozen-lockfile
-docker compose up -d postgres redis seaweedfs
-export DATABASE_URL=postgres://workplace:local_demo_only@127.0.0.1:55438/workplace
-export TEST_DATABASE_URL="$DATABASE_URL"
-export REDIS_URL=redis://127.0.0.1:56380
-export TEST_REDIS_URL="$REDIS_URL"
-pnpm migrate
-pnpm foundation:demo
+pnpm build             # Build workspace packages in dependency order.
+pnpm typecheck         # Check every workspace.
+pnpm test:contracts    # Contract tests; no database required.
+pnpm test:ui           # Shared component and web interaction tests.
+pnpm test              # Full configured suite, including integration tests.
 ```
 
-The demo creates a fresh seeded workspace and two installations. It verifies owner
-isolation, grants, revocation and disablement without invoking any agent or printing
-credentials. Each run keeps its demonstration records in the development database.
-The Compose password is a local development default; use dedicated deployment secrets
-before exposing a service beyond localhost.
+For the experimental mock-agent flow, run `pnpm worker` in another terminal with
+the same exported environment. See the [chat guide](docs/architecture/realtime-chat.md)
+for bootstrap, grants, and approval requirements; registration does not seed an agent.
 
-```sh
-pnpm test:foundation   # contracts + real PostgreSQL foundation tests
-pnpm test:workspace    # profiles, roles, membership and upgrade tests
-pnpm test:auth         # Better Auth accounts, cookie/session security and sockets
-pnpm test              # also runs experimental task-flow regressions
-pnpm typecheck
-pnpm build
-```
+More guides:
 
-Integration tests create and remove a random schema in `TEST_DATABASE_URL`. Point this
-at a development/test database whose role can create schemas. Missing database config
-fails the test command rather than silently skipping integration tests. `pnpm test:contracts` needs no database. Turbo builds each package into its own `dist/` directory, including PostgreSQL migrations.
+- [Authentication and session setup](docs/architecture/authentication.md)
+- [Workspaces, users, and roles](docs/architecture/workspace-users.md)
+- [Memory MCP access](docs/architecture/memory-mcp.md)
+- [Chat storage and partitioning](docs/architecture/chat-partitioning.md)
+- [Foundation contracts and grants](docs/architecture/foundation.md)
+- [Design system](docs/design-system.md)
+- [Module roadmap](docs/architecture/module-roadmap.md)
+- [Architecture decisions](docs/adr/0001-core-boundaries.md)
 
-## Backend
+---
 
-The HTTP backend uses **Fastify 5 + TypeScript** in `@space/server`.
+## Deployment and data
 
-- Explicit routes and shared authentication hooks in `apps/server/api.ts`.
-- Framework JSON parsing, a 32 KiB default body limit (128 KiB for rich chat messages) and consistent error responses.
-- Strict domain validation in `@space/contracts`; authorization in core/persistence.
-- Drizzle ORM for typed queries/transactions over a shared `pg` pool; a separate task worker.
-- Fastify application shutdown closes the production database pool.
-- HTTP integration tests use both a real listener and Fastify `inject()`.
+`docker compose up --build` runs the backend stack, including migrations, API,
+worker, database, Redis, and file storage. It does not serve the web frontend or
+create accounts automatically. The quick start above runs the API on the host
+instead; choose one setup to avoid port conflicts.
 
-Run `pnpm server` for the API, or `pnpm dev` for API and worker together, with
-`DATABASE_URL` set. See [ADR 0004](docs/adr/0004-fastify-backend.md).
+The Compose configuration uses local development defaults. A deployment needs its
+own secrets, HTTPS, trusted origins, and a reverse proxy supporting WebSocket
+upgrades. Email verification, password-reset delivery, human social login, and MFA
+are not configured. Production readiness has not been established.
 
-## Database
+Back up PostgreSQL, SeaweedFS data, and channel memory together. Database backups
+alone do not contain uploaded bytes or Markdown memory. See the
+[storage guide](docs/architecture/assets.md#self-hosting-and-persistence) and
+[memory storage guide](docs/architecture/channel-memory.md#storage-and-operation).
 
-Database code lives in `@space/postgres`:
+---
 
-- `database.ts`: centralized connection-pool setup and Drizzle initialization.
-- `schema.ts`: typed mappings for the existing PostgreSQL tables.
-- Repositories use Drizzle query builders and transactions.
-- PostgreSQL advisory locks and atomic outbox claims use parameterized Drizzle SQL.
-- `pnpm migrate` applies the existing reviewed SQL migrations through Drizzle and keeps
-  the existing `schema_migrations` history. It does not reset existing data.
+## Security
 
-SQL migrations remain the source of truth for constraints, indexes and audit triggers.
-The table mappings are query schemas; Drizzle Kit generation/push is not configured.
-See [ADR 0005](docs/adr/0005-drizzle-postgres.md) for this adoption boundary.
+Space checks current workspace and channel access on API requests and realtime
+commands. File downloads require authorization and use short-lived signed URLs.
+Channel memory is off by default; managers enable it and control scoped MCP keys.
+Connector ChatGPT tokens stay on the local computer.
 
-## Monorepo tooling
+Keep `.env`, connector state, database dumps, and memory files out of source control.
+Treat imported memory as untrusted context. A signed file URL remains usable until
+it expires, even if the user's access changes after it was issued.
 
-pnpm workspaces + Turborepo 2.11.10 manage twelve private packages. Each has its own
-manifest, direct dependencies, exported compiled modules and TypeScript configuration.
-Cross-package imports use `@space/*`; workspace dependencies use `workspace:*`.
+See [authentication and session security](docs/architecture/authentication.md),
+[file access boundaries](docs/architecture/assets.md), and
+[connector credential storage](apps/connector/README.md). Remove credentials and
+private content from logs or screenshots before sharing a bug report.
 
-| Package            | Directory            |
-| ------------------ | -------------------- |
-| `@space/contracts` | `packages/contracts` |
-| `@space/core`      | `packages/core`      |
-| `@space/postgres`  | `adapters/postgres`  |
-| `@space/redis`     | `adapters/redis`     |
-| `@space/mock`      | `adapters/mock`      |
-| `@space/server`    | `apps/server`        |
-| `@space/worker`    | `apps/worker`        |
-| `@space/tools`     | `scripts`            |
-| `@space/tests`     | `tests`              |
-| `@space/ui`        | `packages/ui`        |
-| `@space/web`       | `apps/web`           |
-| `@space/connector` | `apps/connector`     |
+## Telemetry and privacy
 
-```sh
-pnpm build                 # dependency-first builds with local caching
-pnpm typecheck             # checks every workspace
-pnpm test                  # database tests always execute
-pnpm dev                   # watch, build and run API + worker (DATABASE_URL and REDIS_URL required)
-pnpm server                # build and start API only
-pnpm worker                # build and start worker only
-pnpm exec turbo run build --filter=@space/server...
-```
+The application source currently has no first-party product analytics integration.
+The API and connector write operational logs. Review the behavior of any external
+service you connect and keep private conversation content out of public reports.
 
-`turbo.json` defines the task graph. Builds cache each package's `dist/**`; integration
-tests and operational commands are uncached. Database and runtime environment variables
-are explicitly forwarded. No remote cache is configured. Root commands for migrations,
-bootstrap and demos continue to work; demo files remain relative to the repository root.
-Use `pnpm --filter @space/<name> add <dependency>` to add dependencies to their owner.
+Connecting ChatGPT uses a local authorization flow; chat, files, and Markdown memory
+can be explored without connecting a model provider. See the
+[connector guide](apps/connector/README.md) for what stays local and what Space receives.
 
-Docker uses `pnpm deploy --prod` to package the API, worker and tools independently.
-`docker compose up --build` runs PostgreSQL, Redis, SeaweedFS, migrations, server and worker. It does not
-create users automatically. See [ADR 0003](docs/adr/0003-turborepo-workspaces.md).
+---
 
-## Code boundaries
+## Contributing
 
-| Path                                                       | Responsibility                                                             |
-| ---------------------------------------------------------- | -------------------------------------------------------------------------- |
-| `packages/contracts/`                                      | Runtime-neutral types, version 1.0 invocation/events, strict input parsers |
-| `packages/core/policy.ts`                                  | Deterministic eligibility and approval policy                              |
-| `adapters/postgres/access.ts`                              | Shared workspace/channel/thread access checks                              |
-| `adapters/postgres/foundation.ts`                          | Durable definitions, installations, scoped grants and audit                |
-| `adapters/postgres/migrations/`                            | Transactional, versioned migrations                                        |
-| `tests/contracts/`, `tests/integration/foundation.test.ts` | Foundation acceptance checks                                               |
+Bug reports, setup feedback, documentation improvements, and focused fixes are
+welcome. [Open an issue](https://github.com/kai1303/space/issues) with reproduction
+steps, expected behavior, and relevant logs with credentials removed.
 
-The foundation exposes **internal TypeScript APIs**, not network enrollment endpoints.
-The application supplies an authenticated actor ID; these methods never trust actor
-identity from a request body. Definitions are trusted operator-published immutable
-catalog entries. Owners create separate installations and explicitly grant access.
+For a code change, fork the repository, create a branch, and open a pull request.
+Describe the behavior you changed and the checks you ran. Run build, typecheck,
+and the relevant tests; note any checks you could not run. For larger features,
+start with an issue and the [module roadmap](docs/architecture/module-roadmap.md).
 
-See [foundation API and contract guide](docs/architecture/foundation.md),
-[small-module backlog](docs/plans/module-backlog.md), and
-[architecture decisions](docs/adr/0001-core-boundaries.md).
+Looking for a place to start? Browse
+[good first issues](https://github.com/kai1303/space/issues?q=is%3Aissue%20is%3Aopen%20label%3A%22good%20first%20issue%22)
+or [documentation issues](https://github.com/kai1303/space/issues?q=is%3Aissue%20is%3Aopen%20label%3Adocumentation).
+These are issue filters; available work depends on the current issue list.
 
-## Scope and distribution
+<p align="center">
+  <a href="https://github.com/kai1303/space/issues/new"><img src="https://img.shields.io/badge/Report%20a%20bug-GitHub%20Issues-4a154b?style=for-the-badge&amp;logo=github" alt="Report a bug in GitHub Issues" /></a>
+  <a href="https://github.com/kai1303/space/compare"><img src="https://img.shields.io/badge/Contribute-Open%20a%20PR-80558c?style=for-the-badge&amp;logo=github" alt="Contribute a pull request" /></a>
+</p>
 
-Local connector pairing, hashed installation credentials and authenticated status transport
-are implemented. Real agent task dispatch remains pending. Email/password authentication is implemented; email verification,
-password-reset delivery, human social login and MFA remain outside this slice. Disabling/revoking blocks new dispatch;
-it does not promise to cancel an already-running external action. The project intends
-to be open source, but a license has not yet been selected.
+Thanks to everyone who helps improve Space. See the
+[contributor history](https://github.com/kai1303/space/graphs/contributors) and
+[project activity](https://github.com/kai1303/space/activity).
+
+---
+
+## License
+
+A license has not yet been selected, and this repository currently has no
+`LICENSE` file. Public source availability does not grant an open-source license.
+
+---
+
+<p align="center">
+  <a href="#">Back to top</a> ·
+  <a href="https://github.com/kai1303/space">Source</a> ·
+  <a href="https://github.com/kai1303/space/issues">Issues</a> ·
+  <a href="https://github.com/kai1303/space/pulls">Pull requests</a>
+</p>

@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="650" viewBox="0 0 1120 650" role="img" aria-labelledby="title desc">
+  <title id="title">How Space works</title>
+  <desc id="desc">People sign in, discuss work in channels, and keep files and shared memory. The Fastify API checks sessions, workspace roles and channel membership. PostgreSQL stores history, Redis carries update notifications, SeaweedFS stores files, and Markdown stores memory. Local Codex connects for pairing and readiness only; real task execution is planned.</desc>
+  <defs>
+    <linearGradient id="header" x2="1" y2="1"><stop stop-color="#4a154b"/><stop offset="1" stop-color="#24132e"/></linearGradient>
+    <marker id="arrow" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto"><path d="M0 0 8 4 0 8" fill="none" stroke="#a583ac" stroke-width="1.5"/></marker>
+    <style>text{font-family:Arial,Helvetica,sans-serif}.label{font-size:18px;font-weight:700;fill:#29232d}.body{font-size:14px;fill:#645b6b}.small{font-size:13px;fill:#74677b}.step{font-size:13px;font-weight:700;fill:#80558c}</style>
+  </defs>
+  <rect width="1120" height="650" rx="24" fill="#faf8fc"/>
+  <path d="M24 0H1096Q1120 0 1120 24V112H0V24Q0 0 24 0" fill="url(#header)"/>
+  <text x="40" y="49" font-size="28" font-weight="700" fill="#fff">From conversation to shared context</text>
+  <text x="40" y="80" font-size="16" fill="#dfcce6">People, channels, files, and memory in one workspace</text>
+  <g fill="#fff" stroke="#e4dbe9" stroke-width="1.5">
+    <rect x="40" y="144" width="320" height="110" rx="14"/>
+    <rect x="400" y="144" width="320" height="110" rx="14"/>
+    <rect x="760" y="144" width="320" height="110" rx="14"/>
+  </g>
+  <g class="step"><text x="60" y="171">01 / JOIN</text><text x="420" y="171">02 / DISCUSS</text><text x="780" y="171">03 / KEEP CONTEXT</text></g>
+  <g class="label"><text x="60" y="201">People and workspaces</text><text x="420" y="201">Channels and threads</text><text x="780" y="201">Files and shared memory</text></g>
+  <g class="body"><text x="60" y="228">Accounts, roles, membership</text><text x="420" y="228">Rich messages, saved history</text><text x="780" y="228">Uploads, notes, source links, MCP</text></g>
+  <g fill="none" stroke="#a583ac" stroke-width="2" marker-end="url(#arrow)"><path d="M200 254V291"/><path d="M560 254V291"/><path d="M920 254V291"/></g>
+  <rect x="40" y="300" width="1040" height="72" rx="14" fill="#f0e7f4" stroke="#d3bedc"/>
+  <text x="60" y="330" class="label">Fastify API + Better Auth + Socket.IO</text>
+  <text x="60" y="354" class="body">Check the session, workspace role, and channel membership before serving data.</text>
+  <g fill="none" stroke="#a583ac" stroke-width="2" marker-end="url(#arrow)"><path d="M160 372V412"/><path d="M425 372V412"/><path d="M690 372V412"/><path d="M955 372V412"/></g>
+  <g fill="#fff" stroke="#e4dbe9" stroke-width="1.5"><rect x="40" y="422" width="245" height="96" rx="14"/><rect x="305" y="422" width="245" height="96" rx="14"/><rect x="570" y="422" width="245" height="96" rx="14"/><rect x="835" y="422" width="245" height="96" rx="14"/></g>
+  <g class="label"><text x="60" y="453">PostgreSQL</text><text x="325" y="453">Redis</text><text x="590" y="453">SeaweedFS</text><text x="855" y="453">Markdown</text></g>
+  <g class="body"><text x="60" y="479">Durable chat + events</text><text x="325" y="479">Realtime update hints</text><text x="590" y="479">Private file bytes</text><text x="855" y="479">Opt-in channel memory</text></g>
+  <g class="small"><text x="60" y="500">History source of truth</text><text x="325" y="500">Catch-up reads from Postgres</text><text x="590" y="500">Access-checked downloads</text><text x="855" y="500">Editable and exportable</text></g>
+  <rect x="40" y="552" width="1040" height="66" rx="14" fill="#fff" stroke="#a583ac" stroke-width="1.5" stroke-dasharray="6 5"/>
+  <text x="60" y="580" class="label">Local Codex connector</text>
+  <text x="60" y="603" class="body">Pairing + readiness today. Real task execution is planned; the task demo uses a mock connector.</text>
+  <rect x="905" y="570" width="152" height="27" rx="13.5" fill="#f0e7f4"/>
+  <text x="981" y="589" font-size="12" font-weight="700" fill="#80558c" text-anchor="middle">STATUS ONLY</text>
+</svg>
