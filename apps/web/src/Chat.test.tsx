@@ -9,19 +9,22 @@ it('renders live structured agent responses and replaces activity with one saved
   mockPaginatedChat(() => messagePage([root]), '1');
   render(<Chat />);
   await screen.findByText(root.text);
+  await userEvent.click(screen.getByRole('button', { name: 'Reply to Kai' }));
+  await within(screen.getByRole('region', { name: 'Thread', exact: true })).findByText(root.text);
   const socket = mocks.sockets.at(-1);
   const response = { messages: [{ id: 'm', text: '**Streaming result**', status: 'streaming' }], tools: [], components: [{ id: 'c', type: 'card', title: 'Churn analysis', body: 'Down 2%' }] };
   const activity = { channel_id: 'first', thread_id: 'thread', sequence: '2', occurred_at: root.created_at, type: 'task.event', payload: { task_id: 'task', type: 'execution.progress', actor_id: 'agent', installation_id: 'agent', owner_id: 'user', data: { text: 'Working', response } } };
   await act(async () => { socket.receive('chat.events', { channel_id: 'first', cursor: '2', events: [activity] }, vi.fn()); });
   expect((await screen.findByText('Streaming result')).tagName).toBe('STRONG');
   expect(screen.getByText('Down 2%')).toBeTruthy();
-  const saved = { ...paginatedMessage('Final result', '3'), task_id: 'task', text: '**Streaming result**', agent_response: { ...response, messages: [{ id: 'm', text: '**Streaming result**', status: 'complete' }] }, author: { kind: 'agent', id: 'agent', name: 'Research agent' } };
+  const saved = { ...paginatedMessage('Final result', '3'), thread_root_id: root.id, reply_count: 1, task_id: 'task', text: '**Streaming result**', agent_response: { ...response, messages: [{ id: 'm', text: '**Streaming result**', status: 'complete' }] }, author: { kind: 'agent', id: 'agent', name: 'Research agent' } };
   await act(async () => { socket.receive('chat.events', { channel_id: 'first', cursor: '4', events: [
     { type: 'message.created', channel_id: 'first', thread_id: 'thread', sequence: '3', occurred_at: root.created_at, payload: saved },
     { ...activity, sequence: '4', payload: { ...activity.payload, type: 'task.completed', data: { result: saved.text, response: saved.agent_response } } },
   ] }, vi.fn()); });
   expect(screen.getAllByText('Streaming result')).toHaveLength(1);
   expect(screen.getAllByText('Down 2%')).toHaveLength(1);
+  expect(within(screen.getByLabelText('Messages in first')).queryByText('Streaming result')).toBeNull();
 });
 
 it('clears revoked private drafts when channel discovery refreshes before socket revocation', async () => {
@@ -51,12 +54,14 @@ function messagePage(messages: ChatMessage[] = [], overrides: Partial<MessagePag
 }
 const isMessageHistory = (path: string) => /\/channels\/[^/]+\/messages(?:\?|$)/.test(path) || /\/threads\/[^/]+\/history(?:\?|$)/.test(path);
 // jsdom has no layout; exercise the timeline with every fixture row mounted.
-vi.mock('@tanstack/react-virtual', () => ({ useVirtualizer: (options: any) => ({
+vi.mock('@tanstack/react-virtual', () => ({ useVirtualizer: (options: any) => {
+  mocks.timelineRenders++;
+  return {
   getTotalSize: () => options.count * 100 + 88,
   getVirtualItems: () => Array.from({ length: options.count }, (_, index) => ({ index, key: options.getItemKey(index), start: index * 100 + 44 })),
   measureElement: () => {}, scrollToEnd: () => {}, scrollToIndex: () => {},
-}) }));
-const mocks = vi.hoisted(() => ({ sockets: [] as any[], sessionId: 'session-a', refetch: vi.fn(), upload: vi.fn(), sendFailures: 0, pendingSend: undefined as undefined | Promise<void> }));
+}; } }));
+const mocks = vi.hoisted(() => ({ sockets: [] as any[], sessionId: 'session-a', refetch: vi.fn(), upload: vi.fn(), sendFailures: 0, pendingSend: undefined as undefined | Promise<void>, timelineRenders: 0 }));
 vi.mock('./assets.js', () => ({ uploadAsset: mocks.upload }));
 vi.mock('./auth-client.js', () => ({ authClient: { useSession: () => ({ data: { user: { id: 'user', name: 'Kai' }, session: { id: mocks.sessionId } }, isPending: false, error: null, refetch: mocks.refetch }), signOut: vi.fn() } }));
 vi.mock('socket.io-client', () => ({ io: () => {
@@ -65,7 +70,7 @@ vi.mock('socket.io-client', () => ({ io: () => {
     connect: () => { client.connected = true; handlers.get('connect')?.(); },
     disconnect: vi.fn(() => { client.connected = false; }),
     requests: [] as any[],
-    timeout: () => ({ emitWithAck: async (name: string, data: any) => { client.requests.push({ name, data }); if (name === 'message.send' && mocks.pendingSend) await mocks.pendingSend; if (name === 'message.send' && mocks.sendFailures-- > 0) throw new Error('timed out'); return { data: name === 'channel.subscribe' ? data : { id: 'message' } }; } }),
+    timeout: () => ({ emitWithAck: async (name: string, data: any) => { client.requests.push({ name, data }); if (name === 'message.send' && mocks.pendingSend) await mocks.pendingSend; if (name === 'message.send' && mocks.sendFailures-- > 0) throw new Error('timed out'); return { data: name === 'message.send' ? { ...paginatedMessage(data.text, '1000', data.thread_id ?? data.client_message_id), id: data.client_message_id, client_message_id: data.client_message_id, document: data.document, thread_root_id: data.thread_id ? 'Send review root' : data.client_message_id } : data }; } }),
     receive: (name: string, ...args: any[]) => handlers.get(name)?.(...args),
   };
   mocks.sockets.push(client); return client;
@@ -252,7 +257,7 @@ it.each(['forbidden', 'not_found'])('drops a cached workspace when revalidation 
   await screen.findByText('Private history');
   await act(async () => { finishChannels({ items: [{ id: 'other', name: 'other', workspace_id: 'b', joined: true }], next_cursor: null }); });
   expect(screen.queryByRole('button', { name: 'other', exact: true })).toBeNull();
-  const socket = mocks.sockets.at(-1);
+  const socket = mocks.sockets.filter(s => s.requests.some((r: any) => r.name === 'channel.subscribe')).at(-1);
   await act(async () => { denyWorkspace({ ok: false, status: code === 'forbidden' ? 403 : 404, json: async () => ({ error: code }) }); });
   expect(screen.queryByText('Private history')).toBeNull();
   expect(screen.queryByRole('button', { name: 'first', exact: true })).toBeNull();
@@ -392,6 +397,7 @@ it('isolates channel drafts and history, shows trusted agent authors, and clears
     else if (isMessageHistory(path)) body = messagePage([{ ...message(path.includes('/first/') ? 'first' : 'second', path.includes('/first/') ? 'First channel message' : 'Second channel message').payload, sequence: '1', author: { kind: 'agent', name: 'Helper', id: 'agent' } }]);
     else if (path.includes('/history')) body = { events: [], cursor: '1', has_more: false };
     else if (path.startsWith('/v1/agents/installations?')) body = [{ id: 'agent', connector_id: 'helper', enabled: true, capabilities: { skills: ['review'] } }];
+    else if (path.endsWith('/navigator')) body = { candidates: [] };
     else body = [];
     return { ok: true, json: async () => body };
   }));
@@ -429,13 +435,13 @@ it('isolates channel drafts and history, shows trusted agent authors, and clears
   await userEvent.type(await screen.findByRole('textbox', { name: 'Message thread' }), 'Thread draft');
   const ask = screen.getByRole('button', { name: 'Ask an agent', exact: true });
   await userEvent.click(ask);
-  const goal = screen.getByRole('textbox', { name: 'What should the agent do?' });
+  const goal = await screen.findByRole('textbox', { name: 'What should the agent do?' });
   await userEvent.type(goal, 'Review this draft');
   await userEvent.click(ask);
   expect(screen.queryByRole('textbox', { name: 'What should the agent do?' })).toBeNull();
   await waitFor(() => expect(goal.isConnected).toBe(false));
   await userEvent.click(ask);
-  expect((screen.getByRole('textbox', { name: 'What should the agent do?' }) as HTMLTextAreaElement).value).toBe('Review this draft');
+  expect((await screen.findByRole('textbox', { name: 'What should the agent do?' }) as HTMLTextAreaElement).value).toBe('Review this draft');
   fireEvent.click(screen.getByRole('button', { name: 'second', exact: true }));
   await screen.findByText('Second channel message');
   await userEvent.click(screen.getByRole('button', { name: 'Back in history' }));
@@ -445,7 +451,7 @@ it('isolates channel drafts and history, shows trusted agent authors, and clears
   await screen.findByText('Second channel message');
   expect(screen.queryByText('First channel message')).toBeNull();
   expect((await screen.findByRole('textbox', { name: 'Message second' })).textContent?.trim()).toBe('');
-  expect(mocks.sockets[0].disconnect).toHaveBeenCalled();
+  expect(mocks.sockets.find(s => s.requests.some((r: any) => r.name === 'channel.subscribe' && r.data.channel_id === 'first')).disconnect).toHaveBeenCalled();
   await userEvent.click(screen.getByRole('button', { name: 'first', exact: true }));
   expect((await screen.findByRole('textbox', { name: 'Message first' })).textContent).toContain('Private draft');
   await userEvent.click(screen.getByRole('button', { name: 'Reply to Helper' }));
@@ -477,10 +483,10 @@ it('isolates channel drafts and history, shows trusted agent authors, and clears
   await waitFor(() => expect(current.requests.filter((r: any) => r.name === 'channel.subscribe')).toHaveLength(2));
   expect(current.requests.at(-1).data.after).toBe('2');
   act(() => { current.receive('chat.events', { channel_id: 'second', events: [{ channel_id: 'second', thread_id: 'thread', sequence: '3', occurred_at: '2026-11-03T00:01:00.000Z', type: 'task.event', payload: { task_id: 'task', type: 'task.proposed', owner_id: 'user', actor_id: 'user', installation_id: 'agent', data: { goal: 'Review this update' } } }], cursor: '3' }, () => {}); });
+  await userEvent.click(screen.getAllByRole('button', { name: 'Reply to Helper' })[0]!);
   await userEvent.click(await screen.findByRole('button', { name: 'Approve task', exact: true }));
   await screen.findByText('Approved', { exact: true });
   expect(vi.mocked(fetch).mock.calls.some(([path, options]) => path === '/v1/tasks/task/approve' && options?.method === 'POST')).toBe(true);
-  await userEvent.click(screen.getAllByRole('button', { name: 'Reply to Helper' })[0]!);
   expect(document.querySelector('.chat-thread')).toBeTruthy();
   act(() => { current.receive('chat.error', { error: 'not_found' }); });
   expect(document.querySelector('.chat-thread')).toBeNull();
@@ -630,7 +636,7 @@ it('cancels removed files and clears attachment drafts on authorization loss and
   expect(screen.queryByText('private.txt')).toBeNull();
 });
 
-it.each([true, false])('clears acknowledged drafts after navigation while preserving newer edits: %s', async (edited) => {
+it.each([false,true].flatMap(attached => [{edited:true,text:'Original draft'},{edited:false,text:'Original draft'},{edited:true,text:'Original :tada: draft'},{edited:false,text:'Original :tada: draft'}].map(test => ({...test,attached}))))('clears acknowledged drafts after navigation while preserving newer edits: %o', async ({edited,text,attached}) => {
   let acknowledge!: () => void;
   mocks.pendingSend = new Promise<void>(resolve => { acknowledge = resolve; });
   mocks.upload.mockResolvedValue({ id: 'sent-asset', name: 'sent.txt', size: 4, type: 'text/plain' });
@@ -643,8 +649,8 @@ it.each([true, false])('clears acknowledged drafts after navigation while preser
     return [];
   } })));
   const view = render(<Chat />);
-  await userEvent.type(await screen.findByRole('textbox', { name: 'Message first' }), 'Original draft');
-  fireEvent.change(view.container.querySelector('input[type="file"]')!, { target: { files: [new File(['data'], 'sent.txt')] } });
+  await userEvent.type(await screen.findByRole('textbox', { name: 'Message first' }), text);
+  if (attached) fireEvent.change(view.container.querySelector('input[type="file"]')!, { target: { files: [new File(['data'], 'sent.txt')] } });
   await waitFor(() => expect(screen.queryByRole('progressbar')).toBeNull());
   await userEvent.click(screen.getByRole('button', { name: 'Send now' }));
   await userEvent.click(screen.getByRole('button', { name: 'second', exact: true }));
@@ -690,6 +696,77 @@ function mockPaginatedChat(history: (path: string) => MessagePage | Promise<Mess
     return [];
   } })));
 }
+function mockUnreadChat() {
+  const root = { ...paginatedMessage('Unread hello', '1'), author: { kind: 'human' as const, id: 'other', name: 'Teammate' } };
+  const snapshot = { workspace_id: 'workspace', channels: [
+    { channel_id: 'first', last_read_sequence: '0', latest_sequence: '1', unread_count: 1 },
+    { channel_id: 'second', last_read_sequence: '0', latest_sequence: '3', unread_count: 3 },
+  ] };
+  const fetch = vi.fn(async (path: string) => ({ ok: true, json: async () => {
+    if (path === '/v1/me') return { id: 'user', display_name: 'Kai' };
+    if (path.startsWith('/v1/workspaces?')) return { items: [{ id: 'workspace', name: 'Team' }], next_cursor: null };
+    if (path.includes('/channels?')) return { items: ['first', 'second'].map(id => ({ id, name: id, workspace_id: 'workspace', joined: true })), next_cursor: null };
+    if (path.endsWith('/unread')) return snapshot;
+    if (isMessageHistory(path)) return messagePage([root]);
+    if (path.includes('/history')) return { events: [], cursor: '1', has_more: false };
+    return [];
+  } }));
+  vi.stubGlobal('fetch', fetch);
+  return { fetch, snapshot };
+}
+it('updates unopened channel badges from authoritative realtime snapshots without double counting', async () => {
+  const { snapshot } = mockUnreadChat();
+  render(<Chat />);
+  await waitFor(() => expect(mocks.sockets.some(s => s.requests.some((r: any) => r.name === 'workspace.subscribe'))).toBe(true));
+  const socket = mocks.sockets.find(s => s.requests.some((r: any) => r.name === 'workspace.subscribe'));
+  await act(async () => { socket.receive('workspace.unread', snapshot, vi.fn()); });
+  await screen.findByLabelText('3 unread');
+  const updated = { ...snapshot, channels: snapshot.channels.map(c => c.channel_id === 'second' ? { ...c, unread_count: 4, latest_sequence: '4' } : c) };
+  await act(async () => { socket.receive('workspace.unread', updated, vi.fn()); socket.receive('workspace.unread', updated, vi.fn()); });
+  expect(screen.getAllByLabelText('4 unread')).toHaveLength(1);
+  expect(screen.queryByLabelText('3 unread')).toBeNull();
+  await act(async () => { socket.receive('workspace.unread', { workspace_id: 'elsewhere', channels: [] }, vi.fn()); });
+  expect(screen.getByLabelText('4 unread')).toBeTruthy();
+});
+it('marks only the visible latest messages read in a focused window and preserves the new-message divider', async () => {
+  let focused = false;
+  const focus = vi.spyOn(document, 'hasFocus').mockImplementation(() => focused);
+  const { fetch, snapshot } = mockUnreadChat();
+  const reads = () => fetch.mock.calls.filter(([path]) => path === '/v1/channels/first/read');
+  try {
+    render(<Chat />);
+    await screen.findByText('Unread hello');
+    const socket = mocks.sockets.find(s => s.requests.some((r: any) => r.name === 'workspace.subscribe'));
+    await act(async () => { socket.receive('workspace.unread', snapshot, vi.fn()); });
+    await screen.findByText('New messages');
+    expect(reads()).toHaveLength(0);
+    const timeline = screen.getByLabelText('Messages in first');
+    Object.defineProperties(timeline, { scrollHeight: { configurable: true, value: 1000 }, clientHeight: { configurable: true, value: 100 } });
+    fireEvent.scroll(timeline, { target: { scrollTop: 0 } });
+    focused = true; fireEvent.focus(window);
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 350)); });
+    expect(reads()).toHaveLength(0);
+    fireEvent.scroll(timeline, { target: { scrollTop: 900 } });
+    await waitFor(() => expect(reads()).toHaveLength(1));
+    const options = (fetch.mock.calls as unknown as [string, RequestInit][]).find(([path]) => path.endsWith('/first/read'))![1];
+    expect(JSON.parse(options.body as string)).toEqual({ sequence: '1' });
+    expect(screen.getByText('New messages')).toBeTruthy();
+  } finally { focus.mockRestore(); }
+});
+it('keeps typing local to the mounted composer without rendering message history', async () => {
+  mockPaginatedChat(() => messagePage([paginatedMessage('Saved conversation', '1')]));
+  render(<Chat />);
+  await screen.findByText('Saved conversation');
+  const editor = await screen.findByRole('textbox', { name: 'Message first' });
+  await userEvent.click(editor);
+  await act(async () => {});
+  const renders = mocks.timelineRenders;
+  await userEvent.type(editor, 'Keep this draft while typing', { skipClick: true });
+  expect(editor.textContent).toContain('Keep this draft while typing');
+  expect(mocks.timelineRenders).toBe(renders);
+  expect(screen.getByRole('textbox', { name: 'Message first' })).toBe(editor);
+  expect(document.activeElement).toBe(editor);
+});
 it('loads older channel messages near the top once and deduplicates overlapping pages and live replay', async () => {
   const latest = paginatedMessage('Latest channel message', '20');
   let finishOlder!: (page: MessagePage) => void;
@@ -779,8 +856,9 @@ it('replays from the earlier snapshot watermark so tasks between history reads a
     channel_id: 'first', thread_id: 'thread', sequence: '100', occurred_at: message.created_at, type: 'task.event',
     payload: { task_id: 'between-snapshots', type: 'task.proposed', owner_id: 'user', actor_id: 'user', installation_id: 'agent', data: { goal: 'Task created between snapshot reads' } },
   }] }, vi.fn()); });
+  await userEvent.click(screen.getByRole('button', { name: 'Reply to Kai' }));
   expect(await screen.findByText('Task created between snapshot reads')).toBeTruthy();
-  expect(screen.getAllByText(message.text)).toHaveLength(1);
+  expect(within(screen.getByLabelText('Messages in first')).getAllByText(message.text)).toHaveLength(1);
 });
 
 it('retries a failed initial message request and connects after both snapshots recover', async () => {
@@ -799,7 +877,7 @@ it('retries a failed initial message request and connects after both snapshots r
   expect(firstSocket.requests.some((request: any) => request.name === 'channel.subscribe')).toBe(false);
   await userEvent.click(retry);
   await screen.findByText(message.text);
-  await screen.findByText('Live', { exact: true });
+  await waitFor(() => expect(mocks.sockets.at(-1).connected).toBe(true));
   expect(attempts).toBe(2);
   expect(vi.mocked(fetch).mock.calls.filter(([path]) => path === '/v1/channels/first/history')).toHaveLength(2);
   expect(firstSocket.disconnect).toHaveBeenCalled();
@@ -840,14 +918,16 @@ it('opens the agent workspace from a task, restores focus, and clears it after r
     channel_id: 'first', thread_id: 'thread', sequence: '2', occurred_at: '2026-11-03T08:00:00.000Z', type: 'task.event',
     payload: { task_id: task.id, type: 'task.completed', owner_id: 'user', actor_id: 'agent', installation_id: 'agent', data: { goal: task.goal, result: task.result } },
   }] }, vi.fn()); });
+  await userEvent.click(screen.getByRole('button', { name: 'Reply to Kai' }));
   const open = await screen.findByRole('button', { name: 'Open workspace' });
   await userEvent.click(open);
   const workspace = await screen.findByRole('region', { name: 'Agent workspace' });
   await within(workspace).findByText('No preview attached');
   await userEvent.click(within(workspace).getByRole('button', { name: 'Close agent workspace' }));
   await waitFor(() => expect(screen.queryByRole('region', { name: 'Agent workspace' })).toBeNull());
-  await waitFor(() => expect(document.activeElement).toBe(open));
-  await userEvent.click(open);
+  await waitFor(() => expect(document.activeElement?.id).toBe('chat-messages'));
+  await userEvent.click(screen.getByRole('button', { name: 'Reply to Kai' }));
+  await userEvent.click(await screen.findByRole('button', { name: 'Open workspace' }));
   await screen.findByRole('region', { name: 'Agent workspace' });
   await act(async () => { socket.receive('chat.error', { error: 'not_found' }); });
   await waitFor(() => expect(screen.queryByRole('region', { name: 'Agent workspace' })).toBeNull());
@@ -866,4 +946,123 @@ it('keeps the workspace available on a saved structured agent response', async (
   await screen.findByText('The report is ready.');
   await userEvent.click(screen.getByRole('button', { name: 'Open workspace' }));
   await within(await screen.findByRole('region', { name: 'Agent workspace' })).findByText('No preview attached');
+});
+
+it('persists emoji reaction intent and applies realtime reaction updates to the same message', async () => {
+  const root = paginatedMessage('React to this', '1');
+  mockPaginatedChat(() => messagePage([root]), '1');
+  const initialFetch = vi.mocked(fetch).getMockImplementation()!;
+  vi.mocked(fetch).mockImplementation(async (...args) => {
+    if (String(args[0]).endsWith(`/messages/${root.id}/reactions`)) return new Response(JSON.stringify({ ...root, reaction_sequence: '2', reactions: [{ emoji: '👀', count: 1, user_ids: ['user'] }] }), {status:200});
+    return initialFetch(...args);
+  });
+  render(<Chat />);
+  await screen.findByText(root.text);
+  await userEvent.click(screen.getByRole('button',{name:'React with eyes'}));
+  const chip = await screen.findByRole('button',{name:'👀 1 reactions'});
+  expect(chip.getAttribute('aria-pressed')).toBe('true');
+  expect(vi.mocked(fetch).mock.calls.some(([path, init]) => String(path).endsWith('/reactions') && JSON.parse(String(init?.body)).active === true)).toBe(true);
+  const updated = {...root,reaction_sequence:'3',reactions:[{emoji:'👀',count:2,user_ids:['user','other']}]};
+  await act(async () => { mocks.sockets.at(-1).receive('chat.events',{channel_id:'first',cursor:'3',events:[{type:'message.updated',channel_id:'first',thread_id:root.thread_id,sequence:'3',occurred_at:root.created_at,payload:updated}]},vi.fn()); });
+  expect(await screen.findByRole('button',{name:'👀 2 reactions'})).toBeTruthy();
+  expect(screen.getAllByText(root.text)).toHaveLength(1);
+});
+it('opens the current profile for a stored mention and sends selected mentions with their IDs',async()=>{
+ const person={kind:'user' as const,id:'00000000-0000-4000-8000-000000000002',label:'Jamie Chen',detail:'Engineer',joined:true};
+ const root={...paginatedMessage('@Jamie Chen hello','1'),document:{ops:[{insert:'@Jamie Chen',attributes:{mention:{kind:person.kind,id:person.id,label:person.label}}},{insert:' hello\n'}]}};
+ mockPaginatedChat(()=>messagePage([root]),'1');
+ const original=vi.mocked(fetch).getMockImplementation()!;
+ vi.mocked(fetch).mockImplementation(async(...args)=>{
+  const path=String(args[0]);
+  if(path.includes('/mentions/user/'))return new Response(JSON.stringify({...person,label:'Jamie Updated'}),{status:200});
+  if(path.includes('/mentions?q='))return new Response(JSON.stringify({items:[person],member_count:2}),{status:200});
+  if(path.endsWith('/mention-settings'))return new Response(JSON.stringify({paused_until:null,broadcast_permission:'all',can_manage:false,member_count:2,general_channel_id:'first'}),{status:200});
+  if(path.endsWith('/mentions'))return new Response(JSON.stringify({items:[],unread_count:0,next_cursor:null}),{status:200});
+  return original(...args);
+ });
+ render(<Chat/>);
+ await userEvent.click(await screen.findByRole('button',{name:'@Jamie Chen'}));
+ const profile=await screen.findByRole('dialog',{name:'Jamie Updated'});
+ await userEvent.click(within(profile).getByRole('button',{name:'Close dialog'}));
+ const editor=await screen.findByRole('textbox',{name:'Message first'});
+ await userEvent.type(editor,'@Ja');await screen.findByRole('option',{name:/Jamie Chen/});await userEvent.keyboard('{Enter}');
+ await userEvent.keyboard('review{Enter}');
+ await waitFor(()=>expect(mocks.sockets.at(-1).requests.some((r:any)=>r.name==='message.send'&&r.data.document.ops.some((op:any)=>op.attributes?.mention?.id===person.id))).toBe(true));
+});
+
+it('fades a live thread reply without animating the loaded thread history', async () => {
+  const root = paginatedMessage('Existing thread root', '1');
+  mockPaginatedChat(() => messagePage([root]), '1');
+  render(<Chat />);
+  await screen.findByText(root.text);
+  await userEvent.click(screen.getByRole('button', { name: 'Reply to Kai' }));
+  const thread = screen.getByRole('region', { name: 'Thread', exact: true });
+  const history = await within(thread).findByText(root.text);
+  expect(history.closest('article')!.style.opacity).toBe('1');
+  const reply = paginatedMessage('A new live thread reply', '2');
+  await act(async () => { mocks.sockets.at(-1).receive('chat.events', { channel_id: 'first', cursor: '2', events: [{ type: 'message.created', channel_id: 'first', thread_id: 'thread', sequence: '2', occurred_at: reply.created_at, payload: reply }] }, vi.fn()); });
+  const row = within(thread).getByText(reply.text).closest('article')!;
+  expect(row.style.opacity).toBe('0');
+  expect(row.style.transform).not.toMatch(/translate|scale/);
+});
+
+function sendReviewChannels() {
+  const root = paginatedMessage('Send review root', '1');
+  mockPaginatedChat(() => messagePage([root]), '1');
+  const initialFetch = vi.mocked(fetch).getMockImplementation()!;
+  vi.mocked(fetch).mockImplementation(async (...args) => String(args[0]).includes('/channels?')
+    ? new Response(JSON.stringify({items:['first','second'].map(id=>({id,name:id,workspace_id:'workspace',joined:true})),next_cursor:null}))
+    : initialFetch(...args));
+  return root;
+}
+it.each([false,true])('clears a text-only acknowledged draft after leaving its composer: thread=%s', async inThread => {
+  let acknowledge!: () => void;
+  mocks.pendingSend = new Promise<void>(resolve => { acknowledge = resolve; });
+  sendReviewChannels();
+  render(<Chat />);
+  await screen.findByRole('textbox', {name:'Message first'});
+  if (inThread) await userEvent.click(screen.getByRole('button',{name:'Reply to Kai'}));
+  const editor = await screen.findByRole('textbox',{name:inThread?'Message thread':'Message first'});
+  await userEvent.type(editor,'Sent before leaving');
+  fireEvent.keyDown(editor,{key:'Enter'});
+  if (inThread) await userEvent.click(screen.getByRole('button',{name:'Close thread'}));
+  else await userEvent.click(screen.getByRole('button',{name:'second',exact:true}));
+  await waitFor(()=>expect(editor.isConnected).toBe(false));
+  await act(async()=>{acknowledge();await mocks.pendingSend;});
+  if (inThread) await userEvent.click(screen.getByRole('button',{name:'Reply to Kai'}));
+  else await userEvent.click(screen.getByRole('button',{name:'first',exact:true}));
+  expect((await screen.findByRole('textbox',{name:inThread?'Message thread':'Message first'})).textContent?.trim()).toBe('');
+});
+it('keeps thread replies out of the channel and updates the root count on duplicate delivery',async()=>{
+  const root = {...paginatedMessage('Thread root only','1'),thread_root_id:'Thread root only',reply_count:3};
+  mockPaginatedChat(()=>messagePage([root]),'1');
+  render(<Chat />);
+  await screen.findByText(root.text);
+  await userEvent.click(screen.getByRole('button',{name:'Reply to Kai'}));
+  const thread=screen.getByRole('region',{name:'Thread',exact:true});
+  await within(thread).findByText(root.text);
+  const reply={...paginatedMessage('Thread reply only','2'),thread_root_id:root.id,reply_count:4};
+  await act(async()=>{for(let i=0;i<2;i++)mocks.sockets.at(-1).receive('chat.events',{channel_id:'first',cursor:'2',events:[{type:'message.created',channel_id:'first',thread_id:'thread',sequence:'2',occurred_at:reply.created_at,payload:reply}]},vi.fn());});
+  expect(within(thread).getByText(reply.text)).toBeTruthy();
+  const channel=screen.getByLabelText('Messages in first');
+  expect(within(channel).queryByText(reply.text)).toBeNull();
+  expect(within(channel).getByRole('button',{name:/4 replies/})).toBeTruthy();
+});
+it.each([false,true])('reveals an acknowledged send from older history even before socket delivery: thread=%s',async inThread=>{
+  const root=paginatedMessage('Historical root','1');
+  const own={...paginatedMessage('Acknowledged new message','9',inThread?'thread':'new-thread'),thread_root_id:inThread?root.id:'Acknowledged new message',reply_count:inThread?1:0};
+  let sent=false;
+  mockPaginatedChat(path=>messagePage(sent?[root,own]:[root],{has_newer:!sent}),'1');
+  render(<Chat />);
+  await screen.findByRole('textbox',{name:'Message first'});
+  if(inThread)await userEvent.click(screen.getByRole('button',{name:'Reply to Kai'}));
+  const editor=await screen.findByRole('textbox',{name:inThread?'Message thread':'Message first'});
+  await userEvent.type(editor,own.text);
+  // The acknowledgment includes the saved message, while realtime delivery can arrive later.
+  const socket=mocks.sockets.at(-1), originalTimeout=socket.timeout;
+  socket.timeout=()=>({emitWithAck:async(name:string,data:any)=>name==='message.send'?(sent=true,{data:own}):originalTimeout().emitWithAck(name,data)});
+  fireEvent.keyDown(editor,{key:'Enter'});
+  const timeline=within(screen.getByLabelText(inThread?'Thread messages':'Messages in first'));
+  await timeline.findByText(own.text);
+  await waitFor(()=>expect(editor.textContent?.trim()).toBe(''));
 });

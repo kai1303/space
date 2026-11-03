@@ -1,4 +1,9 @@
-import { useEffect, useRef, useState } from "react";
+import { registerMention } from "./mention-blot.js";
+import { useMentions, type FindMentions } from "./use-mentions.js";
+import { documentMentions } from "@space/contracts";
+import { useEffect, useRef, useState, useId } from "react";
+import { EmojiPicker } from "./emoji-picker.js";
+import { emojiCompletion, emojiDocument, emojiNative, emojiPreferences } from "./emoji.js";
 import type Quill from "quill";
 import { Reveal } from "./reveal.js";
 import { isDefaultComposerSendKey } from "./composer-keyboard.js";
@@ -6,7 +11,6 @@ import { MAX_ASSET_BYTES, MAX_MESSAGE_ASSETS, MAX_MESSAGE_DOCUMENT_BYTES } from 
 import {
   PaperPlaneRight,
   Plus,
-  Smiley,
   At,
   TextAa,
   TextB,
@@ -23,7 +27,6 @@ import {
   File,
   Microphone,
   VideoCamera,
-  CaretDown,
   Lightning,
 } from "@phosphor-icons/react";
 import { Button, Dialog, IconButton, Popover, TextField } from "./primitives.js";
@@ -45,6 +48,7 @@ export function RichComposer({
   onAttachmentsChange,
   onSend,
   mentions = [],
+  findMentions,
   plainText = false,
   attachmentsEnabled = true,
 }: {
@@ -60,8 +64,10 @@ export function RichComposer({
     text: string,
     document: RichDocument,
     attachments: Attachment[],
+    options?: { broadcast_confirmed: boolean },
   ) => void | Promise<void>;
   mentions?: string[];
+  findMentions?: FindMentions;
   plainText?: boolean;
   attachmentsEnabled?: boolean;
 }) {
@@ -88,6 +94,13 @@ export function RichComposer({
   const [formats, setFormats] = useState<Record<string, unknown>>({});
   const [showFormats, setShowFormats] = useState(true);
   const [sending, setSending] = useState(false);
+  const [sendingVisible, setSendingVisible] = useState(false);
+  useEffect(() => {
+    if (!sending) { setSendingVisible(false); return; }
+    // Quick acknowledgements should not flash a transient progress label.
+    const timer = setTimeout(() => setSendingVisible(true), 300);
+    return () => clearTimeout(timer);
+  }, [sending]);
   const [error, setError] = useState("");
   const [localFiles, setLocalFiles] = useState<Attachment[]>(attachmentsEnabled ? defaultAttachments : []);
   const files = attachments ?? localFiles;
@@ -109,8 +122,41 @@ export function RichComposer({
   const [linkText, setLinkText] = useState("");
   const [linkUrl, setLinkUrl] = useState("");
   const [linkError, setLinkError] = useState("");
+  const suggestionsId = useId();
+  const [completion, setCompletion] = useState<ReturnType<typeof emojiCompletion>>(null);
+  const completionRef = useRef<ReturnType<typeof emojiCompletion>>(null);
+  const [emojiIndex, setEmojiIndex] = useState(0);
+  const emojiIndexRef = useRef(0);
+  function suggest(q: Quill, range = q.getSelection()) {
+    const format = range ? q.getFormat(range) : {};
+    const next = range && !range.length && !format.code && !format["code-block"] && !format.link ? emojiCompletion(q.getText(), range.index) : null;
+    completionRef.current = next?.items.length ? next : null;
+    setCompletion(completionRef.current); emojiIndexRef.current = 0; setEmojiIndex(0);
+  }
+  function completeEmoji(index: number) {
+    const q = editor.current, match = completionRef.current, item = match?.items[index];
+    if (!q || !match || !item) return;
+    const value = emojiNative(item.id, emojiPreferences().skin);
+    q.deleteText(match.start, match.length, "user");
+    q.insertText(match.start, value, "user");
+    q.setSelection(match.start + value.length, 0, "user");
+    completionRef.current = null; setCompletion(null);
+  }
+  useEffect(() => {
+    const root = editor.current?.root;
+    if (!root) return;
+    root.setAttribute('aria-autocomplete', 'list');
+    root.setAttribute('aria-controls', suggestionsId);
+    root.setAttribute('aria-expanded', String(Boolean(completion)));
+    if (completion) root.setAttribute('aria-activedescendant', `${suggestionsId}-${emojiIndex}`);
+    else root.removeAttribute('aria-activedescendant');
+  }, [completion, emojiIndex, suggestionsId, ready]);
+  const [editorVersion, setEditorVersion] = useState(0);
+  const mentionsUI = useMentions(editor, ready, channel, plainText ? undefined : findMentions, editorVersion);
+  const mentionKeys = useRef(mentionsUI.key); mentionKeys.current = mentionsUI.key;
+  const [broadcastWarning, setBroadcastWarning] = useState(false);
   const sendRef = useRef<() => void>(() => {});
-  async function send() {
+  async function send(confirmed = false) {
     const q = editor.current;
     if (!q || pending.current || filesRef.current.some(file => file.status === "uploading" || file.status === "error")) return;
     const raw = q.getText();
@@ -122,35 +168,38 @@ export function RichComposer({
       );
       return;
     }
-    const document = normalizeDocument(q.getContents());
+    const document = emojiDocument(normalizeDocument(q.getContents()), emojiPreferences().skin);
     if (new TextEncoder().encode(JSON.stringify(document)).byteLength > MAX_MESSAGE_DOCUMENT_BYTES) {
       setError("This message has too much formatting. Split it into smaller messages.");
       return;
     }
+    // Keep stored drafts identical to the submitted document while navigating during send.
+    if (JSON.stringify(normalizeDocument(q.getContents())) !== JSON.stringify(document)) q.setContents(document.ops, "user");
+    if (!confirmed && mentionsUI.memberCount >= 6 && findMentions && documentMentions(document).some(ref => ref.kind === 'broadcast') && channel !== 'thread') { setBroadcastWarning(true); return; }
     pending.current = true;
     setSending(true);
     setError("");
     q.disable();
     try {
-      await callbacks.current.onSend(
-        plain,
-        document,
-        filesRef.current,
-      );
+      const plainText = document.ops.map(op => op.insert).join("").trim();
+      if (confirmed) await callbacks.current.onSend(plainText, document, filesRef.current, { broadcast_confirmed: true });
+      else await callbacks.current.onSend(plainText, document, filesRef.current);
       if (editor.current !== q) return;
       q.setText("");
       q.history.clear();
       setFiles([]);
       callbacks.current.onDraftChange?.({ ops: [] });
-    } catch {
-      if (editor.current === q)
+    } catch (reason) {
+      if (reason instanceof Error && reason.message === 'broadcast_confirmation_required') setBroadcastWarning(true);
+      else if (editor.current === q)
         setError("Could not send. Your draft is still here. Try again.");
     } finally {
       if (editor.current === q) {
         pending.current = false;
         setSending(false);
         q.enable();
-        q.focus();
+        const dom = q.root.ownerDocument;
+        if (dom.activeElement === dom.body || mount.current?.parentElement?.contains(dom.activeElement)) q.focus();
       }
     }
   }
@@ -163,9 +212,11 @@ export function RichComposer({
         if (disposed || !mount.current) return;
         const node = document.createElement("div");
         mount.current.append(node);
+        registerMention(Editor);
         const q = new Editor(node, {
           placeholder: `Message #${channel}`,
           formats: plainText ? [] : [
+            "mention",
             "bold",
             "italic",
             "underline",
@@ -179,6 +230,7 @@ export function RichComposer({
           modules: { toolbar: false, history: { userOnly: true } },
         });
         editor.current = q;
+        completionRef.current = null; setCompletion(null);
         pending.current = false;
         setSending(false);
         q.root.setAttribute("role", "textbox");
@@ -192,7 +244,9 @@ export function RichComposer({
         setText(q.getText());
         const change = () => {
           setText(q.getText());
-          setFormats(q.getFormat());
+          suggest(q);
+          const range = q.getSelection();
+          setFormats(range ? q.getFormat(range) : {});
           // Preserve over-limit drafts for editing; send() validates before submission.
           callbacks.current.onDraftChange?.(
             normalizeDocument(q.getContents(), Infinity),
@@ -202,9 +256,20 @@ export function RichComposer({
           if (range) {
             selection.current = range;
             setFormats(q.getFormat(range));
+            suggest(q, range);
           }
         };
         const key = (event: KeyboardEvent) => {
+          if (event.isComposing || event.keyCode === 229) return;
+          if (mentionKeys.current(event)) return;
+          const match = completionRef.current;
+          if (match && ["ArrowDown", "ArrowUp", "Enter", "Tab", "Escape"].includes(event.key)) {
+            event.preventDefault(); event.stopImmediatePropagation();
+            if (event.key === "Escape") { completionRef.current = null; setCompletion(null); }
+            else if (event.key === "Enter" || event.key === "Tab") completeEmoji(emojiIndexRef.current);
+            else { emojiIndexRef.current = (emojiIndexRef.current + (event.key === "ArrowDown" ? 1 : -1) + match.items.length) % match.items.length; setEmojiIndex(emojiIndexRef.current); }
+            return;
+          }
           if (isDefaultComposerSendKey(event)) {
             event.preventDefault();
             event.stopPropagation();
@@ -215,6 +280,7 @@ export function RichComposer({
         q.on("selection-change", select);
         q.root.addEventListener("keydown", key, true);
         setReady(true);
+        setEditorVersion(version => version + 1);
         cleanup = () => {
           q.off("text-change", change);
           q.off("selection-change", select);
@@ -303,16 +369,24 @@ export function RichComposer({
     { name: "Code block", icon: CodeBlock, format: "code-block", value: true },
   ];
   const codeBlockActive = Boolean(formats["code-block"]);
-  const formatButtons = tools.map(({ name, icon: Icon, format: key, value }) => (
+  const formatButtons = tools.map(({ name, icon: Icon, format: key, value }) => {
+    const unavailable = !ready || (codeBlockActive && !["list", "blockquote", "code-block"].includes(key));
+    return (
     <IconButton key={name} label={name} size="sm"
-      disabled={!ready || sending || (codeBlockActive && !["list", "blockquote", "code-block"].includes(key))}
+      disabled={unavailable || sending}
+      data-send-disabled={sending && !unavailable || undefined}
       aria-pressed={key === "code-block" ? codeBlockActive : formats[key] === value}
       onMouseDown={(e) => e.preventDefault()} onClick={() => format(key, value)}>
       <Icon size={18} />
     </IconButton>
-  ));
+  ); });
   return (
-    <div className="sp-rich-composer">
+    <div className="sp-rich-composer" aria-busy={sending || undefined}>
+      {mentionsUI.suggestions}
+      <Dialog open={broadcastWarning} title="Notify the channel?" onClose={() => setBroadcastWarning(false)}><p>This message can notify {mentionsUI.memberCount || 'all eligible'} channel members. Use channel-wide mentions sparingly.</p><div className="sp-mention-confirm"><Button onClick={() => setBroadcastWarning(false)}>Keep editing</Button><Button variant="primary" onClick={() => { setBroadcastWarning(false); void send(true); }}>Send and notify</Button></div></Dialog>
+      {completion && <div className="sp-emoji-suggestions" id={suggestionsId} role="listbox" aria-label="Emoji suggestions">
+        {completion.items.map((item, index) => <button id={`${suggestionsId}-${index}`} type="button" role="option" aria-selected={index === emojiIndex} key={item.id} onMouseDown={event => event.preventDefault()} onClick={() => completeEmoji(index)}><span>{emojiNative(item.id, emojiPreferences().skin)}</span><span>:{item.id}:</span></button>)}
+      </div>}
       <div className="sp-rich-editor-shell">
         <Reveal open={!plainText && showFormats}>
           <div
@@ -326,6 +400,7 @@ export function RichComposer({
               label="Add link"
               size="sm"
               disabled={!ready || sending || codeBlockActive}
+              data-send-disabled={sending && ready && !codeBlockActive || undefined}
               aria-pressed={typeof formats.link === "string"}
               onMouseDown={(e) => e.preventDefault()}
               onClick={openLink}
@@ -356,11 +431,12 @@ export function RichComposer({
                   </small>
                 </span>
                 {file.status === "uploading" && <progress aria-label={`Uploading ${file.name}`} value={file.progress ?? 0} max={100} />}
-                {file.status === "error" && <><small role="alert">{file.error ?? "Upload failed"}</small><Button size="sm" aria-label={`Retry upload ${file.name}`} disabled={sending} onClick={() => onRetryAttachment?.(file.id)}>Retry</Button></>}
+                {file.status === "error" && <><small role="alert">{file.error ?? "Upload failed"}</small><Button size="sm" aria-label={`Retry upload ${file.name}`} disabled={sending} data-send-disabled={sending || undefined} onClick={() => onRetryAttachment?.(file.id)}>Retry</Button></>}
                 <IconButton
                   label={`Remove ${file.name}`}
                   size="sm"
                   disabled={sending}
+                  data-send-disabled={sending || undefined}
                   onClick={() =>
                     setFiles(files.filter((f) => f.id !== file.id))
                   }
@@ -412,6 +488,7 @@ export function RichComposer({
             size="sm"
             className="sp-attach-trigger"
             disabled={!ready || sending || !attachmentsEnabled}
+            data-send-disabled={sending && ready && attachmentsEnabled || undefined}
             onClick={() => fileInput.current?.click()}
           >
             <Plus size={20} />
@@ -424,25 +501,9 @@ export function RichComposer({
           >
             <TextAa size={20} />
           </IconButton>}
-          <Popover className="sp-composer-picker" label="Choose emoji" trigger={<Smiley size={19} />}>
-            {close => <>
-              {["🙂", "🙌", "💜", "🎉", "👍", "🚀"].map((emoji) => (
-                <button
-                  type="button"
-                  key={emoji}
-                  aria-label={`Insert ${emoji}`}
-                  disabled={!ready || sending}
-                  onClick={() => {
-                    insert(emoji);
-                    close(false);
-                  }}
-                >
-                  {emoji}
-                </button>
-              ))}
-            </>}
-          </Popover>
-          {mentions.length > 0 && (
+          <EmojiPicker label="Choose emoji" disabled={!ready || sending} restoreFocus={false} onSelect={insert} />
+          {!plainText && findMentions && <IconButton label="Mention someone" size="sm" disabled={!ready || sending} onMouseDown={event => event.preventDefault()} onClick={mentionsUI.begin}><At size={19} /></IconButton>}
+          {!findMentions && mentions.length > 0 && (
             <Popover className="sp-composer-picker" panelClassName="sp-mention-options" label="Mention someone" trigger={<At size={19} />}>
               {close => <>
                 {mentions.map((person) => (
@@ -487,25 +548,23 @@ export function RichComposer({
             size="sm"
             className="sp-send-rich"
             disabled={!ready || sending || filesPending || (!text.trim() && !files.length)}
+            data-send-disabled={sending && ready && !filesPending && Boolean(text.trim() || files.length) || undefined}
             onClick={() => void send()}
           >
             <PaperPlaneRight size={19} weight="fill" />
           </IconButton>
-          {!plainText && <IconButton label="Schedule for later unavailable in this preview" size="sm" className="sp-schedule-rich" disabled>
-            <CaretDown size={12} />
-          </IconButton>}
           </div>
         </div>
       </div>
       <div className="sp-rich-help">
         <span>
-          {sending
+          {sendingVisible
             ? "Sending…"
             : text.length > 9000
               ? `${text.trim().length}/10,000 characters`
               : "Enter to send · Shift + Enter to add a new line"}
         </span>
-        {!plainText && attachmentsEnabled && <span>{attachments !== undefined ? "Up to 5 files · 25 MB each" : "Files stay local in this preview"}</span>}
+        {!plainText && attachmentsEnabled && attachments === undefined && <span>Files stay local in this preview</span>}
       </div>
       {error && (
         <p role="alert" className="sp-field-error">

@@ -1,4 +1,5 @@
 import { AppError, record, text, uuid } from './validation.js';
+import { parseThreadContext } from './thread-context.js';
 import type { AgentCapabilities, AgentSession, ControlFeature, Execution, InvocationRequest } from './index.js';
 export interface DefinitionInput { name: string; capabilities: AgentCapabilities }
 export interface InstallationInput { workspace_id: string; definition_id: string; connector_id: string }
@@ -43,6 +44,16 @@ export function parseInvocation(value: unknown): InvocationRequest {
   const execution_id = uuid(v.execution_id);
   if (uuid(v.idempotency_key) !== execution_id) throw new AppError(400, 'invalid_idempotency_key');
   let context:InvocationRequest['context'];
-  if(v.context!==undefined){const ctx=record(v.context,['thread_id','messages']);if(!Array.isArray(ctx.messages)||ctx.messages.length>16)throw new AppError(400,'invalid_context');context={thread_id:uuid(ctx.thread_id),messages:ctx.messages.map(raw=>{const m=record(raw,['id','text','author_type']);if(m.author_type!=='human'&&m.author_type!=='agent')throw new AppError(400,'invalid_context');return {id:uuid(m.id),text:text(m.text,1000),author_type:m.author_type};})};}
+  if (v.context !== undefined) {
+    const ctx = record(v.context, ['thread_id', 'messages', 'working_memory']);
+    if (!Array.isArray(ctx.messages) || ctx.messages.length > 16) throw new AppError(400, 'invalid_context');
+    const working_memory = ctx.working_memory === undefined ? undefined : parseThreadContext(ctx.working_memory);
+    if (working_memory && working_memory.thread_id !== uuid(ctx.thread_id)) throw new AppError(400, 'invalid_context_thread');
+    context = { ...(working_memory ? { working_memory } : {}), thread_id: uuid(ctx.thread_id), messages: ctx.messages.map(raw => {
+      const m = record(raw, ['id', 'text', 'author_type']);
+      if (m.author_type !== 'human' && m.author_type !== 'agent') throw new AppError(400, 'invalid_context');
+      return { id: uuid(m.id), text: text(m.text, 1000), author_type: m.author_type };
+    }) };
+  }
   return { ...(context?{context}:{}), schema_version: '1.0', task_id: uuid(v.task_id), execution_id, session_id: uuid(v.session_id), idempotency_key: execution_id, goal: text(v.goal), skill: text(v.skill, 80) };
 }

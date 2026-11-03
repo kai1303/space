@@ -84,11 +84,48 @@ cannot supply their own author identity. Agent messages can only come through th
 trusted task-event acceptance path.
 
 A root message creates a thread. Replies reference a thread in the same channel.
+Channel message pages contain only thread roots; replies and agent activity appear in the thread panel.
+Message payloads include `thread_root_id` and the thread's `reply_count`, so channel reply counts remain correct across pagination and duplicate replay.
 Retries reuse the original client message ID; conflicting content returns 409.
 The UI preserves a failed draft and its retry ID within the mounted composer.
 Unsent drafts survive in-app channel/workspace/thread navigation but are not persisted across reload.
+Acknowledged sends clear the matching draft even after navigation, while preserving newer edits.
+A send finishing in the background preserves focus in another input.
 
 ## Message storage and scrolling
+
+### Per-user unread state
+
+Migration 027 stores `channel_reads(channel_id,user_id,last_read_sequence)`. Each
+membership starts at the channel's current history, including existing memberships
+when the migration runs. Removing a membership deletes its cursor; rejoining starts
+at the new current history. Cursors advance monotonically and never affect another
+user. Counts include human and agent root messages after the cursor, exclude the reader's
+own messages, and ignore task activity and reactions. Thread replies are displayed
+separately and do not increase the channel badge; their direct mentions retain the
+existing mention inbox behavior.
+
+`GET /v1/workspaces/:id/unread` returns `{workspace_id,channels}` for joined channels
+in an active workspace membership. Each channel includes `channel_id`,
+`last_read_sequence`, `latest_sequence` (decimal strings), and `unread_count`.
+`POST /v1/channels/:id/read` accepts only `{sequence}`: zero or an existing message
+creation sequence in that channel. The actor always comes from authentication.
+
+The workspace socket subscribes with `workspace.subscribe {workspace_id}` and
+receives acknowledged `workspace.unread` snapshots in the same shape as the HTTP
+summary. It watches all joined channels independently of the selected channel.
+Read updates enqueue transactional outbox hints, so the same user's devices sync
+across API instances. Repeated hints replace snapshots instead of incrementing
+client counters. Every refresh rechecks access; reconnect, focus and periodic
+server reconciliation recover missed events. Membership revocation removes state
+or disconnects the workspace subscription.
+
+The web app displays sidebar counts and preserves a “New messages” divider for
+the channel visit. After a short debounce it advances only through the displayed
+latest message when the window has focus, the document is visible, and the timeline
+is at the bottom. Older history, search and content overlays do not clear unread.
+A failed read save keeps the badge and retries when the user returns. Desktop push
+notifications are outside this feature.
 
 Migration 016 adds an immutable bigint `messages.sequence`. A database trigger locks
 the channel counter before allocating the sequence; the message's `message.created`
@@ -123,7 +160,7 @@ Channel and thread views independently load near the top or bottom. TanStack Vir
 measures variable-height rows and preserves the visible message on prepends. Each view
 retains at most 500 messages, evicts the far end when paging, and can fetch evicted
 messages again. Live messages follow the viewport only when it is at the bottom;
-otherwise the reader keeps their position. A historical window offers **Jump to latest**.
+otherwise the reader keeps their position. A successful own send returns its channel or thread view to the latest messages, including when an older-page request is still pending. The acknowledgment supplies the saved message without waiting for socket delivery. A historical window offers **Jump to latest**.
 Search covers the currently retained messages. Initial network failures expose a retry;
 revocation clears cached history and ignores in-flight responses.
 

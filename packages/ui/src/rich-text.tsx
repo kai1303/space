@@ -1,3 +1,5 @@
+import { parseMention, mentionOperations, type MentionReference } from "@space/contracts";
+import { emojiDocument } from "./emoji.js";
 import { Fragment, type ReactNode } from "react";
 import type { RichAttributes, RichDocument } from "@space/contracts";
 export type { RichAttributes, RichDocument } from "@space/contracts";
@@ -49,6 +51,9 @@ export function normalizeDocument(
       "blockquote",
     ] as const)
       if (a[key] === true) attributes[key] = true;
+    if (a.mention) {
+      try { const mention = parseMention(a.mention); if (insert === `@${mention.label}`) attributes.mention = mention; } catch { /* Malformed draft references stay plain text. */ }
+    }
     if (typeof a.link === "string") {
       const link = safeLink(a.link);
       if (link) attributes.link = link;
@@ -65,17 +70,22 @@ export function normalizeDocument(
 export function documentText(document: RichDocument) {
   return document.ops.map((op) => op.insert).join("");
 }
-export function RichContent({ document }: { document: RichDocument }) {
-  const safe = normalizeDocument(document);
+export function RichContent({ document, onMentionClick, viewerId }: { document: RichDocument; onMentionClick?: (mention: MentionReference) => void; viewerId?: string }) {
+  const safe = emojiDocument(normalizeDocument(document));
+  const active = new Set(mentionOperations(safe).map(item => item.index));
   const lines: { content: ReactNode[]; attributes: RichAttributes }[] = [];
   let content: ReactNode[] = [];
   let key = 0;
-  for (const op of safe.ops) {
+  for (const [opIndex, op] of safe.ops.entries()) {
     const parts = op.insert.split("\n");
     parts.forEach((part, index) => {
       if (part) {
         let node: ReactNode = part;
         const a = op.attributes ?? {};
+        if (a.mention && active.has(opIndex) && !a.code && !a.link) {
+          const mention = a.mention, className = `sp-mention-token${mention.kind === 'user' && mention.id === viewerId ? ' is-self' : ''}`;
+          node = onMentionClick && mention.kind !== 'broadcast' ? <button type="button" className={className} onClick={() => onMentionClick(mention)}>{part}</button> : <span className={className}>{part}</span>;
+        }
         if (a.code) node = <code>{node}</code>;
         if (a.bold) node = <strong>{node}</strong>;
         if (a.italic) node = <em>{node}</em>;

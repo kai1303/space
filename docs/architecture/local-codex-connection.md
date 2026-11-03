@@ -1,8 +1,9 @@
 # Local Codex connection
 
-The first connection slice enrolls a local agent and shows it alongside human
-workspace members. It does not dispatch tasks, read channels, run a Navigator or
-perform model inference. Repository and channel selection are absent from onboarding.
+Local Codex enrollment shows an owned agent alongside human workspace members.
+After the owner explicitly enables it for a channel, the connector can claim
+approved `codex.run` tasks and return streamed responses. Pairing grants no channel
+access. Repository selection is absent from this chat integration.
 
 ## Setup
 
@@ -44,8 +45,8 @@ sequenceDiagram
 - Claiming is transactional. Space stores SHA-256 hashes of codes and connector
   credentials. Retrying the same code and credential returns the same installation;
   a different credential cannot replay a claimed code.
-- An installation has a human owner and a Local Codex definition, with no executable
-  skills or channel grants. It is not a synthetic human login.
+- An installation has a human owner and a Local Codex definition, with the `codex.run`
+  capability and no channel grants. It is not a synthetic human login.
 - The separate `/agents` namespace accepts connector credentials only. Human chat
   sockets and HTTP user sessions do not accept them. Heartbeats recheck membership,
   revocation and the current connection generation; stale sockets cannot overwrite
@@ -70,8 +71,19 @@ sequenceDiagram
 | `GET /v1/workspaces/:id/participants` | Paginated human and agent directory |
 | `POST /v1/agents/connections/:id/revoke` | Owner disconnects installation |
 | `/agents`, `agent.heartbeat` | Authenticated readiness updates |
+| `GET /v1/channels/:id/local-codex` | Owner's paired agents and channel enablement |
+| `POST /v1/agents/connections/:id/channels/:channelId` | Owner enables or disables the channel grant |
+| `/agents`, `agent.task.claim/event/renew/finish/fail` | Scoped task delivery and persisted event acknowledgements |
 
-PostgreSQL persists enrollment and status. Socket.IO carries heartbeats directly;
+Local task claims exclude every other installation, and ordinary workers exclude
+`codex.local`. A current ready socket can hold one 30-second lease, renewed during
+a maximum two-minute model turn. Event acceptance rechecks installation, task,
+channel access, grant, socket generation, and live lease. Disconnects and expired
+leases fail visibly; uncertain claims are never automatically invoked again.
+The connector uses an ephemeral tool-free runtime with isolated home and working
+directories, and denies unsupported tool or approval requests.
+
+PostgreSQL persists enrollment, status, tasks, events, and responses. Socket.IO carries heartbeats directly;
 PostgreSQL is not a message broker. Existing Redis chat distribution is unchanged.
 
 ## Verification boundaries
@@ -86,6 +98,7 @@ Real ChatGPT authorization, installed Codex 0.146.0 initialization and a complet
 model turn were verified on 2026-11-03. The runtime returned the exact smoke-test
 response using `gpt-5.6-sol`, with no tool use. Restarting the production connector
 reused and refreshed saved authorization, and Space returned to Online.
-See [real Codex E2E evidence](../real-codex-e2e-qa.md). The prompt test used the
-connector's runtime directly; authenticated task dispatch from Space chat and
-results back into the conversation remain the next slice.
+See [real Codex E2E evidence](../real-codex-e2e-qa.md). That historical prompt test used the
+connector's runtime directly. The chat dispatch path is covered separately by
+`tests/integration/local-codex.test.ts` and connector task tests; real browser
+verification must be recorded separately from these synthetic checks.

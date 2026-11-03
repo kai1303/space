@@ -6,7 +6,7 @@ export const MAX_MEMORY_IMPORT_BYTES = 100_000;
 export type MemoryScope = { workspace_id: string; channel_id: string };
 export type MemorySource = { id: string; title: string; text: string; url?: string; fingerprint?: string };
 export type MemoryDocument = { content: string; revision: string; sources: { id: string; title: string; url?: string; fingerprint?: string }[] };
-export type MemoryConnection = { id: string; name: string; access: 'read' | 'write'; created_at: string };
+export type MemoryConnection = { thread_id?: string | null; id: string; name: string; access: 'read' | 'write'; created_at: string };
 export type MemoryMatch = { text: string; line: number };
 export type ChannelMemory = {
   enabled: boolean; provider: string; can_manage: boolean;

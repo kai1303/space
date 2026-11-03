@@ -4,7 +4,7 @@ import type { Pool } from 'pg';
 import { and, eq, gt, isNull, sql } from 'drizzle-orm';
 import { AppError, connectionSecret, parsePairing, parsePairingClaim, parseAgentHeartbeat, parsePage, uuid, type WorkspaceParticipant, type AgentPairingStatus } from '@space/contracts';
 import { database } from './database.js';
-import { hasWorkspaceAccess, lockWorkspace, requireWorkspaceAccess } from './access.js';
+import { hasChannelAccess, hasWorkspaceAccess, lockWorkspace, requireWorkspaceAccess } from './access.js';
 import * as s from './schema.js';
 const hash = (value: string) => createHash('sha256').update(value).digest('hex');
 const unauthorized = () => new AppError(401, 'unauthorized');
@@ -51,8 +51,7 @@ export class AgentConnectionStore {
         return { installation_id: pairing.installation_id, workspace_id: pairing.workspace_id };
       }
       if (pairing.expires_at.getTime() <= Date.now()) throw unauthorized();
-      // Enrollment advertises no executable skills until the async dispatch slice exists.
-      await c.insert(s.agentDefinitions).values({ id: definitionId, name: 'Local Codex', capabilities: { skills: [], controls: {} } }).onConflictDoNothing();
+      await c.insert(s.agentDefinitions).values({ id: definitionId, name: 'Local Codex', capabilities: { skills: ['codex.run'], controls: { progress_stream: true } } }).onConflictDoNothing();
       const installation_id = randomUUID();
       await c.insert(s.agentInstallations).values({ id: installation_id, workspace_id: pairing.workspace_id, owner_id: pairing.owner_id, definition_id: definitionId, connector_id: 'codex.local' });
       await c.insert(s.agentConnections).values({ installation_id, name: pairing.name, token_hash: hash(credential) });
@@ -93,6 +92,42 @@ export class AgentConnectionStore {
       .where(and(eq(s.agentConnections.installation_id, identity.id), eq(s.agentConnections.token_hash, hash(token as string)), isNull(s.agentConnections.revoked_at))).returning();
     if (!rows.length) throw unauthorized();
     return { ...identity, connection_id };
+  }
+  async authenticateConnection(token: unknown, connection: string) {
+    const identity = await this.authenticate(token);
+    const [row] = await this.db.select().from(s.agentConnections).where(and(eq(s.agentConnections.installation_id, identity.id), eq(s.agentConnections.connection_id, connection)));
+    if (!row) throw unauthorized();
+    if (row.auth_status !== 'ready' || !row.last_seen_at || row.last_seen_at.getTime() <= Date.now() - 45_000) throw new AppError(409, 'agent_not_ready');
+    return identity;
+  }
+  async channelAgents(actor: string, channelId: string) {
+    const [channel] = await this.db.select().from(s.channels).where(eq(s.channels.id, uuid(channelId)));
+    if (!channel || !await hasChannelAccess(this.db, actor, channel.workspace_id, channel.id)) throw new AppError(404, 'not_found');
+    return (await this.db.execute<{ id: string; name: string; enabled_in_channel: boolean }>(sql`
+      SELECT i.id,ac.name,EXISTS(SELECT 1 FROM agent_grants g WHERE g.installation_id=i.id AND g.channel_id=${channel.id} AND g.skill='codex.run') AS enabled_in_channel
+      FROM agent_installations i JOIN agent_connections ac ON ac.installation_id=i.id
+      WHERE i.workspace_id=${channel.workspace_id} AND i.owner_id=${actor} AND i.connector_id='codex.local' AND i.enabled AND ac.revoked_at IS NULL ORDER BY i.id LIMIT 100`)).rows;
+  }
+  async setChannelEnabled(actor: string, id: string, channelId: string, enabled: boolean) {
+    if (typeof enabled !== 'boolean') throw new AppError(400, 'invalid_enabled');
+    return this.db.transaction(async c => {
+      const [ref] = await c.select().from(s.agentInstallations).where(eq(s.agentInstallations.id, uuid(id)));
+      if (!ref || ref.connector_id !== 'codex.local') throw new AppError(404, 'not_found');
+      await lockWorkspace(c, ref.workspace_id);
+      await requireWorkspaceAccess(c, actor, ref.workspace_id);
+      const [installation] = await c.select().from(s.agentInstallations).where(eq(s.agentInstallations.id, id)).for('update');
+      if (installation!.owner_id !== actor) throw new AppError(403, 'installation_not_owned');
+      const [channel] = await c.select().from(s.channels).where(and(eq(s.channels.id, uuid(channelId)), eq(s.channels.workspace_id, ref.workspace_id))).for('share');
+      if (!channel || !await hasChannelAccess(c, actor, ref.workspace_id, channel.id)) throw new AppError(404, 'not_found');
+      if (enabled && channel.archived_at) throw new AppError(409, 'channel_archived');
+      if (!installation!.enabled || !(await c.select().from(s.agentConnections).where(and(eq(s.agentConnections.installation_id, id), isNull(s.agentConnections.revoked_at)))).length) throw new AppError(409, 'agent_unavailable');
+      const grant = { installation_id: id, workspace_id: ref.workspace_id, channel_id: channel.id, skill: 'codex.run' };
+      const changed = enabled
+        ? await c.insert(s.agentGrants).values(grant).onConflictDoNothing().returning()
+        : await c.delete(s.agentGrants).where(and(eq(s.agentGrants.installation_id, id), eq(s.agentGrants.channel_id, channel.id), eq(s.agentGrants.skill, 'codex.run'))).returning();
+      if (changed.length) await c.insert(s.foundationEvents).values({ id: randomUUID(), workspace_id: ref.workspace_id, installation_id: id, actor_id: actor, type: enabled ? 'grant.created' : 'grant.revoked', payload: { channel_id: channel.id, skill: 'codex.run' } });
+      return { enabled_in_channel: enabled };
+    });
   }
   async heartbeat(token: unknown, connection: string, raw: unknown) {
     const auth_status = parseAgentHeartbeat(raw), identity = await this.authenticate(token);

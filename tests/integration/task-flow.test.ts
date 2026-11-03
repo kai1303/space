@@ -104,6 +104,7 @@ test('queued work and in-flight started work survive new store instances', async
   assert.ok(lease);
   const prepared = await store.prepareDelivery(lease);
   assert.ok(prepared);
+  assert.equal(prepared.request.context?.working_memory?.thread_id, seed.thread_id);
   await assert.rejects(new MockConnector().invoke(prepared.request, async event => {
     await store.acceptEvent(seed.installation_id, event);
     throw new Error('simulated process death');

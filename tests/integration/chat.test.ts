@@ -273,7 +273,7 @@ test('a slow subscriber receives an explicit retryable error and is disconnected
 test('message pages use immutable sequences for both directions with equal timestamps and scoped bounds', async () => {
   const a = await bootstrap(pool), chat = new ChatStore(pool);
   const saved = [];
-  for (let i = 0; i < 125; i++) saved.push(await chat.send(a.owner_id, a.channel_id, { client_message_id: randomUUID(), thread_id: a.thread_id, text: `Page ${i}` }));
+  for (let i = 0; i < 125; i++) saved.push(await chat.send(a.owner_id, a.channel_id, { client_message_id: randomUUID(), text: `Page ${i}` }));
   await pool.query('UPDATE messages SET created_at=$1 WHERE channel_id=$2', ['2020-01-01T00:00:00Z', a.channel_id]);
   const latest = await api(a.owner_token, 'GET', `/channels/${a.channel_id}/messages`);
   assert.equal(latest.messages.length, 50);
@@ -289,9 +289,8 @@ test('message pages use immutable sequences for both directions with equal times
   assert.deepEqual(forward.messages.map((m: any) => m.id), saved.slice(25).map(m => m.id));
   assert.equal(forward.has_older, true); assert.equal(forward.has_newer, false);
   const other = await chat.send(a.owner_id, a.channel_id, { client_message_id: randomUUID(), text: 'Other thread' });
-  const thread = await api(a.owner_token, 'GET', `/threads/${a.thread_id}/history?limit=100`);
-  assert.equal(thread.messages.length, 100);
-  assert.ok(thread.messages.every((m: any) => m.thread_id === a.thread_id));
+  const thread = await api(a.owner_token, 'GET', `/threads/${saved[0]!.thread_id}/history?limit=100`);
+  assert.deepEqual(thread.messages.map((m: any) => m.id), [saved[0]!.id]);
   assert.equal(thread.has_newer, false);
   assert.equal(thread.event_cursor, other.sequence);
   const before = await api(a.owner_token, 'GET', `/channels/${a.channel_id}/messages?before=0`);
@@ -326,7 +325,10 @@ test('concurrent retries allocate one immutable message sequence and replay rema
   assert.ok(BigInt(snapshot.event_cursor) > BigInt(snapshot.newer_cursor));
   await store.approveTask(a.owner_id, task.id);
   await deliverOne(store, [new MockConnector()]);
-  const messages = await api(a.owner_token, 'GET', `/channels/${a.channel_id}/messages`);
+  const roots = await api(a.owner_token, 'GET', `/channels/${a.channel_id}/messages`);
+  assert.deepEqual(roots.messages.map((m: any) => m.author.kind), ['human']);
+  assert.equal(roots.messages[0].reply_count, 1);
+  const messages = await api(a.owner_token, 'GET', `/threads/${a.thread_id}/history`);
   assert.deepEqual(messages.messages.map((m: any) => m.author.kind), ['human', 'agent']);
   assert.ok(BigInt(messages.messages[1].sequence) > BigInt(messages.messages[0].sequence) + 1n);
   const replay = await chat.events(a.owner_id, a.channel_id, snapshot.event_cursor);
@@ -372,7 +374,11 @@ test('message migration preserves original event order, payloads, and rows witho
     const oldEvents = (await legacy.query('SELECT * FROM channel_events ORDER BY sequence')).rows;
     assert.equal(oldEvents[0].payload.sequence, undefined);
     await migrate(legacy);
-    const after = await new ChatStore(legacy).messageHistory(a.owner_id, a.channel_id);
+    const chat = new ChatStore(legacy);
+    const roots = await chat.messageHistory(a.owner_id, a.channel_id);
+    assert.deepEqual(roots.messages.map(m => m.id), [ids[0]]);
+    assert.equal(roots.messages[0]!.reply_count, 1);
+    const after = await chat.threadHistory(a.owner_id, a.thread_id);
     assert.deepEqual(after.messages.map(m => m.id), ids);
     assert.deepEqual(after.messages.map(m => m.sequence), ['1', '3']);
     assert.equal(after.event_cursor, '4');
@@ -382,14 +388,14 @@ test('message migration preserves original event order, payloads, and rows witho
     const next = await new ChatStore(legacy).send(a.owner_id, a.channel_id, { client_message_id: randomUUID(), text: 'After migration' });
     assert.equal(next.sequence, '5');
     await migrate(legacy);
-    assert.equal((await new ChatStore(legacy).messageHistory(a.owner_id, a.channel_id)).messages.length, 3);
+    assert.equal((await new ChatStore(legacy).messageHistory(a.owner_id, a.channel_id)).messages.length, 2);
   } finally { await legacy.end(); await admin.query(`DROP SCHEMA ${legacySchema} CASCADE`); }
 });
 
 test('concurrent message snapshots and replay cover every insert without losing bigint precision', async () => {
   const a = await bootstrap(pool), chat = new ChatStore(pool);
   await pool.query('UPDATE channels SET event_sequence=$1 WHERE id=$2', ['9007199254740992', a.channel_id]);
-  const requests = Array.from({ length: 20 }, (_, i) => ({ client_message_id: randomUUID(), thread_id: a.thread_id, text: `Racing ${i}` }));
+  const requests = Array.from({ length: 20 }, (_, i) => ({ client_message_id: randomUUID(), text: `Racing ${i}` }));
   const [snapshot, saved] = await Promise.all([
     chat.messageHistory(a.owner_id, a.channel_id),
     Promise.all(requests.map(input => chat.send(a.owner_id, a.channel_id, input))),
@@ -453,4 +459,60 @@ test('a transient authentication store failure is retryable rather than unauthor
     const connected = await socket(a.owner_token,base);
     connected.ws.disconnect();
   } finally { await temporary.close(); }
+});
+
+test('emoji reactions persist per user, retry safely, replay and enforce channel access', async () => {
+  const a = await bootstrap(pool), outsider = await bootstrap(pool);
+  const message = await api(a.owner_token, 'POST', `/channels/${a.channel_id}/messages`, { client_message_id: randomUUID(), text: 'Emoji test 👍🏽' }, 201);
+  const path = `/channels/${a.channel_id}/messages/${message.id}/reactions`;
+  const first = await api(a.owner_token, 'POST', path, { emoji: '👍🏽', active: true });
+  assert.equal(first.reactions[0].count, 1);
+  const retry = await api(a.owner_token, 'POST', path, { emoji: '👍🏽', active: true });
+  assert.equal(retry.reaction_sequence, first.reaction_sequence);
+  await api(a.collaborator_token, 'POST', path, { emoji: '👍🏽', active: true });
+  const page = await api(a.owner_token, 'GET', `/channels/${a.channel_id}/messages`);
+  assert.equal(page.messages[0].reactions[0].count, 2);
+  assert.deepEqual(new Set(page.messages[0].reactions[0].user_ids), new Set([a.owner_id, a.collaborator_id]));
+  const client = await socket(a.owner_token);
+  try {
+    client.send({ type: 'subscribe', channel_id: a.channel_id, after: page.event_cursor });
+    await client.wait('subscribed');
+    const removed = await api(a.owner_token, 'POST', path, { emoji: '👍🏽', active: false });
+    assert.equal(removed.reactions[0].count, 1);
+    const replay = await client.wait('events', frame => frame.events.some((e: any) => e.type === 'message.updated'));
+    assert.equal(replay.events[0].payload.reactions[0].count, 1);
+    assert.equal(replay.events[0].payload.sequence, message.sequence);
+    assert.notEqual(replay.events[0].payload.reaction_sequence, message.sequence);
+  } finally { client.ws.close(); }
+  await api(outsider.owner_token, 'POST', path, { emoji: '👀', active: true }, 404);
+  await api(a.owner_token, 'POST', path, { emoji: 'not-an-emoji', active: true }, 400);
+  await api(a.owner_token, 'POST', path, { emoji: '👍👀', active: true }, 400);
+  await api(a.owner_token, 'POST', path, { emoji: '👀', active: 'yes' }, 400);
+  await api(a.owner_token, 'POST', path, { emoji: '👀', active: true, user_id: outsider.owner_id }, 400);
+  await api(a.collaborator_token, 'POST', path, { emoji: '👍🏽', active: false });
+  const thread = await api(a.owner_token, 'GET', `/threads/${message.thread_id}/history`);
+  assert.deepEqual(thread.messages[0].reactions, []);
+});
+
+test('channel message pages contain roots with complete reply counts while thread history keeps replies',async()=>{
+  const a=await bootstrap(pool), chat=new ChatStore(pool);
+  const root=await chat.send(a.owner_id,a.channel_id,{client_message_id:randomUUID(),text:'Channel root'});
+  const reply=await chat.send(a.owner_id,a.channel_id,{client_message_id:randomUUID(),thread_id:root.thread_id,text:'Thread reply'});
+  assert.equal(root.thread_root_id,root.id);
+  assert.equal(root.reply_count,0);
+  assert.equal(reply.thread_root_id,root.id);
+  assert.equal(reply.reply_count,1);
+  const other=await chat.send(a.owner_id,a.channel_id,{client_message_id:randomUUID(),text:'Another root'});
+  const page=await chat.messageHistory(a.owner_id,a.channel_id,{limit:'1'});
+  assert.deepEqual(page.messages.map(m=>m.id),[other.id]);
+  const older=await chat.messageHistory(a.owner_id,a.channel_id,{before:page.older_cursor,limit:'1'});
+  assert.deepEqual(older.messages.map(m=>m.id),[root.id]);
+  assert.equal(older.messages[0]!.reply_count,1);
+  assert.equal(older.has_older,false);
+  const thread=await chat.threadHistory(a.owner_id,root.thread_id);
+  assert.deepEqual(thread.messages.map(m=>m.id),[root.id,reply.id]);
+  const replay=await chat.history(a.owner_id,a.channel_id);
+  const event=replay.events.find(e=>e.type==='message.created'&&e.payload.id===reply.id);
+  assert.ok(event?.type==='message.created');
+  assert.equal(event.payload.thread_root_id,root.id);
 });

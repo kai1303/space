@@ -8,6 +8,7 @@ import { database, type DbSession } from './database.js';
 import * as s from './schema.js';
 import { tokenHash } from './bootstrap.js';
 import { hasThreadAccess } from './access.js';
+import { readThreadContext } from './thread-context.js';
 import { FoundationStore } from './foundation.js';
 const notFound = () => new AppError(404, 'not_found');
 const now = sql`now()`;
@@ -132,18 +133,26 @@ export class PostgresStore implements DeliveryStore {
     });
   }
   async installations(actor: string, workspace: string): Promise<AgentInstallation[]> { return new FoundationStore(this.pool).list(actor, workspace); }
-  async claimDelivery(): Promise<Delivery | null> {
+  async claimDelivery(localInstallation?: string): Promise<Delivery | null> {
     return this.db.transaction(async c => {
       // Keep the claim atomic across workers; ordinary select-then-update would race.
       const result = await c.execute<Delivery & Record<string, unknown>>(sql`WITH candidate AS (
-        SELECT id FROM outbox WHERE (state='pending' AND available_at<=now()) OR (state='delivering' AND lease_until<=now())
-        ORDER BY available_at,id FOR UPDATE SKIP LOCKED LIMIT 1)
+        SELECT o.id FROM outbox o JOIN tasks t ON t.id=o.task_id JOIN agent_installations i ON i.id=t.installation_id
+        WHERE ${localInstallation ? sql`i.id=${uuid(localInstallation)} AND i.connector_id='codex.local'` : sql`i.connector_id<>'codex.local'`}
+        AND ((o.state='pending' AND o.available_at<=now()) OR (o.state='delivering' AND o.lease_until<=now()))
+        ORDER BY o.available_at,o.id FOR UPDATE OF o SKIP LOCKED LIMIT 1)
         UPDATE outbox SET state='delivering',attempts=attempts+1,lease_until=now()+interval '30 seconds',lease_token=${randomUUID()}
         FROM candidate WHERE outbox.id=candidate.id RETURNING outbox.*`);
       return result.rows[0] ?? null;
     });
   }
-  async prepareDelivery(delivery: Delivery): Promise<PreparedDelivery | null> {
+  private async localConnection(c: DbSession, installationId: string, connectionId?: string) {
+    if (connectionId === undefined) return;
+    const rows = await c.select({ id: s.agentConnections.installation_id }).from(s.agentConnections)
+      .where(and(eq(s.agentConnections.installation_id, installationId), eq(s.agentConnections.connection_id, connectionId), eq(s.agentConnections.auth_status, 'ready'), sql`${s.agentConnections.revoked_at} IS NULL`, sql`${s.agentConnections.last_seen_at}>now()-interval '45 seconds'`)).for('share');
+    if (!rows.length) throw new AppError(401, 'unauthorized');
+  }
+  async prepareDelivery(delivery: Delivery, connectionId?: string): Promise<PreparedDelivery | null> {
     return this.db.transaction(async c => {
       const task = await this.task(c, delivery.task_id);
       if (task.status === 'completed' || task.status === 'failed') return null;
@@ -151,25 +160,33 @@ export class PostgresStore implements DeliveryStore {
       const lease = await c.select({ id: s.outbox.id }).from(s.outbox).where(this.liveLease(delivery));
       if (!lease.length) throw new AppError(409, 'stale_lease');
       const installation = await this.eligible(c, task);
+      await this.localConnection(c, installation.id, connectionId);
       const [origin]=await navigatorPresent(c)?(await c.execute<{through_sequence:string}>(sql`SELECT through_sequence::text FROM navigator_decisions WHERE decision->>'task_id'=${task.id} LIMIT 1`)).rows:[];
       const thread=(await c.select().from(s.threads).where(eq(s.threads.id,task.thread_id)))[0]!;
-      const context=origin?(await c.execute<{id:string;text:string;author_type:'human'|'agent'}>(sql`SELECT id,left(text,1000) AS text,author_type FROM messages WHERE channel_id=${thread.channel_id} AND thread_id=${task.thread_id} AND sequence<=${origin.through_sequence}::bigint AND length(btrim(text))>0 ORDER BY sequence DESC LIMIT 16`)).rows.reverse():undefined;
-      return { installation, request: { schema_version: '1.0', task_id: task.id, session_id: task.session_id!, execution_id: delivery.execution_id, idempotency_key: delivery.execution_id, goal: task.goal, skill: task.skill, ...(context?{context:{thread_id:task.thread_id,messages:context}}:{}) } };
+      const working_memory = await readThreadContext(c, thread.channel_id, task.thread_id, origin?.through_sequence);
+      const context = { thread_id: task.thread_id, working_memory, messages: working_memory.messages.filter(m => m.text.trim()).map(m => ({ id: m.id, text: m.text, author_type: m.author.kind })) };
+      return { installation, request: { schema_version: '1.0', task_id: task.id, session_id: task.session_id!, execution_id: delivery.execution_id, idempotency_key: delivery.execution_id, goal: task.goal, skill: task.skill, context } };
     });
   }
-  async acceptEvent(installationId: string, raw: unknown): Promise<void> {
+  async acceptEvent(installationId: string, raw: unknown, delivery?: Delivery, connectionId?: string): Promise<void> {
     const event = parseAgentEvent(raw);
     await this.db.transaction(async c => {
       const [ref] = await c.select().from(s.executions).where(and(eq(s.executions.id, event.execution_id), eq(s.executions.installation_id, installationId)));
       if (!ref) throw notFound();
       const task = await this.task(c, ref.task_id);
+      if (delivery) {
+        await this.eligible(c, task);
+        await this.localConnection(c, installationId, connectionId);
+        if (delivery.execution_id !== event.execution_id || delivery.task_id !== task.id) throw new AppError(409, 'stale_execution');
+        if (!(await c.select({ id: s.outbox.id }).from(s.outbox).where(this.liveLease(delivery)).for('update')).length) throw new AppError(409, 'stale_lease');
+      }
       const [previous] = await c.select({ same: sql<boolean>`${s.agentEventReceipts.event}=${JSON.stringify(event)}::jsonb` })
         .from(s.agentEventReceipts).where(and(eq(s.agentEventReceipts.installation_id, installationId), eq(s.agentEventReceipts.event_id, event.id)));
       if (previous) {
         if (!previous.same) throw new AppError(409, 'event_id_conflict');
         return;
       }
-      await this.eligible(c,task);
+      if (!delivery) await this.eligible(c,task);
       if (task.active_execution_id !== event.execution_id || !['queued', 'running'].includes(task.status)) throw new AppError(409, 'stale_execution');
       const execution = (await c.select().from(s.executions).where(eq(s.executions.id, event.execution_id)).for('update'))[0]!;
       if (event.sequence !== execution.last_sequence + 1) throw new AppError(409, 'event_out_of_order');
@@ -193,6 +210,24 @@ export class PostgresStore implements DeliveryStore {
   }
   private liveLease(delivery: Delivery) {
     return and(eq(s.outbox.id, delivery.id), eq(s.outbox.lease_token, delivery.lease_token), eq(s.outbox.state, 'delivering'), gt(s.outbox.lease_until, now));
+  }
+  async renewDelivery(delivery: Delivery, connectionId: string): Promise<boolean> {
+    return this.db.transaction(async c => {
+      const task = await this.task(c, delivery.task_id);
+      if (task.active_execution_id !== delivery.execution_id || !['queued', 'running'].includes(task.status)) throw new AppError(409, 'stale_execution');
+      await this.eligible(c, task);
+      await this.localConnection(c, task.installation_id, connectionId);
+      return (await c.update(s.outbox).set({ lease_until: sql`now()+interval '30 seconds'` }).where(this.liveLease(delivery)).returning({ id: s.outbox.id })).length > 0;
+    });
+  }
+  async expireLocalDeliveries(): Promise<void> {
+    const expired = await this.db.transaction(async c => (await c.execute<Delivery & Record<string, unknown>>(sql`
+      WITH candidate AS (SELECT o.id FROM outbox o JOIN tasks t ON t.id=o.task_id JOIN agent_installations i ON i.id=t.installation_id
+        WHERE i.connector_id='codex.local' AND o.state='delivering' AND o.lease_until<=now()
+        ORDER BY o.lease_until FOR UPDATE OF o SKIP LOCKED LIMIT 10)
+      UPDATE outbox SET lease_token=${randomUUID()},lease_until=now()+interval '30 seconds'
+      FROM candidate WHERE outbox.id=candidate.id RETURNING outbox.*`)).rows);
+    for (const delivery of expired) await this.failDelivery(delivery, 'local_execution_interrupted', true);
   }
   async ackDelivery(delivery: Delivery): Promise<boolean> {
     return (await this.db.update(s.outbox).set({ state: 'done', lease_until: null }).where(this.liveLease(delivery)).returning({ id: s.outbox.id })).length > 0;

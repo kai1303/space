@@ -3,6 +3,15 @@ import { record, uuid } from '@space/contracts';
 import type { ChatStore } from '@space/postgres/chat';
 
 export function registerChatRoutes(app: FastifyInstance, chat: ChatStore) {
+  app.get<{ Params: { workspaceId: string } }>('/v1/workspaces/:workspaceId/unread', r => chat.unread.summary(r.actorId, uuid(r.params.workspaceId)));
+  app.post<{ Params: { channelId: string } }>('/v1/channels/:channelId/read', r => chat.unread.markRead(r.actorId, uuid(r.params.channelId), r.body));
+  app.get<{ Params: { channelId: string } }>('/v1/channels/:channelId/mentions', r => chat.mentions.search(r.actorId, uuid(r.params.channelId), r.query));
+  app.get<{ Params: { channelId: string; kind: string; id: string } }>('/v1/channels/:channelId/mentions/:kind/:id', r => chat.mentions.detail(r.actorId, uuid(r.params.channelId), r.params.kind, r.params.id));
+  app.get<{ Params: { workspaceId: string } }>('/v1/workspaces/:workspaceId/mention-settings', r => chat.mentions.settings(r.actorId, uuid(r.params.workspaceId)));
+  app.patch<{ Params: { workspaceId: string } }>('/v1/workspaces/:workspaceId/mention-settings', r => chat.mentions.updateSettings(r.actorId, uuid(r.params.workspaceId), r.body));
+  app.get<{ Params: { workspaceId: string } }>('/v1/workspaces/:workspaceId/mentions', r => chat.mentions.activity(r.actorId, uuid(r.params.workspaceId), r.query));
+  app.post<{ Params: { workspaceId: string; id: string } }>('/v1/workspaces/:workspaceId/mentions/:id/read', r => { record(r.body, []); return chat.mentions.markRead(r.actorId, uuid(r.params.workspaceId), r.params.id); });
+
   app.get<{ Params: { workspaceId: string } }>('/v1/workspaces/:workspaceId/channels', r => chat.channels(r.actorId, uuid(r.params.workspaceId), r.query));
   app.post<{ Params: { workspaceId: string } }>('/v1/workspaces/:workspaceId/channels', async (r, reply) => reply.code(201).send(await chat.createChannel(r.actorId, uuid(r.params.workspaceId), r.body)));
   app.get<{ Params: { channelId: string } }>('/v1/channels/:channelId', r => chat.details(r.actorId, uuid(r.params.channelId)));
@@ -11,6 +20,7 @@ export function registerChatRoutes(app: FastifyInstance, chat: ChatStore) {
   app.get<{ Params: { channelId: string } }>('/v1/channels/:channelId/history', r => chat.history(r.actorId, uuid(r.params.channelId), r.query));
   app.get<{ Params: { channelId: string } }>('/v1/channels/:channelId/messages', r => chat.messageHistory(r.actorId, uuid(r.params.channelId), r.query));
   app.post<{ Params: { channelId: string } }>('/v1/channels/:channelId/messages', { bodyLimit: 131072 }, async (r, reply) => reply.code(201).send(await chat.send(r.actorId, uuid(r.params.channelId), r.body)));
+  app.post<{ Params: { channelId: string; messageId: string } }>('/v1/channels/:channelId/messages/:messageId/reactions', r => chat.react(r.actorId, uuid(r.params.channelId), uuid(r.params.messageId), r.body));
   app.post<{ Params: { channelId: string } }>('/v1/channels/:channelId/join', r => {
     record(r.body, []);
     return chat.join(r.actorId, uuid(r.params.channelId));

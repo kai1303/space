@@ -1,6 +1,6 @@
 import { AppError } from '@space/contracts';
 import {
-  CopyObjectCommand, CreateBucketCommand, DeleteObjectCommand, GetObjectCommand,
+  CreateBucketCommand, DeleteObjectCommand, GetObjectCommand,
   HeadBucketCommand, HeadObjectCommand, PutBucketCorsCommand, PutObjectCommand, S3Client,
 } from '@aws-sdk/client-s3';
 import { createPresignedPost } from '@aws-sdk/s3-presigned-post';
@@ -8,6 +8,7 @@ import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 
 export interface AssetStorage {
   createUpload(key: string, size: number, expiresAt?: Date): Promise<{ url: string; fields: Record<string, string> }>;
+  // Retries and concurrent processors must reuse sealed originals, never overwrite them.
   finalize(stagingKey: string, finalKey: string, size: number): Promise<void>;
   download(key: string, name: string): Promise<string>;
   read(key: string, maxBytes: number, range?: { start: number; end: number }): Promise<Uint8Array>;
@@ -91,6 +92,12 @@ export class SeaweedStorage implements AssetStorage {
   async finalize(stagingKey: string, finalKey: string, size: number): Promise<void> {
     validateSize(size);
     await this.run(async () => {
+      // A retried or expired processor must never overwrite already sealed bytes.
+      try {
+        const existing = await this.client.send(new HeadObjectCommand({ Bucket: this.config.bucket, Key: finalKey }));
+        if (existing.ContentLength !== size) throw new AppError(409, 'invalid_upload');
+        return;
+      } catch (error) { if (statusOf(error) !== 404) throw error; }
       let source;
       try { source = await this.client.send(new HeadObjectCommand({ Bucket: this.config.bucket, Key: stagingKey })); }
       catch (error) {
@@ -98,20 +105,19 @@ export class SeaweedStorage implements AssetStorage {
         throw error;
       }
       if (source.ContentLength !== size || !source.ETag) throw new AppError(409, 'invalid_upload');
+      const bytes = await this.read(stagingKey, size, undefined, source.ETag);
+      if (bytes.length !== size) throw new AppError(409, 'invalid_upload');
       try {
-        await this.client.send(new CopyObjectCommand({
-          Bucket: this.config.bucket, Key: finalKey,
-          CopySource: `${this.config.bucket}/${stagingKey.split('/').map(encodeURIComponent).join('/')}`,
-          CopySourceIfMatch: source.ETag, MetadataDirective: 'REPLACE',
+        await this.client.send(new PutObjectCommand({
+          Bucket: this.config.bucket, Key: finalKey, Body: bytes, IfNoneMatch: '*',
           ContentType: 'application/octet-stream', ContentDisposition: 'attachment',
         }));
       } catch (error) {
-        if (statusOf(error) === 412) throw new AppError(409, 'invalid_upload');
-        if (statusOf(error) === 404) throw new AppError(409, 'upload_not_ready');
-        throw error;
+        // Another claimant may have sealed this object first.
+        if (![409, 412].includes(statusOf(error) ?? 0)) throw error;
       }
       const final = await this.client.send(new HeadObjectCommand({ Bucket: this.config.bucket, Key: finalKey }));
-      if (final.ContentLength !== size || final.ETag !== source.ETag) throw new AppError(409, 'invalid_upload');
+      if (final.ContentLength !== size) throw new AppError(409, 'invalid_upload');
     });
   }
   async download(key: string, name: string): Promise<string> {
@@ -127,7 +133,7 @@ export class SeaweedStorage implements AssetStorage {
       Bucket: this.config.bucket, Key: key, ResponseContentType: type, ResponseContentDisposition: 'inline',
     }), { expiresIn: 60 }));
   }
-  async read(key: string, maxBytes: number, range?: { start: number; end: number }): Promise<Uint8Array> {
+  async read(key: string, maxBytes: number, range?: { start: number; end: number }, expectedEtag?: string): Promise<Uint8Array> {
     validateSize(maxBytes);
     if (range && (!Number.isSafeInteger(range.start) || !Number.isSafeInteger(range.end) || range.start < 0 || range.end < range.start || range.end - range.start + 1 > maxBytes)) throw new AppError(409, 'invalid_upload');
     const expected = range ? range.end - range.start + 1 : maxBytes;
@@ -135,6 +141,7 @@ export class SeaweedStorage implements AssetStorage {
       const controller = new AbortController();
       const object = await this.client.send(new GetObjectCommand({
         Bucket: this.config.bucket, Key: key, ...(range ? { Range: `bytes=${range.start}-${range.end}` } : {}),
+        ...(expectedEtag ? { IfMatch: expectedEtag } : {}),
       }), { abortSignal: controller.signal });
       const body = object.Body;
       try {

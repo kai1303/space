@@ -177,3 +177,89 @@ it('edits the existing selected link and rejects unsafe link URLs without replac
   await userEvent.click(within(dialog).getByRole('button', { name: 'Save', exact: true }));
   await waitFor(() => expect(editor.querySelector('a')?.getAttribute('href')).toBe('https://example.test/new'));
 });
+
+it('sends known emoji shortcodes as matching Unicode text and rich document, preserving code', async () => {
+  const send = vi.fn();
+  render(<RichComposer channel="emoji" defaultValue={{ops:[{insert:':tada: '},{insert:':tada:',attributes:{code:true}},{insert:'\n'}]}} onSend={send} />);
+  await screen.findByRole('textbox', {name:'Message emoji'});
+  await userEvent.click(screen.getByRole('button',{name:'Send now',exact:true}));
+  expect(send).toHaveBeenCalledWith('🎉 :tada:', expect.objectContaining({ops:expect.arrayContaining([{insert:'🎉 '},{insert:':tada:',attributes:{code:true}}])}), []);
+});
+it('completes emoji shortcodes with Enter before sending the message', async () => {
+  const send = vi.fn();
+  render(<RichComposer channel="emoji" onSend={send} />);
+  const editor = await screen.findByRole('textbox',{name:'Message emoji'});
+  await userEvent.type(editor, 'Hello :rocke');
+  await screen.findByRole('listbox',{name:'Emoji suggestions'});
+  await userEvent.keyboard('{Enter}');
+  expect(send).not.toHaveBeenCalled();
+  expect(editor.textContent).toContain('Hello 🚀');
+  await userEvent.keyboard('{Enter}');
+  expect(send).toHaveBeenCalledWith('Hello 🚀', expect.anything(), []);
+});
+it('inserts a searched emoji at the saved selection and returns focus to the editor', async () => {
+  render(<RichComposer channel="emoji" onSend={() => {}} />);
+  const editor = await screen.findByRole('textbox',{name:'Message emoji'});
+  await userEvent.type(editor, 'Hello ');
+  await userEvent.click(screen.getByRole('button',{name:'Choose emoji'}));
+  await userEvent.type(screen.getByRole('searchbox',{name:'Search emoji'}),'rocket');
+  await userEvent.click(screen.getByRole('button',{name:'🚀 :rocket:'}));
+  expect(editor.textContent).toContain('Hello 🚀');
+  expect(document.activeElement).toBe(editor);
+});
+
+it('selects a person with Enter before send and keeps their stable mention ID',async()=>{
+ const onSend=vi.fn(), person={kind:'user' as const,id:'00000000-0000-4000-8000-000000000001',label:'Kai Nguyen',detail:'Engineer'};
+ render(<RichComposer channel="mentions" findMentions={async()=>({items:[person],member_count:2})} onSend={onSend}/>);
+ const editor=await screen.findByRole('textbox',{name:'Message mentions'});
+ await userEvent.type(editor,'Hi @Kai');
+ await screen.findByRole('option',{name:/Kai Nguyen/});
+ await userEvent.keyboard('{Enter}');expect(onSend).not.toHaveBeenCalled();
+ expect(editor.textContent).toContain('Hi @Kai Nguyen ');
+ await userEvent.keyboard('hello{Enter}');
+ expect(onSend).toHaveBeenCalledWith('Hi @Kai Nguyen hello',expect.objectContaining({ops:expect.arrayContaining([{insert:'@Kai Nguyen',attributes:{mention:{kind:'user',id:person.id,label:person.label}}}])}),[]);
+});
+it('confirms a broadcast to six or more members before sending',async()=>{
+ const onSend=vi.fn();
+ render(<RichComposer channel="broadcast" findMentions={async()=>({items:[{kind:'broadcast',id:'channel',label:'channel',detail:'Everyone'}],member_count:6})} onSend={onSend}/>);
+ const editor=await screen.findByRole('textbox',{name:'Message broadcast'});
+ await userEvent.type(editor,'@cha');await screen.findByRole('option',{name:/channel/});
+ await userEvent.keyboard('{Enter}');await userEvent.keyboard('hello{Enter}');
+ expect(onSend).not.toHaveBeenCalled();
+ const dialog=await screen.findByRole('dialog',{name:'Notify the channel?'});
+ await userEvent.click(within(dialog).getByRole('button',{name:'Send and notify'}));
+ expect(onSend).toHaveBeenCalledWith('@channel hello',expect.anything(),[],{broadcast_confirmed:true});
+});
+it('dismisses mentions with Escape, ignores addresses and code, and deletes a selected identity as one token',async()=>{
+ const find=vi.fn(async()=>({items:[{kind:'user' as const,id:'00000000-0000-4000-8000-000000000001',label:'Kai',detail:'Member'}],member_count:2}));
+ render(<RichComposer channel="mentions" findMentions={find} onSend={()=>{}}/>);
+ const editor=await screen.findByRole('textbox',{name:'Message mentions'});
+ await userEvent.type(editor,'@Ka');await screen.findByRole('option',{name:/Kai/});await userEvent.keyboard('{Escape}');
+ expect(screen.queryByRole('listbox',{name:'Mention suggestions'})).toBeNull();
+ await userEvent.keyboard('{Control>}a{/Control}');
+ // Use the mention button to exercise selection restoration, then choose with Tab.
+ await userEvent.click(screen.getByRole('button',{name:'Mention someone'}));
+ await screen.findByRole('option',{name:/Kai/});await userEvent.keyboard('{Tab}');
+ expect(editor.querySelector('[data-mention]')).toBeTruthy();
+ await userEvent.keyboard('{Backspace}{Backspace}');expect(editor.querySelector('[data-mention]')).toBeNull();
+});
+it('does not search for mentions inside an email address or formatted code',async()=>{
+ const find=vi.fn(async()=>({items:[],member_count:0}));
+ render(<RichComposer channel="literal" findMentions={find} onSend={()=>{}}/>);
+ const editor=await screen.findByRole('textbox',{name:'Message literal'});
+ await userEvent.type(editor,'person@example.test');
+ expect(find).not.toHaveBeenCalled();
+ await userEvent.keyboard('{Enter}');
+ await userEvent.click(screen.getByRole('button',{name:'Code',exact:true}));
+ await userEvent.type(editor,'@Kai');
+ expect(find).not.toHaveBeenCalled();
+ expect(screen.queryByRole('listbox',{name:'Mention suggestions'})).toBeNull();
+});
+it('keeps mention completion working when the same composer changes channels',async()=>{
+ const find=async()=>({items:[{kind:'user' as const,id:'00000000-0000-4000-8000-000000000001',label:'Kai',detail:'Member'}],member_count:2});
+ const view=render(<RichComposer channel="one" findMentions={find} onSend={()=>{}}/>);
+ await screen.findByRole('textbox',{name:'Message one'});
+ view.rerender(<RichComposer channel="two" findMentions={find} onSend={()=>{}}/>);
+ const editor=await screen.findByRole('textbox',{name:'Message two'});await userEvent.type(editor,'@Ka');
+ expect(await screen.findByRole('option',{name:/Kai/})).toBeTruthy();
+});

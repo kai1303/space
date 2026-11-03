@@ -1,6 +1,8 @@
+import { parseMention, type MentionReference } from './mentions.js';
 import { AppError, record } from './validation.js';
 
 export type RichAttributes = {
+  mention?: MentionReference;
   bold?: boolean; italic?: boolean; underline?: boolean; strike?: boolean; code?: boolean;
   link?: string; list?: 'ordered' | 'bullet'; blockquote?: boolean; 'code-block'?: boolean | string;
 };
@@ -20,11 +22,16 @@ export function parseRichDocument(input: unknown): RichDocument {
     if (characters > MAX_MESSAGE_DOCUMENT_CHARACTERS) throw new AppError(400, 'document_too_large');
     const attributes: RichAttributes = {};
     if (op.attributes !== undefined) {
-      const a = record(op.attributes, ['bold', 'italic', 'underline', 'strike', 'code', 'link', 'list', 'blockquote', 'code-block']);
+      const a = record(op.attributes, ['bold', 'italic', 'underline', 'strike', 'code', 'link', 'list', 'blockquote', 'code-block', 'mention']);
       for (const key of ['bold', 'italic', 'underline', 'strike', 'code', 'blockquote'] as const) {
         if (a[key] === undefined) continue;
         if (typeof a[key] !== 'boolean') throw new AppError(400, 'invalid_document');
         attributes[key] = a[key];
+      }
+      if (a.mention !== undefined) {
+        const mention = parseMention(a.mention);
+        if (op.insert !== `@${mention.label}`) throw new AppError(400, 'invalid_mention_text');
+        attributes.mention = mention;
       }
       if (a.link !== undefined) {
         if (typeof a.link !== 'string' || a.link.length > 2048 || a.link.includes('\0')) throw new AppError(400, 'invalid_document_link');

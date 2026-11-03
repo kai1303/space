@@ -1,17 +1,20 @@
-import { useLayoutEffect, useRef, type ReactNode, type RefObject } from 'react';
+import { useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { Button } from '@space/ui';
 import type { ChatEvent, MessagePage } from '@space/contracts';
 import type { HistoryDirection } from './history-window.js';
 
 export type TimelineHandle = { reveal: (id: string) => void };
-export function MessageTimeline({ label, items, page, loading, latestVersion, load, pinned, handle, render, children, busy }: {
+export function MessageTimeline({ label, items, page, loading, latestVersion, load, pinned, handle, render, children, busy, onAtEndChange }: {
   label: string; items: ChatEvent[]; page: MessagePage | null; loading: HistoryDirection | null;
   latestVersion: number; load: (direction: HistoryDirection) => unknown;
   pinned: RefObject<boolean>; handle?: RefObject<TimelineHandle | null>;
   render: (event: ChatEvent, index: number) => ReactNode; children?: ReactNode; busy?: boolean;
+  onAtEndChange?: (atEnd: boolean) => void;
 }) {
   const element = useRef<HTMLDivElement>(null), lastOffset = useRef(0);
+  const handledLatest = useRef(0);
+  const [atEnd, setAtEnd] = useState(true);
   const virtualizer = useVirtualizer({
     count: items.length, getScrollElement: () => element.current,
     getItemKey: index => items[index]!.type === 'message.created' ? `message:${items[index]!.payload.id}` : `event:${items[index]!.sequence}`,
@@ -21,7 +24,10 @@ export function MessageTimeline({ label, items, page, loading, latestVersion, lo
     onChange: instance => { pinned.current = instance.isAtEnd(); },
   });
   useLayoutEffect(() => {
-    if (latestVersion) { virtualizer.scrollToEnd(); pinned.current = true; }
+    if (latestVersion && latestVersion !== handledLatest.current) {
+      handledLatest.current = latestVersion;
+      virtualizer.scrollToEnd(); pinned.current = true; setAtEnd(true); onAtEndChange?.(true);
+    }
   }, [latestVersion, virtualizer]);
   useLayoutEffect(() => {
     if (!handle) return;
@@ -39,6 +45,7 @@ export function MessageTimeline({ label, items, page, loading, latestVersion, lo
       const movingUp = offset < lastOffset.current, movingDown = offset > lastOffset.current;
       lastOffset.current = offset;
       pinned.current = node.scrollHeight - offset - node.clientHeight < 80;
+      setAtEnd(pinned.current); onAtEndChange?.(pinned.current);
       if (loading || offset < 0) return;
       if (movingUp && offset < 300 && page?.has_older) void load('older');
       else if (movingDown && node.scrollHeight - offset - node.clientHeight < 300 && page?.has_newer) void load('newer');
@@ -50,6 +57,6 @@ export function MessageTimeline({ label, items, page, loading, latestVersion, lo
         <div className="chat-history-edge chat-history-edge--newer">{page?.has_newer && <Button variant="ghost" size="sm" disabled={!!loading} onClick={() => void load('newer')}>{loading === 'newer' ? 'Loading newer messages…' : 'Load newer messages'}</Button>}</div>
       </div>}
     </div>
-    {page?.has_newer && <div className="chat-jump-latest"><Button size="sm" disabled={!!loading} onClick={() => void load('latest')}>Jump to latest</Button></div>}
+    {(page?.has_newer || !atEnd) && <div className="chat-jump-latest"><Button size="sm" disabled={!!loading} onClick={() => void load('latest')}>Jump to latest</Button></div>}
   </>;
 }

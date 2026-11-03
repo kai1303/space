@@ -38,3 +38,45 @@ it('keeps messages delivered during a latest-page request without retaining old 
   expect(result.messages.at(-1)?.id).toBe('105');
   expect(result.messages.some(m => m.id === '101')).toBe(false); // snapshot watermark is 103
 });
+
+it('updates reactions in older history without inserting unseen messages or moving the window', () => {
+  const old = page(1, 50, false, true);
+  const updated = {...message(10),reaction_sequence:'101',reactions:[{emoji:'👀',count:1,user_ids:['user']}]};
+  const result = appendLive(old,[updated,{...message(99),reaction_sequence:'102',reactions:[]}],false);
+  expect(result.messages).toHaveLength(50);
+  expect(result.messages.find(m=>m.id==='10')?.reactions).toEqual(updated.reactions);
+  expect(result.messages.some(m=>m.id==='99')).toBe(false);
+  expect(result.older_cursor).toBe('1');
+  expect(result.newer_cursor).toBe('50');
+  const stale = mergePage(result,page(1,50,false,true),'older');
+  expect(stale.messages.find(m=>m.id==='10')?.reaction_sequence).toBe('101');
+});
+it('does not pull an old unseen message into the live end when its reaction changes', () => {
+  const latest = page(51,100);
+  const next = appendLive(latest,[{...message(5),reaction_sequence:'110',reactions:[]}],true);
+  expect(next.messages.map(m=>m.id)).toEqual(latest.messages.map(m=>m.id));
+});
+it('retains a reaction update when a simultaneous new message overflows an unpinned window', () => {
+  const updated = {...message(10),reaction_sequence:'600',reactions:[{emoji:'👀',count:1,user_ids:['user']}]};
+  const result = appendLive(page(1,500,false),[updated,message(501)],false);
+  expect(result.messages).toHaveLength(500);
+  expect(result.has_newer).toBe(true);
+  expect(result.messages.find(m=>m.id==='10')?.reaction_sequence).toBe('600');
+});
+
+it('keeps reply counts monotonic through duplicate delivery, reaction updates and stale pages',()=>{
+  const root={...message(1),thread_root_id:'1',reply_count:0};
+  const previous={...page(1,1,false,true),messages:[root]};
+  const reply={...message(100),thread_root_id:'1',reply_count:5};
+  const unseen={...message(101),thread_root_id:'99',reply_count:1};
+  const live=appendLive(previous,[reply,unseen,reply],false,true);
+  expect(live.messages).toHaveLength(1);
+  expect(live.messages[0]!.reply_count).toBe(5);
+  expect(live.newer_cursor).toBe('1');
+  const reaction={...root,reaction_sequence:'102',reactions:[{emoji:'👀',count:1,user_ids:['user']}]};
+  const updated=appendLive(live,[reaction],false,true);
+  expect(updated.messages[0]!.reactions).toEqual(reaction.reactions);
+  expect(updated.messages[0]!.reply_count).toBe(5);
+  const stale=mergePage(updated,{...previous,messages:[root]},'older');
+  expect(stale.messages[0]!.reply_count).toBe(5);
+});

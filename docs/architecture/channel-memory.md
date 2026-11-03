@@ -48,12 +48,20 @@ is its revision. Stale writes return `409 memory_conflict`; the UI keeps the dra
 and can load the latest version for comparison. Save/merge before importing or
 removing sources. Closing a dirty editor asks before discarding its changes.
 
-All memory operations lock the workspace/channel and verify current
-membership before accessing any provider. PostgreSQL channel locks serialize writes
-across API processes. Every replica must use the same database and shared memory
-volume; independent local disks are not a supported multi-replica configuration.
-Stop application writes before editing the canonical files externally; direct
-filesystem writers do not participate in PostgreSQL's locks.
+Memory operations check current membership before accessing a provider and recheck
+membership and settings before returning. Provider I/O holds no database connection,
+transaction or row lock. An authorized write already in flight can complete after
+disablement or revocation; subsequent operations are blocked and an in-flight result
+is withheld if access or settings changed.
+
+The Markdown provider serializes mutations using a per-document filesystem lock
+(`proper-lockfile`), with a heartbeat and recovery after 30 seconds of inactivity.
+Revision checks happen inside that boundary; reads use atomic file snapshots and
+need no write lock. Every replica must use the same database and shared memory volume
+with atomic directory creation/rename; independent local disks are unsupported.
+Stop application writes before editing canonical files externally; direct filesystem
+writers do not participate in the provider's coordination. Short database-only MCP
+key creation still serializes its quota check; no provider is called in that transaction.
 
 Disabling blocks retrieval and writes without touching stored memory. The separate
 **Delete stored memory…** control requires manager permission and confirmation; it
@@ -108,6 +116,8 @@ The built-in `markdown` adapter is always available. Custom IDs must be unique a
 match `[a-z][a-z0-9-]{0,63}`. Registered providers appear in the channel manager's
 provider selector. Adapters implement `read`, revision-checked `write`, idempotent
 `ingest`, source `remove`, bounded `search`, and idempotent `clear`. They must honor
+atomic revision checks and concurrent mutations across API replicas; the caller no
+longer serializes provider operations in PostgreSQL. They must also honor
 scope isolation, enforce content limits, preserve source references, and handle
 failures without discarding stored data. Implement timeouts inside remote adapters.
 No third-party memory adapter ships in this slice; the integration test verifies
@@ -165,3 +175,10 @@ Verified on 2026-11-03:
 
 These checks use local test data; no external memory service or agent inference was
 invoked, and no production, load or deployment verification is implied.
+
+## Thread working memory
+
+[Thread working memory](./thread-working-memory.md) is available independently of
+channel memory opt-in. Thread-scoped MCP keys expose conversation retrieval and
+source-linked Markdown checkpoints on the existing MCP transport. Reusable channel
+knowledge keeps the provider and opt-in behavior described above.

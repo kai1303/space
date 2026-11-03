@@ -1,5 +1,6 @@
 import { useRef, useState } from 'react';
 import { ArrowBendUpRight, BellSlash, BookmarkSimple, ChatCircleDots, CheckCircle, Clock, DotsThreeVertical, Link, PencilSimple, PushPin, Smiley, Sparkle, SquaresFour, TextT, Trash, Tray } from '@phosphor-icons/react';
+import { EmojiPicker } from './emoji-picker.js';
 import { IconButton, Menu } from './primitives.js';
 
 export type MessageAction = 'forward' | 'addTodo' | 'askAgent' | 'edit' | 'markUnread' | 'save' | 'saveMemory' | 'remind' | 'toggleReplyNotifications' | 'copyLink' | 'copyMessage' | 'pin' | 'connectApp' | 'delete';
@@ -43,7 +44,7 @@ export function MessageActions({ author, onReply, onReact, actions = {} }: {
     <div className="sp-message-actions" role="group" aria-label={`Message actions for ${author}`}>
       {onReact && <>
         {([['✅', 'white check mark'], ['👀', 'eyes'], ['🙌', 'raised hands']] as const).map(([emoji, label]) => <IconButton key={emoji} label={`React with ${label}`} size="sm" onClick={() => onReact(emoji)}><span className="sp-message-quick-emoji" aria-hidden="true">{emoji}</span></IconButton>)}
-        <Menu label="Add reaction…" menuLabel="Choose reaction" className="sp-message-emoji-menu" floating trigger={<Smiley size={20} />} items={['✅', '👀', '🙌', '👍', '🎉', '💜', '🙂', '🚀'].map(emoji => ({ label: `React ${emoji}`, icon: <span aria-hidden="true">{emoji}</span>, onSelect: () => onReact(emoji) }))} />
+        <EmojiPicker label="Add reaction…" className="sp-message-emoji-menu" trigger={<Smiley size={20} />} onSelect={onReact} />
       </>}
       {onReply && <IconButton label={`Reply to ${author}`} title="Reply in thread" size="sm" onClick={onReply}><ChatCircleDots size={20} /></IconButton>}
       {actions.forward && <IconButton label="Forward message…" size="sm" onClick={() => { void run('forward', 'Forward message'); }}><ArrowBendUpRight size={20} /></IconButton>}

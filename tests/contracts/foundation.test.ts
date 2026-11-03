@@ -31,3 +31,13 @@ test('invocations, sessions and executions have separate validated contracts', (
 test('event timestamps reject calendar dates normalized by Date.parse', () => {
   assert.throws(() => parseAgentEvent({ id: randomUUID(), schema_version: '1.0', execution_id: randomUUID(), sequence: 1, type: 'execution.started', occurred_at: '2026-02-30T00:00:00.000Z', payload: { text: 'Hello' } }));
 });
+
+test('invocation working memory preserves source references and rejects unbounded or foreign-thread context', () => {
+  const execution_id = randomUUID(), thread_id = randomUUID();
+  const working_memory = { thread_id, through_sequence: '0', root: null, messages: [], checkpoint: null, has_earlier_messages: false };
+  const invocation = { schema_version: '1.0', task_id: randomUUID(), execution_id, session_id: randomUUID(), idempotency_key: execution_id, goal: 'Review', skill: 'demo.echo', context: { thread_id, messages: [], working_memory } };
+  assert.deepEqual(parseInvocation(invocation), invocation);
+  for (const invalid of [{ ...working_memory, thread_id: randomUUID() }, { ...working_memory, injected: true }, { ...working_memory, has_earlier_messages: 'yes' }]) {
+    assert.throws(() => parseInvocation({ ...invocation, context: { ...invocation.context, working_memory: invalid } }));
+  }
+});

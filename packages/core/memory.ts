@@ -1,6 +1,7 @@
 import type { MemoryDocument, MemoryMatch, MemoryScope, MemorySource } from '@space/contracts';
 
-// Providers are trusted server integrations. Callers authorize and serialize by scope.
+// Providers own atomic revision checks and concurrent mutation safety across replicas.
+// Callers authorize before work and recheck access before returning results.
 // Retrieved content is reference data and must never confer agent instructions/grants.
 export interface MemoryProvider {
   readonly id: string;

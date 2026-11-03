@@ -25,7 +25,11 @@ async function fixture() { return bootstrap(pool); }
 async function send(s: Awaited<ReturnType<typeof fixture>>, text: string, actor=s.owner_id, thread=s.thread_id) {
   return chat.send(actor, s.channel_id, { text, thread_id: thread, client_message_id: randomUUID() });
 }
-async function tick() { await pool.query("UPDATE navigator_threads SET available_at=now() WHERE lease_until IS NULL"); return nav.processOne(); }
+async function tick(thread?: string) {
+  if (thread) await pool.query("UPDATE navigator_threads SET available_at=CASE WHEN thread_id=$1 THEN now() ELSE 'infinity'::timestamptz END WHERE lease_until IS NULL", [thread]);
+  else await pool.query("UPDATE navigator_threads SET available_at=now() WHERE lease_until IS NULL");
+  return nav.processOne();
+}
 async function drainTasks() { while (await deliverOne(tasks, [new MockConnector()])) {} }
 
 test('mention sends atomically wake routing; duplicates make one task and owner dispatch is immediate', async () => {
@@ -200,7 +204,7 @@ test('semantic context is bounded by the selected batch before a later explicit 
  await send(s,`@agent-${s.installation_id} second request`);
  for(let i=0;i<18;i++)await send(s,`Later context ${i}`);
  await pool.query('UPDATE navigator_threads SET available_at=now() WHERE thread_id=$1',[s.thread_id]);await semantic.processOne();
- assert.deepEqual(observed.pendingMessageIds,[first.id]);assert.ok(observed.messages.some((m:any)=>m.id===first.id));assert.ok(!observed.messages.some((m:any)=>m.text.includes('later unrelated')));
+ assert.equal(observed.workingMemory.root.id,first.id);assert.equal(observed.workingMemory.checkpoint,null);assert.deepEqual(observed.pendingMessageIds,[first.id]);assert.ok(observed.messages.some((m:any)=>m.id===first.id));assert.ok(!observed.messages.some((m:any)=>m.text.includes('later unrelated')));
  await pool.query("UPDATE navigator_threads SET available_at='infinity' WHERE thread_id=$1",[s.thread_id]);
 });
 
@@ -223,4 +227,17 @@ test('native Jev classifies the last human message, persists separate intent and
   assert.equal(inference.provider,'jev');assert.ok(inference.reserved_tokens>=Buffer.byteLength(JSON.stringify(received)));assert.equal(inference.input_tokens,120);
   await nav.configure(s.owner_id,s.channel_id,{daily_token_limit:1});await send(s,'Can we do something else?');await pool.query('UPDATE navigator_threads SET available_at=now() WHERE thread_id=$1',[s.thread_id]);await semantic.processOne();assert.equal(calls,1);
  }finally{server.closeAllConnections();await new Promise<void>(resolve=>server.close(()=>resolve()));}
+});
+
+test('semantic agent mentions survive renames and semantic people mentions cannot invoke a namesake agent',async()=>{
+ const s=await fixture();
+ await pool.query('UPDATE users SET display_name=$1 WHERE id=$2',['Mock echo agent',s.collaborator_id]);
+ const person={kind:'user',id:s.collaborator_id,label:'Mock echo agent'};
+ await chat.send(s.owner_id,s.channel_id,{client_message_id:randomUUID(),thread_id:s.thread_id,text:'@Mock echo agent hello',document:{ops:[{insert:'@Mock echo agent',attributes:{mention:person}},{insert:' hello\n'}]}});
+ await tick(s.thread_id);assert.equal((await pool.query('SELECT * FROM tasks WHERE thread_id=$1',[s.thread_id])).rowCount,0);
+ await pool.query('UPDATE agent_definitions SET name=$1 WHERE id=$2',['Renamed agent',s.definition_id]);
+ const agent={kind:'agent',id:s.installation_id,label:'Old label'};
+ await chat.send(s.owner_id,s.channel_id,{client_message_id:randomUUID(),thread_id:s.thread_id,text:'@Old label summarize',document:{ops:[{insert:'@Old label',attributes:{mention:agent}},{insert:' summarize\n'}]}});
+ await tick(s.thread_id);
+ const tasks=await pool.query('SELECT * FROM tasks WHERE thread_id=$1',[s.thread_id]);assert.equal(tasks.rowCount,1);assert.equal(tasks.rows[0].installation_id,s.installation_id);assert.equal(tasks.rows[0].status,'queued');
 });

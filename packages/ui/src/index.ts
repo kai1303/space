@@ -40,3 +40,8 @@ export { CodeBlock } from "./code-block.js";
 export { AgentApproval } from "./agent-approval.js";
 export { AgentResponse, AgentMarkdown } from "./agent-response.js";
 export type { ApprovalDecision, ApprovalStatus } from "./agent-approval.js";
+
+export { EmojiPicker } from "./emoji-picker.js";
+export { replaceEmojiShortcodes } from "./emoji.js";
+
+export type { FindMentions } from "./use-mentions.js";

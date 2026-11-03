@@ -2,8 +2,16 @@ import type { FastifyInstance } from 'fastify';
 import type { Server } from 'socket.io';
 import { AppError, record, uuid } from '@space/contracts';
 import type { AgentConnectionStore } from '@space/postgres/agent-connections';
+import type { PostgresStore } from '@space/postgres/store';
+import { registerLocalCodexTasks } from './local-codex.js';
 
 export function registerAgentConnectionRoutes(app: FastifyInstance, store: AgentConnectionStore) {
+  app.get<{ Params: { channelId: string } }>('/v1/channels/:channelId/local-codex', r => store.channelAgents(r.actorId, uuid(r.params.channelId)));
+  app.post<{ Params: { installationId: string; channelId: string } }>('/v1/agents/connections/:installationId/channels/:channelId', r => {
+    const input = record(r.body, ['enabled']);
+    if (typeof input.enabled !== 'boolean') throw new AppError(400, 'invalid_enabled');
+    return store.setChannelEnabled(r.actorId, uuid(r.params.installationId), uuid(r.params.channelId), input.enabled);
+  });
   const claims = new Map<string, { count: number; until: number }>();
   app.post<{ Params: { workspaceId: string } }>('/v1/workspaces/:workspaceId/agent-pairings', async (r, reply) =>
     reply.code(201).send(await store.createPairing(r.actorId, uuid(r.params.workspaceId), r.body)));
@@ -24,7 +32,7 @@ export function registerAgentConnectionRoutes(app: FastifyInstance, store: Agent
     record(r.body, []); return store.revoke(r.actorId, uuid(r.params.installationId));
   });
 }
-export function registerAgentConnections(app: FastifyInstance, io: Server, store: AgentConnectionStore) {
+export function registerAgentConnections(app: FastifyInstance, io: Server, store: AgentConnectionStore, tasks: PostgresStore) {
   const agents = io.of('/agents');
   agents.use(async (socket, next) => {
     try {
@@ -35,6 +43,7 @@ export function registerAgentConnections(app: FastifyInstance, io: Server, store
     } catch { next(new Error('unauthorized')); }
   });
   agents.on('connection', socket => {
+    registerLocalCodexTasks(socket, store, tasks);
     const identity = socket.data.agent as { id: string; connection_id: string };
     let working = false, count = 0, windowStart = Date.now();
     socket.on('agent.heartbeat', async (input: unknown, ack: unknown) => {
@@ -51,8 +60,13 @@ export function registerAgentConnections(app: FastifyInstance, io: Server, store
     socket.on('disconnect', () => { void store.disconnect(identity.id, identity.connection_id).catch(() => {}); });
   });
   let timer: ReturnType<typeof setInterval>;
+  let expiring = false;
   app.addHook('onReady', async () => {
     timer = setInterval(() => {
+      if (!expiring) {
+        expiring = true;
+        void tasks.expireLocalDeliveries().catch(() => app.log.error('local_delivery_cleanup_failed')).finally(() => { expiring = false; });
+      }
       for (const socket of agents.sockets.values()) {
         void store.authenticate(socket.data.token).catch(() => socket.disconnect(true));
       }

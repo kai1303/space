@@ -1,3 +1,5 @@
+import { replaceEmojiShortcodes, emojiPreferences } from "./emoji.js";
+import { EmojiPicker } from "./emoji-picker.js";
 import { useRef, useState, type ReactNode } from "react";
 import { motion, useReducedMotion } from "motion/react";
 import { motionTransition } from "./motion.js";
@@ -44,9 +46,9 @@ export function Message({
   return (
     <motion.article
       className="sp-message"
-      initial={arrival && !reduced ? { opacity: 0, y: 8 } : false}
-      animate={{ opacity: 1, y: 0 }}
-      transition={motionTransition(reduced)}
+      initial={arrival && !reduced ? { opacity: 0 } : false}
+      animate={{ opacity: 1 }}
+      transition={motionTransition(reduced, 0.14)}
     >
       <Avatar name={author} initials={initials} tone={tone} />
       <div className="sp-message-body">
@@ -106,7 +108,7 @@ export function Composer({
     setSending(true);
     setError("");
     try {
-      await onSend(value);
+      await onSend(replaceEmojiShortcodes(value, emojiPreferences().skin));
       setText("");
     } catch {
       setError("Could not send. Your draft is saved here. Try again.");
@@ -190,14 +192,7 @@ export function Composer({
           }}
         />
         <div className="sp-composer-bottom">
-          <IconButton
-            label="Insert smile emoji"
-            size="sm"
-            disabled={sending}
-            onClick={() => insert("🙂", "")}
-          >
-            <Smiley size={19} />
-          </IconButton>
+          <EmojiPicker label="Insert smile emoji" disabled={sending} restoreFocus={false} onSelect={emoji => insert(emoji, "")} />
           <span className="sp-composer-help">
             {sending
               ? "Sending…"

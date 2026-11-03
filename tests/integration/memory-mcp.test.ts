@@ -11,6 +11,7 @@ import { migrate } from '@space/postgres/migrate';
 import { PostgresStore } from '@space/postgres/store';
 import { WorkspaceStore } from '@space/postgres/workspace';
 import { createApi } from '@space/server/api';
+import { parseThreadContext } from '@space/contracts';
 import type { MemoryProvider } from '@space/core/memory';
 
 if (!process.env.TEST_DATABASE_URL) throw new Error('TEST_DATABASE_URL is required');
@@ -154,5 +155,99 @@ test('agents can extract knowledge from imported documents with validated source
     assert.match(saved.content, new RegExp(`document:${sourceId}`));
     assert.equal(saved.sources.length, 2);
     assert.equal((await client.callTool({ name: 'memory_remember', arguments: { ...input, id: randomUUID(), source_ids: [`document:${randomUUID()}`] } })).isError, true);
+  } finally { await client.close(); }
+});
+
+test('thread-scoped MCP works with channel memory off and preserves source-backed working memory', async () => {
+  const a = await bootstrap(pool);
+  const root = await api(a.owner_token, 'POST', `/channels/${a.channel_id}/messages`, { client_message_id: randomUUID(), text: 'Build a guide. Keep the examples in TypeScript. ' + 'Details '.repeat(200) }, 201);
+  const path = `/channels/${a.channel_id}/threads/${root.thread_id}/context`;
+  const grant = await api(a.owner_token, 'POST', `${path}/connections`, { name: 'Thread agent', access: 'write' }, 201);
+  const client = await connect(grant.token);
+  try {
+    assert.deepEqual((await client.listTools()).tools.map(t => t.name).sort(), ['thread_checkpoint', 'thread_context', 'thread_message', 'thread_messages']);
+    const initial = data(await client.callTool({ name: 'thread_context', arguments: {} }));
+    assert.equal(initial.root.id, root.id);
+    assert.equal(initial.root.text_truncated, true);
+    assert.equal(data(await client.callTool({ name: 'thread_message', arguments: { message_id: root.id } })).text, root.text);
+    assert.equal(initial.checkpoint, null);
+    const checkpoint = { revision: 0, through_sequence: initial.through_sequence, content: '# Decisions\nUse TypeScript.\n\n# Open questions\nWho is the audience?', source_message_ids: [root.id] };
+    const saved = data(await client.callTool({ name: 'thread_checkpoint', arguments: checkpoint }));
+    assert.equal(saved.revision, 1);
+    assert.deepEqual(saved.source_message_ids, [root.id]);
+    assert.equal((await client.callTool({ name: 'thread_checkpoint', arguments: checkpoint })).isError, true);
+    for (let i = 0; i < 18; i++) await api(a.owner_token, 'POST', `/channels/${a.channel_id}/messages`, { client_message_id: randomUUID(), thread_id: root.thread_id, text: `Feedback ${i}` }, 201);
+    const current = data(await client.callTool({ name: 'thread_context', arguments: {} }));
+    assert.equal(current.root.id, root.id);
+    assert.equal(current.messages.length, 16);
+    assert.equal(current.checkpoint.content, checkpoint.content);
+    assert.equal(current.has_earlier_messages, true);
+    const first = data(await client.callTool({ name: 'thread_messages', arguments: { limit: 2 } }));
+    assert.equal(first.messages[0].id, root.id);
+    assert.equal(first.has_more, true);
+    const second = data(await client.callTool({ name: 'thread_messages', arguments: { after: first.cursor, limit: 2 } }));
+    assert.notEqual(second.messages[0].id, root.id);
+    await assert.rejects(client.callTool({ name: 'memory_read', arguments: {} }), /not found/);
+    assert.equal((await client.callTool({ name: 'thread_context', arguments: { thread_id: randomUUID() } })).isError, true);
+    const foreign = await api(a.owner_token, 'POST', `/channels/${a.channel_id}/messages`, { client_message_id: randomUUID(), text: 'Other thread' }, 201);
+    assert.equal((await client.callTool({ name: 'thread_message', arguments: { message_id: foreign.id } })).isError, true);
+    assert.equal((await client.callTool({ name: 'thread_checkpoint', arguments: { ...checkpoint, revision: 1, source_message_ids: [foreign.id] } })).isError, true);
+    assert.equal((await client.callTool({ name: 'thread_checkpoint', arguments: { ...checkpoint, revision: 1, through_sequence: '999999999999' } })).isError, true);
+    const human = await api(a.owner_token, 'GET', path);
+    assert.equal(human.checkpoint.revision, 1);
+    await api(a.owner_token, 'POST', `/channels/${a.channel_id}/memory/connections/${grant.connection.id}/revoke`, {});
+    await assert.rejects(client.callTool({ name: 'thread_context', arguments: {} }));
+  } finally { await client.close(); }
+});
+
+test('thread MCP read grants cannot checkpoint and inaccessible threads cannot be granted', async () => {
+  const a = await bootstrap(pool), b = await bootstrap(pool);
+  const root = await api(a.owner_token, 'POST', `/channels/${a.channel_id}/messages`, { client_message_id: randomUUID(), text: 'Request' }, 201);
+  const path = `/channels/${a.channel_id}/threads/${root.thread_id}/context`;
+  await api(b.owner_token, 'POST', `${path}/connections`, { name: 'Foreign', access: 'read' }, 404);
+  await api(a.collaborator_token, 'POST', `${path}/connections`, { name: 'Unmanaged', access: 'write' }, 403);
+  const grant = await api(a.owner_token, 'POST', `${path}/connections`, { name: 'Read agent', access: 'read' }, 201);
+  const client = await connect(grant.token);
+  try {
+    assert.deepEqual((await client.listTools()).tools.map(t => t.name).sort(), ['thread_context', 'thread_message', 'thread_messages']);
+    await assert.rejects(client.callTool({ name: 'thread_checkpoint', arguments: {} }), /not found/);
+    data(await client.callTool({ name: 'thread_context', arguments: {} }));
+    await pool.query('DELETE FROM channel_members WHERE channel_id=$1 AND user_id=$2', [a.channel_id, a.owner_id]);
+    await assert.rejects(client.callTool({ name: 'thread_context', arguments: {} }));
+  } finally { await client.close(); }
+});
+
+test('checkpoint races reject stale writes and earlier context excludes future summaries', async () => {
+  const a = await bootstrap(pool);
+  const root = await api(a.owner_token, 'POST', `/channels/${a.channel_id}/messages`, { client_message_id: randomUUID(), text: 'Start' }, 201);
+  const path = `/channels/${a.channel_id}/threads/${root.thread_id}/context`;
+  const grant = await api(a.owner_token, 'POST', `${path}/connections`, { name: 'Concurrent agent', access: 'write' }, 201);
+  const client = await connect(grant.token);
+  try {
+    const initial = data(await client.callTool({ name: 'thread_context', arguments: {} }));
+    const later = await api(a.owner_token, 'POST', `/channels/${a.channel_id}/messages`, { client_message_id: randomUUID(), thread_id: root.thread_id, text: 'Later decision' }, 201);
+    const current = data(await client.callTool({ name: 'thread_context', arguments: {} }));
+    const input = { revision: 0, through_sequence: current.through_sequence, content: '# Decision\nLater decision', source_message_ids: [later.id] };
+    const results = await Promise.all([client.callTool({ name: 'thread_checkpoint', arguments: input }), client.callTool({ name: 'thread_checkpoint', arguments: { ...input, content: 'Conflicting summary' } })]);
+    assert.equal(results.filter(r => !r.isError).length, 1);
+    const { readThreadContext } = await import('@space/postgres/thread-context');
+    const earlier = await readThreadContext(new PostgresStore(pool).db, a.channel_id, root.thread_id, initial.through_sequence);
+    assert.equal(earlier.checkpoint, null);
+    assert.equal(earlier.messages.length, 1);
+    assert.equal(earlier.messages[0]!.id, root.id);
+  } finally { await client.close(); }
+});
+
+test('Unicode excerpts remain valid at invocation boundaries and full message text is recoverable', async () => {
+  const a = await bootstrap(pool);
+  const root = await api(a.owner_token, 'POST', `/channels/${a.channel_id}/messages`, { client_message_id: randomUUID(), text: 'a'.repeat(999) + '😀' }, 201);
+  const grant = await api(a.owner_token, 'POST', `/channels/${a.channel_id}/threads/${root.thread_id}/context/connections`, { name: 'Unicode agent', access: 'read' }, 201);
+  const client = await connect(grant.token);
+  try {
+    const context = data(await client.callTool({ name: 'thread_context', arguments: {} }));
+    assert.doesNotThrow(() => parseThreadContext(context));
+    assert.equal(context.root.text_truncated, true);
+    assert.equal(context.root.text, 'a'.repeat(999));
+    assert.equal(data(await client.callTool({ name: 'thread_message', arguments: { message_id: root.id } })).text, root.text);
   } finally { await client.close(); }
 });

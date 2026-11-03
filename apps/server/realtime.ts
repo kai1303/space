@@ -45,10 +45,11 @@ export function registerRealtime(app: FastifyInstance, authenticate: (headers: I
   });
   io.on('connection', socket => {
     let subscription: { channel: string; cursor: string } | undefined;
+    let workspace: { id: string; snapshot?: string } | undefined;
     let running = false, pending = false, command = false;
     let windowStart = Date.now(), commands = 0;
     const pump = (channels?: (string | null)[]) => {
-      if (channels && !channels.includes(null) && (!subscription || !channels.includes(subscription.channel))) return;
+      if (!workspace && channels && !channels.includes(null) && (!subscription || !channels.includes(subscription.channel))) return;
       pending = true;
       if (running) return;
       running = true;
@@ -57,6 +58,16 @@ export function registerRealtime(app: FastifyInstance, authenticate: (headers: I
           while (pending && socket.connected) {
             pending = false;
             await authenticate(socket.handshake.headers, socket.data.token);
+            const currentWorkspace = workspace;
+            if (currentWorkspace) {
+              const snapshot = await chat.unread.summary(socket.data.actor, currentWorkspace.id);
+              const serialized = JSON.stringify(snapshot);
+              if (workspace === currentWorkspace && socket.connected && currentWorkspace.snapshot !== serialized) {
+                try { await socket.timeout(5000).emitWithAck('workspace.unread', snapshot); }
+                catch { throw new AppError(408, 'ack_timeout'); }
+                if (workspace === currentWorkspace) currentWorkspace.snapshot = serialized;
+              }
+            }
             const current = subscription;
             if (!current) continue;
             const events = await chat.events(socket.data.actor, current.channel, current.cursor);
@@ -77,7 +88,7 @@ export function registerRealtime(app: FastifyInstance, authenticate: (headers: I
       })();
     };
     pumps.add(pump);
-    socket.on('disconnect', () => { subscription = undefined; pumps.delete(pump); });
+    socket.on('disconnect', () => { subscription = undefined; workspace = undefined; pumps.delete(pump); });
     const handle = (name: string, action: (input: unknown) => Promise<unknown>) => {
       socket.on(name, async (input: unknown, ack: unknown) => {
         if (typeof ack !== 'function') return;
@@ -91,6 +102,15 @@ export function registerRealtime(app: FastifyInstance, authenticate: (headers: I
         finally { command = false; }
       });
     };
+    handle('workspace.subscribe', async input => {
+      workspace = undefined;
+      const v = record(input, ['workspace_id']);
+      const id = uuid(v.workspace_id);
+      await chat.unread.summary(socket.data.actor, id);
+      workspace = { id };
+      setImmediate(() => pump());
+      return { workspace_id: id };
+    });
     handle('channel.subscribe', async input => {
       subscription = undefined;
       const v = record(input, ['channel_id', 'after']);
@@ -101,7 +121,7 @@ export function registerRealtime(app: FastifyInstance, authenticate: (headers: I
       return { channel_id: channel, cursor };
     });
     handle('message.send', async input => {
-      const v = record(input, ['channel_id', 'client_message_id', 'text', 'thread_id', 'document', 'asset_ids']);
+      const v = record(input, ['channel_id', 'client_message_id', 'text', 'thread_id', 'document', 'asset_ids', 'broadcast_confirmed']);
       const { channel_id, ...message } = v;
       return chat.send(socket.data.actor, uuid(channel_id), message);
     });

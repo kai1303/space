@@ -52,3 +52,33 @@ it('keeps a live message arriving while newer history catches up to the present'
   await act(async () => { finish({ ok: true, json: async () => page('51') }); await pending; });
   expect(result.current.page?.messages.map(m => m.id)).toEqual(['50', '51', '52']);
 });
+
+it('a successful send supersedes an older-page request and ignores its late response', async () => {
+  let finishOlder!: (value: unknown) => void;
+  const fetch = vi.fn().mockImplementationOnce(async () => ({ok:true,json:async()=>({...page('50'),has_newer:true})}))
+    .mockImplementationOnce(() => new Promise(resolve => {finishOlder=resolve;}))
+    .mockImplementationOnce(async () => ({ok:true,json:async()=>page('100')}));
+  vi.stubGlobal('fetch',fetch);
+  const {result,unmount}=renderHook(()=>useMessageHistory('/channels/one/messages',vi.fn()));
+  await act(async()=>{await result.current.load('latest');});
+  let pending:Promise<unknown>;
+  act(()=>{pending=result.current.load('older');});
+  act(()=>result.current.sent(page('100').messages[0] as any));
+  await waitFor(()=>expect(result.current.page?.messages.map(m=>m.id)).toEqual(['100']));
+  await act(async()=>{finishOlder({ok:true,json:async()=>page('1')});await pending;});
+  expect(result.current.page?.messages.map(m=>m.id)).toEqual(['100']);
+  expect(result.current.loading).toBeNull();
+  unmount();
+});
+it('ignores late send acknowledgments after history is cleared or unmounted',async()=>{
+  const fetch=vi.fn(async()=>({ok:true,json:async()=>page('1')}));
+  vi.stubGlobal('fetch',fetch);
+  const {result,unmount}=renderHook(()=>useMessageHistory('/channels/one/messages',vi.fn()));
+  await act(async()=>{await result.current.load('latest');});
+  act(()=>result.current.clear());
+  act(()=>result.current.sent(page('2').messages[0] as any));
+  expect(result.current.page).toBeNull();
+  unmount();
+  result.current.sent(page('3').messages[0] as any);
+  expect(fetch).toHaveBeenCalledOnce();
+});

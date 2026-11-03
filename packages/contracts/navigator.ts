@@ -13,6 +13,7 @@ export interface NavigationDecision {
   tasks?: NavigationTask[];
 }
 export interface NavigationContext {
+  workingMemory?: Pick<import('./thread-context.js').ThreadContext, 'root' | 'checkpoint'>;
   pendingMessageIds?: string[];
   messages: { id: string; text: string; author?:{id:string;kind:'human'|'agent';name?:string} }[];
   candidates: NavigatorCandidate[];

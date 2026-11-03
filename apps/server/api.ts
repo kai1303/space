@@ -114,6 +114,6 @@ export function createApi(store: PostgresStore, options: { logger?: boolean; rea
   const connections = new AgentConnectionStore(store.pool);
   registerAgentConnectionRoutes(app, connections);
   const { io } = registerRealtime(app, authenticate, chat, { ...options.realtime, ...(options.auth ? { allowedOrigins: [...options.auth.origins], strictOrigins: true } : {}) });
-  registerAgentConnections(app, io, connections);
+  registerAgentConnections(app, io, connections, store);
   return app;
 }

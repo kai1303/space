@@ -275,3 +275,9 @@ it("remembers sidebar filters and collapsed sections separately for each workspa
   view.rerender(<WorkspaceSidebar {...props} workspaceId="b" />);
   expect(input.value).toBe("other");
 });
+it('renders identity-backed mentions as accessible profile controls without activating code examples',async()=>{
+ const id='00000000-0000-4000-8000-000000000001',mention={kind:'user' as const,id,label:'Kai'},open=vi.fn();
+ const {container}=render(<RichContent viewerId={id} onMentionClick={open} document={{ops:[{insert:'@Kai',attributes:{mention}},{insert:'\n'},{insert:'@Kai',attributes:{mention}},{insert:'\n',attributes:{'code-block':true}}]}}/>);
+ const token=screen.getByRole('button',{name:'@Kai'});expect(token.className).toContain('is-self');await userEvent.click(token);expect(open).toHaveBeenCalledWith(mention);
+ expect(container.querySelector('pre button')).toBeNull();expect(container.querySelector('pre')?.textContent).toBe('@Kai');
+});

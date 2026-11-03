@@ -5,6 +5,7 @@ import { AppError, record, text, uuid, type NavigatorCandidate, type NavigatorRu
 import { matchAgentMentions, rulesDecision, parseNavigationDecision } from '@space/core/navigator';
 import { database, type DbSession } from './database.js';
 import { hasChannelAccess } from './access.js';
+import { readThreadContext } from './thread-context.js';
 import { PostgresStore } from './store.js';
 import * as s from './schema.js';
 
@@ -21,7 +22,7 @@ function routingText(message:Message):string {
  if(!message.document)return message.text;
  let line='',visible='';
  for(const op of message.document.ops){const parts=op.insert.split('\n');for(let i=0;i<parts.length;i++){
-  line+=op.attributes?.code||op.attributes?.link||op.attributes?.blockquote||op.attributes?.['code-block']?' '.repeat(parts[i]!.length):parts[i];
+  line+=op.attributes?.code||op.attributes?.link||op.attributes?.blockquote||op.attributes?.['code-block']?' '.repeat(parts[i]!.length):op.attributes?.mention?(op.attributes.mention.kind==='agent'?` @agent-${op.attributes.mention.id} `:' '.repeat(parts[i]!.length)):parts[i];
   if(i<parts.length-1){if(!op.attributes?.blockquote&&!op.attributes?.['code-block'])visible+=line+'\n';line='';}
  }}
  return visible+line;
@@ -136,8 +137,8 @@ export class NavigatorStore {
    // Route a leading explicit mention alone; otherwise batch only until the next mention.
    const leading=job.messages[0];if(leading&&!leading.text.trim()){job.messages=job.messages.slice(0,1);await this.finish(job,'attachment',empty('Attachment without a request'));return true;}let mention=leading?matchAgentMentions(leading.routing_text??leading.text,job.candidates):{mentioned:false,candidates:[]};
    if(mention.mentioned)job.messages=job.messages.slice(0,1);else{const index=job.messages.findIndex((m,i)=>i>0&&matchAgentMentions(m.routing_text??m.text,job.candidates).mentioned);if(index>0)job.messages=job.messages.slice(0,index);}
-   const recent=job.messages.length?await rows<NavigationContext['messages'][number]>(this.db,sql`SELECT id,left(text,1000) AS text,jsonb_build_object('id',coalesce(user_id,installation_id),'kind',author_type) AS author FROM messages WHERE channel_id=${job.channel_id} AND thread_id=${job.thread_id} AND sequence<=${job.messages.at(-1)!.sequence}::bigint ORDER BY sequence DESC LIMIT 20`):[];
-   const context:NavigationContext={pendingMessageIds:job.messages.map(m=>m.id),messages:recent.reverse(),candidates:job.candidates,rules:job.settings.rules};
+   const working = await readThreadContext(this.db, job.channel_id, job.thread_id, job.messages.at(-1)?.sequence);
+   const context:NavigationContext={pendingMessageIds:job.messages.map(m=>m.id),messages:working.messages.map(m=>({id:m.id,text:m.text,author:m.author})),workingMemory:{root:working.root,checkpoint:working.checkpoint},candidates:job.candidates,rules:job.settings.rules};
    let route='ignore',decision=empty('No useful action');let candidate:NavigatorCandidate|undefined;
    if(mention.candidates.length>1&&job.subscription){const owned=mention.candidates.filter(c=>c.installation_id===job.subscription!.installation_id&&c.skill===job.subscription!.skill);if(owned.length===1&&mention.candidates.every(c=>c.installation_id===job.subscription!.installation_id))mention={mentioned:true,candidates:owned};}
    if(mention.mentioned){route='mention';if(mention.candidates.length===1){candidate=mention.candidates[0];if(job.subscription?.installation_id===candidate!.installation_id&&job.subscription.skill===candidate!.skill){route='subscription';if(['queued','running','awaiting_approval'].includes(job.subscription.task_status)){await this.release(job);return true;}}}else if(mention.candidates.length)decision={action:'suggest',capabilities:[...new Set(mention.candidates.map(x=>x.skill))].slice(0,8),evidenceMessageIds:[leading!.id],reason:'Choose which agent capability to use.'};else decision=empty('Mentioned agent unavailable or ambiguous');}

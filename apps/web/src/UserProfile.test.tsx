@@ -1,5 +1,5 @@
 import { afterEach, beforeAll, expect, it, vi } from 'vitest';
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { StrictMode } from 'react';
 import type { UserProfile } from '@space/contracts';
 import userEvent from '@testing-library/user-event';
@@ -97,4 +97,17 @@ it('prepares, previews and saves a photo under StrictMode', async () => {
   expect(close).toHaveBeenCalledOnce();
   await userEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
   await waitFor(() => expect(fetcher.mock.calls.some(([, options]) => options?.method === 'PATCH' && JSON.parse(options.body as string).image === image)).toBe(true));
+});
+
+it('keeps the searchable emoji picker inside the native status dialog', async () => {
+  const fetcher = setup();
+  await open('Update your status');
+  const status = screen.getByRole('dialog');
+  await userEvent.click(screen.getByRole('button',{name:'Choose status emoji'}));
+  const picker = screen.getByRole('dialog',{name:'Choose status emoji'});
+  expect(status.contains(picker)).toBe(true);
+  await userEvent.type(within(picker).getByRole('searchbox',{name:'Search emoji'}),'rocket');
+  await userEvent.click(within(picker).getByRole('button',{name:'🚀 :rocket:'}));
+  await userEvent.click(screen.getByRole('button',{name:'Save',exact:true}));
+  await waitFor(() => expect(fetcher.mock.calls.some(([,options]) => options?.method === 'PATCH' && JSON.parse(options.body as string).status?.emoji === '🚀')).toBe(true));
 });

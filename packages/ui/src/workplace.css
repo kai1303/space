@@ -234,8 +234,7 @@
   .sp-rich-actions .sp-unavailable-action,
   .sp-rich-actions .sp-composer-divider { display: none; }
 }
-.sp-rich-send-group .sp-send-rich.sp-button { margin-left: 0; border-radius: 4px 0 0 4px; }
-.sp-schedule-rich.sp-button { width: 24px; border-left: 1px solid var(--sp-border); border-radius: 0 4px 4px 0; opacity: 1; color: var(--sp-text-tertiary); background: var(--sp-surface-hover); }
+.sp-rich-send-group .sp-send-rich.sp-button { margin-left: 0; border-radius: 4px; }
 .sp-composer-divider {
   height: 18px;
   width: 1px;
@@ -254,6 +253,12 @@
   background: var(--sp-surface-hover);
   color: var(--sp-text-tertiary);
   opacity: 1;
+}
+/* Preserve the toolbar's appearance while a send is acknowledged. */
+.sp-rich-composer .sp-button[data-send-disabled="true"]:disabled { opacity: 1; }
+.sp-send-rich.sp-button[data-send-disabled="true"]:disabled {
+  background: var(--sp-success);
+  color: var(--sp-on-success);
 }
 .sp-rich-help {
   display: flex;
@@ -551,7 +556,7 @@
   .sp-composer-picker > div {
     left: -60px;
   }
-  .sp-rich-actions > .sp-button:disabled:not(.sp-send-rich) {
+  .sp-rich-actions > .sp-button:disabled:not(.sp-send-rich):not([data-send-disabled="true"]) {
     display: none;
   }
 }

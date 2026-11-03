@@ -46,7 +46,8 @@ it('restores the reaction picker trigger after selecting an emoji', async () => 
   render(<><Message author="Kai" initials="KA" time="12:00" onReact={() => {}} actions={{ copyMessage: () => {} }}>Hello</Message><button>Next control</button></>);
   const addReaction = screen.getByRole('button', { name: 'Add reaction…' });
   await userEvent.click(addReaction);
-  await userEvent.click(screen.getByRole('menuitem', { name: 'React 🎉' }));
+  await userEvent.type(screen.getByRole('searchbox', { name: 'Search emoji' }), 'tada');
+  await userEvent.click(screen.getByRole('button', { name: '🎉 :tada:' }));
   expect(document.activeElement).toBe(addReaction);
 });
 

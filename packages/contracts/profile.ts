@@ -1,3 +1,4 @@
+import { isUnicodeEmoji } from './emoji.js';
 import { AppError, record, text } from './validation.js';
 
 export interface UserStatus { text: string; emoji: string; expires_at: string | null }
@@ -34,8 +35,8 @@ export function parseProfileUpdate(input: unknown): ProfileUpdate {
     if (v.status === null) result.status = null;
     else {
       const s = record(v.status, ['text', 'emoji', 'expires_at']);
-      const statusText = optionalText(s.text, 100), emoji = optionalText(s.emoji, 32);
-      if (emoji && (!/\p{Extended_Pictographic}/u.test(emoji) || [...new Intl.Segmenter('en', { granularity: 'grapheme' }).segment(emoji)].length !== 1)) throw new AppError(400, 'invalid_status_emoji');
+      const statusText = optionalText(s.text, 100), emoji = optionalText(s.emoji, 64);
+      if (emoji && !isUnicodeEmoji(emoji)) throw new AppError(400, 'invalid_status_emoji');
       if (s.expires_at !== null && (typeof s.expires_at !== 'string' || !Number.isFinite(Date.parse(s.expires_at)) || new Date(s.expires_at).toISOString() !== s.expires_at || Date.parse(s.expires_at) <= Date.now())) throw new AppError(400, 'invalid_status_expiration');
       result.status = statusText || emoji ? { text: statusText, emoji, expires_at: s.expires_at as string | null } : null;
     }

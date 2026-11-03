@@ -4,7 +4,14 @@ export const HISTORY_LIMIT = 500;
 export type HistoryDirection = 'older' | 'newer' | 'latest';
 
 function ordered(messages: ChatMessage[]) {
-  return [...new Map(messages.map(message => [message.id, message])).values()]
+  const unique = new Map<string, ChatMessage>();
+  for (const message of messages) {
+    const previous = unique.get(message.id);
+    const latest = !previous || BigInt(message.reaction_sequence ?? '0') >= BigInt(previous.reaction_sequence ?? '0') ? message : previous;
+    unique.set(message.id, previous?.reply_count !== undefined || message.reply_count !== undefined
+      ? { ...latest, reply_count: Math.max(previous?.reply_count ?? 0, message.reply_count ?? 0) } : latest);
+  }
+  return [...unique.values()]
     .sort((a, b) => BigInt(a.sequence!) < BigInt(b.sequence!) ? -1 : BigInt(a.sequence!) > BigInt(b.sequence!) ? 1 : 0);
 }
 function boundaries(page: MessagePage, messages: ChatMessage[]): MessagePage {
@@ -24,9 +31,27 @@ export function mergePage(previous: MessagePage | null, page: MessagePage, direc
     has_newer: direction === 'newer' ? page.has_newer : previous.has_newer || overflow,
   }, direction === 'older' ? messages.slice(0, HISTORY_LIMIT) : messages.slice(-HISTORY_LIMIT));
 }
-export function appendLive(previous: MessagePage, incoming: ChatMessage[], pinned: boolean): MessagePage {
-  if (!incoming.length || previous.has_newer) return previous;
+export function appendLive(previous: MessagePage, incoming: ChatMessage[], pinned: boolean, rootsOnly = false): MessagePage {
+  if (rootsOnly) {
+    const counts = new Map<string, number>();
+    for (const message of incoming) if (message.thread_root_id && message.reply_count !== undefined)
+      counts.set(message.thread_root_id, Math.max(counts.get(message.thread_root_id) ?? 0, message.reply_count));
+    incoming = [
+      ...incoming.filter(message => !message.thread_root_id || message.thread_root_id === message.id),
+      ...previous.messages.filter(message => counts.has(message.id)).map(message => ({ ...message, reply_count: Math.max(message.reply_count ?? 0, counts.get(message.id)!) })),
+    ];
+  }
+  const present = new Set([...previous.messages.map(message => message.id), ...incoming.filter(message => !message.reaction_sequence || message.reaction_sequence === '0').map(message => message.id)]);
+  incoming = incoming.filter(message => present.has(message.id));
+  if (!incoming.length) return previous;
+  if (previous.has_newer) {
+    const ids = new Set(previous.messages.map(message => message.id));
+    return { ...previous, messages: ordered([...previous.messages, ...incoming.filter(message => ids.has(message.id))]) };
+  }
   const messages = ordered([...previous.messages, ...incoming]);
-  if (messages.length > HISTORY_LIMIT && !pinned) return { ...previous, has_newer: true };
+  if (messages.length > HISTORY_LIMIT && !pinned) {
+    const ids = new Set(previous.messages.map(message => message.id));
+    return { ...previous, has_newer: true, messages: ordered([...previous.messages, ...incoming.filter(message => ids.has(message.id))]) };
+  }
   return boundaries({ ...previous, has_older: previous.has_older || messages.length > HISTORY_LIMIT }, messages.slice(-HISTORY_LIMIT));
 }

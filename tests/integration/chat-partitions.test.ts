@@ -167,7 +167,8 @@ test('v17 copy preserves all message, asset, event and counter values and failed
     await legacy.query(`INSERT INTO assets(id,workspace_id,channel_id,uploader_id,name,size,type,staging_key,object_key,status,message_id)
       VALUES($1,$2,$3,$4,'old.txt',1,'text/plain',$1::uuid::text,$1::uuid::text,'ready',$5)`,[asset,a.workspace_id,a.channel_id,a.owner_id,human.id]);
     await legacy.query('UPDATE messages SET attachments=$1 WHERE id=$2',[JSON.stringify([{id:asset,name:'old.txt',size:1,type:'text/plain'}]),human.id]);
-    const snapshot = async () => Promise.all(['messages','assets','channel_events','channels'].map(async table=>(await legacy.query(`SELECT ${table==='messages'?"to_jsonb(t)-'agent_milestone'-'agent_response'":'to_jsonb(t)'} AS row FROM ${table} t ORDER BY to_jsonb(t)::text`)).rows));
+    // Compare the original v17 fields; later migrations add defaulted runtime state.
+    const snapshot = async () => Promise.all(['messages','assets','channel_events','channels'].map(async table=>(await legacy.query(`SELECT ${table==='messages'?"to_jsonb(t)-'agent_milestone'-'agent_response'-'reaction_sequence'":table==='assets'?"to_jsonb(t)-'processing_token'-'processing_until'":'to_jsonb(t)'} AS row FROM ${table} t ORDER BY to_jsonb(t)::text`)).rows));
     const before = await snapshot();
     // Fail after all migration DDL has run, at the version recording boundary.
     await legacy.query(`CREATE FUNCTION reject_partition_migration() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN
@@ -179,6 +180,8 @@ test('v17 copy preserves all message, asset, event and counter values and failed
     assert.equal((await legacy.query('SELECT max(version) AS version FROM schema_migrations')).rows[0].version,17);
     await legacy.query('DROP TRIGGER reject_partition_migration ON schema_migrations; DROP FUNCTION reject_partition_migration()'); await migrate(legacy);
     assert.deepEqual(await snapshot(),before);
+    assert.equal((await legacy.query('SELECT count(*) FROM messages WHERE reaction_sequence<>0')).rows[0].count,'0');
+    assert.equal((await legacy.query('SELECT count(*) FROM assets WHERE processing_token IS NOT NULL OR processing_until IS NOT NULL')).rows[0].count,'0');
     assert.equal((await legacy.query('SELECT count(*) FROM message_identities')).rows[0].count,'2');
     const stats = (await legacy.query(`SELECT DISTINCT tablename FROM pg_stats WHERE schemaname=current_schema()
       AND tablename IN ('messages','channel_events','message_identities')`)).rows.map(row=>row.tablename).sort();

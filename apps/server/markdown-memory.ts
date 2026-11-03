@@ -4,6 +4,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { dirname, join, resolve } from 'node:path';
 import { AppError, MAX_MEMORY_BYTES, memoryContent, memorySourceId, uuid, type MemoryDocument, type MemoryScope, type MemorySource } from '@space/contracts';
 import type { MemoryProvider } from '@space/core/memory';
+import lockfile from 'proper-lockfile';
 
 const revision = (content: string) => createHash('sha256').update(content).digest('hex');
 const sections = (content: string) => [...content.matchAll(/^<!-- space-memory-source:((?:message|document|knowledge):[a-f0-9-]{36}) -->\n([\s\S]*?)^<!-- \/space-memory-source -->\n?/gm)];
@@ -37,6 +38,21 @@ export class MarkdownMemoryProvider implements MemoryProvider {
       throw new AppError(503, 'memory_storage_unavailable');
     }
   }
+  private async mutate<T>(scope: MemoryScope, work: (check: () => void) => Promise<T>): Promise<T> {
+    return this.run(async () => {
+      const path = await this.path(scope, true);
+      let compromised: Error | undefined;
+      const release = await lockfile.lock(path, { realpath: false, stale: 30_000, update: 5000,
+        retries: { retries: 100, factor: 1, minTimeout: 25, maxTimeout: 25, randomize: true },
+        onCompromised: error => { compromised = error; } });
+      try {
+        const check = () => { if (compromised) throw compromised; };
+        const result = await work(check);
+        check();
+        return result;
+      } finally { if (!compromised) await release(); }
+    });
+  }
   async read(scope: MemoryScope): Promise<MemoryDocument> {
     return this.run(async () => {
       try {
@@ -65,6 +81,9 @@ export class MarkdownMemoryProvider implements MemoryProvider {
     });
   }
   async write(scope: MemoryScope, content: string, expectedRevision: string): Promise<MemoryDocument> {
+    return this.mutate(scope, check => this.replace(scope, content, expectedRevision, check));
+  }
+  private async replace(scope: MemoryScope, content: string, expectedRevision: string, check: () => void): Promise<MemoryDocument> {
     memoryContent(content);
     if (Buffer.byteLength(content, 'utf8') > MAX_MEMORY_BYTES) throw new AppError(413, 'memory_too_large');
     return this.run(async () => {
@@ -76,6 +95,7 @@ export class MarkdownMemoryProvider implements MemoryProvider {
         const file = await open(temporary, 'wx', 0o600);
         try { await file.writeFile(content, 'utf8'); await file.sync(); }
         finally { await file.close(); }
+        check();
         await rename(temporary, path);
         const directory = await open(dirname(path), 'r');
         try { await directory.sync(); } finally { await directory.close(); }
@@ -84,17 +104,25 @@ export class MarkdownMemoryProvider implements MemoryProvider {
     });
   }
   async ingest(scope: MemoryScope, source: MemorySource): Promise<MemoryDocument> {
-    const id = memorySourceId(source.id), current = await this.read(scope);
-    if (current.sources.some(item => item.id === id)) return current;
-    const title = source.title.replace(/[\r\n\u0000-\u001f\u2028\u2029<>]/g, ' ').trim().slice(0, 500);
-    const quoted = source.text.split(/\r\n|[\r\n\u2028\u2029]/).map(line => `> ${line}`).join('\n');
-    const content = `${current.content}${current.content ? '\n\n' : ''}<!-- space-memory-source:${id} -->\n### ${title}\n${source.url ? `Source: [View original](${source.url})\n` : ''}${source.fingerprint ? `Input fingerprint: ${source.fingerprint}\n` : ''}\n${quoted}\n<!-- /space-memory-source -->\n`;
-    return this.write(scope, content, current.revision);
+    return this.mutate(scope, async check => {
+      const id = memorySourceId(source.id), current = await this.read(scope);
+      const previous = current.sources.find(item => item.id === id);
+      if (previous) {
+        if (source.fingerprint && previous.fingerprint !== source.fingerprint) throw new AppError(409, 'memory_source_conflict');
+        return current;
+      }
+      const title = source.title.replace(/[\r\n\u0000-\u001f\u2028\u2029<>]/g, ' ').trim().slice(0, 500);
+      const quoted = source.text.split(/\r\n|[\r\n\u2028\u2029]/).map(line => `> ${line}`).join('\n');
+      const content = `${current.content}${current.content ? '\n\n' : ''}<!-- space-memory-source:${id} -->\n### ${title}\n${source.url ? `Source: [View original](${source.url})\n` : ''}${source.fingerprint ? `Input fingerprint: ${source.fingerprint}\n` : ''}\n${quoted}\n<!-- /space-memory-source -->\n`;
+      return this.replace(scope, content, current.revision, check);
+    });
   }
   async remove(scope: MemoryScope, sourceId: string): Promise<MemoryDocument> {
-    const id = memorySourceId(sourceId), current = await this.read(scope);
-    const match = sections(current.content).find(section => section[1] === id);
-    return match ? this.write(scope, current.content.replace(match[0], ''), current.revision) : current;
+    return this.mutate(scope, async check => {
+      const id = memorySourceId(sourceId), current = await this.read(scope);
+      const match = sections(current.content).find(section => section[1] === id);
+      return match ? this.replace(scope, current.content.replace(match[0], ''), current.revision, check) : current;
+    });
   }
   async search(scope: MemoryScope, query: string) {
     const { content } = await this.read(scope), words = query.trim().toLocaleLowerCase().split(/\s+/);
@@ -102,7 +130,8 @@ export class MarkdownMemoryProvider implements MemoryProvider {
       ? [{ text: line.slice(0, 500), line: index + 1 }] : []).slice(0, 20);
   }
   async clear(scope: MemoryScope): Promise<void> {
-    await this.run(async () => {
+    await this.mutate(scope, async check => {
+      check();
       try { await unlink(await this.path(scope)); }
       catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
     });

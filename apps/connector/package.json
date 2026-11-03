@@ -11,6 +11,6 @@
     "start": "node dist/main.js",
     "test": "pnpm build && node --test test/*.test.mjs"
   },
-  "dependencies": { "socket.io-client": "^4.8.4", "jose": "^6.2.15" },
+  "dependencies": { "@space/contracts": "workspace:*", "socket.io-client": "^4.8.4", "jose": "^6.2.15" },
   "devDependencies": { "@types/node": "22", "typescript": "^7.0.2", "socket.io": "^4.8.4" }
 }

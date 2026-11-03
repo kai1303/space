@@ -1,7 +1,9 @@
+import type { MentionOption, MentionReference } from '@space/contracts';
 import { AnimatePresence } from 'motion/react';
 import { useState } from "react";
 import {
   SidePanel,
+  Dialog,
   Avatar,
   Badge,
   ChannelItem,
@@ -25,7 +27,20 @@ import {
 } from "@phosphor-icons/react";
 import { SectionHeading } from "./Foundations.js";
 
+const previewPeople: MentionOption[] = [
+  {kind:'user',id:'00000000-0000-4000-8000-000000000001',label:'Alex Morgan',detail:'Product design',joined:true},
+  {kind:'user',id:'00000000-0000-4000-8000-000000000002',label:'Jamie Chen',detail:'Engineering',joined:true},
+  {kind:'user',id:'00000000-0000-4000-8000-000000000003',label:'Sam Rivera',detail:'Operations',joined:true},
+  {kind:'agent',id:'00000000-0000-4000-8000-000000000004',label:'Space assistant',detail:'Agent'},
+  {kind:'broadcast',id:'here',label:'here',detail:'Notify active members'},
+  {kind:'broadcast',id:'channel',label:'channel',detail:'Notify all channel members'},
+];
+async function previewMentions(query:string, general:boolean) {
+  const items=general?[...previewPeople,{kind:'broadcast' as const,id:'everyone',label:'everyone',detail:'Notify the general channel'}]:previewPeople;
+  return {items:items.filter(item=>item.label.toLowerCase().includes(query.trim().toLowerCase())),member_count:8};
+}
 export function Conversation() {
+  const [previewMention,setPreviewMention]=useState<MentionReference>();
   const [channel, setChannel] = useState("design-system");
   const [view, setView] = useState("messages");
   const [thread, setThread] = useState(false);
@@ -54,6 +69,7 @@ export function Conversation() {
     );
   return (
     <section id="patterns" className="ds-section">
+      {previewMention && <Dialog open title={previewMention.label} onClose={() => setPreviewMention(undefined)}><p>{previewMention.kind === 'agent' ? 'Agent' : 'Workspace member'} · Local preview</p><p>This example preserves mention identity without notifying anyone or executing an agent.</p></Dialog>}
       <SectionHeading
         number="03"
         title="Better together"
@@ -225,7 +241,7 @@ export function Conversation() {
                       tone="blue"
                       time="Just now"
                     >
-                      <RichContent document={message.document} />
+                      <RichContent document={message.document} onMentionClick={setPreviewMention} />
                       {message.attachments.map((file) => <div key={file.id} className="preview-attachment">{file.name}</div>)}
                     </Message>
                   ))}
@@ -240,7 +256,7 @@ export function Conversation() {
               defaultAttachments={attachmentDrafts[channel]}
               onDraftChange={(document) => setDrafts((old) => ({ ...old, [channel]: document }))}
               onAttachmentsChange={(attachments) => setAttachmentDrafts((old) => ({ ...old, [channel]: attachments }))}
-              mentions={["Alex Morgan", "Jamie Chen", "Sam Rivera", "Space assistant"]}
+              findMentions={query => previewMentions(query, channel === "general")}
               onSend={(_text, document, attachments) =>
                 setMessages((previous) => [...previous, { id: crypto.randomUUID(), channel, document, attachments }])
               }
@@ -278,7 +294,7 @@ export function Conversation() {
               </Message>
               {replies.map((reply) => (
                 <Message key={reply.id} author="You" initials="YO" time="Just now">
-                  <RichContent document={reply.document} />
+                  <RichContent document={reply.document} onMentionClick={setPreviewMention} />
                   {reply.attachments.map((file) => <div key={file.id} className="preview-attachment">{file.name}</div>)}
                 </Message>
               ))}
@@ -290,7 +306,7 @@ export function Conversation() {
               defaultAttachments={attachmentDrafts[`thread:${channel}`]}
               onDraftChange={(document) => setDrafts((old) => ({ ...old, [`thread:${channel}`]: document }))}
               onAttachmentsChange={(attachments) => setAttachmentDrafts((old) => ({ ...old, [`thread:${channel}`]: attachments }))}
-              mentions={["Alex Morgan", "Jamie Chen", "Sam Rivera"]}
+              findMentions={query => previewMentions(query, channel === "general")}
               onSend={(_text, document, attachments) => setReplies((previous) => [...previous, { id: crypto.randomUUID(), document, attachments }])}
             /></div>
           </SidePanel>

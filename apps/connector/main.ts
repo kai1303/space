@@ -72,6 +72,9 @@ export async function runConnector(args = process.argv.slice(2)) {
       console.error('Space rejected this connector credential. Create a new pairing code and run with --pair.');
       process.exitCode = 1;
       stop();
+    }, async (request, emit, signal) => {
+      if (status !== 'ready' || !codex?.alive()) throw new Error('Codex is not ready.');
+      await codex.invoke(request, emit, signal);
     });
     async function activate(credentials: Credentials) {
       if (controller.signal.aborted) return;

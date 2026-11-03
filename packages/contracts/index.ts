@@ -9,6 +9,8 @@ export * from './chat.js';
 export * from './rich-text.js';
 export * from './assets.js';
 export * from './memory.js';
+export * from './thread-context.js';
+import type { ThreadContext } from './thread-context.js';
 export const SCHEMA_VERSION = '1.0' as const;
 export type ControlFeature = 'active_steer' | 'queued_followup' | 'cancel' | 'pause' | 'resume' | 'progress_stream' | 'input_request';
 export interface AgentCapabilities { skills: string[]; controls: Partial<Record<ControlFeature, boolean>> }
@@ -23,7 +25,7 @@ export interface ControlCommand { id: string; execution_id: string; expected_rev
 export type AgentEventType = 'execution.started' | 'execution.progress' | 'execution.completed' | 'execution.failed';
 export interface AgentEvent { id: string; schema_version: '1.0'; execution_id: string; sequence: number; type: AgentEventType; occurred_at: string; payload: { text: string; response?: AgentResponse } }
 export interface WorkplaceEvent { id: string; schema_version: '1.0'; type: string; workspace_id: string; actor_id: string; resource_id: string; correlation_id: string; causation_id: string | null; sequence: number; occurred_at: string; payload: Record<string, unknown> }
-export interface InvocationRequest { schema_version: typeof SCHEMA_VERSION; task_id: string; execution_id: string; session_id: string; idempotency_key: string; goal: string; skill: string; context?: {thread_id:string;messages:{id:string;text:string;author_type:'human'|'agent'}[]} }
+export interface InvocationRequest { schema_version: typeof SCHEMA_VERSION; task_id: string; execution_id: string; session_id: string; idempotency_key: string; goal: string; skill: string; context?: {working_memory?:ThreadContext;thread_id:string;messages:{id:string;text:string;author_type:'human'|'agent'}[]} }
 export interface InvocationReceipt { external_execution_id: string; status: 'completed' }
 // Invoke resolves only after terminal events are accepted in Increment A. Async receipt/status
 // transports will extend this contract after local/cloud conformance in Increment B.
@@ -51,3 +53,5 @@ export function assertTransition(from: TaskStatus, to: TaskStatus): void {
 
 export * from './agent-connection.js';
 export * from './navigator.js';
+
+export * from './mentions.js';

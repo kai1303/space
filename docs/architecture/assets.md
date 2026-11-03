@@ -46,7 +46,7 @@ CORS configuration; use a dedicated bucket.
 | `POST /v1/channels/:channelId/assets` | Reserves an authorized channel upload and returns `AssetUpload`, including its signed POST form. |
 | `POST /v1/assets/:assetId/complete` | Accepts `{}`, verifies and seals the stored bytes, then returns file metadata. |
 | `GET /v1/assets/:assetId/download` | Checks current chat access and redirects to a signed attachment URL valid for 60 seconds. |
-| `GET /v1/assets/:assetId/preview` | Returns byte-validated preview metadata; legacy attachments are backfilled under an asset lock. |
+| `GET /v1/assets/:assetId/preview` | Returns byte-validated preview metadata; legacy attachments use an atomic processing claim. |
 | `GET /v1/assets/:assetId/content` | Returns PDF bytes on the authenticated API origin for canvas rendering; redirects validated image/media representations to short-lived signed URLs. |
 | `GET /v1/assets/:assetId/thumbnail` | Authorizes and redirects to a generated WebP image thumbnail. |
 
@@ -64,18 +64,19 @@ attachment references are persisted by migration `009_assets.sql`.
    reservation with `410 upload_expired`. The policy permits only the generated staging key,
    exact reserved byte count and `application/octet-stream`. Files must contain
    between 1 byte and 25 MiB. The file is the last multipart field.
-3. Finalization checks staging `HEAD` metadata. While holding the file's database
-   lock, it copies the object to a server-only final key with `CopySourceIfMatch`
-   bound to the staging ETag. It replaces metadata with
-   `application/octet-stream` and `Content-Disposition: attachment`, then verifies
-   final length and ETag. Browser credentials cannot overwrite the finalized key.
+3. Finalization claims the asset with an atomic conditional update, then releases
+   the database connection. It checks staging `HEAD`, reads at most 25 MiB with
+   `If-Match` bound to the staging ETag, and seals the server-only final key using
+   `If-None-Match: *`. Existing sealed bytes are reused, never overwritten on retry.
+   Final metadata is `application/octet-stream` and `Content-Disposition: attachment`.
+   The final length is verified; browser credentials cannot overwrite the final key.
 4. Messages refer to file IDs and metadata. A file is available only after
    finalization and attachment through the authorized chat scope.
 5. The API checks current access before issuing a signed GET valid for 60 seconds.
    Downloads use attachment disposition, a safely encoded filename and
    `application/octet-stream`. Anonymous object reads are forbidden.
 
-A missing staging object produces `409 upload_not_ready`; size or conditional-copy
+A missing staging object produces `409 upload_not_ready`; size
 validation failures produce `409 invalid_upload`. Provider failures produce
 `503 storage_unavailable`, without provider credentials or response details.
 Deleting an absent object succeeds.
@@ -113,6 +114,15 @@ after the five-minute upload credential expires. Attached final objects are kept
 indefinitely. Cleanup depends on the API running and storage being available;
 monitor failed cleanup and disk usage. Do not delete final objects solely because
 they appear old without checking database references.
+
+Migration 024 adds processing tokens and deadlines. Completion, preview generation,
+PDF conversion and cleanup use 30-second claims renewed every five seconds. All
+storage calls run outside transactions; metadata publication/release is fenced by
+the claim token. Expired claims can be recovered after a crash. Contending requests
+poll for at most 15 seconds without reserving a connection; overload returns
+`503 asset_processing_busy`. At most four asset jobs per API pool buffer/copy/decode
+bytes concurrently. Access is rechecked after storage work. Upload admission retains
+its short database-only transaction for quota enforcement.
 
 ## Verification
 
@@ -321,11 +331,11 @@ usable. The viewer still fetches authenticated PDF ranges only after activation.
 
 The first authorized PDF `/thumbnail` request reads the sealed original once,
 renders page 1 with Poppler and stores `previews/{id}/thumbnail.webp` at at most
-360×240. PDF preview JSON records `thumbnail: true` or `false`. A database row
-lock deduplicates simultaneous requests, including across API instances. Failed
+360×240. PDF preview JSON records `thumbnail: true` or `false`. An atomic processing
+claim deduplicates simultaneous requests across API instances without retaining a database lock. Failed
 document conversion is cached; storage outages and missing/busy renderers remain
 retryable. Access is checked again after conversion before signing the result.
-This JSON-only extension requires no migration and supports existing PDF assets.
+The thumbnail JSON supports existing PDF assets; processing claims require migration 024.
 
 Conversion admits two jobs per API, a 25MiB input, first-page-only 720px raster,
 8s wall timeout and temporary-directory cleanup. Linux uses `prlimit` with

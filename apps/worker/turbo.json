@@ -1,0 +1,27 @@
+{
+  "extends": ["//"],
+  "tasks": {
+    "start": {
+      "passThroughEnv": [
+        "DATABASE_URL",
+        "NODE_ENV",
+        "AG_UI_URL",
+        "AG_UI_TOKEN",
+        "TYPESAFE_API_KEY",
+        "NAVIGATOR_L1_*",
+        "NAVIGATOR_L2_*"
+      ]
+    },
+    "dev": {
+      "passThroughEnv": [
+        "DATABASE_URL",
+        "NODE_ENV",
+        "AG_UI_URL",
+        "AG_UI_TOKEN",
+        "TYPESAFE_API_KEY",
+        "NAVIGATOR_L1_*",
+        "NAVIGATOR_L2_*"
+      ]
+    }
+  }
+}

@@ -1,59 +1,11 @@
 import { createHash, randomBytes } from 'node:crypto';
-import { spawn, type SpawnOptionsWithoutStdio, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { io } from 'socket.io-client';
+import { parseInvocation, parseAgentEvent, type AgentEvent } from '@space/contracts';
+import type { InvokeCodex } from './codex.js';
 import { ConnectorStore, platformOrigin, type Connection } from './storage.js';
 
 export type AuthStatus = 'required' | 'ready' | 'error';
-export type SpawnCodex = (command: string, args: string[], options: SpawnOptionsWithoutStdio) => ChildProcessWithoutNullStreams;
-export async function startCodex(accessToken: string, onExit: () => void, launch: SpawnCodex = spawn): Promise<{ stop(): void; alive(): boolean }> {
-  const config = [
-    'model_provider="openai_chatgpt_plan"',
-    'model_providers.openai_chatgpt_plan.name="ChatGPT plan"',
-    'model_providers.openai_chatgpt_plan.base_url="https://api.openai.com/v1"',
-    'model_providers.openai_chatgpt_plan.env_key="ACCESS_TOKEN"',
-    'model_providers.openai_chatgpt_plan.wire_api="responses"',
-    'model_providers.openai_chatgpt_plan.requires_openai_auth=false',
-    'model_providers.openai_chatgpt_plan.supports_websockets=false',
-  ];
-  const child = launch('codex', ['app-server', '--listen', 'stdio://', ...config.flatMap(value => ['-c', value])], { env: { ...process.env, ACCESS_TOKEN: accessToken }, stdio: 'pipe' });
-  let live = true;
-  let stopped = false;
-  let ready = false;
-  let buffer = '';
-  const stop = () => { stopped = true; live = false; child.kill(); };
-  child.stderr.resume(); // Do not forward child diagnostics, which may contain credentials.
-  await new Promise<void>((resolve, reject) => {
-    const timeout = setTimeout(() => { stop(); reject(new Error('Codex initialize timed out. Check the installed Codex CLI.')); }, 15_000);
-    const failed = () => {
-      live = false;
-      clearTimeout(timeout);
-      if (!ready) reject(new Error('Could not initialize Codex app-server. Install or update the Codex CLI, then restart the connector.'));
-      else if (!stopped) onExit();
-    };
-    child.once('error', failed);
-    child.once('exit', failed);
-    child.stdin.on('error', failed);
-    child.stdout.on('data', (chunk: Buffer) => {
-      buffer += chunk.toString('utf8');
-      if (buffer.length > 1_000_000) { stop(); failed(); return; }
-      let newline: number;
-      while ((newline = buffer.indexOf('\n')) !== -1) {
-        const line = buffer.slice(0, newline);
-        buffer = buffer.slice(newline + 1);
-        let message: { id?: unknown; error?: unknown; result?: unknown };
-        try { message = JSON.parse(line); } catch { continue; }
-        if (message.id !== 1 || ready) continue;
-        if (message.error || !message.result || typeof message.result !== 'object') { stop(); failed(); return; }
-        clearTimeout(timeout);
-        ready = true;
-        child.stdin.write(`${JSON.stringify({ method: 'initialized', params: {} })}\n`);
-        resolve();
-      }
-    });
-    child.stdin.write(`${JSON.stringify({ id: 1, method: 'initialize', params: { clientInfo: { name: 'space_connector', title: 'Space Connector', version: '0.0.1' }, capabilities: { experimentalApi: false } } })}\n`);
-  });
-  return { stop, alive: () => live };
-}
+export { startCodex, type SpawnCodex, type InvokeCodex } from './codex.js';
 
 export async function claimPairing(store: ConnectorStore, inputOrigin: string, code: string, request: typeof fetch = fetch): Promise<Connection> {
   const origin = platformOrigin(inputOrigin);
@@ -80,7 +32,7 @@ function unauthorized(error: unknown): boolean {
   const value = error as { code?: unknown; message?: unknown; data?: { code?: unknown } };
   return [value.code, value.data?.code, value.message].some(item => typeof item === 'string' && /unauthorized|unauthenticated|revoked|invalid.token/i.test(item));
 }
-export function connectPlatform(connection: Connection, status: () => AuthStatus, onUnauthorized: () => void) {
+export function connectPlatform(connection: Connection, status: () => AuthStatus, onUnauthorized: () => void, invoke?: InvokeCodex) {
   const socket = io(`${platformOrigin(connection.origin)}/agents`, {
     transports: ['websocket'], auth: { token: connection.credential },
     reconnection: true, reconnectionAttempts: Infinity, reconnectionDelay: 1_000,
@@ -89,19 +41,111 @@ export function connectPlatform(connection: Connection, status: () => AuthStatus
   let closed = false;
   let reconnect: NodeJS.Timeout | undefined;
   let reconnectDelay = 1_000;
-  const close = () => { closed = true; clearInterval(heartbeat); clearTimeout(reconnect); socket.disconnect(); };
+  let claiming = false, halted = false, readyToClaim = false;
+  let generation = 0, heartbeatRevision = 0;
+  let active: AbortController | undefined;
+  const seen = new Set<string>();
+  let operations = Promise.resolve();
+  const taskRpc = (name: string, payload: unknown, shouldSend = () => true): Promise<unknown> => {
+    const operation = operations.then(() => new Promise<unknown>((resolve, reject) => {
+      if (!shouldSend()) { resolve(true); return; }
+      if (closed || !socket.connected) { reject(new Error('Space disconnected.')); return; }
+      socket.timeout(8_000).emit(name, payload, (error: Error | null, ack?: { data?: unknown; error?: unknown }) => {
+        if (error || ack?.error || !ack || !('data' in ack)) {
+          if (ack?.error && unauthorized(ack.error)) rejected();
+          reject(new Error(name === 'agent.task.claim' && ack?.error === 'agent_not_ready' ? 'agent_not_ready' : 'Space did not acknowledge this task operation.'));
+        } else resolve(ack.data);
+      });
+    }));
+    operations = operation.then(() => {}, () => {});
+    return operation;
+  };
+  const accepted = async (name: string, payload: unknown = {}, shouldSend = () => true) => {
+    if (await taskRpc(name, payload, shouldSend) !== true) throw new Error('Space rejected the task operation.');
+  };
+  const failTask = async () => {
+    try { if (socket.connected && !closed) await accepted('agent.task.fail'); } catch { /* Server lease expiry handles a lost connection. */ }
+  };
+  const claim = async () => {
+    if (status() !== 'ready') { readyToClaim = false; return; }
+    if (!invoke || closed || halted || claiming || active || !socket.connected || !readyToClaim) return;
+    claiming = true;
+    let renewal: NodeJS.Timeout | undefined, deadline: NodeJS.Timeout | undefined;
+    let terminal = false, terminalSubmitted = false;
+    try {
+      const data = await taskRpc('agent.task.claim', {});
+      if (data === null) return;
+      const request = parseInvocation(data);
+      if (seen.has(request.execution_id)) throw new Error('Space returned an uncertain execution.');
+      seen.add(request.execution_id);
+      const controller = new AbortController();
+      active = controller;
+      if (closed || halted || !socket.connected) { controller.abort(); throw new Error('Space disconnected.'); }
+      let renewing = false, lastSequence = 0;
+      deadline = setTimeout(() => controller.abort(), 120_000);
+      renewal = setInterval(() => {
+        if (renewing || controller.signal.aborted || terminalSubmitted) return;
+        renewing = true;
+        void accepted('agent.task.renew', {}, () => !terminalSubmitted && !controller.signal.aborted).catch(() => { halted = true; controller.abort(); }).finally(() => { renewing = false; });
+      }, 5_000);
+      await invoke(request, async (value: AgentEvent) => {
+        controller.signal.throwIfAborted();
+        const event = parseAgentEvent(value);
+        if (terminal || event.execution_id !== request.execution_id || event.sequence !== lastSequence + 1) throw new Error('Invalid Codex event sequence.');
+        if (event.type === 'execution.completed' || event.type === 'execution.failed') {
+          terminalSubmitted = true;
+          clearInterval(renewal);
+        }
+        await accepted('agent.task.event', { event });
+        lastSequence = event.sequence;
+        terminal = event.type === 'execution.completed' || event.type === 'execution.failed';
+      }, controller.signal);
+      controller.signal.throwIfAborted();
+      if (!terminal) throw new Error('Codex did not send a terminal event.');
+      clearInterval(renewal);
+      await accepted('agent.task.finish');
+    } catch (error) {
+      if (!active && error instanceof Error && error.message === 'agent_not_ready' && socket.connected && !closed) {
+        readyToClaim = false;
+        publish();
+        return;
+      }
+      if (terminal && !active?.signal.aborted && socket.connected && !closed) {
+        clearInterval(renewal);
+        try { await accepted('agent.task.finish'); return; } catch { /* Finish is uncertain; stop below. */ }
+      }
+      // An unacknowledged claim or event is uncertain: never automatically rerun it.
+      halted = true;
+      active?.abort();
+      await failTask();
+    } finally {
+      clearInterval(renewal); clearTimeout(deadline); active = undefined; claiming = false;
+      if (halted) publish();
+    }
+  };
+  const tasks = setInterval(() => { void claim(); }, 1_000);
+  const close = () => { closed = true; active?.abort(); clearInterval(tasks); clearInterval(heartbeat); clearTimeout(reconnect); socket.disconnect(); };
   const rejected = () => { if (!closed) { close(); onUnauthorized(); } };
   const publish = () => {
     if (!socket.connected || closed) return;
-    socket.timeout(8_000).emit('agent.heartbeat', { auth_status: status() }, (error: Error | null, ack?: { data?: { installation_id?: string }; error?: unknown }) => {
-      if (error) return;
-      if (ack?.error && unauthorized(ack.error)) rejected();
-      if (ack?.data?.installation_id && ack.data.installation_id !== connection.installation_id) rejected();
+    readyToClaim = false;
+    const authStatus = halted ? 'error' : status();
+    const revision = ++heartbeatRevision, currentGeneration = generation;
+    socket.timeout(8_000).emit('agent.heartbeat', { auth_status: authStatus }, (error: Error | null, ack?: { data?: { installation_id?: string }; error?: unknown }) => {
+      if (closed || currentGeneration !== generation || revision !== heartbeatRevision || error) return;
+      if (ack?.error && unauthorized(ack.error)) { rejected(); return; }
+      if (ack?.data?.installation_id && ack.data.installation_id !== connection.installation_id) { rejected(); return; }
+      if (!ack?.error && ack?.data?.installation_id === connection.installation_id && authStatus === 'ready' && status() === 'ready' && !halted) {
+        readyToClaim = true;
+        void claim();
+      }
     });
   };
   const heartbeat = setInterval(publish, 10_000);
-  socket.on('connect', () => { reconnectDelay = 1_000; publish(); });
+  socket.on('connect', () => { generation++; readyToClaim = false; reconnectDelay = 1_000; publish(); });
   socket.on('disconnect', reason => {
+    generation++; readyToClaim = false;
+    if (active || claiming) { halted = true; active?.abort(); }
     // A graceful API restart also disconnects the namespace; recheck credentials on reconnect.
     if (reason !== 'io server disconnect' || closed) return;
     clearTimeout(reconnect);

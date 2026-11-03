@@ -339,7 +339,7 @@ export function Popover({ label, trigger, children, className = "", panelClassNa
       <summary role="button" className={triggerClassName} aria-label={label} aria-haspopup={role} aria-expanded={open} aria-controls={id} onClick={event => { event.preventDefault(); if (open) close(); else show(); }}>
         {trigger}
       </summary>
-      {floating ? createPortal(content, document.body) : content}
+      {floating ? createPortal(content, ref.current?.closest("dialog") ?? document.body) : content}
     </details>
   );
 }

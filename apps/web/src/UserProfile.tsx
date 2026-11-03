@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { AnimatePresence } from 'motion/react';
-import { Avatar, Button, Dialog, IconButton, Popover, SidePanel, TextField } from '@space/ui';
+import { Avatar, Button, EmojiPicker, Dialog, IconButton, Popover, SidePanel, TextField } from '@space/ui';
 import { Clock, EnvelopeSimple, Phone, Plus, Smiley, X } from '@phosphor-icons/react';
 import { visibleStatus, type ProfileUpdate, type UserProfile, type UserStatus } from '@space/contracts';
 import { request } from './chat-client.js';
@@ -16,7 +16,7 @@ const presets = [
   { text: 'Vacationing', emoji: '🌴', duration: 'never', hint: 'Don’t clear' },
   { text: 'Working remotely', emoji: '🏡', duration: 'today', hint: 'Today' },
 ];
-const emojiChoices = ['🗓️', '🚌', '🤒', '🌴', '🏡', '🎯', '👀', '💻', '☕', '🍽️', '🚀', '💬', '🎧', '✈️', '🧠', '✅'];
+
 
 export function UserSettings({ user, userId, onNameChange }: { user: string; userId?: string; onNameChange?: (name: string) => void }) {
   const [profile, setProfile] = useState<UserProfile>({ id: userId ?? '', display_name: user, full_name: '', title: '', name_pronunciation: '', phone: '', time_zone: 'UTC', image: null, email: null, status: null, presence: 'active' });
@@ -184,9 +184,7 @@ function StatusEditor({ profile, busy, error, save, onClose }: { profile: UserPr
   return <Dialog open={open} title="Set a status" onClose={onClose} onBeforeClose={() => !busy}>
     <form className="space-status-editor" onSubmit={submit}>
       <fieldset disabled={busy}>
-        <div className="space-status-input"><Popover label="Choose status emoji" className="space-status-emoji" panelClassName="space-status-emoji-grid" trigger={<span>{emoji || <Smiley size={24} />}</span>}>
-          {close => <>{emojiChoices.map(item => <button key={item} type="button" aria-label={`Use ${item} for status`} onClick={() => { setEmoji(item); close(); }}>{item}</button>)}<button type="button" aria-label="Remove status emoji" onClick={() => { setEmoji(''); close(); }}><X size={18} /></button></>}
-        </Popover><input aria-label="Status" placeholder="What’s your status?" maxLength={100} value={text} onChange={e => setText(e.target.value)} />{(text || emoji) && <IconButton label="Clear all" onClick={() => { setText(''); setEmoji(''); }}><X size={18} /></IconButton>}</div>
+        <div className="space-status-input"><EmojiPicker label="Choose status emoji" className="space-status-emoji" trigger={<span>{emoji || <Smiley size={24} />}</span>} onSelect={setEmoji} />{emoji && <IconButton label="Remove status emoji" onClick={() => setEmoji('')}><X size={16} /></IconButton>}<input aria-label="Status" placeholder="What’s your status?" maxLength={100} value={text} onChange={e => setText(e.target.value)} />{(text || emoji) && <IconButton label="Clear all" onClick={() => { setText(''); setEmoji(''); }}><X size={18} /></IconButton>}</div>
         {!text && !emoji ? <div className="space-status-presets"><strong>Suggestions</strong>{presets.map(preset => <button key={preset.text} type="button" onClick={() => { setText(preset.text); setEmoji(preset.emoji); setDuration(preset.duration); }}><span>{preset.emoji}</span><span>{preset.text}</span><small>— {preset.hint}</small></button>)}</div> : <label className="space-profile-select">Duration<select value={duration} onChange={e => setDuration(e.target.value)}>
           {initialExpiration && <option value="existing">Keep current expiration</option>}
           <option value="never">Don’t clear</option><option value="30">30 minutes</option><option value="60">1 hour</option><option value="240">4 hours</option><option value="today">Today</option><option value="custom">Choose a date and time…</option>

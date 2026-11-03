@@ -36,8 +36,8 @@ Run it locally, keep channel memory in Markdown, and connect your local Codex in
 ---
 
 > **Early development.** Chat, files, channel memory, and local connector pairing
-> are implemented. Local Codex task execution is still being built; the task
-> flow defaults to a mock connector, with an optional AG-UI backend.
+> are implemented. Local Codex can answer approved chat tasks after explicit
+> channel enablement. The task flow also supports a mock connector and an optional AG-UI backend.
 
 <p align="center">
   <img src="assets/brand/verification/portal-main-page.png" alt="Space local development screenshot showing channel navigation, a conversation, rich messages, threaded replies, and the composer" width="1064" />
@@ -170,8 +170,8 @@ The [/workspace](http://127.0.0.1:5173/workspace) route is a synthetic design pr
    with source links, edit notes, search, and import or export text documents.
    Scoped MCP keys let external tools read or update enabled channel memory.
 6. **Connect an agent.** A local connector pairs your computer with Space and
-   reports ChatGPT sign-in and Codex readiness. Pairing currently stops at
-   enrollment and status; it does not execute tasks or read conversations.
+   reports ChatGPT sign-in and Codex readiness. Enable it for a channel from
+   **Ask an agent** in a thread to run approved chat tasks and receive responses.
 
 See the [chat architecture](docs/architecture/realtime-chat.md),
 [file storage guide](docs/architecture/assets.md), and
@@ -232,7 +232,7 @@ These are the connections implemented in this checkout and their current boundar
 
 | Category | Connection | Current scope |
 | --- | --- | --- |
-| **Local agent** | Codex CLI + ChatGPT sign-in | Computer pairing, local authorization, and readiness reporting. Real task execution is planned. |
+| **Local agent** | Codex CLI + ChatGPT sign-in | Computer pairing, local authorization, channel grants, and approved chat task execution with streamed replies. |
 | **Agent context** | MCP | Revocable, channel-scoped keys for reading and updating enabled channel memory. |
 | **Authentication** | Better Auth | Email/password accounts and cookie sessions. Human social login and MFA are planned separately. |
 | **File storage** | SeaweedFS through its S3-compatible API | Private uploads, access-checked downloads, and previews. |
@@ -250,7 +250,7 @@ See [connector setup](apps/connector/README.md),
 replies, durable history and reconnect catch-up, file uploads and previews, opt-in
 channel memory, scoped memory MCP access, rules-first Navigator suggestions, agent mention/thread routing, and local connector enrollment/status.
 
-**Still ahead:** real agent task dispatch, direct messages, presence,
+**Still ahead:** agent repository access and file modification, direct messages, presence,
 message editing/deletion, email invitations, and additional agent adapters.
 The [module roadmap](docs/architecture/module-roadmap.md) tracks the broader scope.
 

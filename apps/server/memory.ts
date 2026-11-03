@@ -3,6 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { AppError, MAX_MEMORY_IMPORT_BYTES, memorySourceId, parseMemorySettings, parseMemorySource, parseMemoryWrite, record, text, uuid, type ChannelMemory } from '@space/contracts';
 import type { MemoryProvider } from '@space/core/memory';
 import { MemoryStore, type MemoryChannel } from '@space/postgres/memory';
+import { readThreadContext } from '@space/postgres/thread-context';
 import { MarkdownMemoryProvider } from './markdown-memory.js';
 
 export type MemoryOptions = { directory?: string; providers?: MemoryProvider[] };
@@ -29,6 +30,13 @@ export function registerMemoryRoutes(app: FastifyInstance, store: MemoryStore, p
     providers: [...providers.values()].map(({ id, name }) => ({ id, name })),
     document: channel.enabled ? await providerFor(channel).read(channel) : null,
   });
+  const threadPath = '/v1/channels/:channelId/threads/:threadId/context';
+  app.get<{ Params: { channelId: string; threadId: string } }>(threadPath, r => {
+    record(r.query, []);
+    return store.channel(r.actorId, r.params.channelId, (channel, c) => readThreadContext(c, channel.channel_id, uuid(r.params.threadId)));
+  });
+  app.post<{ Params: { channelId: string; threadId: string } }>(`${threadPath}/connections`, async (r, reply) =>
+    reply.code(201).send(await store.createConnection(r.actorId, uuid(r.params.channelId), r.body, uuid(r.params.threadId))));
   const path = '/v1/channels/:channelId/memory';
   app.get<{ Params: { channelId: string } }>(`${path}/connections`, r => store.connections(r.actorId, uuid(r.params.channelId)));
   app.post<{ Params: { channelId: string } }>(`${path}/connections`, async (r, reply) => reply.code(201).send(await store.createConnection(r.actorId, uuid(r.params.channelId), r.body)));

@@ -4,7 +4,7 @@ import { randomUUID, randomBytes } from 'node:crypto';
 import { Pool } from 'pg';
 import { database } from '@space/postgres/database';
 import { users, agentDefinitions } from '@space/postgres/schema';
-import { migrate } from '@space/postgres/migrate';
+import { migrate, migrationFiles } from '@space/postgres/migrate';
 
 const url = process.env.TEST_DATABASE_URL;
 if (!url) throw new Error('TEST_DATABASE_URL is required');
@@ -28,7 +28,7 @@ test('Drizzle rolls back on failure, reuses the pool, binds text and preserves m
     await migrate(pool);
     assert.equal((await db.select().from(users))[0]?.id, id);
     assert.equal((await db.select().from(agentDefinitions))[0]?.name, name);
-    assert.equal((await pool.query('SELECT * FROM schema_migrations')).rowCount, 21);
+    assert.equal((await pool.query('SELECT * FROM schema_migrations')).rowCount, migrationFiles.length);
   } finally {
     await pool.end();
     await admin.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);

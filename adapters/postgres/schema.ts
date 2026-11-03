@@ -32,6 +32,7 @@ export const channelEvents = pgTable('channel_events', {
 }, table => [primaryKey({ columns: [table.channel_id, table.sequence] })]);
 export const channelMembers = pgTable('channel_members', { workspace_id: uuid().notNull(), channel_id: uuid().notNull(), user_id: uuid().notNull() });
 export const memoryConnections = pgTable('memory_connections', {
+  thread_id: uuid(),
   id: id(), workspace_id: uuid().notNull(), channel_id: uuid().notNull(), created_by: uuid().notNull(),
   name: text().notNull(), access: text().$type<'read' | 'write'>().notNull(), token_hash: text().notNull(), created_at: time(),
 });
@@ -66,6 +67,7 @@ export const messages = pgTable('messages', {
   author_type: text().$type<'human' | 'agent'>().notNull().default('agent'), user_id: uuid(), client_message_id: uuid(), request_hash: text(),
   text: text().notNull(), document: jsonb().$type<RichDocument>(), attachments: jsonb().$type<AssetAttachment[]>().notNull().default([]), created_at: time(),
   agent_response: jsonb().$type<AgentResponse>(),
+  reaction_sequence: bigint({ mode: 'bigint' }).notNull().default(0n),
 }, table => [primaryKey({ columns: [table.channel_id, table.id] })]);
 export const messageIdentities = pgTable('message_identities', {
   id: id(), workspace_id: uuid().notNull(), channel_id: uuid().notNull(), task_id: uuid(),
@@ -78,6 +80,7 @@ export const assets = pgTable('assets', {
   message_id: uuid(), upload_expires_at: timestamp({ withTimezone: true }).notNull(), expires_at: timestamp({ withTimezone: true }).notNull(),
   staging_deleted_at: timestamp({ withTimezone: true }), created_at: time(),
   preview: jsonb().$type<AssetPreview>(),
+  processing_token: uuid(), processing_until: timestamp({ withTimezone: true }),
 });
 export const outbox = pgTable('outbox', {
   id: id(), task_id: uuid().notNull(), execution_id: uuid().notNull(), state: text().$type<'pending' | 'delivering' | 'done' | 'dead'>().notNull().default('pending'),

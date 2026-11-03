@@ -68,6 +68,9 @@ importers:
 
   apps/connector:
     dependencies:
+      '@space/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
       jose:
         specifier: ^6.2.15
         version: 6.2.15
@@ -126,6 +129,9 @@ importers:
       file-type:
         specifier: ^22.3.0
         version: 22.3.0
+      proper-lockfile:
+        specifier: 4.1.2
+        version: 4.1.2
       sharp:
         specifier: ^0.35.5
         version: 0.35.5(@types/node@22.20.5)
@@ -139,6 +145,9 @@ importers:
       '@types/node':
         specifier: '22'
         version: 22.20.5
+      '@types/proper-lockfile':
+        specifier: 4.1.4
+        version: 4.1.4
       typescript:
         specifier: ^7.0.2
         version: 7.0.2
@@ -259,6 +268,9 @@ importers:
 
   packages/ui:
     dependencies:
+      '@emoji-mart/data':
+        specifier: 1.2.1
+        version: 1.2.1
       '@phosphor-icons/react':
         specifier: ^2.1.10
         version: 2.1.10(react-dom@19.3.1)(react@19.3.1)
@@ -866,6 +878,10 @@ packages:
       tslib: 2.9.1
     dev: false
     optional: true
+
+  /@emoji-mart/data@1.2.1:
+    resolution: {integrity: sha512-no2pQMWiBy6gpBEiqGeU77/bFejDqUTRY7KX+0+iur13op3bqUsXdnwoZs6Xb1zbv0gAj5VvS1PWoUUckSr5Dw==}
+    dev: false
 
   /@esbuild/aix-ppc64@0.28.2:
     resolution: {integrity: sha512-XExcO+dvLKvVtNTibSTBej1NCAbaGhWn9Ww1ZPx80qsahhPFe/8jgWP0IchNe0F3HwkU7n8ejhH8bjonqht8mQ==}
@@ -2272,6 +2288,12 @@ packages:
       pg-protocol: 1.16.1
       pg-types: 2.2.0
 
+  /@types/proper-lockfile@4.1.4:
+    resolution: {integrity: sha512-uo2ABllncSqg9F1D4nugVl9v93RmjxF6LJzQLMLDdPaXCUIDPeOJ21Gbqi43xNKzBi/WQ0Q0dICqufzQbMjipQ==}
+    dependencies:
+      '@types/retry': 0.12.5
+    dev: true
+
   /@types/react-dom@19.3.0(@types/react@19.3.0):
     resolution: {integrity: sha512-ZI7bU42mZXXKHn/qNLEw2IrbiINU7X5+vfgdixBHkCNpYWXjKgfQ/P+uyGb5CjOLB9UcnTeg3rylQtV2hym44Q==}
     peerDependencies:
@@ -2284,6 +2306,10 @@ packages:
     resolution: {integrity: sha512-N0rFCuH9YoxG9/m61l9MfpJKfmLOVU0em7ipIz6TRgSSkvReLB9vL85GB+yr8Bs5leqpvg96JSwF4ZS1s4viQg==}
     dependencies:
       csstype: 3.2.3
+
+  /@types/retry@0.12.5:
+    resolution: {integrity: sha512-3xSjTp3v03X/lSQLkczaN9UIEwJMoMCA1+Nb5HfbJEQWogdeQIyVtTvxPXDQjZ5zws8rFQfVfRdz03ARihPJgw==}
+    dev: true
 
   /@types/unist@2.0.11:
     resolution: {integrity: sha512-CmBKiL6NNo/OqgmMn95Fk9Whlp2mtvIv+KNpQKN2F4SjvrEesubTRWGYSg+BnWZOnlCaSTU1sMpsBOzgbYhnsA==}
@@ -3203,6 +3229,10 @@ packages:
     os: [darwin]
     requiresBuild: true
     optional: true
+
+  /graceful-fs@4.2.11:
+    resolution: {integrity: sha512-RbJ5/jmFcNNCcDV5o9eTnBLJ/HszWV0P73bc+Ff4nS/rJj+YaS6IGyiOL0VoBYX+l1Wrl3k63h/KrH+nhJ0XvQ==}
+    dev: false
 
   /hast-util-to-html@9.0.6:
     resolution: {integrity: sha512-1SZUxCN3TtJAE7e2BQN2MBHsoZ1gnmi9GoCP5Di59CSWptIezSAW09yDZyVbanb78V9eCwrKqdQsjtfVTxYHWA==}
@@ -4257,6 +4287,14 @@ packages:
     resolution: {integrity: sha512-oCkNVj4OKnKEcocVBcDfiIugN1/cE6rgfT3nCtzeqZPA8+rIxMaQ0xXzIkGP8Gj2qUaP1UR7uhJ1VD8lUCpzCg==}
     dev: false
 
+  /proper-lockfile@4.1.2:
+    resolution: {integrity: sha512-TjNPblN4BwAWMXU8s9AEz4JmQxnD1NNL7bNOY/AKUzyamc379FWASUhc/K1pL2noVb+XmZKLL68cjzLsiOAMaA==}
+    dependencies:
+      graceful-fs: 4.2.11
+      retry: 0.12.0
+      signal-exit: 3.0.7
+    dev: false
+
   /property-information@7.2.0:
     resolution: {integrity: sha512-IAtzIB6sUiWaJYrX9smp3V46pBGbBeLFRGdh25kg1334VcBlD8HzhPeNIWQH9zhGmo2itIe25EHt9dQP7G5hmg==}
     dev: false
@@ -4409,6 +4447,11 @@ packages:
   /ret@0.5.1:
     resolution: {integrity: sha512-Z/nyvABwcRnRD2mMP7Kz6G1dFZZqX1mNErOnxF42OCQKE07b9k9hK9SQxHL3LFEZUdzQaLM4dId1E/E6Vm4WhA==}
     engines: {node: '>=10'}
+    dev: false
+
+  /retry@0.12.0:
+    resolution: {integrity: sha512-9LkiTwjUh6rT555DtE9rTX+BKByPfrMzEAtnlEtdEwr3Nkffwiihqe2bWADg+OQRjt9gl6ICdmB/ZFDCGAtSow==}
+    engines: {node: '>= 4'}
     dev: false
 
   /reusify@1.1.0:
@@ -4601,6 +4644,10 @@ packages:
 
   /siginfo@2.0.0:
     resolution: {integrity: sha512-ybx0WO1/8bSBLEWXZvEd7gMW3Sn3JFlW3TvX1nREbDLRNQNaeNN8WK0meBwPdAaOI7TtRRRJn/Es1zhrrCHu7g==}
+
+  /signal-exit@3.0.7:
+    resolution: {integrity: sha512-wnD2ZE+l+SPC/uoS0vXeE9L1+0wuaMqKlfz9AMUo38JsyLSBWSFcHR1Rri62LZc12vLr1gb3jl7iwQhgwpAbGQ==}
+    dev: false
 
   /socket.io-adapter@2.5.8:
     resolution: {integrity: sha512-6Oy52pbg+kvdCVvjcN+FnY7BvxZ7cIHNScbvztT/It5d0vbwoJoVZmF2gjJmnV0/4WlXRfG15zc45ySk9Ah8bw==}

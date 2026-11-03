@@ -106,3 +106,5 @@
 .chat-history-edge{position:absolute;left:0;right:0;height:44px;display:flex;justify-content:center;align-items:center}
 .chat-history-edge--older{top:0}.chat-history-edge--newer{bottom:0}
 .chat-jump-latest{display:flex;justify-content:center;padding:4px;background:var(--sp-surface,#fff)}
+.chat-unread-divider { display: flex; align-items: center; gap: 12px; margin: 12px 20px; color: var(--sp-danger, #e35b65); font-size: 12px; font-weight: 700; }
+.chat-unread-divider::before, .chat-unread-divider::after { content: ''; flex: 1; height: 1px; background: currentColor; }

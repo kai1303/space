@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { test } from 'node:test';
-import { CopyObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import { CopyObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { createAssetStorageFromEnv } from './dist/storage.js';
 import { generateAssetPreview } from './dist/previews.js';
 import sharp from 'sharp';
@@ -35,7 +35,13 @@ test('SeaweedFS enforces private signed transfers and finalized bytes survive st
     }
     assert.ok((await post('abc')).ok, 'valid signed POST succeeds');
     await storage.finalize(staging, final, 3);
+    let overwriteStatus;
+    try {
+      await client.send(new PutObjectCommand({ Bucket: bucket, Key: final, Body: 'xyz', IfNoneMatch: '*' }));
+    } catch (error) { overwriteStatus = error.$metadata?.httpStatusCode; }
+    assert.equal(overwriteStatus, 412, 'conditional sealing cannot replace an existing object');
     assert.ok((await post('xyz')).ok, 'the unexpired staging credential remains usable');
+    await storage.finalize(staging, final, 3);
     const download = await fetch(await storage.download(final, 'résumé".txt'));
     assert.equal(download.status, 200);
     assert.equal(await download.text(), 'abc', 'staging overwrite cannot change finalized bytes');

@@ -1,7 +1,9 @@
+import { MentionStore } from './mentions.js';
+import { UnreadStore } from './unread.js';
 import { createHash, randomUUID } from 'node:crypto';
 import type { Pool } from 'pg';
 import { and, eq, gt, lt, gte, lte, asc, desc, or, exists, inArray, sql } from 'drizzle-orm';
-import { AppError, parseMessageInput, parseChannelInput, parseChannelUpdate, parseMessagePage, parsePage, record, uuid, chatCursor, type ChatMessage, type ChatEvent, type ChatHistory, type MessagePage, type ChannelSummary, type ChannelDetails } from '@space/contracts';
+import { AppError, parseReactionInput, parseMessageInput, parseChannelInput, parseChannelUpdate, parseMessagePage, parsePage, record, uuid, chatCursor, type ChatMessage, type ChatEvent, type ChatHistory, type MessagePage, type ChannelSummary, type ChannelDetails } from '@space/contracts';
 import { database, type DbSession } from './database.js';
 import { hasChannelAccess, requireWorkspaceAccess, lockWorkspace, hasThreadAccess } from './access.js';
 import { page } from './membership.js';
@@ -9,8 +11,8 @@ import * as s from './schema.js';
 const notFound = () => new AppError(404, 'not_found');
 
 export class ChatStore {
-  readonly db;
-  constructor(readonly pool: Pool) { this.db = database(pool); }
+  readonly db; readonly mentions; readonly unread;
+  constructor(readonly pool: Pool) { this.db = database(pool); this.mentions = new MentionStore(pool); this.unread = new UnreadStore(pool); }
   async channels(actor: string, workspace: string, query: unknown = {}) {
     const { after, limit } = parsePage(query);
     return this.db.transaction(async c => {
@@ -138,6 +140,7 @@ export class ChatStore {
         return this.message(c, existing.id, existing.channel_id);
       }
       if (channel.archived_at) throw new AppError(409, 'channel_archived');
+      const prepared = await this.mentions.prepare(c, actor, channel, request.document, !!request.thread_id, !!request.broadcast_confirmed);
       const threadId = request.thread_id ?? randomUUID();
       if (request.thread_id) {
         if (!(await c.select({ id: s.threads.id }).from(s.threads).where(and(eq(s.threads.id, threadId), eq(s.threads.channel_id, channelId)))).length) throw notFound();
@@ -150,9 +153,29 @@ export class ChatStore {
         return { id: file.id, name: file.name, size: file.size, type: file.type };
       });
       await c.insert(s.messages).values({ id, workspace_id: channel.workspace_id, channel_id: channelId, thread_id: threadId,
-        author_type: 'human', user_id: actor, client_message_id: request.client_message_id, request_hash: hash, text: request.text, document: request.document ?? null, attachments });
+        author_type: 'human', user_id: actor, client_message_id: request.client_message_id, request_hash: hash, text: prepared.document ? prepared.document.ops.map(op => op.insert).join('').trim() : request.text, document: prepared.document ?? null, attachments });
+      await this.mentions.notify(c, actor, channel, id, prepared.refs, !!request.thread_id);
       if (files.length) await c.update(s.assets).set({ message_id: id }).where(inArray(s.assets.id, files.map(file => file.id)));
       return this.message(c, id, channelId);
+    });
+  }
+  async react(actor: string, channelId: string, messageId: string, input: unknown): Promise<ChatMessage> {
+    const { emoji, active } = parseReactionInput(input);
+    messageId = uuid(messageId);
+    return this.db.transaction(async c => {
+      const channel = await this.lockedChannel(c, channelId);
+      await this.authorize(c, actor, channelId);
+      const [message] = await c.select().from(s.messages).where(and(eq(s.messages.channel_id, channelId), eq(s.messages.id, messageId)));
+      if (!message) throw notFound();
+      if (channel.archived_at) throw new AppError(409, 'channel_archived');
+      const changed = active
+        ? await c.execute(sql`INSERT INTO message_reactions(channel_id,message_id,user_id,emoji) VALUES(${channelId},${messageId},${actor},${emoji}) ON CONFLICT DO NOTHING RETURNING emoji`)
+        : await c.execute(sql`DELETE FROM message_reactions WHERE channel_id=${channelId} AND message_id=${messageId} AND user_id=${actor} AND emoji=${emoji} RETURNING emoji`);
+      if (changed.rows.length) {
+        await c.execute(sql`UPDATE messages SET reaction_sequence=${channel.event_sequence + 1n} WHERE channel_id=${channelId} AND id=${messageId}`);
+        await c.execute(sql`SELECT append_chat_event(${channelId},${message.thread_id},'message.updated',chat_message_payload(messages)) FROM messages WHERE channel_id=${channelId} AND id=${messageId}`);
+      }
+      return this.message(c, messageId, channelId);
     });
   }
   private async message(c: DbSession, id: string, channel: string): Promise<ChatMessage> {
@@ -192,7 +215,10 @@ export class ChatStore {
   }
   private async messagePage(c: DbSession, channel: typeof s.channels.$inferSelect, paging: ReturnType<typeof parseMessagePage>, thread?: string): Promise<MessagePage> {
     const { before, after, limit } = paging;
-    const scope = and(eq(s.messages.workspace_id, channel.workspace_id), eq(s.messages.channel_id, channel.id), thread ? eq(s.messages.thread_id, thread) : undefined);
+    const scope = and(eq(s.messages.workspace_id, channel.workspace_id), eq(s.messages.channel_id, channel.id), thread ? eq(s.messages.thread_id, thread) : sql`NOT EXISTS (
+      SELECT 1 FROM messages earlier WHERE earlier.workspace_id=${s.messages.workspace_id} AND earlier.channel_id=${s.messages.channel_id}
+        AND earlier.thread_id=${s.messages.thread_id} AND earlier.sequence<${s.messages.sequence}
+    )`);
     const rows = await c.select({ sequence: s.messages.sequence, message: sql<ChatMessage>`chat_message_payload(messages)` }).from(s.messages)
       .where(and(scope, before === undefined ? undefined : lt(s.messages.sequence, BigInt(before)), after === undefined ? undefined : gt(s.messages.sequence, BigInt(after))))
       .orderBy(after === undefined ? desc(s.messages.sequence) : asc(s.messages.sequence)).limit(limit);

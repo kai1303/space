@@ -49,29 +49,36 @@ test('upload policy never outlives the absolute reservation deadline', async () 
   assert.ok(cappedExpiration <= Date.now() + 300_000, 'policy lifetime cannot exceed five minutes');
 });
 
-test('finalization checks source size and etag, copies safe metadata, and confirms destination', async t => {
+test('finalization checks source size and etag, conditionally seals bytes, and confirms destination', async t => {
   const requests = [];
   let sourceSize = 3;
-  const server = createServer((req, res) => {
+  let sealed = false;
+  const server = createServer(async (req, res) => {
     requests.push({ method: req.method, url: req.url, headers: req.headers });
     if (req.method === 'HEAD') {
+      if (req.url.startsWith('/space-assets/final/') && !sealed) { res.statusCode = 404; res.end(); return; }
       res.setHeader('Content-Length', sourceSize);
       res.setHeader('ETag', '"source-etag"');
       res.end();
     } else if (req.method === 'PUT') {
-      res.setHeader('Content-Type', 'application/xml');
-      res.end('<CopyObjectResult><ETag>"source-etag"</ETag></CopyObjectResult>');
+      for await (const _chunk of req) { /* Consume the bounded upload. */ }
+      sealed = true;
+      res.setHeader('ETag', '"source-etag"'); res.end();
+    } else if (req.method === 'GET') {
+      res.setHeader('Content-Length', 3); res.end('abc');
     } else { res.statusCode = 204; res.end(); }
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   t.after(() => new Promise(resolve => server.close(resolve)));
   const adapter = new storage.SeaweedStorage({ ...config, endpoint: `http://127.0.0.1:${server.address().port}` });
   await adapter.finalize('staging/id', 'final/id', 3);
-  assert.deepEqual(requests.map(r => r.method), ['HEAD', 'PUT', 'HEAD']);
-  assert.equal(requests[1].headers['x-amz-copy-source-if-match'], '"source-etag"');
-  assert.equal(requests[1].headers['x-amz-metadata-directive'], 'REPLACE');
-  assert.equal(requests[1].headers['content-type'], 'application/octet-stream');
-  assert.equal(requests[1].headers['content-disposition'], 'attachment');
+  assert.deepEqual(requests.map(r => r.method), ['HEAD', 'HEAD', 'GET', 'PUT', 'HEAD']);
+  assert.equal(requests[2].headers['if-match'], '"source-etag"');
+  assert.equal(requests[3].headers['if-none-match'], '*');
+  assert.equal(requests[3].headers['content-type'], 'application/octet-stream');
+  assert.equal(requests[3].headers['content-disposition'], 'attachment');
+  await adapter.finalize('staging/id', 'final/id', 3);
+  assert.equal(requests.length, 6, 'retry only checks the sealed destination');
   sourceSize = 2;
   await assert.rejects(adapter.finalize('staging/id', 'final/id', 3), { status: 409, code: 'invalid_upload' });
   await adapter.remove('absent');

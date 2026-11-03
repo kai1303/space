@@ -1,7 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { mkdtemp, readFile, rm, stat, symlink, mkdir, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, stat, symlink, mkdir, writeFile, utimes } from 'node:fs/promises';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { MarkdownMemoryProvider } from './dist/markdown-memory.js';
@@ -11,6 +13,35 @@ async function fixture(work) {
   try { await work(new MarkdownMemoryProvider(root), root, { workspace_id: randomUUID(), channel_id: randomUUID() }); }
   finally { await rm(root, { recursive: true, force: true }); }
 }
+test('independent Markdown providers atomically reject concurrent stale replacements', () => fixture(async (provider, root, scope) => {
+  const empty = await provider.read(scope);
+  const other = new MarkdownMemoryProvider(root);
+  const results = await Promise.allSettled([provider.write(scope, 'first', empty.revision), other.write(scope, 'second', empty.revision)]);
+  assert.equal(results.filter(result => result.status === 'fulfilled').length, 1);
+  assert.match(results.find(result => result.status === 'rejected').reason.message, /memory_conflict/);
+}));
+test('independent Markdown providers retain concurrent sources without caller serialization', () => fixture(async (_provider, root, scope) => {
+  const sources = Array.from({ length: 8 }, (_, i) => ({ id: `document:${randomUUID()}`, title: `Source ${i}`, text: `Fact ${i}` }));
+  await Promise.all(sources.map(source => new MarkdownMemoryProvider(root).ingest(scope, source)));
+  const saved = await new MarkdownMemoryProvider(root).read(scope);
+  assert.deepEqual(new Set(saved.sources.map(source => source.id)), new Set(sources.map(source => source.id)));
+}));
+test('Markdown revision checks coordinate separate processes and recover abandoned locks', () => fixture(async (provider, root, scope) => {
+  const empty = await provider.read(scope);
+  const script = `import { MarkdownMemoryProvider } from ${JSON.stringify(new URL('./dist/markdown-memory.js', import.meta.url).href)};
+    const provider = new MarkdownMemoryProvider(process.argv[1]);
+    try { await provider.write(JSON.parse(process.argv[2]), process.argv[3], process.argv[4]); console.log('saved'); }
+    catch (error) { if (error.message !== 'memory_conflict') throw error; console.log('conflict'); }`;
+  const run = promisify(execFile);
+  const results = await Promise.all(['first', 'second'].map(content => run(process.execPath, ['--input-type=module', '-e', script, root, JSON.stringify(scope), content, empty.revision])));
+  assert.deepEqual(results.map(result => result.stdout.trim()).sort(), ['conflict', 'saved']);
+  const lock = join(root, scope.workspace_id, scope.channel_id, 'memory.md.lock');
+  await mkdir(lock);
+  const stale = new Date(Date.now() - 60_000);
+  await utimes(lock, stale, stale);
+  const current = await provider.read(scope);
+  assert.equal((await provider.write(scope, 'recovered', current.revision)).content, 'recovered');
+}));
 test('Markdown is private, canonical across restarts, atomic and rejects stale revisions', () => fixture(async (provider, root, scope) => {
   const empty = await provider.read(scope);
   assert.equal(empty.content, '');

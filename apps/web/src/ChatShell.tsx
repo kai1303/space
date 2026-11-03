@@ -5,7 +5,7 @@ import { ArrowLeft, ArrowRight, BookOpen, CaretDown, Check, ClockCounterClockwis
 import { UserSettings } from './UserProfile.js';
 import { SpaceLogo } from './SpaceLogo.js';
 
-export function ChatShell({ name, user, userId, onNameChange, onSearch, onMembers, workspaces = [], workspace = '', onWorkspaceChange, sidebarWidth = 220, onBack, onForward, history = [], children }: {
+export function ChatShell({ name, user, userId, onNameChange, onSearch, onMembers, workspaces = [], workspace = '', onWorkspaceChange, sidebarWidth = 220, onBack, onForward, history = [], activity, children }: {
   name: string;
   user: string;
   userId?: string;
@@ -19,6 +19,7 @@ export function ChatShell({ name, user, userId, onNameChange, onSearch, onMember
   onBack?: () => void;
   onForward?: () => void;
   history?: { label: string; onSelect: () => void }[];
+  activity?: ReactNode;
   children: ReactNode;
 }) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -55,7 +56,7 @@ export function ChatShell({ name, user, userId, onNameChange, onSearch, onMember
       </div>
       <div className="chat-mobile-toggle" ref={menu}><IconButton label={sidebarOpen ? 'Close conversations' : 'Open conversations'} aria-expanded={sidebarOpen} aria-controls="chat-conversations" onClick={() => setSidebarOpen(open => !open)}><List size={20} /></IconButton></div>
       <button className="chat-global-search" disabled={!onSearch} onClick={openSearch}><MagnifyingGlass size={17} /><span>Search {name}</span><kbd>⌘ K</kbd></button>
-      <div className="chat-topbar-end"><a className="chat-system-link" href="/design-system" aria-label="Open design system"><BookOpen size={19} /></a></div>
+      <div className="chat-topbar-end">{activity}<a className="chat-system-link" href="/design-system" aria-label="Open design system"><BookOpen size={19} /></a></div>
     </header>
     <div className="chat-body">
       <nav className="chat-rail" aria-label="Main navigation">
