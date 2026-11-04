@@ -1227,3 +1227,22 @@ it('opens DMs from the rail and selects a recipient into the shared message room
   await screen.findByText('Mentioned DM message');
   await waitFor(() => expect(vi.mocked(fetch).mock.calls.some(([path]) => String(path).includes('/channels/second-direct/messages/mentioned'))).toBe(true));
 });
+
+it('opens Activity from the rail and routes its notification to the source message', async () => {
+  const message = paginatedMessage('Activity destination message', '1');
+  mockPaginatedChat(() => messagePage([message]));
+  const original = vi.mocked(fetch).getMockImplementation()!;
+  vi.mocked(fetch).mockImplementation(async (...args) => {
+    const path = String(args[0]);
+    const notification = { id: '7', kind: 'mention', channel_id: 'first', channel_name: 'first', channel_kind: 'channel', message_id: message.id, thread_id: message.thread_id, author_name: 'Alex', text: 'Please review this', emoji: null, created_at: message.created_at, read_at: null, silent: false };
+    if (path.includes('/notifications')) return new Response(JSON.stringify(args[1]?.method === 'PATCH' ? { read: true } : { items: [notification], unread_count: 1, next_cursor: null, latest_id: '7' }), { status: 200 });
+    if (path === '/v1/channels/first') return new Response(JSON.stringify({ id:'first',workspace_id:'workspace',name:'first',kind:'channel',joined:true }),{status:200});
+    if (path === `/v1/channels/first/messages/${encodeURIComponent(message.id)}`) return new Response(JSON.stringify(message),{status:200});
+    return original(...args);
+  });
+  render(<Chat/>);await screen.findByRole('textbox',{name:'Message first'});
+  await userEvent.click(await screen.findByRole('button',{name:'Activity (1 unread)',exact:true}));
+  await userEvent.click(await screen.findByRole('button',{name:/Open notification from Alex/}));
+  await screen.findByRole('dialog',{name:'Original message in #first'});
+  expect(await screen.findByRole('textbox',{name:'Message first'})).toBeTruthy();
+});

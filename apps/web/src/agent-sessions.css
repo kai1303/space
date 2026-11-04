@@ -27,3 +27,6 @@
 .chat-conversation:has(.chat-agent-sessions:not([hidden]) .agent-session-details)>.chat-channel{display:none}
 .chat-agent-sessions:has(.agent-session-details){flex:1}
 @container(max-width:600px){.agent-session-details{position:absolute;inset:0 0 0 auto;width:min(360px,100%)}.agent-session-body:has(.agent-session-details)>.agent-session-conversation{visibility:hidden}}
+
+/* The session activity line lives above the shared composer. */
+.agent-session .sp-agent-streaming{display:none}

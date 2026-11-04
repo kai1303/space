@@ -1,3 +1,4 @@
+import { sessionTransaction } from './session-concurrency.js';
 import type { Pool } from 'pg';
 import { sql } from 'drizzle-orm';
 import { AppError, chatCursor, documentMentions, mentionOperations, parseMention, parseRichDocument, record, uuid, type MentionActivity, type MentionOption, type MentionReference, type MentionSettings, type RichDocument } from '@space/contracts';
@@ -135,8 +136,10 @@ export class MentionStore {
     });
   }
   async markRead(actor:string,workspace:string,id:string){
-    await requireWorkspaceAccess(this.db,actor,uuid(workspace));
-    const result=await this.db.execute(sql`UPDATE mention_notifications n SET read_at=coalesce(read_at,now()) FROM channels ch WHERE n.id=${chatCursor(id)}::bigint AND n.user_id=${actor} AND n.workspace_id=${workspace} AND ch.id=n.channel_id AND EXISTS(SELECT 1 FROM workspace_members wm WHERE wm.workspace_id=n.workspace_id AND wm.user_id=${actor} AND wm.active) AND (NOT ch.private OR EXISTS(SELECT 1 FROM channel_members cm WHERE cm.channel_id=ch.id AND cm.user_id=${actor})) RETURNING n.id`);
-    if(!result.rows.length)throw missing();return {read:true};
+    return sessionTransaction(this.db,async c=>{
+      await requireWorkspaceAccess(c,actor,uuid(workspace));
+      const result=await c.execute(sql`UPDATE mention_notifications n SET read_at=coalesce(read_at,now()) FROM channels ch WHERE n.id=${chatCursor(id)}::bigint AND n.user_id=${actor} AND n.workspace_id=${workspace} AND ch.id=n.channel_id AND EXISTS(SELECT 1 FROM workspace_members wm WHERE wm.workspace_id=n.workspace_id AND wm.user_id=${actor} AND wm.active) AND (NOT ch.private OR EXISTS(SELECT 1 FROM channel_members cm WHERE cm.channel_id=ch.id AND cm.user_id=${actor})) RETURNING n.id`);
+      if(!result.rows.length)throw missing();return {read:true};
+    });
   }
 }

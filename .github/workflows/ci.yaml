@@ -31,7 +31,7 @@ jobs:
           version: 8.10.3
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24
           cache: pnpm
       - name: Install PDF rendering dependencies
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends poppler-utils util-linux fonts-liberation

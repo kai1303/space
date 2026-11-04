@@ -5,6 +5,7 @@ import { constants } from 'node:fs';
 import { delimiter, dirname, join } from 'node:path';
 import { promisify } from 'node:util';
 import { ensureDirectory } from './session-storage.js';
+import { projectMcp, projectServer, projectToolNames } from './project-tools.js';
 import type { Registration } from './storage.js';
 
 export async function resolveKiroAcpCommand(path = process.env.PATH ?? '') {
@@ -28,16 +29,17 @@ export async function kiroEnvironment(directory: string) {
     XDG_CONFIG_HOME: await ensureDirectory(join(home, '.config')),
     XDG_DATA_HOME: await ensureDirectory(join(home, '.local')) };
 }
-export async function prepareKiroProfile(directory: string) {
+export async function prepareKiroProfile(directory: string, project?: string) {
   const env = await kiroEnvironment(directory);
   const root = await ensureDirectory(join(env.HOME, '.kiro'));
   const agents = await ensureDirectory(join(root, 'agents'));
   const temporary = join(agents, `.space-chat-${randomUUID()}`);
   const file = await open(temporary, 'wx', 0o600);
   try {
-    await file.writeFile(JSON.stringify({ name: 'space-chat', description: 'Space chat without tools',
-      prompt: 'Respond using only the supplied Space task, quoted context and retained conversation. Do not access local files, run commands, or use external tools.',
-      tools: [], excludedTools: ['*'], mcpServers: {}, includeMcpJson: false, includePowers: false, resources: [], hooks: {},
+    await file.writeFile(JSON.stringify({ name: 'space-chat', description: project ? 'Space project file tools' : 'Space chat without tools',
+      prompt: project ? `Work on the supplied Space task in the project ${project}. Use only the ${projectServer} MCP file tools for project inspection and edits. Native tools, shell and other integrations are unavailable.` : 'Respond using only the supplied Space task, quoted context and retained conversation. Do not access local files, run commands, or use external tools.',
+      tools: project ? projectToolNames.map(name => `@${projectServer}/${name}`) : [], excludedTools: project ? [] : ['*'], mcpServers: project ? { [projectServer]: projectMcp(project) } : {},
+      ...(project ? { permissions: { rules: [...['fs_read', 'fs_write', 'shell', 'web_fetch', 'web_search', 'subagent'].map(capability => ({ capability, effect: 'deny' })), { capability: 'mcp', match: projectToolNames.map(name => `${projectServer}/${name}`), effect: 'allow' }] } } : {}), includeMcpJson: false, includePowers: false, resources: [], hooks: {},
     }));
     await file.sync();
   } finally { await file.close(); }

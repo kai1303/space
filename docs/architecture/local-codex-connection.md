@@ -3,16 +3,24 @@
 Local Codex enrollment shows an owned agent alongside human workspace members.
 After the owner explicitly enables it for a channel, the connector can claim
 approved `codex.run` tasks and return streamed responses. Pairing grants no channel
-access. Repository selection is absent from this chat integration.
+access. Optional project file tools require an explicit local `--project` folder;
+default launches remain chat-only. Native shell execution is disabled.
 
 ## Setup
 
 Apply migrations with `pnpm migrate`, build with `pnpm build`, and run the existing
-API, Redis and web app. Open **Members → Connect Local Codex** in chat. Run the
+API, Redis, NATS, CDC bridge and web app. Open **Members → Connect Local Codex** in chat. Run the
 displayed `pnpm connector --url <web-origin> --connect` command from this checkout;
-the local machine needs Node 22+ and the Codex CLI on PATH. Enter the code at the
+the local machine needs Node 24+ and the Codex CLI on PATH. Enter the code at the
 terminal prompt, then open the connector's Continue with ChatGPT URL yourself.
 Keep the connector running. Subsequent `pnpm connector` starts reuse the saved pairing.
+
+Channel enablement currently requires the [authenticated channel-grant API](../../apps/connector/README.md#enable-a-channel);
+the former Ask an agent control is no longer mounted in threads. After enablement,
+select the agent's mention to start a linked managed session, then use its own
+composer for follow-ups. The owner's requests autoapprove; other users' requests
+require the installation owner's approval. See [local providers](local-agent-providers.md)
+for Kiro, project selection, activity and tool boundaries.
 
 The connector's [guide](../../apps/connector/README.md) documents local credential
 storage, login/logout, lock recovery and the OSS versus hosted-service boundary.

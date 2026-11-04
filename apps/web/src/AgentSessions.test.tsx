@@ -270,3 +270,18 @@ it('enables only the selected skill when starting a multi-skill session agent',a
  expect(await screen.findByRole('option',{name:'Research · research.review'})).toBeTruthy();
  expect(screen.getByRole('button',{name:'Enable Research · research.run in this channel'})).toBeTruthy();
 });
+
+
+it('shows agent activity above the shared composer, reuses the tool timeline and clears terminal activity',async()=>{
+ const fetch=setup(),original=fetch.getMockImplementation()!;let phase='thinking',running=true;
+ fetch.mockImplementation(async(path,init)=>path==='/v1/agent-sessions/one'?{ok:true,json:async()=>({session:session('one','Research'),turns:[{...turn('Research prompt'),task:{...turn('Research prompt').task,status:running?'running':'completed'},response:{messages:[],tools:phase==='using_tools'?[{id:'read',name:'read_text_file',arguments:'{"path":"README.md"}',status:'running'}]:[],components:[],activity:phase}}],next_cursor:null})}:original(path,init));
+ render(<SessionViews/>);await userEvent.click(await screen.findByRole('button',{name:'Research',exact:true}));
+ const editor=await screen.findByRole('textbox',{name:'Message agent session'}),compose=editor.closest('.chat-compose')!;
+ expect(await within(compose as HTMLElement).findByText('is thinking…')).toBeTruthy();
+ const indicator=compose.querySelector('.chat-typing')!;expect(indicator.compareDocumentPosition(compose.querySelector('.sp-rich-composer')!)&Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+ phase='using_tools';await act(async()=>{await mocks.refresh?.();});
+ expect(await within(compose as HTMLElement).findByText('is using tools…')).toBeTruthy();expect(await screen.findByText('read_text_file · Running')).toBeTruthy();
+ phase='responding';await act(async()=>{await mocks.refresh?.();});expect(await within(compose as HTMLElement).findByText('is responding…')).toBeTruthy();
+ running=false;await act(async()=>{await mocks.refresh?.();});await waitFor(()=>expect(indicator.textContent).toBe(''));
+ expect(screen.getByRole('textbox',{name:'Message agent session'})).toBe(editor);
+});

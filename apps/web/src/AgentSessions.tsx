@@ -9,6 +9,7 @@ import {request} from './chat-client.js';
 import {subscribeUpdates} from './live-updates.js';
 import {TaskPreview,TaskFiles,TaskChanges} from './AgentTaskWorkspace.js';
 import {useMentionSearch} from './Mentions.js';
+import {AgentActivityIndicator} from './AgentActivityIndicator.js';
 import './agent-sessions.css';
 
 const denied=(error:unknown)=>error instanceof Error&&['unauthorized','forbidden','not_found'].includes(error.message);
@@ -126,7 +127,7 @@ function SessionConversation({session,channel,channelName,onBack,onClose,viewerI
  const events:ChatEvent[]=rows.map(row=>({type:'message.created',channel_id:channel,thread_id:session.origin_thread_id,sequence:row.message.sequence,occurred_at:row.message.created_at,payload:row.message as ChatMessage}));
  const sessionStatus=`${session.agent_name} ${activeSession.state==='ended'?'Ended':!data?'Loading…':turns.at(-1)?.detail==='session_stopped'?'Stopped':status(latest)}`;
 
- const footer=activeSession.state==='ended'?<p className="agent-session-notice">This session has ended. Its conversation and outputs are saved.</p>:!session.managed?<p className="agent-session-notice">Start a new session to continue this earlier run.</p>:!archived?<ConversationComposer channel="agent session" findMentions={findReferences} sendDisabledReason={sendDisabledReason} maxLength={4000} attachmentsEnabled={false} defaultValue={draft} acknowledgedDocument={acknowledged} onDraftChange={onDraftChange} onSend={async(text,document)=>{pinned.current=true;const task=await onSend(text,document);setSubmittedTask(task.id);}}/>:null;
+ const footer=activeSession.state==='ended'?<p className="agent-session-notice">This session has ended. Its conversation and outputs are saved.</p>:!session.managed?<p className="agent-session-notice">Start a new session to continue this earlier run.</p>:!archived?<ConversationComposer typingIndicator={<AgentActivityIndicator name={session.agent_name} turn={turns.at(-1)}/>} channel="agent session" findMentions={findReferences} sendDisabledReason={sendDisabledReason} maxLength={4000} attachmentsEnabled={false} defaultValue={draft} acknowledgedDocument={acknowledged} onDraftChange={onDraftChange} onSend={async(text,document)=>{pinned.current=true;const task=await onSend(text,document);setSubmittedTask(task.id);}}/>:null;
  return <div className="agent-session" aria-label={`Agent session ${session.title}`}>
   <ConversationHeader title="Agent session" channel={channelName} icon={<Robot size={20}/>} status={sessionStatus} onBack={onBack} onClose={onClose} actions={<>{manage&&busy(latest)&&<Button size="sm" disabled={pending} onClick={()=>void action(`/agent-sessions/${session.id}/stop`)}><Stop size={14}/>Stop</Button>}<span ref={detailsTrigger}><IconButton label="Session details" aria-expanded={detailsOpen} aria-controls={detailsOpen?detailsId:undefined} onClick={()=>detailsOpen?closeDetails():setDetailsOpen(true)}><SidebarSimple size={20} weight={detailsOpen?'fill':'regular'}/></IconButton></span></>}/>
   {error&&<p role="alert" className="agent-sessions-error">{error} <Button size="sm" variant="ghost" onClick={()=>setRetry(value=>value+1)}>Retry</Button></p>}

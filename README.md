@@ -7,7 +7,7 @@
 <h1>Space: A shared workplace for people and AI agents</h1>
 
 <p>Bring team conversations, files, and shared knowledge into one workspace.<br />
-Run it locally, keep channel memory in Markdown, and connect your local Codex instance.</p>
+Run it locally, keep channel memory in Markdown, and collaborate with local Codex or Kiro agents.</p>
 
 <p align="center">
   <a href="https://github.com/kai1303/space/actions/workflows/ci.yaml?query=branch%3Amain"><img src="https://img.shields.io/github/actions/workflow/status/kai1303/space/ci.yaml?branch=main&amp;style=for-the-badge&amp;label=CI" alt="CI checks status" /></a>
@@ -36,8 +36,10 @@ Run it locally, keep channel memory in Markdown, and connect your local Codex in
 ---
 
 > **Early development.** Chat, files, channel memory, and local connector pairing
-> are implemented. Local Codex can answer approved chat tasks after explicit
-> channel enablement. The task flow also supports a mock connector and an optional AG-UI backend.
+> are implemented. Codex and Kiro support persistent agent sessions, streamed
+> responses, and opt-in project file tools after explicit channel enablement.
+> First-time channel enablement currently requires the API; see [agent setup](#connect-a-local-agent).
+> The task flow also supports a mock connector and an optional AG-UI backend.
 
 <p align="center">
   <img src="assets/brand/verification/portal-main-page.png" alt="Space local development screenshot showing channel navigation, a conversation, rich messages, threaded replies, and the composer" width="1064" />
@@ -49,7 +51,7 @@ Run it locally, keep channel memory in Markdown, and connect your local Codex in
 - [Why Space?](#why-space)
 - [Quick start](#quick-start)
 - [How Space works](#how-space-works)
-- [Connect local Codex](#connect-local-codex)
+- [Connect a local agent](#connect-a-local-agent)
 - [Architecture](#architecture)
 - [Integrations](#integrations)
 - [Project status](#project-status)
@@ -72,6 +74,8 @@ people and independently operated agents in the same workplace.
   saved history keep work together.
 - **Knowledge the team can maintain.** Save useful messages to channel memory,
   edit shared notes, and import or export Markdown.
+- **Persistent agent conversations.** Mention an enabled agent to start a session
+  linked to a thread, then follow up in its own panel with streamed text and tools.
 - **Your own infrastructure.** PostgreSQL stores chat history, SeaweedFS stores
   files, and channel memory lives on your filesystem.
 - **Explicit access.** Workspace roles, channel membership, and scoped agent
@@ -83,9 +87,14 @@ people and independently operated agents in the same workplace.
 
 ### Before you begin
 
-Install **Node.js 22.12+**, **pnpm 8.10.3**, **Docker Compose**, and **OpenSSL**.
+Install **Node.js 24+**, **pnpm 8.10.3**, **Docker Compose**, and **OpenSSL**.
 The commands below use a POSIX shell on macOS or Linux. Docker Compose supplies
 PostgreSQL 16, NATS JetStream, Redis 7, and SeaweedFS for local development.
+
+For PDF thumbnails with a host-run API, also install **Poppler** (`pdftoppm`),
+fonts, and **`prlimit` on Linux**. These dependencies are included in the Docker
+image. Without them, PDF uploads retain the viewer/download path but may lack
+thumbnails. See [PDF preview setup](docs/architecture/assets.md#inline-pdf-message-thumbnails).
 
 ### 1. Get the project
 
@@ -113,19 +122,25 @@ set -a
 set +a
 
 pnpm migrate
-# In a separate terminal, export the same .env and keep the CDC bridge running.
-pnpm events
-# In another terminal with the same environment:
-pnpm server
 ```
 
-Wait for the database to become ready before running migrations. Keep this terminal
-open. The API listens on port `3000`; the frontend proxies API and WebSocket traffic
-to it.
+Wait for the database to become ready before running migrations. Then keep these
+processes running in **two separate terminals**, each with `.env` exported using
+the `set -a` / `. ./.env` / `set +a` commands above:
+
+```sh
+pnpm events   # Terminal 1: committed database events → NATS JetStream.
+```
+
+```sh
+pnpm server   # Terminal 2: API on port 3000.
+```
+
+The frontend proxies API and WebSocket traffic to the API.
 
 ### 3. Open Space
 
-In a second terminal, from the repository root:
+In a third terminal, from the repository root:
 
 ```sh
 pnpm web
@@ -156,7 +171,7 @@ The [/workspace](http://127.0.0.1:5173/workspace) route is a synthetic design pr
 ## How Space works
 
 <p align="center">
-  <img src="docs/images/how-space-works.svg" alt="How Space works: people use channels, files, and memory through an authorized API backed by PostgreSQL, Redis, SeaweedFS, and Markdown. Local Codex currently supports pairing and readiness only." width="1064" />
+  <img src="docs/images/how-space-works.png" alt="People send messages in Space channels and threads. Linked agent sessions send approved requests to local Codex or Kiro and stream text and tool activity back. Space holds files and opt-in channel memory; agents can read and edit an explicitly selected local project folder. Sessions retain context across turns." width="1064" />
 </p>
 
 1. **Sign in and choose a workspace.** Better Auth provides email/password accounts
@@ -172,9 +187,18 @@ The [/workspace](http://127.0.0.1:5173/workspace) route is a synthetic design pr
 5. **Keep useful context.** Channel memory is opt-in. Members can save messages
    with source links, edit notes, search, and import or export text documents.
    Scoped MCP keys let external tools read or update enabled channel memory.
-6. **Connect an agent.** A local connector pairs your computer with Space and
-   reports ChatGPT sign-in and Codex readiness. Enable it for a channel from
-   **Ask an agent** in a thread to run approved chat tasks and receive responses.
+6. **Work with an agent.** Pair local Codex or Kiro from **Members** and explicitly
+   enable it for a channel through the [channel-grant API](apps/connector/README.md#enable-a-channel).
+   Select its mention in a channel or thread to start a managed session. Open the
+   session link below the message to follow up in its own panel. One thread can
+   have multiple independent sessions; ordinary thread replies do not send agent
+   follow-ups. The owner's requests autoapprove; other people's requests require
+   the agent owner's approval.
+7. **Follow the work.** Sessions retain provider context across turns and connector
+   restarts. Public text and expandable tool calls stream in order, with Working,
+   Thinking, Responding or Using tools activity above the shared composer. Stop
+   interrupts the current turn while keeping its history. Project file tools
+   require a local `--project` selection; shell execution is not enabled.
 
 See the [chat architecture](docs/architecture/realtime-chat.md),
 [file storage guide](docs/architecture/assets.md), and
@@ -182,24 +206,52 @@ See the [chat architecture](docs/architecture/realtime-chat.md),
 
 ---
 
-## Connect local Codex
+<a id="connect-local-codex"></a>
 
-With the Codex CLI installed on your `PATH`, open **Members → Connect Local Codex**
-in Space. Run the command shown in the dialog from this checkout, for example:
+## Connect a local agent
+
+Install the selected provider CLI on your `PATH`: Codex, or `kiro-cli` with ACP v3
+support. In **Members**, choose the **Agent provider**, then **Connect Local Codex**
+or **Connect Local Kiro**. Run the command shown in the dialog from this checkout:
 
 ```sh
 pnpm connector --url http://127.0.0.1:5173 --connect
+# For Kiro instead:
+pnpm connector --provider kiro --url http://127.0.0.1:5173 --connect
 ```
 
-Enter the pairing code and complete **Continue with ChatGPT** in your browser.
-Keep the connector running to report its status. Use your actual Space origin.
+Use your actual Space origin and run only the command for the selected provider.
+Enter the pairing code, then complete **Continue with ChatGPT** for Codex or the
+connector's local Kiro sign-in. Keep the connector running to execute tasks.
 
-ChatGPT tokens stay in the connector's local state directory. Space receives its
-own connector credential and readiness status. Readiness does not establish that
-model inference or task execution works.
+Pairing grants **no channel access**. The owner must enable each channel through
+the [channel-grant API](apps/connector/README.md#enable-a-channel); the current UI
+has no channel-enablement control. Then select the agent from the composer's
+mention suggestions and send a request. Follow-ups go in the resulting agent
+session panel. Connecting or reporting Ready does not run a model turn or prove
+inference will succeed.
+
+For file access, stop the connector and explicitly choose a folder on each launch:
+
+```sh
+pnpm connector --project /absolute/path/to/project
+# Or, for Kiro:
+pnpm connector --provider kiro --project /absolute/path/to/project
+```
+
+Start a new Space agent session after adding or changing the project. The selected
+folder determines the retained session namespace. Tools can read, list, search,
+create and edit files within that root; native shell and unrelated integrations
+remain disabled. File-tool path checks are not a general OS sandbox.
+
+Provider credentials and private provider history stay in separate local connector
+directories. Space stores submitted requests, streamed responses and tool details;
+the selected provider receives the context and file contents used during a task.
+Codex and Kiro can run concurrently with their own local state.
 
 See the [connector guide](apps/connector/README.md) and
-[connection architecture](docs/architecture/local-codex-connection.md).
+[provider architecture](docs/architecture/local-agent-providers.md), plus
+[agent sessions](docs/architecture/agent-sessions.md) for persistence and recovery.
 
 ---
 
@@ -226,7 +278,7 @@ Space is a TypeScript monorepo using pnpm workspaces and Turborepo.
 | Socket.IO adapter | Redis Pub/Sub | [`adapters/redis`](adapters/redis) |
 | Contracts and policy | Shared validation, types, access and approval policy | [`packages/contracts`](packages/contracts), [`packages/core`](packages/core) |
 | Agent worker | Experimental task flow with a mock connector | [`apps/worker`](apps/worker), [`adapters/mock`](adapters/mock) |
-| Local connector | Pairing, local authorization, readiness reporting | [`apps/connector`](apps/connector) |
+| Local connector | Codex/Kiro pairing, authorization, persistent sessions, streaming and opt-in project file tools | [`apps/connector`](apps/connector) |
 
 ---
 
@@ -236,8 +288,8 @@ These are the connections implemented in this checkout and their current boundar
 
 | Category | Connection | Current scope |
 | --- | --- | --- |
-| **Local agent** | Codex CLI + ChatGPT sign-in | Computer pairing, local authorization, channel grants, and approved chat task execution with streamed replies. |
-| **Agent context** | MCP | Revocable, channel-scoped keys for reading and updating enabled channel memory. |
+| **Local agents** | Codex + ChatGPT sign-in; Kiro CLI + local sign-in | Explicit channel grants, owner approval, persistent sessions, ordered text/tool streaming, activity and Stop. Opt-in project file tools through `--project`; no native shell. |
+| **Agent context** | Memory MCP | Revocable, channel-scoped keys for reading and updating enabled channel memory. Separate from the local project file server. |
 | **Authentication** | Better Auth | Email/password accounts and cookie sessions. Human social login and MFA are planned separately. |
 | **File storage** | SeaweedFS through its S3-compatible API | Private uploads, access-checked downloads, and previews. |
 | **Shared memory** | Markdown files | Built-in provider with imports, source links, search, and export. Custom providers have an adapter interface; third-party adapters do not ship yet. |
@@ -252,12 +304,21 @@ See [connector setup](apps/connector/README.md),
 
 **Implemented:** workspace accounts and roles, channel conversations and threaded
 replies, durable history and reconnect catch-up, file uploads and previews, opt-in
-channel memory, scoped memory MCP access, rules-first Navigator suggestions, agent mention/thread routing, and local connector enrollment/status.
+channel memory, scoped memory MCP access, thread working context, rules-first
+Navigator suggestions, agent mention routing, and local Codex/Kiro connections.
+Managed sessions retain conversations across turns and restarts, with ordered
+text/tool streaming, activity indicators and Stop. Explicit project selection
+enables scoped file reads and edits. Channel/thread typing indicators are also implemented.
 
 **Direct messages:** Same-workspace one-to-one and self conversations support recipient search, open/resume, threads, reactions, files, unread state, and per-user hide/reopen. See [Slack flow research and implementation](docs/architecture/slack-direct-messages-research.md). Migration 039 is required.
 
-**Still ahead:** agent repository access and file modification, group direct messages, presence,
+**Notifications:** Activity collects human DMs, mentions, followed-thread replies and reactions with read controls, realtime updates, global preferences and opt-in browser alerts while Space is open. See [Slack notification flow research and implementation](docs/architecture/slack-notifications-research.md). Migration 040 is required; email/mobile push and agent-output notifications are not included.
+
+**Still ahead:** a channel-enablement UI for paired agents, native shell execution
+and interactive tool approvals, group direct messages, broader presence,
 message editing/deletion, email invitations, and additional agent adapters.
+Streaming follow-ups include complete lifecycle-event retention, normalized
+incremental tool output, smaller browser updates and long-output paging.
 The [module roadmap](docs/architecture/module-roadmap.md) tracks the broader scope.
 
 Local checks and browser captures describe development behavior. They do not
@@ -279,6 +340,7 @@ pnpm build             # Build workspace packages in dependency order.
 pnpm typecheck         # Check every workspace.
 pnpm test:contracts    # Contract tests; no database required.
 pnpm test:ui           # Shared component and web interaction tests.
+pnpm --filter @space/connector test # Local provider, session and project-tool tests.
 pnpm test              # Full configured suite, including integration tests.
 ```
 
@@ -290,6 +352,9 @@ More guides:
 
 - [Authentication and session setup](docs/architecture/authentication.md)
 - [Workspaces, users, and roles](docs/architecture/workspace-users.md)
+- [Local connector setup and channel grants](apps/connector/README.md)
+- [Codex and Kiro providers](docs/architecture/local-agent-providers.md)
+- [Persistent agent sessions](docs/architecture/agent-sessions.md)
 - [Memory MCP access](docs/architecture/memory-mcp.md)
 - [Navigator and thread routing](docs/architecture/navigator.md)
 - [Native Jev setup](docs/architecture/jev-navigator.md)
@@ -358,6 +423,11 @@ commands. File downloads require authorization and use short-lived signed URLs.
 Channel memory is off by default; managers enable it and control scoped MCP keys.
 Connector ChatGPT tokens stay on the local computer.
 
+Project file tools are off unless the connector is launched with `--project`.
+Only select a folder the agent is authorized to read and modify. Task/tool output
+can include file contents and is persisted in Space; provider requests can send
+that content to the selected model service. Reasoning contents are not forwarded.
+
 Keep `.env`, connector state, database dumps, and memory files out of source control.
 Treat imported memory as untrusted context. A signed file URL remains usable until
 it expires, even if the user's access changes after it was issued.
@@ -373,7 +443,7 @@ The application source currently has no first-party product analytics integratio
 The API and connector write operational logs. Review the behavior of any external
 service you connect and keep private conversation content out of public reports.
 
-Connecting ChatGPT uses a local authorization flow; chat, files, and Markdown memory
+Connecting Codex or Kiro uses a local authorization flow; chat, files, and Markdown memory
 can be explored without connecting a model provider. See the
 [connector guide](apps/connector/README.md) for what stays local and what Space receives.
 

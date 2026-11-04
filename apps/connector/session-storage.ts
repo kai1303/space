@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import type { LocalProvider } from '@space/contracts';
 import type { Connection, Registration } from './storage.js';
 
-export interface LocalSessionStorage { directory: string; connection: Connection; identity: Registration }
+export interface LocalSessionStorage { directory: string; connection: Connection; identity: Registration; project?: string }
 
 async function privateDirectory(path: string, create = true) {
   if (create) await mkdir(path, { mode: 0o700 });
@@ -27,7 +27,7 @@ export async function localSessionStore(storage: LocalSessionStorage, provider: 
   const { connection, identity } = storage;
   const namespace = createHash('sha256').update(JSON.stringify([
     connection.origin, connection.workspace_id, connection.installation_id, connection.credential,
-    identity.issuer, identity.subject, identity.client_id,
+    identity.issuer, identity.subject, identity.client_id, ...(storage.project ? [storage.project] : []),
   ])).digest('hex');
   await privateDirectory(storage.directory, false); // ConnectorStore owns and locks this root.
   const root = await ensureDirectory(join(storage.directory, provider));

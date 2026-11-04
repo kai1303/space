@@ -1,3 +1,4 @@
+import { NotificationStore } from './notifications.js';
 import { DirectMessageStore } from './direct-messages.js';
 import { sessionTransaction } from './session-concurrency.js';
 import { MentionStore } from './mentions.js';
@@ -13,8 +14,8 @@ import * as s from './schema.js';
 const notFound = () => new AppError(404, 'not_found');
 
 export class ChatStore {
-  readonly db; readonly mentions; readonly unread; readonly directMessages;
-  constructor(readonly pool: Pool) { this.db = database(pool); this.directMessages = new DirectMessageStore(this.db); this.mentions = new MentionStore(pool); this.unread = new UnreadStore(pool); }
+  readonly db; readonly notifications; readonly mentions; readonly unread; readonly directMessages;
+  constructor(readonly pool: Pool) { this.db = database(pool); this.notifications = new NotificationStore(pool); this.directMessages = new DirectMessageStore(this.db); this.mentions = new MentionStore(pool); this.unread = new UnreadStore(pool); }
   async channels(actor: string, workspace: string, query: unknown = {}) {
     const { after, limit } = parsePage(query);
     return this.db.transaction(async c => {
@@ -46,7 +47,7 @@ export class ChatStore {
   }
   private async channelTransaction<T>(id: string, work: (c: DbSession) => Promise<T>): Promise<T> {
     const [channel] = await this.db.select({ kind: s.channels.kind }).from(s.channels).where(eq(s.channels.id, uuid(id)));
-    return channel?.kind === 'direct' ? sessionTransaction(this.db, work) : this.db.transaction(work);
+    return sessionTransaction(this.db, work, channel?.kind === 'direct' ? 'serializable' : 'read committed');
   }
   private async authorize(c: DbSession, actor: string, channel: string) {
     const [row] = await c.select().from(s.channels).where(eq(s.channels.id, uuid(channel)));
@@ -184,6 +185,7 @@ export class ChatStore {
       await c.insert(s.messages).values({ id, workspace_id: channel.workspace_id, channel_id: channelId, thread_id: threadId,
         author_type: 'human', user_id: actor, client_message_id: request.client_message_id, request_hash: hash, text: prepared.document ? prepared.document.ops.map(op => op.insert).join('').trim() : request.text, document: prepared.document ?? null, attachments });
       await this.mentions.notify(c, actor, channel, id, prepared.refs, !!request.thread_id);
+      await this.notifications.notify(c, actor, channel, id, threadId, prepared.refs, !!request.thread_id);
       if (files.length) await c.update(s.assets).set({ message_id: id }).where(inArray(s.assets.id, files.map(file => file.id)));
       if (channel.kind === 'direct') await c.execute(sql`UPDATE direct_message_views SET hidden=false,last_activity_at=now() WHERE channel_id=${channelId}`);
       return this.message(c, id, channelId);
@@ -202,15 +204,23 @@ export class ChatStore {
         ? await c.execute(sql`INSERT INTO message_reactions(channel_id,message_id,user_id,emoji) VALUES(${channelId},${messageId},${actor},${emoji}) ON CONFLICT DO NOTHING RETURNING emoji`)
         : await c.execute(sql`DELETE FROM message_reactions WHERE channel_id=${channelId} AND message_id=${messageId} AND user_id=${actor} AND emoji=${emoji} RETURNING emoji`);
       if (changed.rows.length) {
+        if (active) await this.notifications.reaction(c, actor, channel, messageId, emoji);
         await c.execute(sql`UPDATE messages SET reaction_sequence=${channel.event_sequence + 1n} WHERE channel_id=${channelId} AND id=${messageId}`);
         await c.execute(sql`SELECT append_chat_event(${channelId},${message.thread_id},'message.updated',chat_message_payload(messages)) FROM messages WHERE channel_id=${channelId} AND id=${messageId}`);
       }
       return this.message(c, messageId, channelId);
     });
   }
+  async sourceMessage(actor: string, channel: string, id: string): Promise<ChatMessage> {
+    return this.db.transaction(async c => {
+      await this.authorize(c, actor, channel);
+      return this.message(c, uuid(id), channel);
+    }, { isolationLevel: 'repeatable read', accessMode: 'read only' });
+  }
   private async message(c: DbSession, id: string, channel: string): Promise<ChatMessage> {
     const result = await c.execute<{ message: ChatMessage }>(sql`SELECT chat_message_payload(messages) AS message FROM messages WHERE channel_id=${channel} AND id=${id}`);
-    return result.rows[0]!.message;
+    if (!result.rows[0]) throw notFound();
+    return result.rows[0].message;
   }
   async threadMessages(actor: string, thread: string, query: unknown = {}): Promise<ChatMessage[]> {
     const v = record(query, ['before']);

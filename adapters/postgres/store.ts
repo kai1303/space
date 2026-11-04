@@ -299,6 +299,7 @@ export class PostgresStore implements DeliveryStore {
       response.messages.forEach(message => { message.status = 'complete'; });
       response.tools.forEach(tool => { if (tool.status !== 'completed') tool.status = 'interrupted'; });
       delete response.step;
+      delete response.activity;
     }
     if (task.active_execution_id) await c.update(s.executions).set({ status: 'failed' }).where(eq(s.executions.id, task.active_execution_id));
     await c.update(s.outbox).set({ state: 'dead', lease_token: randomUUID(), lease_until: null, last_error: 'session_stopped' }).where(eq(s.outbox.task_id, task.id));
@@ -363,6 +364,7 @@ export class PostgresStore implements DeliveryStore {
         response.messages.forEach(message => { message.status = 'complete'; });
         response.tools.forEach(tool => { if (tool.status !== 'completed') tool.status = 'interrupted'; });
         delete response.step;
+        delete response.activity;
       }
       const payload = { code, ...(response ? { response } : {}) };
       await this.append(c, task, 'execution.failed', task.installation_id, payload);

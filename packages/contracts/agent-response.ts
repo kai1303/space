@@ -10,7 +10,9 @@ export type AgentSessionOutputs = {
   files: { path: string; content: string; language?: string }[];
   changes: { path: string; patch: string }[];
 };
-export type AgentResponse = { messages: AgentText[]; tools: AgentTool[]; components: AgentComponent[]; step?: string; outputs?: AgentSessionOutputs };
+export type AgentActivity = 'working' | 'thinking' | 'responding' | 'using_tools';
+export type AgentResponseItem = { type: 'message' | 'tool'; id: string };
+export type AgentResponse = { messages: AgentText[]; tools: AgentTool[]; components: AgentComponent[]; items?: AgentResponseItem[]; activity?: AgentActivity; step?: string; outputs?: AgentSessionOutputs };
 
 function parseOutputs(input: unknown): AgentSessionOutputs {
   const v = record(input, ['preview', 'files', 'changes']);
@@ -62,7 +64,8 @@ export function parseAgentComponent(input: unknown): AgentComponent {
   throw new AppError(400, 'unsupported_agent_component');
 }
 export function parseAgentResponse(input: unknown): AgentResponse {
-  const v = record(input, ['messages', 'tools', 'components', 'step', 'outputs']);
+  const v = record(input, ['messages', 'tools', 'components', 'items', 'activity', 'step', 'outputs']);
+  if (v.activity !== undefined && !['working', 'thinking', 'responding', 'using_tools'].includes(v.activity as string)) throw new AppError(400, 'invalid_agent_activity');
   const messages = unique(list(v.messages, 30, (item): AgentText => {
     const m = record(item, ['id', 'text', 'status']);
     if (m.status !== 'streaming' && m.status !== 'complete') throw new AppError(400, 'invalid_agent_response');
@@ -75,7 +78,18 @@ export function parseAgentResponse(input: unknown): AgentResponse {
       status: t.status as AgentTool['status'], ...(t.result === undefined ? {} : { result: string(t.result, 16000) }) };
   }));
   const components = unique(list(v.components, 20, parseAgentComponent));
-  const result = { messages, tools, components, ...(v.step === undefined ? {} : { step: text(v.step, 200) }), ...(v.outputs === undefined ? {} : { outputs: parseOutputs(v.outputs) }) };
+  let items: AgentResponseItem[] | undefined;
+  if (v.items !== undefined) {
+    const remaining = new Set([...messages.map(message => `message:${message.id}`), ...tools.map(tool => `tool:${tool.id}`)]);
+    items = list(v.items, 60, value => {
+      const item = record(value, ['type', 'id']);
+      const id = text(item.id, 128);
+      if (!['message', 'tool'].includes(item.type as string) || !remaining.delete(`${item.type}:${id}`)) throw new AppError(400, 'invalid_agent_response_order');
+      return { type: item.type as AgentResponseItem['type'], id };
+    });
+    if (remaining.size) throw new AppError(400, 'incomplete_agent_response_order');
+  }
+  const result = { messages, tools, components, ...(items === undefined ? {} : { items }), ...(v.activity === undefined ? {} : { activity: v.activity as AgentActivity }), ...(v.step === undefined ? {} : { step: text(v.step, 200) }), ...(v.outputs === undefined ? {} : { outputs: parseOutputs(v.outputs) }) };
   if (messages.map(message => message.text).join('\n\n').length > 16000 || JSON.stringify(result).length > 64000) throw new AppError(400, 'agent_response_too_large');
   return result;
 }

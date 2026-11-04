@@ -20,3 +20,18 @@ test('agent responses reject executable components, invalid tools and excessive 
     { ...response, messages: [response.messages[0], response.messages[0]] },
   ]) assert.throws(() => parseAgentEvent(event(value)));
 });
+
+
+test('agent responses carry typed activity without exposing reasoning text', () => {
+  for (const activity of ['working', 'thinking', 'responding', 'using_tools']) {
+    assert.equal(parseAgentEvent(event({ ...response, activity })).payload.response?.activity, activity);
+  }
+  assert.throws(() => parseAgentEvent(event({ ...response, activity: 'pretend_typing' })));
+});
+
+
+test('ordered response items reference every message and tool exactly once',()=>{
+ const value={messages:[{id:'before',text:'Before.',status:'complete'},{id:'after',text:'After.',status:'complete'}],tools:[{id:'read',name:'read_text_file',arguments:'{}',status:'completed'}],components:[],items:[{type:'message',id:'before'},{type:'tool',id:'read'},{type:'message',id:'after'}]};
+ assert.deepEqual(parseAgentEvent(event(value)).payload.response,value);
+ for(const items of [[],value.items.slice(1),[...value.items,value.items[0]],[{type:'message',id:'missing'},...value.items.slice(1)],[{type:'unknown',id:'before'},...value.items.slice(1)]])assert.throws(()=>parseAgentEvent(event({...value,items})));
+});

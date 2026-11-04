@@ -38,3 +38,39 @@ it('updates streamed text in place and shows interrupted tool state on failure',
   expect(screen.getByText(/Interrupted/)).toBeTruthy();
   expect(screen.queryByRole('status')).toBeNull();
 });
+
+
+it('uses observed agent activity instead of claiming every streamed turn is responding',()=>{
+ const {rerender}=render(<AgentResponse response={{messages:[],tools:[],components:[],activity:'thinking'}} streaming/>);
+ expect(screen.getByRole('status').textContent).toBe('Thinking…');
+ rerender(<AgentResponse response={{messages:[],tools:[],components:[],activity:'using_tools'}} streaming/>);
+ expect(screen.getByRole('status').textContent).toBe('Using tools…');
+});
+
+
+it('keeps text and expanded tools stable in chronological streaming order',async()=>{
+ const before={id:'before',text:'Before first read.',status:'streaming' as const};
+ const base:Response={messages:[before],tools:[],components:[],activity:'responding',items:[{type:'message',id:'before'}]};
+ const {rerender,container}=render(<AgentResponse response={base} streaming/>);
+ const first=screen.getByText('Before first read.');
+ rerender(<AgentResponse response={{...base,tools:[{id:'read',name:'read_text_file',arguments:'{"path":"README.md"}',status:'running'}],activity:'using_tools',items:[{type:'message',id:'before'},{type:'tool',id:'read'}]}} streaming/>);
+ expect(screen.getByText('Before first read.')).toBe(first);
+ const tool=screen.getByText('read_text_file · Running');
+ expect(first.compareDocumentPosition(tool)&Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+ await userEvent.click(screen.getByRole('button',{name:'Expand timeline'}));
+ rerender(<AgentResponse response={{...base,messages:[{...before,status:'complete'},{id:'final',text:'Final answer.',status:'complete'}],tools:[{id:'read',name:'read_text_file',arguments:'{"path":"README.md"}',status:'completed',result:'Read result.'}],activity:undefined,items:[{type:'message',id:'before'},{type:'tool',id:'read'},{type:'message',id:'final'}]}}/>);
+ expect(screen.getByText('Before first read.')).toBe(first);expect(screen.getByText('Final answer.')).toBeTruthy();
+ expect(screen.getByRole('button',{name:'Collapse timeline'})).toBeTruthy();expect(screen.getByText('Read result.')).toBeTruthy();
+ expect(screen.getByText('read_text_file · Completed').compareDocumentPosition(screen.getByText('Final answer.'))&Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+ expect(container.querySelector('[aria-busy="true"]')).toBeNull();
+});
+
+it('groups only adjacent tools and keeps their expansion when another tool is added',async()=>{
+ const tools:Response['tools']=[{id:'first',name:'First read',arguments:'{}',status:'completed'}];
+ const first:Response={messages:[{id:'before',text:'Before.',status:'complete'}],tools,components:[],items:[{type:'message',id:'before'},{type:'tool',id:'first'}]};
+ const {rerender}=render(<AgentResponse response={first} streaming/>);
+ await userEvent.click(screen.getByRole('button',{name:'Expand timeline'}));
+ rerender(<AgentResponse response={{...first,tools:[...tools,{id:'second',name:'Second read',arguments:'{}',status:'running'}],items:[...first.items!,{type:'tool',id:'second'}]}} streaming/>);
+ expect(screen.getByRole('button',{name:'Collapse timeline'})).toBeTruthy();expect(screen.getByText('Second read · Running')).toBeTruthy();
+ expect(screen.getByText('Before.').compareDocumentPosition(screen.getByText('First read · Completed'))&Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+});

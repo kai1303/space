@@ -7,12 +7,16 @@ import { StringDecoder } from 'node:string_decoder';
 import { localSessionStore, type LocalSessionStorage } from './session-storage.js';
 import { parseInvocation, parseAgentEvent, parseAgentResponse, type AgentEvent } from '@space/contracts';
 
+import { AgentProgress } from './agent-progress.js';
+import { projectMcp, projectServer, projectToolNames, resolveProject } from './project-tools.js';
 import { AgentSessionStopped, type InvokeAgent, type SpawnAgent } from './agent-runtime.js';
 export { AgentSessionStopped } from './agent-runtime.js';
 export type { InvokeAgent as InvokeCodex, SpawnAgent as SpawnCodex } from './agent-runtime.js';
 type Message = { id?: string | number; method?: string; result?: any; error?: unknown; params?: any };
 
-export async function startCodex(accessToken: string, onExit: () => void, launch: SpawnAgent = spawn, storage?: LocalSessionStorage) {
+export async function startCodex(accessToken: string, onExit: () => void, launch: SpawnAgent = spawn, storage?: LocalSessionStorage, selectedProject?: string) {
+  const project = await resolveProject(selectedProject ?? storage?.project);
+  if (storage && project) storage = { ...storage, project };
   const sessions = storage ? await localSessionStore(storage) : undefined;
   const directory = sessions?.directory ?? await mkdtemp(join(tmpdir(), 'space-codex-'));
   const home = sessions?.home ?? join(directory, 'home');
@@ -20,6 +24,8 @@ export async function startCodex(accessToken: string, onExit: () => void, launch
   if (!sessions) await Promise.all([mkdir(home, { mode: 0o700 }), mkdir(cwd, { mode: 0o700 })]);
   const cleanup = () => sessions ? Promise.resolve() : rm(directory, { recursive: true, force: true });
   const config = [
+    ...(project ? [`projects.${JSON.stringify(project)}.trust_level="untrusted"`, 'project_root_markers=[]'] : []),
+    ...(project ? Object.entries({ ...projectMcp(project), enabled_tools: projectToolNames }).map(([key,value]) => `mcp_servers.${projectServer}.${key}=${JSON.stringify(value)}`) : []),
     'model_provider="openai_chatgpt_plan"',
     'model_providers.openai_chatgpt_plan.name="ChatGPT plan"',
     'model_providers.openai_chatgpt_plan.base_url="https://api.openai.com/v1"',
@@ -99,6 +105,7 @@ export async function startCodex(accessToken: string, onExit: () => void, launch
     let completedTurn = false, finishTurn!: () => void;
     const turnFinished = new Promise<void>(resolve => { finishTurn = resolve; });
     let progress: NodeJS.Timeout | undefined, dirty = false, progressPending = false, settled = false;
+    const output = new AgentProgress();
     const messages = new Map<string, { id: string; text: string; status: 'streaming' | 'complete' }>();
     let queue = Promise.resolve();
     let finish!: () => void, reject!: (error: Error) => void;
@@ -106,7 +113,13 @@ export async function startCodex(accessToken: string, onExit: () => void, launch
     // Notifications may arrive in the same stdout chunk as the turn/start response.
     const early: Message[] = [];
     const publish = (type: AgentEvent['type'], text: string, complete = false, sessionReady = false) => {
-      const response = type === 'execution.failed' || !messages.size ? undefined : parseAgentResponse({ messages: [...messages.values()].map(message => ({ ...message, ...(complete ? { status: 'complete' } : {}) })), tools: [], components: [] });
+      const terminal = type === 'execution.completed' || type === 'execution.failed';
+      let response;
+      try { response = output.snapshot([...messages.values()].map(message => ({ ...message, ...(terminal ? { status: 'complete' as const } : {}) })), terminal); }
+      catch (error) {
+        if (type !== 'execution.failed') throw error;
+        try { response = output.snapshot([], true); } catch { /* Invalid snapshots cannot hide the terminal failure. */ }
+      }
       const event = parseAgentEvent({ id: randomUUID(), schema_version: '1.0', execution_id: request.execution_id, sequence: ++sequence, type, occurred_at: new Date().toISOString(), payload: { text, ...(response ? { response } : {}), ...(sessionReady ? { session_ready: true } : {}) } });
       queue = queue.then(async () => { signal.throwIfAborted(); await emit(event); });
       void queue.catch(reject);
@@ -132,12 +145,25 @@ export async function startCodex(accessToken: string, onExit: () => void, launch
       if (message.method === 'turn/completed') { completedTurn = true; finishTurn(); }
       if (settled) return;
       try {
-        if (message.method === 'item/started' && !['userMessage', 'agentMessage', 'reasoning', 'plan'].includes(p.item?.type)) {
-          if (live) void rpc('turn/interrupt', { threadId, turnId }).catch(() => {});
+        if ((message.method === 'item/started' || message.method === 'item/completed') && project && p.item?.type === 'mcpToolCall' && p.item.server === projectServer && projectToolNames.includes(p.item.tool)) {
+          const item = p.item;
+          const failed = item.status === 'failed' || !!item.error;
+          output.tool(item.id, item.tool, item.arguments, message.method === 'item/started' ? 'running' : failed ? 'interrupted' : 'completed', item.result ?? (failed ? 'Tool failed.' : undefined));
+          dirty = true; if (!progress) progress = setTimeout(flush, 100);
+        } else if ((message.method === 'item/started' && p.item?.type === 'reasoning') || message.method === 'item/reasoning/summaryTextDelta' || message.method === 'item/reasoning/textDelta') {
+          if (output.activity !== 'thinking') { output.setActivity('thinking'); dirty = true; if (!progress) progress = setTimeout(flush, 100); }
+        } else if (message.method === 'item/started' && p.item?.type === 'agentMessage') {
+          if (typeof p.item.id !== 'string') throw new Error();
+          output.message(p.item.id);
+          if (!messages.has(p.item.id)) messages.set(p.item.id, { id: p.item.id, text: '', status: 'streaming' });
+          output.setActivity('responding'); dirty = true; if (!progress) progress = setTimeout(flush, 100);
+        } else if (message.method === 'item/started' && !['userMessage', 'agentMessage', 'reasoning', 'plan'].includes(p.item?.type)) {
           reject(new Error('Codex attempted an unsupported tool.'));
         } else if (message.method === 'item/agentMessage/delta') {
           if (typeof p.itemId !== 'string' || !p.itemId || p.itemId.length > 128 || typeof p.delta !== 'string') throw new Error();
+          output.message(p.itemId);
           const current = messages.get(p.itemId) ?? { id: p.itemId, text: '', status: 'streaming' as const };
+          output.setActivity('responding');
           current.text += p.delta;
           messages.set(p.itemId, current);
           if (messages.size > 30 || text().length > 16_000 || current.text.includes('\0')) throw new Error();
@@ -145,6 +171,8 @@ export async function startCodex(accessToken: string, onExit: () => void, launch
           if (!progress) progress = setTimeout(flush, 100);
         } else if (message.method === 'item/completed' && p.item?.type === 'agentMessage') {
           if (typeof p.item.id !== 'string' || typeof p.item.text !== 'string') throw new Error();
+          output.setActivity('responding');
+          output.message(p.item.id);
           messages.set(p.item.id, { id: p.item.id, text: p.item.text, status: 'complete' });
           parseAgentResponse({ messages: [...messages.values()], tools: [], components: [] });
           dirty = true;
@@ -174,11 +202,11 @@ export async function startCodex(accessToken: string, onExit: () => void, launch
         sessionUnavailable = true;
         if (!sessions) throw new Error('Persistent Codex storage is unavailable.');
         retained = await sessions.session(request.session_id, request.persistent_session.resume);
-        taskDirectory = retained.cwd;
+        taskDirectory = project ?? retained.cwd;
         sessionUnavailable = false;
-      } else taskDirectory = await mkdtemp(join(cwd, 'task-'));
+      } else taskDirectory = project ?? await mkdtemp(join(cwd, 'task-'));
       signal.throwIfAborted();
-      const restrictions = { cwd: taskDirectory, sandbox: 'read-only', approvalPolicy: 'never', developerInstructions: `Respond to the supplied Space task using only its supplied context${retained ? ' and retained conversation' : ''}. Do not access local files, run commands, or use external tools.` };
+      const restrictions = { cwd: taskDirectory, sandbox: 'read-only', approvalPolicy: 'never', developerInstructions: project ? `Work on the supplied Space task in the project ${project}. Use only the ${projectServer} MCP file tools for project inspection and edits. Native shell, external tools and files outside the selected project are unavailable.` : `Respond to the supplied Space task using only its supplied context${retained ? ' and retained conversation' : ''}. Do not access local files, run commands, or use external tools.` };
       const thread = retained?.threadId
         ? await rpc('thread/resume', { ...restrictions, threadId: retained.threadId })
         : await rpc('thread/start', { ...restrictions, ephemeral: !retained });
@@ -224,15 +252,15 @@ export async function startCodex(accessToken: string, onExit: () => void, launch
         await queue.catch(() => {});
         throw signal.reason;
       }
-      if (threadId && turnId && live) void rpc('turn/interrupt', { threadId, turnId }).catch(() => {});
-      else if (live && !sessionUnavailable) { fail(); stop(); }
+      // A failed in-flight turn cannot share a runtime with the next tool turn.
+      if (live && !completedTurn && !sessionUnavailable) { fail(); stop(); }
       if (!signal.aborted) {
-        try { await queue; await publish('execution.failed', sessionUnavailable ? 'Saved Codex session is unavailable. End this session and start a new one.' : 'Codex could not complete this task. Restart the connector or retry the approved task.'); } catch { /* The platform will fail an unacknowledged run. */ }
+        try { await queue; await publish('execution.failed', sessionUnavailable ? 'Saved Codex session is unavailable for this account and project. Open a new agent session.' : 'Codex could not complete this task. Restart the connector or retry the approved task.'); } catch { /* The platform will fail an unacknowledged run. */ }
       }
       throw new Error('Codex could not complete this task.');
     } finally {
       settled = true; clearTimeout(progress); clearTimeout(deadline); signal.removeEventListener('abort', abort); active = undefined;
-      if (taskDirectory && !request.persistent_session) await rm(taskDirectory, { recursive: true, force: true });
+      if (taskDirectory && !project && !request.persistent_session) await rm(taskDirectory, { recursive: true, force: true });
     }
   };
   return { stop, alive: () => live, invoke };

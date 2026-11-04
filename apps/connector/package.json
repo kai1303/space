@@ -3,14 +3,30 @@
   "version": "0.0.1",
   "private": true,
   "type": "module",
-  "bin": { "space-connector": "dist/main.js" },
-  "files": ["dist"],
+  "bin": {
+    "space-connector": "dist/main.js"
+  },
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "start": "node dist/main.js",
     "test": "pnpm build && node --test test/*.test.mjs"
   },
-  "dependencies": { "@space/contracts": "workspace:*", "socket.io-client": "^4.8.4", "jose": "^6.2.15" },
-  "devDependencies": { "@types/node": "22", "typescript": "^7.0.2", "socket.io": "^4.8.4" }
+  "dependencies": {
+    "@modelcontextprotocol/server-filesystem": "2.1.0",
+    "@space/contracts": "workspace:*",
+    "jose": "^6.2.15",
+    "socket.io-client": "^4.8.4"
+  },
+  "devDependencies": {
+    "@types/node": "22",
+    "socket.io": "^4.8.4",
+    "typescript": "^7.0.2"
+  },
+  "engines": {
+    "node": ">=24"
+  }
 }

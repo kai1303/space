@@ -61,11 +61,12 @@ test('a terminal delivery failure retains partial response content', async () =>
   const approved = await store.approveTask(seed.owner_id, task.id);
   const delivery = await store.claimDelivery();
   assert.ok(delivery);
-  const response: AgentResponse = { messages: [{ id: 'm', text: 'Partial result', status: 'streaming' }], tools: [{ id: 't', name: 'search', arguments: '{}', status: 'running' }], components: [] };
+  const response: AgentResponse = { activity: 'using_tools', messages: [{ id: 'm', text: 'Partial result', status: 'streaming' }], tools: [{ id: 't', name: 'search', arguments: '{}', status: 'running' }], components: [], items: [{ type: 'message', id: 'm' }, { type: 'tool', id: 't' }] };
   await store.acceptEvent(seed.installation_id, { id: randomUUID(), execution_id: approved.active_execution_id!, schema_version: '1.0', sequence: 1, type: 'execution.started', occurred_at: '2026-11-03T00:00:00.000Z', payload: { text: 'Working', response } });
   await store.failDelivery(delivery, 'connector_timeout', true);
   const events = await store.events(seed.owner_id, task.id, 0);
-  assert.deepEqual(events.at(-1)?.payload.response, { ...response, messages: [{ ...response.messages[0], status: 'complete' }], tools: [{ ...response.tools[0], status: 'interrupted' }] });
+  const {activity: _activity, ...terminal} = response;
+  assert.deepEqual(events.at(-1)?.payload.response, { ...terminal, messages: [{ ...response.messages[0], status: 'complete' }], tools: [{ ...response.tools[0], status: 'interrupted' }] });
 });
 
 test('structured responses persist once and survive message history and task replay', async () => {
@@ -90,4 +91,18 @@ test('structured responses persist once and survive message history and task rep
   assert.deepEqual(created.payload.agent_response, response);
   assert.deepEqual(replay.events.at(-1)?.payload, { task_id: task.id, type: 'task.completed', actor_id: seed.installation_id, installation_id: seed.installation_id, owner_id: seed.owner_id, data: { result: 'Results', response } });
   assert.deepEqual((await chat.threadHistory(seed.owner_id, seed.thread_id)).messages[0]?.agent_response, response);
+});
+
+test('interleaved response order survives persistence, duplicate receipts and thread replay',async()=>{
+ const seed=await bootstrap(pool);
+ const task=await store.createTask(seed.owner_id,{workspace_id:seed.workspace_id,thread_id:seed.thread_id,installation_id:seed.installation_id,goal:'Ordered turn',skill:'demo.echo'},randomUUID());
+ const approved=await store.approveTask(seed.owner_id,task.id);
+ const response:AgentResponse={messages:[{id:'before',text:'Before.',status:'complete'},{id:'between',text:'Between.',status:'complete'},{id:'final',text:'Final.',status:'complete'}],tools:[{id:'first',name:'read_text_file',arguments:'{}',result:'First result',status:'completed'},{id:'second',name:'read_text_file',arguments:'{}',result:'Second result',status:'completed'}],components:[],items:[{type:'message',id:'before'},{type:'tool',id:'first'},{type:'message',id:'between'},{type:'tool',id:'second'},{type:'message',id:'final'}]};
+ const event=(sequence:number,type:AgentEvent['type'],snapshot?:AgentResponse):AgentEvent=>({id:randomUUID(),execution_id:approved.active_execution_id!,schema_version:'1.0',sequence,type,occurred_at:new Date().toISOString(),payload:{text:'Ordered turn',...(snapshot?{response:snapshot}:{})}});
+ await store.acceptEvent(seed.installation_id,event(1,'execution.started'));
+ const completed=event(2,'execution.completed',response);await store.acceptEvent(seed.installation_id,completed);await store.acceptEvent(seed.installation_id,completed);
+ const history=await chat.threadHistory(seed.owner_id,seed.thread_id);
+ assert.equal(history.messages.length,1);assert.deepEqual(history.messages[0]?.agent_response,response);
+ const replay=await chat.history(seed.owner_id,seed.channel_id);
+ const message=replay.events.find(event=>event.type==='message.created');assert.ok(message?.type==='message.created');assert.deepEqual(message.payload.agent_response?.items,response.items);
 });

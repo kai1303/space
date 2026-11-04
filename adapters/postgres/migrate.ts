@@ -14,7 +14,7 @@ export const migrationFiles = [
   '019_chat_delivery_outbox.sql', '020_navigator.sql', '021_agent_responses.sql',
   '022_local_codex_execution.sql', '023_message_reactions.sql', '024_storage_claims.sql',
   '025_mentions.sql', '026_thread_context.sql', '027_channel_reads.sql', '028_thread_messages.sql',
-  '029_resource_updates.sql', '030_agent_sessions.sql', '031_agent_session_revisions.sql', '032_event_stream.sql', '033_thread_agent_session_entries.sql', '034_inline_agent_session_links.sql', '035_session_request_documents.sql', '036_local_agent_providers.sql', '037_agent_connector_capabilities.sql', '038_agent_memory_grants.sql', '039_direct_messages.sql',
+  '029_resource_updates.sql', '030_agent_sessions.sql', '031_agent_session_revisions.sql', '032_event_stream.sql', '033_thread_agent_session_entries.sql', '034_inline_agent_session_links.sql', '035_session_request_documents.sql', '036_local_agent_providers.sql', '037_agent_connector_capabilities.sql', '038_agent_memory_grants.sql', '039_direct_messages.sql', '040_notifications.sql',
 ] as const;
 
 export async function migrate(pool: Pool): Promise<void> {

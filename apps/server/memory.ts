@@ -113,8 +113,4 @@ export function registerMemoryRoutes(app: FastifyInstance, store: MemoryStore, p
     await providerFor(channel, false).clear(channel);
     return { deleted: true };
   }));
-  app.get<{ Params: { channelId: string; messageId: string } }>('/v1/channels/:channelId/messages/:messageId', r => {
-    const id = uuid(r.params.messageId);
-    return store.channel(r.actorId, r.params.channelId, (channel, c) => store.message(c, channel, id));
-  });
 }

@@ -60,3 +60,5 @@ export * from './navigator.js';
 export * from './mentions.js';
 
 export * from './typing.js';
+
+export * from './notifications.js';

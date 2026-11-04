@@ -188,3 +188,16 @@ test('pagination keeps its original boundary when the anchor receives a new mess
     await api(a.owner_token,'GET',`/workspaces/${a.workspace_id}/direct-messages?after=${value}`,undefined,400);
   }
 });
+
+test('DM source messages use chat authorization while memory stays forbidden',async()=>{
+ const a=await bootstrap(pool),b=await bootstrap(pool),dm=await open(a);
+ const message=await api(a.owner_token,'POST',`/channels/${dm.id}/messages`,{client_message_id:randomUUID(),text:'Source from Activity'},201);
+ for(const token of [a.owner_token,a.collaborator_token])assert.deepEqual(await api(token,'GET',`/channels/${dm.id}/messages/${message.id}`),message);
+ await api(b.owner_token,'GET',`/channels/${dm.id}/messages/${message.id}`,undefined,404);
+ await api(a.owner_token,'GET',`/channels/${a.channel_id}/messages/${message.id}`,undefined,404);
+ await api(a.owner_token,'GET',`/channels/${dm.id}/messages/${randomUUID()}`,undefined,404);
+ await api(a.owner_token,'GET',`/channels/${dm.id}/memory`,undefined,403);
+ await api(a.owner_token,'POST',`/channels/${dm.id}/memory/settings`,{enabled:true},403);
+ await pool.query('UPDATE workspace_members SET active=false WHERE workspace_id=$1 AND user_id=$2',[a.workspace_id,a.collaborator_id]);
+ await api(a.collaborator_token,'GET',`/channels/${dm.id}/messages/${message.id}`,undefined,404);
+});

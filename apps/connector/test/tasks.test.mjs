@@ -331,3 +331,78 @@ test('idle connectors wait for a socket work notification instead of polling cla
     assert.equal(claims, 2);
   } finally { await close(); }
 });
+
+
+test('Codex forwards thinking and responding activity without forwarding reasoning content', { timeout: 5000 }, async () => {
+  const runtime = await startCodex('token', () => {}, launchFake(`
+    send({method:'item/started',params:{threadId:'thread-1',turnId:'turn-1',item:{id:'thought',type:'reasoning'}}});
+    send({method:'item/reasoning/summaryTextDelta',params:{threadId:'thread-1',turnId:'turn-1',itemId:'thought',delta:'PRIVATE REASONING'}});
+    setTimeout(()=>{ ${delta('Answer')} ${completed('completed')} },200);
+  `));
+  const events=[];
+  try {
+    await runtime.invoke(invocation,async e=>events.push(e),new AbortController().signal);
+    assert.ok(events.some(e=>e.payload.response?.activity==='thinking'));
+    assert.ok(events.some(e=>e.payload.response?.activity==='responding'));
+    assert.equal(events.at(-1).payload.response.activity,undefined);
+    assert.equal(JSON.stringify(events).includes('PRIVATE REASONING'),false);
+  } finally { runtime.stop(); }
+});
+
+test('Codex project tools reuse the tool timeline and remain confined to the configured MCP server', { timeout:5000 },async()=>{
+ const {mkdtemp,rm}=await import('node:fs/promises');const {tmpdir}=await import('node:os');const {join}=await import('node:path');
+ const project=await mkdtemp(join(tmpdir(),'space-project-'));
+ const runtime=await startCodex('token',()=>{},launchFake(`
+  send({method:'item/started',params:{threadId:'thread-1',turnId:'turn-1',item:{id:'read',type:'mcpToolCall',server:'space_project',tool:'read_text_file',arguments:{path:'README.md'},status:'inProgress'}}});
+  setTimeout(()=>{
+   send({method:'item/completed',params:{threadId:'thread-1',turnId:'turn-1',item:{id:'read',type:'mcpToolCall',server:'space_project',tool:'read_text_file',arguments:{path:'README.md'},status:'completed',result:{content:[{type:'text',text:'Project read'}]}}}});
+   ${delta('Read the project.')} ${completed('completed')}
+  },200);
+ `,(args)=>{assert.ok(args.some(arg=>arg.includes('mcp_servers.space_project')));assert.ok(args.some(arg=>arg.endsWith('.trust_level="untrusted"')));assert.ok(args.includes('features.shell_tool=false'));}),undefined,project);
+ const events=[];
+ try{
+  await runtime.invoke(invocation,async e=>events.push(e),new AbortController().signal);
+  assert.ok(events.some(e=>e.payload.response?.activity==='using_tools'));
+  const tool=events.at(-1).payload.response.tools[0];assert.equal(tool.name,'read_text_file');assert.equal(tool.status,'completed');assert.equal(tool.result,'Project read');
+ }finally{runtime.stop();await rm(project,{recursive:true,force:true});}
+});
+
+
+test('failed turns keep valid partial text and clear activity', {timeout:5000},async()=>{
+ const runtime=await startCodex('token',()=>{},launchFake(`${delta('Partial answer')} setTimeout(()=>{${completed('failed')}},150);`)),events=[];
+ try{await assert.rejects(runtime.invoke(invocation,async e=>events.push(e),new AbortController().signal));assert.equal(events.at(-1).payload.response.messages[0].text,'Partial answer');assert.equal(events.at(-1).payload.response.activity,undefined);}finally{runtime.stop();}
+});
+
+
+test('an in-flight connector failure closes the Codex runtime before another tool turn can start',{timeout:5000},async()=>{
+ const runtime=await startCodex('token',()=>{},launchFake(`send({method:'item/started',params:{threadId:'thread-1',turnId:'turn-1',item:{id:'unsupported',type:'commandExecution'}}});`));
+ try{await assert.rejects(runtime.invoke(invocation,async()=>{},new AbortController().signal));assert.equal(runtime.alive(),false);await assert.rejects(runtime.invoke(invocation,async()=>{},new AbortController().signal));}finally{runtime.stop();}
+});
+
+
+test('whole-turn streaming preserves alternating text and two tools through terminal completion',{timeout:5000},async t=>{
+ const {mkdtemp,rm}=await import('node:fs/promises');const {tmpdir}=await import('node:os');const {join}=await import('node:path');
+ const project=await mkdtemp(join(tmpdir(),'space-turn-stream-'));
+ const notify=(method,params)=>`send(${JSON.stringify({method,params:{threadId:'thread-1',turnId:'turn-1',...params}})});`;
+ const message=(id,text)=>notify('item/agentMessage/delta',{itemId:id,delta:text});
+ const tool=(id,stage)=>notify(stage==='started'?'item/started':'item/completed',{item:{id,type:'mcpToolCall',server:'space_project',tool:'read_text_file',arguments:{path:id+'.txt'},status:stage==='started'?'inProgress':'completed',...(stage==='completed'?{result:{content:[{type:'text',text:id+' result'}]}}:{})}});
+ const behavior=notify('item/started',{item:{id:'reasoning',type:'reasoning'}})+
+ `setTimeout(()=>{${message('before','Before first read.')}},180);`+
+ `setTimeout(()=>{${tool('first','started')}},360);`+
+ `setTimeout(()=>{${tool('first','completed')}${message('between','Between reads.')}},540);`+
+ `setTimeout(()=>{${tool('second','started')}},720);`+
+ `setTimeout(()=>{${tool('second','completed')}${message('final','Final answer.')}},900);`+
+ `setTimeout(()=>{${completed('completed')}},1080);`;
+ const runtime=await startCodex('token',()=>{},launchFake(behavior),undefined,project),events=[];
+ try{
+  await runtime.invoke(invocation,async e=>events.push(e),new AbortController().signal);
+  const final=events.at(-1).payload.response;
+  assert.deepEqual(final.messages.map(m=>m.text),['Before first read.','Between reads.','Final answer.']);
+  assert.deepEqual(final.items,[{type:'message',id:'before'},{type:'tool',id:'first'},{type:'message',id:'between'},{type:'tool',id:'second'},{type:'message',id:'final'}]);
+  assert.deepEqual(final.tools.map(tool=>[tool.id,tool.status,tool.result]),[['first','completed','first result'],['second','completed','second result']]);
+  assert.ok(events.some(e=>e.payload.response?.activity==='thinking'));assert.ok(events.some(e=>e.payload.response?.activity==='using_tools'));
+  assert.ok(events.some(e=>e.type==='execution.progress'&&e.payload.response?.messages.some(m=>m.id==='between')&&!e.payload.response.tools.some(tool=>tool.id==='second')));
+  assert.equal(final.activity,undefined);assert.deepEqual(events.map(e=>e.sequence),events.map((_,i)=>i+1));
+  t.diagnostic(JSON.stringify({provider:'codex',progressSnapshots:events.filter(e=>e.type==='execution.progress').length,textBlocks:final.messages.length,tools:final.tools.length,serializedBytes:events.reduce((sum,e)=>sum+Buffer.byteLength(JSON.stringify(e)),0)}));
+ }finally{runtime.stop();await rm(project,{recursive:true,force:true});}
+});

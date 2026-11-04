@@ -1,14 +1,14 @@
 # Space Connector
 
-This local connector pairs Codex or Kiro on one computer with a Space workspace, reports provider readiness, and executes approved chat tasks. Pairing alone grants no channel access. Repository access and file changes are not part of this chat integration.
+This local connector pairs Codex or Kiro on one computer with a Space workspace, reports provider readiness, and executes approved chat tasks. Pairing alone grants no channel access. Project file tools are an explicit local opt-in with `--project`.
 
-Requirements: Node.js 22+, pnpm, and the selected provider CLI installed on `PATH`. Codex is the default; Kiro requires `kiro-cli` with ACP v3 support.
+Requirements: Node.js 24+, pnpm, and the selected provider CLI installed on `PATH`. Codex is the default; Kiro requires `kiro-cli` with ACP v3 support.
 
 For Codex, from this repository:
 
 ```sh
-pnpm install
-pnpm --filter @space/connector build
+pnpm install --frozen-lockfile
+pnpm exec turbo run build --filter=@space/connector...
 pnpm --filter @space/connector start --url http://localhost:3000 --pair YOUR_32_CHARACTER_PAIRING_CODE
 ```
 
@@ -46,17 +46,60 @@ pnpm connector --provider kiro --logout # sign out of Space's Kiro home
 
 Codex and Kiro can run concurrently in separate terminals. Codex keeps `~/.config/space-connector`; Kiro uses `~/.config/space-connector-kiro`. Each root permits one local connector process. Kiro's isolated `kiro-home` holds CLI-owned credentials and history. Private, atomic session mappings under `kiro/` are scoped to the platform, workspace, installation, pairing credential and Kiro account. Missing history or a changed account fails the turn instead of silently starting over. Keep `--provider kiro` on subsequent launches.
 
-The adapter launches ACP v3, resolving the installed `kiro-cli-chat` companion when present so Kiro can run with its isolated HOME. It requires session loading and verifies that Kiro selected the generated `space-chat` profile before reporting readiness. This profile disables tools, MCP, powers, resources and hooks. The client advertises no filesystem or terminal callbacks and rejects permission requests and unexpected tool events. Kiro’s own `fetch_cloud_config` status notifications are recognized as housekeeping, without authorizing model tools. No repository access is enabled. This is a tool restriction, not an OS filesystem jail. Session updates are bounded and coalesced while awaiting Space's acknowledgments. Stop waits for the outstanding setup request or prompt cancellation to settle before accepting another turn; uncertain transport failures require restarting the connector and do not replay inference.
+The adapter launches ACP v3, resolving the installed `kiro-cli-chat` companion when present so Kiro can run with its isolated HOME. It requires session loading and verifies that Kiro selected the generated `space-chat` profile before reporting readiness. Without `--project`, this profile disables tools, MCP, powers, resources and hooks. The client advertises no filesystem or terminal callbacks and rejects permission requests and unexpected tool events. Kiro’s own `fetch_cloud_config` status notifications are recognized as housekeeping, without authorizing model tools. Project access requires the local `--project` option described below. This is a tool restriction, not an OS filesystem jail. Session updates are bounded and coalesced while awaiting Space's acknowledgments. Stop waits for the outstanding setup request or prompt cancellation to settle before accepting another turn; uncertain transport failures require restarting the connector and do not replay inference.
 
-Kiro uses its own authentication and model defaults. Models, coding tools, provider-specific commands and interactive tool approval are outside this first integration. See Kiro's [ACP v3 client guide](https://kiro.dev/docs/cli/v3/acp-migration/) and [agent profile reference](https://kiro.dev/docs/custom-agents/configuration-reference/).
+Kiro uses its own authentication and model defaults. Model selection, native shell tools, provider-specific commands and interactive tool approval remain unsupported. See Kiro's [ACP v3 client guide](https://kiro.dev/docs/cli/v3/acp-migration/) and [agent profile reference](https://kiro.dev/docs/custom-agents/configuration-reference/).
+
+## Project file tools and activity
+
+Stop the current connector, then select the project folder explicitly on each launch:
+
+```sh
+pnpm connector --project /absolute/path/to/project
+pnpm connector --provider kiro --project /absolute/path/to/project
+```
+
+The selected directory is resolved locally and is never accepted from a Space task. Both runtimes expose the maintained MCP filesystem server for reading text, listing/searching files, creating directories, and writing/editing files within that root. Native shell, unrelated integrations and approval escalation remain disabled. The file server checks path and symlink boundaries; this is a tool boundary, not a general OS sandbox. Reads and edits reach the selected project. Do not use a folder you have not authorized the agent to access.
+
+A project changes the private session namespace. Start a new Space agent session after enabling tools or selecting a different project; an earlier chat-only session is not silently rebound to a folder. Returning to the same project and identity can resume its saved sessions. Codex ignores project-local runtime configuration; Kiro uses the generated allowlist profile. Kiro waits for the project MCP server to become connected before starting inference.
+
+Space shows Working, Thinking, Responding or Using tools above the shared session composer, based on provider events. States can repeat. Reasoning contents are not forwarded. Tool inputs/results use the existing expandable timeline; older details are shortened to keep accumulated snapshots within the response budget. Completed, stopped and failed turns clear their activity. Unexpected or unconfirmed in-flight failures close the runtime before another tool turn can start.
+
+## Enable a channel
+
+Pairing and provider sign-in do not grant channel access. The current chat UI has
+no channel-enablement control; the former **Ask an agent** control is not mounted.
+Until a replacement ships, the installation owner must configure grants through
+the authenticated HTTP API. Use the owner's normal Space user session, not the
+connector credential. No model invocation is needed to configure a grant.
+
+1. Read `GET /v1/workspaces` and `GET /v1/workspaces/:workspaceId/channels` to find
+   the workspace and channel IDs.
+2. Read `GET /v1/channels/:channelId/agents`. This returns the caller's owned
+   installations, supported `skills` and current `granted_skills`. Use its `id`
+   as `installationId` below; do not use the connector or provider name as an ID.
+3. Send the following request with the same authenticated user session:
+
+```http
+POST /v1/agents/connections/:installationId/channels/:channelId
+Content-Type: application/json
+
+{"enabled":true,"skill":"codex.run"}
+```
+
+For Kiro, use `kiro.run`; other connectors must use a skill advertised by that
+installation. Set `enabled` to `false` to revoke the same skill. The owner must
+have access to the channel. Direct messages cannot enable agents, and archived
+channels cannot receive new grants. Re-read the channel's agent list to confirm
+the selected skill appears in `granted_skills`.
 
 ## Chat tasks
 
-In a channel, open a message thread and expand **Ask an agent**. The agent owner can choose **Enable in this channel**, select the paired Codex and `codex.run`, enter a goal, and request a task. The owner approves the task before the connector can claim it. After enabling, the composer also offers the agent's mention tag; existing Navigator ownership rules apply to direct mentions and thread follow-ups.
+Enable the paired agent in the channel, then select its mention from the composer and send a request. Space creates a managed agent session linked below that message. Open the link to follow up in the session composer. The owner's requests autoapprove; other people's requests require the installation owner's approval. Ordinary thread discussion does not send agent follow-ups.
 
 Responses stream into Space. Named agent sessions retain their own Codex conversation and working directory across turns and connector restarts; their conversation and outputs stay inside the session view. The private `~/.config/space-connector/codex/` directory stores session history and atomic `0600` mappings from Space session IDs to Codex thread IDs. Storage is isolated by platform, workspace, installation, pairing credential and authenticated ChatGPT account/client identity, with `0700` directories. Before any model turn, the connector saves the thread mapping, obtains Space’s session-readiness acknowledgment, and records readiness locally. A stop before that acknowledgment can safely reuse the same unused thread. Missing or damaged saved state fails the turn without creating a replacement conversation. Signing out removes OAuth tokens and retains this account-bound session data.
 
-Legacy standalone tasks still start fresh ephemeral Codex threads and temporary working directories. Navigator tasks include up to 16 bounded messages from the originating thread; manually requested tasks send the entered goal. All turns have tools disabled and use a connector-owned HOME/CODEX_HOME, separate from existing Codex desktop data. The installed runtime uses a read-only sandbox; this is not a separate OS filesystem read-root jail.
+Legacy standalone tasks still start fresh ephemeral Codex threads and temporary working directories. Navigator tasks include up to 16 bounded messages from the originating thread; manually requested tasks send the entered goal. Default launches have tools disabled and use a connector-owned HOME/CODEX_HOME, separate from existing Codex desktop data. The installed runtime uses a read-only sandbox; this is not a separate OS filesystem read-root jail.
 
 Stopping or ending a managed session interrupts its exact Codex turn and waits for acknowledgment and completion before accepting another task; other sessions keep working. A turn is limited to two minutes. Disconnects, revoked access, expired leases and uncertain acknowledgements stop a run without automatically generating the same response again. A connector reporting an error must be restarted before requesting another task. Existing task-owner approval is separate from unsupported mid-turn tool approvals, which the connector rejects.
 

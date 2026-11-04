@@ -2,9 +2,9 @@ import { AppError } from '@space/contracts';
 import { setTimeout as delay } from 'node:timers/promises';
 import type { Database, DbSession } from './database.js';
 export class SessionConflict extends Error {}
-export async function sessionTransaction<T>(db: Database, work: (c: DbSession) => Promise<T>): Promise<T> {
+export async function sessionTransaction<T>(db: Database, work: (c: DbSession) => Promise<T>, isolationLevel: 'serializable' | 'read committed' = 'serializable'): Promise<T> {
   for (let attempt = 0; attempt < 5; attempt++) {
-    try { return await db.transaction(work, { isolationLevel: 'serializable' }); }
+    try { return await db.transaction(work, { isolationLevel }); }
     catch (error) {
       const failure = error as { code?: string; cause?: { code?: string } };
       const code = failure.cause?.code ?? failure.code;

@@ -3,9 +3,11 @@ import { randomUUID } from 'node:crypto';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
-import { parseInvocation, parseAgentEvent, type AgentEvent } from '@space/contracts';
+import { parseInvocation, parseAgentEvent, type AgentEvent, type AgentText } from '@space/contracts';
 import { AgentSessionStopped, type InvokeAgent, type SpawnAgent } from './agent-runtime.js';
 import { localSessionStore, type LocalSessionStorage } from './session-storage.js';
+import { AgentProgress } from './agent-progress.js';
+import { projectServer, projectToolNames, resolveProject } from './project-tools.js';
 import { prepareKiroProfile, resolveKiroAcpCommand } from './kiro-auth.js';
 
 type Message = { jsonrpc?: string; id?: string | number; method?: string; result?: any; error?: unknown; params?: any };
@@ -17,12 +19,31 @@ function requireChatMode(result: any) {
 }
 
 export async function startKiro(storage: LocalSessionStorage, onExit: () => void, launch: SpawnAgent = spawn) {
+  const project = await resolveProject(storage.project);
+  storage = { ...storage, project };
   const sessions = await localSessionStore(storage, 'kiro');
-  const env = await prepareKiroProfile(storage.directory);
+  const env = await prepareKiroProfile(storage.directory, project);
   const command = launch === spawn ? await resolveKiroAcpCommand() : 'kiro-cli';
   const child = launch(command, ['acp', '--agent-engine=v3'], { cwd: sessions.cwd, env, stdio: 'pipe' });
   let live = true, ready = false, stopped = false, nextId = 0, buffer = '';
   const decoder = new StringDecoder('utf8');
+  const mcpStates = new Map<string, string>();
+  const mcpWaiting = new Map<string, { resolve(): void; reject(error: Error): void; timer: NodeJS.Timeout }>();
+  const waitForProjectTools = async (id: string, signal?: AbortSignal) => {
+    signal?.throwIfAborted();
+    if (!project || mcpStates.get(id) === 'connected') return;
+    if (['failed', 'disabled'].includes(mcpStates.get(id) ?? '')) throw new Error('Project file tools are unavailable.');
+    await new Promise<void>((resolve, reject) => {
+      const finish = (error?: Error) => {
+        clearTimeout(timer); signal?.removeEventListener('abort', aborted); mcpWaiting.delete(id);
+        if (error) reject(error); else resolve();
+      };
+      const aborted = () => finish(signal?.reason instanceof Error ? signal.reason : new Error('Project tool setup was interrupted.'));
+      const timer = setTimeout(() => finish(new Error('Project file tools did not become ready.')), 15_000);
+      mcpWaiting.set(id, { resolve: () => finish(), reject: finish, timer });
+      signal?.addEventListener('abort', aborted, { once: true });
+    });
+  };
   const pending = new Map<number, { resolve(value: any): void; reject(error: Error): void; timer: NodeJS.Timeout }>();
   let active: { notify(message: Message): void; reject(error: Error): void } | undefined;
   const write = (message: Message) => {
@@ -34,7 +55,9 @@ export async function startKiro(storage: LocalSessionStorage, onExit: () => void
     if (!live) return;
     live = false;
     for (const request of pending.values()) { clearTimeout(request.timer); request.reject(new Error('Kiro request failed.')); }
-    pending.clear(); active?.reject(new Error('Kiro stopped.'));
+    pending.clear();
+    for (const waiter of mcpWaiting.values()) { clearTimeout(waiter.timer); waiter.reject(new Error('Kiro stopped before project tools were ready.')); }
+    mcpWaiting.clear(); active?.reject(new Error('Kiro stopped.'));
     if (ready && !stopped) onExit();
   };
   const stop = () => {
@@ -72,6 +95,20 @@ export async function startKiro(storage: LocalSessionStorage, onExit: () => void
           clearTimeout(request.timer); pending.delete(message.id);
           if (message.error || !message.result || typeof message.result !== 'object') request.reject(new Error('Kiro request failed.'));
           else request.resolve(message.result);
+        } else if (project && message.method === '_kiro/mcp/status') {
+          const id = message.params?.sessionId, servers = message.params?.servers;
+          if (typeof id !== 'string' || id.length > 256 || !Array.isArray(servers) || servers.length > 100) throw new Error();
+          const server = servers.find((item: any) => item.name === projectServer);
+          if (server) {
+            if (!mcpStates.has(id) && mcpStates.size >= 100) mcpStates.delete(mcpStates.keys().next().value!);
+            mcpStates.set(id, server.status);
+            const waiter = mcpWaiting.get(id);
+            if (waiter && ['connected', 'failed', 'disabled'].includes(server.status)) {
+              clearTimeout(waiter.timer); mcpWaiting.delete(id);
+              if (server.status === 'connected') waiter.resolve(); else waiter.reject(new Error('Project file tools are unavailable.'));
+            }
+          }
+          active?.notify(message);
         } else if (message.method) active?.notify(message);
       } catch { fail(); stop(); return; }
     }
@@ -81,7 +118,10 @@ export async function startKiro(storage: LocalSessionStorage, onExit: () => void
     const result = await rpc('initialize', { protocolVersion: 1, clientInfo: { name: 'space_connector', version: '0.0.1' }, clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false } });
     if (result.protocolVersion !== 1 || result.agentCapabilities?.loadSession !== true) throw new Error('Kiro session loading is unavailable.');
     // A no-inference session verifies authentication and the restrictive profile before readiness.
-    requireChatMode(await rpc('session/new', sessionParams(sessions.cwd)));
+    const probe = await rpc('session/new', sessionParams(project ?? sessions.cwd));
+    requireChatMode(probe);
+    if (project && (typeof probe.sessionId !== 'string' || !probe.sessionId || probe.sessionId.length > 256)) throw new Error('Invalid Kiro session.');
+    await waitForProjectTools(probe.sessionId);
     ready = true;
   } catch { stop(); throw new Error('Could not initialize Kiro chat mode. Sign in with --provider kiro --login and use a Kiro CLI with ACP v3 support.'); }
 
@@ -90,15 +130,25 @@ export async function startKiro(storage: LocalSessionStorage, onExit: () => void
     if (request.skill !== 'kiro.run' || active || !live || signal.aborted) throw new Error('Kiro is unavailable for this task.');
     let sessionId: string | undefined, text = '', sequence = 0, prompting = false, settled = false;
     const configurationUpdates = new Set<string>();
+    const output = new AgentProgress();
+    const messages: AgentText[] = [];
+    let currentMessage: AgentText | undefined;
     let progress: NodeJS.Timeout | undefined, dirty = false, publishing = false, queue = Promise.resolve();
     let reject!: (error: Error) => void, rejected: Error | undefined;
     const failure = new Promise<never>((_resolve, fail) => { reject = error => { rejected ??= error; fail(error); }; });
     void failure.catch(() => {});
     let prompt: Promise<any> | undefined, taskDirectory: string | undefined;
     const publish = (type: AgentEvent['type'], detail: string, sessionReady = false) => {
+      let response;
+      const terminal = type === 'execution.completed' || type === 'execution.failed';
+      try { response = output.snapshot(messages.map(message => ({ ...message, ...(terminal ? { status: 'complete' as const } : {}) })), terminal); }
+      catch (error) {
+        if (type !== 'execution.failed') throw error;
+        try { response = output.snapshot([], true); } catch { /* Invalid snapshots cannot hide the terminal failure. */ }
+      }
       const event = parseAgentEvent({ id: randomUUID(), schema_version: '1.0', execution_id: request.execution_id, sequence: ++sequence, type, occurred_at: new Date().toISOString(), payload: {
         text: detail, ...(sessionReady ? { session_ready: true } : {}),
-        ...(text && type !== 'execution.failed' ? { response: { messages: [{ id: 'answer', text, status: type === 'execution.completed' ? 'complete' : 'streaming' }], tools: [], components: [] } } : {}),
+        ...(response ? { response } : {}),
       } });
       queue = queue.then(async () => { signal.throwIfAborted(); await emit(event); });
       void queue.catch(reject);
@@ -113,8 +163,11 @@ export async function startKiro(storage: LocalSessionStorage, onExit: () => void
       catch { reject(new Error('Kiro returned an invalid response.')); }
     };
     active = { reject, notify(message) {
-      if (settled || message.method !== 'session/update' || message.params?.sessionId !== sessionId) return;
+      if (settled || message.params?.sessionId !== sessionId) return;
+      if (message.method === '_kiro/mcp/status' && ['failed', 'disabled'].includes(mcpStates.get(sessionId!) ?? '')) { reject(new Error('Project file tools disconnected.')); return; }
+      if (message.method !== 'session/update') return;
       const update = message.params.update;
+      if (update?._meta?.kiro?.replay === true) return;
       if (update?.sessionUpdate === 'current_mode_update' && update.currentModeId !== mode) { reject(new Error('Kiro changed chat mode.')); return; }
       // Kiro reports its own account configuration refresh as tool-shaped telemetry.
       // This does not authorize any tool request; only matching status updates are ignored.
@@ -123,11 +176,38 @@ export async function startKiro(storage: LocalSessionStorage, onExit: () => void
       }
       if (update?.sessionUpdate === 'tool_call_update' && configurationUpdates.has(update.toolCallId)) return;
       if (!prompting) return; // session/load can replay old content before returning.
-      if (update?.sessionUpdate === 'tool_call' || update?.sessionUpdate === 'tool_call_update') { reject(new Error('Kiro attempted a tool.')); return; }
-      if (update?.sessionUpdate !== 'agent_message_chunk') return;
-      if (update.content?.type !== 'text' || typeof update.content.text !== 'string') { reject(new Error('Unsupported Kiro content.')); return; }
-      text += update.content.text;
-      if (text.length > 16_000 || text.includes('\0')) { reject(new Error('Kiro response is too large.')); return; }
+      try {
+        if (update?.sessionUpdate === 'agent_thought_chunk') {
+          // Reasoning contents stay local; only the observed activity is forwarded.
+          if (output.activity === 'thinking') return;
+          output.setActivity('thinking');
+        } else if (update?.sessionUpdate === 'tool_call' || update?.sessionUpdate === 'tool_call_update') {
+          // Kiro's deferred tool discovery has no matching start or MCP identity.
+          const loaded = update.rawInput?.tool_ids;
+          if (project && update.sessionUpdate === 'tool_call_update' && update.status === 'completed' && update._meta?.kiro?.toolOrigin === 'default' && Array.isArray(loaded) && loaded.length > 0 && loaded.length <= projectToolNames.length && loaded.every((id: unknown) => typeof id === 'string' && projectToolNames.some(name => id === `${projectServer}::${name}`))) return;
+          const previous = output.tools.get(update.toolCallId);
+          const identity = update._meta?.kiro?.mcpTool;
+          const wrapped = update._meta?.kiro?.serverName === projectServer && typeof update.rawInput?.tool_id === 'string' ? projectToolNames.find(name => update.rawInput.tool_id === `${projectServer}::${name}`) : undefined;
+          const name = identity?.serverName === projectServer && projectToolNames.includes(identity.toolName) ? identity.toolName : wrapped;
+          if (!project || (!previous && !name)) throw new Error('Unsupported tool.');
+          const state = update.status ?? 'in_progress';
+          if (!['pending', 'in_progress', 'completed', 'failed'].includes(state)) throw new Error('Invalid tool status.');
+          if (!previous && currentMessage) { currentMessage.status = 'complete'; currentMessage = undefined; }
+          output.tool(update.toolCallId, previous?.name ?? name, (wrapped ? update.rawInput.arguments : update.rawInput) ?? previous?.arguments ?? '', state === 'pending' ? 'calling' : state === 'in_progress' ? 'running' : state === 'completed' ? 'completed' : 'interrupted', update.rawOutput ?? update.content ?? previous?.result);
+        } else if (update?.sessionUpdate === 'agent_message_chunk') {
+          if (update.content?.type !== 'text' || typeof update.content.text !== 'string') throw new Error('Unsupported Kiro content.');
+          output.setActivity('responding');
+          if (!currentMessage) {
+            const id = messages.length ? `answer-${messages.length + 1}` : 'answer';
+            output.message(id);
+            currentMessage = { id, text: '', status: 'streaming' };
+            messages.push(currentMessage);
+          }
+          currentMessage.text += update.content.text;
+          text = messages.map(message => message.text).join('\n\n');
+          if (text.length > 16_000 || text.includes('\0')) throw new Error('Kiro response is too large.');
+        } else return;
+      } catch { reject(new Error('Kiro returned unsupported or oversized content.')); return; }
       dirty = true; if (!progress) progress = setTimeout(flush, 100);
     } };
     const abort = () => { reject(signal.reason instanceof AgentSessionStopped ? signal.reason : new Error('Kiro turn interrupted.')); if (!(signal.reason instanceof AgentSessionStopped)) { fail(); stop(); } };
@@ -136,8 +216,9 @@ export async function startKiro(storage: LocalSessionStorage, onExit: () => void
     try {
       await publish('execution.started', 'Kiro is working.');
       const retained = request.persistent_session ? await sessions.session(request.session_id, request.persistent_session.resume) : undefined;
-      taskDirectory = retained?.cwd ?? await mkdtemp(join(sessions.cwd, 'task-'));
+      taskDirectory = project ?? retained?.cwd ?? await mkdtemp(join(sessions.cwd, 'task-'));
       signal.throwIfAborted();
+      if (project && retained?.threadId) mcpStates.delete(retained.threadId);
       const result = retained?.threadId
         ? await rpc('session/load', { ...sessionParams(taskDirectory), sessionId: retained.threadId })
         : await rpc('session/new', sessionParams(taskDirectory));
@@ -146,6 +227,7 @@ export async function startKiro(storage: LocalSessionStorage, onExit: () => void
       requireChatMode(result);
       sessionId = retained?.threadId ?? result.sessionId;
       if (typeof sessionId !== 'string' || !sessionId || sessionId.length > 256 || /[\u0000-\u001f\u007f]/.test(sessionId)) throw new Error('Invalid Kiro session.');
+      await waitForProjectTools(sessionId, signal);
       if (retained && !retained.threadId) await retained.save(sessionId, false);
       signal.throwIfAborted();
       if (retained) { await publish('execution.progress', 'Kiro session is ready.', true); await retained.save(sessionId, true); }
@@ -180,7 +262,7 @@ export async function startKiro(storage: LocalSessionStorage, onExit: () => void
       throw new Error('Kiro could not complete this task.');
     } finally {
       settled = true; clearTimeout(progress); clearTimeout(deadline); signal.removeEventListener('abort', abort); active = undefined;
-      if (taskDirectory && !request.persistent_session) await rm(taskDirectory, { recursive: true, force: true });
+      if (taskDirectory && !project && !request.persistent_session) await rm(taskDirectory, { recursive: true, force: true });
     }
   };
   return { stop, alive: () => live, invoke };

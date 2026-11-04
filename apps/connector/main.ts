@@ -2,6 +2,7 @@
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { parseLocalProvider, type LocalProvider } from '@space/contracts';
+import { resolveProject } from './project-tools.js';
 import type { AgentRuntime } from './agent-runtime.js';
 import { startKiro } from './kiro.js';
 import { kiroIdentity, kiroLogin } from './kiro-auth.js';
@@ -14,13 +15,13 @@ import { claimPairing, connectPlatform, startCodex, type AuthStatus } from './ru
 
 export function parseOptions(args: string[]) {
   const { values } = parseArgs({ args, strict: true, allowPositionals: false, options: {
-    provider: { type: 'string' }, connect: { type: 'boolean', default: false }, url: { type: 'string' }, pair: { type: 'string' }, login: { type: 'boolean', default: false },
+    provider: { type: 'string' }, project: { type: 'string' }, connect: { type: 'boolean', default: false }, url: { type: 'string' }, pair: { type: 'string' }, login: { type: 'boolean', default: false },
     logout: { type: 'boolean', default: false }, help: { type: 'boolean', default: false },
   } });
-  if (values.logout && (values.login || values.pair || values.url || values.connect)) throw new Error('Use --logout by itself.');
+  if (values.logout && (values.login || values.pair || values.url || values.connect || values.project)) throw new Error('Use --logout by itself.');
   if (values.pair !== undefined && !/^[A-Za-z0-9_-]{32}$/.test(values.pair)) throw new Error('Use the 32-character pairing code from Space.');
   const provider = values.provider === undefined ? undefined : parseLocalProvider(values.provider);
-  return { ...(provider ? { provider } : {}), url: values.url ? platformOrigin(values.url) : undefined, pair: values.pair, login: values.login, logout: values.logout, help: values.help, connect: values.connect };
+  return { ...(provider ? { provider } : {}), ...(values.project ? { project: values.project } : {}), url: values.url ? platformOrigin(values.url) : undefined, pair: values.pair, login: values.login, logout: values.logout, help: values.help, connect: values.connect };
 }
 
 export function connectorDirectory(provider: LocalProvider) {
@@ -35,9 +36,10 @@ export function credentialRenewalDelay(expiresAt: number, now = Date.now()) {
 export async function runConnector(args = process.argv.slice(2)) {
   const options = parseOptions(args);
   if (options.help) {
-    console.log('Space Connector\n\n  --provider <codex|kiro>     Select the local agent (default: codex)\n  --url <origin> --pair <code>  Pair this computer with Space\n  --connect                   Prompt for a new pairing code\n  --login                     Sign in to the selected provider\n  --logout                    Sign out of the selected provider\n\nRun without arguments to reconnect. Pairing codes are prompted when omitted.\nKeep this terminal running. The selected provider CLI must be installed on PATH. Kiro requires ACP v3.');
+    console.log('Space Connector\n\n  --provider <codex|kiro>     Select the local agent (default: codex)\n  --url <origin> --pair <code>  Pair this computer with Space\n  --project <absolute-path>   Enable file tools within this project folder\n  --connect                   Prompt for a new pairing code\n  --login                     Sign in to the selected provider\n  --logout                    Sign out of the selected provider\n\nRun without arguments to reconnect. Pairing codes are prompted when omitted.\nKeep this terminal running. The selected provider CLI must be installed on PATH. Kiro requires ACP v3.');
     return;
   }
+  const project = await resolveProject(options.project);
   const provider = parseLocalProvider(options.provider);
   const store = new ConnectorStore(connectorDirectory(provider));
   const unlock = await store.lock();
@@ -64,6 +66,7 @@ export async function runConnector(args = process.argv.slice(2)) {
       } else console.log('No local ChatGPT tokens are saved.');
       return;
     }
+    if (project) console.log(`Project file tools enabled: ${project}`);
     let paired = false;
     if (options.connect || options.pair || !state.connection) {
       const origin = options.url ?? state.pending?.origin ?? state.connection?.origin;
@@ -104,7 +107,7 @@ export async function runConnector(args = process.argv.slice(2)) {
         status = 'error';
         platform?.publish();
         console.error('Codex app-server stopped. Restart the connector to retry.');
-      }, undefined, { directory: store.directory, connection: state.connection!, identity: credentials });
+      }, undefined, { directory: store.directory, connection: state.connection!, identity: credentials, project });
       if (controller.signal.aborted) { runtime.stop(); return; }
       status = runtime.alive() ? 'ready' : 'error';
       platform?.publish();
@@ -122,7 +125,7 @@ export async function runConnector(args = process.argv.slice(2)) {
           identity = await kiroIdentity(store.directory, controller.signal);
         }
         if (!controller.signal.aborted) {
-          runtime = await startKiro({ directory: store.directory, connection: state.connection, identity }, () => {
+          runtime = await startKiro({ directory: store.directory, connection: state.connection, identity, project }, () => {
             status = 'error'; platform?.publish(); console.error('Kiro stopped. Restart the connector to retry.');
           });
           if (controller.signal.aborted) runtime.stop();

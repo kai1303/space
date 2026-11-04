@@ -23,7 +23,7 @@ Managed deliveries carry persistent_session.resume. The connector stores a priva
 
 Stop/End return an intentional agent_session_stopped protocol result. The connector interrupts only that turn and waits for its acknowledgment/terminal event before claiming more work. Genuine transport/lease uncertainty still fails closed and never automatically repeats a model turn. Missing or mismatched retained history fails visibly instead of silently creating an empty conversation. Local history remains after connector restart and sign-out; it is available only with the same local installation and identity.
 
-Response outputs are validated before persistence. Durable summaries retain the latest preview and latest20 file/change paths; preview documents use the existing sandboxed iframe. Current Local Codex remains tool-free and normally returns text only. Other trusted output producers can attach files/previews/changes through the validated response envelope.
+Response outputs are validated before persistence. Durable summaries retain the latest preview and latest20 file/change paths; preview documents use the existing sandboxed iframe. Local Codex and Kiro support opt-in project file tools through the local connector `--project` option; default launches remain chat-only. Tool activity and results reuse the response timeline, and typed activity appears above the shared composer. Other trusted output producers can attach files/previews/changes through the validated response envelope.
 
 ## Additional local providers
 

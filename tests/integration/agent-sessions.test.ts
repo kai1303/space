@@ -205,7 +205,9 @@ test('detail and stop retain the latest response snapshot across progress events
   const a = await fixture(), one = await session(a);
   const task = await api(a.owner_token, 'POST', `/agent-sessions/${one.id}/messages`, { text: 'Keep partial response' }, 201);
   const delivery = (await store.claimDelivery(a.installation_id))!;
-  await store.acceptEvent(a.installation_id, event(task.active_execution_id, 1, 'execution.started'), delivery);
+  const base = event(task.active_execution_id, 1, 'execution.started');
+  const started = { ...base, payload: { ...base.payload, response: { messages: [{ id: 'reply', text: 'Answer', status: 'streaming' }], tools: [{ id: 'read', name: 'read_text_file', arguments: '{}', status: 'running' }], components: [], items: [{ type: 'message', id: 'reply' }, { type: 'tool', id: 'read' }], activity: 'using_tools' } } };
+  await store.acceptEvent(a.installation_id, started, delivery);
   const progress = { ...event(task.active_execution_id, 2, 'execution.progress'), payload: { text: 'Still working' } };
   await store.acceptEvent(a.installation_id, progress, delivery);
   const detail = await api(a.owner_token, 'GET', `/agent-sessions/${one.id}`);
@@ -214,6 +216,9 @@ test('detail and stop retain the latest response snapshot across progress events
   await api(a.owner_token, 'POST', `/agent-sessions/${one.id}/stop`, {});
   const stopped = await api(a.owner_token, 'GET', `/agent-sessions/${one.id}`);
   assert.equal(stopped.turns[0].response?.messages[0].text, 'Answer');
+  assert.deepEqual(stopped.turns[0].response?.items, started.payload.response.items);
+  assert.equal(stopped.turns[0].response?.tools[0].status, 'interrupted');
+  assert.equal(stopped.turns[0].response?.activity, undefined);
 });
 
 test('session lists cap at one hundred and changes wake only their linked thread', async () => {

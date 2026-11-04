@@ -113,7 +113,7 @@ function MemberDialog({ workspace, viewer, onClose }: { workspace: string; viewe
         <div className="space-member-details"><div><strong>{member.name}</strong>{member.kind === 'agent' && <Badge>Agent</Badge>}</div><small>{member.kind === 'agent' ? statusText[member.status ?? 'offline'] : member.id === viewer ? 'You' : 'Member'}{member.kind === 'agent' && member.owner_id === viewer ? ' · Owned by you' : ''}</small></div>
         {member.kind === 'agent' && member.owner_id === viewer && <Button size="sm" variant="ghost" aria-label={`Disconnect ${member.name}`} disabled={busy} onClick={() => void revoke(member.id)}>Disconnect</Button>}
       </li>)}</ul>
-      <p className="space-members-hint">Enable a paired agent for a channel from Ask an agent in a thread. Its owner approves tasks before they run.</p>
+      <p className="space-members-hint">Pairing grants no channel access. Channel setup currently requires the API. Mention an enabled agent to start a session. The owner's requests autoapprove; other people's requests need the owner's approval.</p>
     </div>
   </Dialog>;
 }
