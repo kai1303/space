@@ -14,7 +14,9 @@
     "test:workspace": "tsx --test contracts/workspace.test.ts integration/workspace.test.ts integration/user-provisioning.test.ts integration/workspace-isolation.test.ts",
     "test:chat": "tsx --test integration/chat.test.ts integration/chat-outbox.test.ts integration/chat-partitions.test.ts integration/redis-adapter.test.ts",
     "test:auth": "tsx --test integration/auth.test.ts",
-    "test:assets": "tsx --test integration/assets.test.ts storage/assets.test.ts"
+    "test:assets": "tsx --test integration/assets.test.ts storage/assets.test.ts",
+    "test:search": "tsx --test contracts/search.test.ts contracts/typesense.test.ts integration/search.test.ts",
+    "test:search:e2e": "tsx --test e2e/search.test.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/client": "2.4.0",
@@ -34,6 +36,7 @@
     "@types/node": "22",
     "@types/pg": "^8.23.1",
     "tsx": "^4.23.15",
-    "typescript": "^7.0.2"
+    "typescript": "^7.0.2",
+    "@playwright/test": "^1.64.1"
   }
 }

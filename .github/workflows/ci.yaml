@@ -20,6 +20,8 @@ jobs:
           --health-cmd "redis-cli ping" --health-interval 2s --health-timeout 5s
           --health-retries 20
     env:
+      TYPESENSE_URL: http://127.0.0.1:58108
+      TYPESENSE_API_KEY: space_local_search
       NATS_URL: nats://127.0.0.1:4222
       TEST_NATS_URL: nats://127.0.0.1:4222
       TEST_REDIS_URL: redis://127.0.0.1:6379
@@ -45,9 +47,10 @@ jobs:
           docker exec "$POSTGRES_CONTAINER" psql -U postgres -d workplace_test -c "ALTER SYSTEM SET wal_level='logical'"
           docker exec "$POSTGRES_CONTAINER" psql -U postgres -d workplace_test -c "ALTER SYSTEM SET max_replication_slots=20"
           docker restart "$POSTGRES_CONTAINER"
+          docker run -d --name space-typesense --tmpfs /data -p 58108:8108 typesense/typesense:30.2 --data-dir=/data --api-key=space_local_search
           docker run -d --name space-nats -p 4222:4222 -v "$PWD/config/nats.conf:/etc/nats/space.conf:ro" nats:2.15.2-alpine -c /etc/nats/space.conf
           for attempt in $(seq 1 30); do
-            if docker exec "$POSTGRES_CONTAINER" pg_isready -U postgres -d workplace_test && docker exec space-nats sh -c 'nc -z 127.0.0.1 4222'; then break; fi
+            if docker exec "$POSTGRES_CONTAINER" pg_isready -U postgres -d workplace_test && docker exec space-nats sh -c 'nc -z 127.0.0.1 4222' && curl --fail --silent http://127.0.0.1:58108/health; then break; fi
             sleep 1
           done
           DATABASE_URL="$TEST_DATABASE_URL" NATS_URL="$TEST_NATS_URL" node apps/events/dist/main.js > /tmp/space-cdc.log 2>&1 &
@@ -61,3 +64,8 @@ jobs:
           exit 1
       - name: Test
         run: pnpm exec turbo run test --concurrency=1
+
+      - name: Browser search E2E
+        run: |
+          pnpm --filter @space/tests exec playwright install --with-deps chromium
+          pnpm --filter @space/tests test:search:e2e

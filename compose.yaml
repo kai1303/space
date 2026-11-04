@@ -15,6 +15,14 @@ services:
       interval: 2s
       timeout: 5s
       retries: 20
+  typesense:
+    image: typesense/typesense:30.2
+    command: ["--data-dir=/data", "--api-key=${TYPESENSE_API_KEY:-space_local_search}"]
+    ports:
+      - "127.0.0.1:58108:8108"
+    volumes:
+      - typesense_data:/data
+    restart: unless-stopped
   nats:
     image: nats:2.15.2-alpine
     command: ["-c", "/etc/nats/space.conf"]
@@ -80,6 +88,8 @@ services:
     environment:
       <<: *database
       NATS_URL: nats://nats:4222
+      TYPESENSE_URL: http://typesense:8108
+      TYPESENSE_API_KEY: ${TYPESENSE_API_KEY:-space_local_search}
       HOST: 0.0.0.0
       NODE_ENV: development
       TRUSTED_PROXY_CIDRS: ${TRUSTED_PROXY_CIDRS:-}
@@ -131,6 +141,7 @@ services:
       migrate:
         condition: service_completed_successfully
 volumes:
+  typesense_data:
   nats_data:
   postgres_data:
   seaweedfs_data:

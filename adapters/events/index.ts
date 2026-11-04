@@ -18,7 +18,7 @@ export class EventBus {
     const nc = this.connection = await connect({ servers: this.url.split(',').map(server => server.trim()).filter(Boolean), name: `space-${this.instanceId}`, maxReconnectAttempts: -1, reconnectTimeWait: 1000, timeout: 5000 });
     this.client = nc.jetstream({ timeout: 10000 });
     this.connected = true;
-    try { if (this.schema !== '*') { await this.ensureStream(this.schema, true); await this.ensureStream(this.schema, false); } }
+    try { if (this.schema !== '*') { await this.ensureStream(this.schema, true); await this.ensureStream(this.schema, false); await this.ensureStream(this.schema, false, true); } }
     catch (error) { this.connected = false; await nc.close(); this.connection = undefined; this.client = undefined; throw error; }
     void nc.closed().then(() => { this.connected = false; });
     void (async () => { for await (const status of nc.status()) {
@@ -28,19 +28,19 @@ export class EventBus {
   }
   private readonly streams = new Set<string>();
   private readonly initializing = new Map<string, Promise<string>>();
-  private async ensureStream(schema: string, chat: boolean): Promise<string> {
-    const name = `${streamName(schema)}_${chat ? 'CHAT' : 'WORK'}`;
+  private async ensureStream(schema: string, chat: boolean, search = false): Promise<string> {
+    const name = `${streamName(schema)}_${search ? 'SEARCH' : chat ? 'CHAT' : 'WORK'}`;
     if (this.streams.has(name)) return name;
     const existing = this.initializing.get(name);
     if (existing) return existing;
-    const initialization = this.initializeStream(schema, chat);
+    const initialization = this.initializeStream(schema, chat, search);
     this.initializing.set(name, initialization);
     try { return await initialization; }
     finally { this.initializing.delete(name); }
   }
-  private async initializeStream(schema: string, chat: boolean): Promise<string> {
+  private async initializeStream(schema: string, chat: boolean, search = false): Promise<string> {
     const prefix = streamName(schema);
-    const name = `${prefix}_${chat ? 'CHAT' : 'WORK'}`;
+    const name = `${prefix}_${search ? 'SEARCH' : chat ? 'CHAT' : 'WORK'}`;
     if (this.streams.has(name)) return name;
     if (this.streams.size >= 256) this.streams.delete(this.streams.values().next().value!);
     const manager = await this.connection!.jetstreamManager();
@@ -49,8 +49,8 @@ export class EventBus {
     const config = {
       name,
       num_replicas: replicas,
-      subjects: chat ? [`${prefix}.chat.>`] : [...['task', 'navigator', 'connection', 'delivery', 'asset', 'todo', 'invitation', 'retention'].map(kind => `${prefix}.${kind}.>`), `${prefix}.schedule.>`],
-      retention: chat ? RetentionPolicy.Limits : RetentionPolicy.Workqueue,
+      subjects: search ? [`${prefix}.search.>`] : chat ? [`${prefix}.chat.>`] : [...['task', 'navigator', 'connection', 'delivery', 'asset', 'todo', 'invitation', 'retention'].map(kind => `${prefix}.${kind}.>`), `${prefix}.schedule.>`],
+      retention: search ? RetentionPolicy.Interest : chat ? RetentionPolicy.Limits : RetentionPolicy.Workqueue,
       max_age: chat ? nanos(24 * 60 * 60 * 1000) : 0,
       storage: StorageType.File,
       discard: DiscardPolicy.Old,
@@ -58,7 +58,7 @@ export class EventBus {
       max_msgs: -1, max_msgs_per_subject: -1,
       max_msg_size: 1024 * 1024,
       duplicate_window: nanos(120000),
-      ...(!chat ? { allow_msg_schedules: true } : {}),
+      ...(!chat && !search ? { allow_msg_schedules: true } : {}),
     };
     // Scheduling requires DiscardOld. WORK has no eviction limits; the broker's global storage limit rejects new writes.
     let exists = false;
@@ -69,7 +69,7 @@ export class EventBus {
       try { await manager.streams.add(config); }
       catch (createError) { await manager.streams.info(name).catch(() => { throw createError; }); await manager.streams.update(name, config); }
     }
-    if (!chat) {
+    if (!chat && !search) {
       const info = await manager.streams.info(name);
       if (!(info.config as typeof info.config & { allow_msg_schedules?: boolean }).allow_msg_schedules) throw new Error('NATS server must support persistent message schedules (2.12+)');
     }
@@ -80,10 +80,10 @@ export class EventBus {
     if (!this.client || (this.schema !== '*' && event.schema !== this.schema)) throw new Error('event bus schema mismatch or not started');
     if (!/^[a-zA-Z0-9_-]+(?:\.[a-zA-Z0-9_-]+)*$/.test(event.kind) || !/^[a-zA-Z0-9_-]+$/.test(event.aggregate_id)) throw new Error('invalid event subject');
     if (at !== undefined && !Number.isFinite(at)) throw new Error('invalid event deadline');
-    const chat = event.kind.startsWith('chat.');
-    await this.ensureStream(event.schema, chat);
+    const chat = event.kind.startsWith('chat.'), search = event.kind.startsWith('search.');
+    await this.ensureStream(event.schema, chat, search);
     const prefix = streamName(event.schema), target = `${prefix}.${event.kind}.${event.aggregate_id}`;
-    const schedule = !chat && at !== undefined && at > Date.now();
+    const schedule = !chat && !search && at !== undefined && at > Date.now();
     const metadata = headers();
     if (schedule) { metadata.set('Nats-Schedule', `@at ${new Date(at).toISOString()}`); metadata.set('Nats-Schedule-Target', target); }
     await this.client.publish(schedule ? `${prefix}.schedule.${transportId}` : target, new TextEncoder().encode(JSON.stringify(event)), { msgID: transportId, headers: metadata });
@@ -113,6 +113,8 @@ export class EventBus {
         sequence: message.info.streamSequence,
         ack: () => { message.ack(); pending.delete(message); },
         retry: async (delayMs = 1000) => {
+          // SEARCH retains interest only in real work subjects; delayed NAK keeps the original durable obligation.
+          if (event.kind.startsWith('search.')) { message.nak(Math.min(Math.max(delayMs, 1), 60_000)); pending.delete(message); return; }
           const at = Date.now() + Math.min(Math.max(delayMs, 1), 24 * 60 * 60 * 1000);
           const transportId = `${event.id}.retry.${message.info.streamSequence}.${message.info.deliveryCount}`;
           try {
@@ -131,7 +133,7 @@ export class EventBus {
     catch (error) {
       if (!options.durable || (error as { api_error?: { err_code?: number } }).api_error?.err_code !== 10148) throw error;
       // Another process created the same durable after our initial lookup. Bind without recreating it.
-      opts.bind(`${this.stream}_${filter.startsWith('chat.') ? 'CHAT' : 'WORK'}`, options.durable);
+      opts.bind(`${this.stream}_${filter.startsWith('search.') ? 'SEARCH' : filter.startsWith('chat.') ? 'CHAT' : 'WORK'}`, options.durable);
       subscription = await this.client.subscribe(`${this.stream}.${filter}`, opts);
     }
     let stopping: Promise<void> | undefined;

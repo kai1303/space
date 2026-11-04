@@ -98,6 +98,10 @@
     "./todo-sync": {
       "types": "./dist/todo-sync.d.ts",
       "default": "./dist/todo-sync.js"
+    },
+    "./search": {
+      "types": "./dist/search.d.ts",
+      "default": "./dist/search.js"
     }
   },
   "dependencies": {

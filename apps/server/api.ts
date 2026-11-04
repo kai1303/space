@@ -1,3 +1,6 @@
+import { SearchStore } from '@space/postgres/search';
+import { registerSearch } from './search.js';
+import type { TypesenseOptions } from './typesense.js';
 import { WorkspaceSettingsStore } from '@space/postgres/workspace-settings';
 import { WorkspaceInvitationStore } from '@space/postgres/workspace-invitations';
 import { WorkspaceRetentionStore } from '@space/postgres/workspace-retention';
@@ -37,7 +40,7 @@ declare module 'fastify' {
   interface FastifyRequest { actorId: string }
 }
 
-export function createApi(store: PostgresStore, options: { invitationEmail?: {config:InvitationEmailConfig;mailer:ReturnType<typeof createInvitationMailer>}; pairedConnectors?: import('@space/contracts').PairedConnector[]; logger?: boolean; realtime?: RealtimeOptions; auth?: Authentication; allowDevelopmentTokens?: boolean; trustedProxies?: string[]; storage?: AssetStorage; memory?: MemoryOptions } = {}) {
+export function createApi(store: PostgresStore, options: { search?: TypesenseOptions; invitationEmail?: {config:InvitationEmailConfig;mailer:ReturnType<typeof createInvitationMailer>}; pairedConnectors?: import('@space/contracts').PairedConnector[]; logger?: boolean; realtime?: RealtimeOptions; auth?: Authentication; allowDevelopmentTokens?: boolean; trustedProxies?: string[]; storage?: AssetStorage; memory?: MemoryOptions } = {}) {
   if (options.allowDevelopmentTokens && process.env.NODE_ENV === 'production') throw new Error('Development tokens are forbidden in production');
   const authenticate = async (headers: IncomingHttpHeaders, socketToken?: unknown) => {
     const actor = await options.auth?.actor(headers);
@@ -147,6 +150,7 @@ export function createApi(store: PostgresStore, options: { invitationEmail?: {co
     } catch { return reply.code(503).send({status:'unavailable'}); }
   });
   registerAgentConnections(app, io, connections, store, onOutbox, getEvents, work);
+  registerSearch(app, new SearchStore(store.pool), getEvents, options.search);
   registerEventDeadlines(app, getEvents, store, assets, options.storage);
   registerWorkspaceRetention(app,getEvents,new WorkspaceRetentionStore(store.pool),options.storage);
   if(options.invitationEmail) registerInvitationEmailDelivery(app,getEvents,invitations,options.invitationEmail.mailer);

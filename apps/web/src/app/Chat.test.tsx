@@ -144,12 +144,9 @@ it('browses channel files outside loaded history, opens their source and keeps d
   await screen.findByRole('region', { name: 'Files in #first' });
   await waitFor(() => expect(screen.queryByRole('region', { name: 'Thread' })).toBeNull());
   await userEvent.click(screen.getByRole('button', { name: 'Search in first' }));
-  await screen.findByRole('dialog', { name: 'Search Space' });
+  await screen.findByRole('dialog', { name: 'Search in first' });
   await waitFor(() => expect(screen.queryByRole('region', { name: 'Files in #first' })).toBeNull());
-  const search = screen.getByRole('combobox', { name: 'Search messages' });
-  await userEvent.clear(search); await userEvent.type(search, 'Loaded'); await userEvent.keyboard('{Enter}');
-  await screen.findByLabelText('Search results');
-  await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Search Space' })).toBeNull());
+  fireEvent(screen.getByRole('dialog', { name: 'Search in first' }), new Event('close'));
   await userEvent.click(filesButton);
   await screen.findByRole('region', { name: 'Files in #first' });
   await waitFor(() => expect(screen.queryByLabelText('Search results')).toBeNull());
@@ -298,7 +295,7 @@ it.each([false, true])('keeps a pending channel creation scoped to its original 
   if (returnToOriginal) expect(screen.getByRole('button', { name: 'first', exact: true }).getAttribute('aria-current')).toBe('page');
   else expect(screen.queryByRole('button', { name: 'late-channel', exact: true })).toBeNull();
   await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Create a channel' })).toBeNull());
-  expect(screen.getByRole('button', { name: `Search Team ${returnToOriginal ? 'A' : 'B'} ⌘ K` })).toHaveProperty('disabled', true);
+  expect(screen.getByRole('button', { name: `Search Team ${returnToOriginal ? 'A' : 'B'} ⌘ K` })).toHaveProperty('disabled', false);
 });
 it.each(['revalidation', 'refresh'])('does not let a stale %s undo a successful channel creation', async kind => {
   const first = { id: 'first', name: 'first', workspace_id: 'a', joined: false };
@@ -466,16 +463,15 @@ it('isolates channel drafts and history, shows trusted agent authors, and clears
   await userEvent.click(screen.getByRole('button', { name: 'Reply to Helper' }));
   expect((await screen.findByRole('textbox', { name: 'Message thread' })).textContent).toContain('Thread draft');
   await userEvent.click(screen.getByRole('button', { name: 'Search in first' }));
-  expect(screen.getByText('Search loaded messages in #first. Load older history to include earlier messages.')).toBeTruthy();
-  const search = screen.getByRole('combobox', { name: 'Search messages' });
-  fireEvent.change(search, { target: { value: 'First channel message' } });
-  fireEvent.keyDown(search, { key: 'ArrowDown' });
-  fireEvent.keyDown(search, { key: 'Enter' });
+  const searchDialog = screen.getByRole('dialog', { name: 'Search in first' });
+  expect(within(searchDialog).getByRole('searchbox', { name: 'Search messages' })).toBeTruthy();
+  fireEvent(searchDialog, new Event('close'));
+  await userEvent.click(screen.getByRole('button', { name: 'Close thread', exact: true }));
   await waitFor(() => expect(screen.queryByRole('button', { name: 'Close thread' })).toBeNull());
   await switchWorkspace('Another team');
   await screen.findByRole('heading', { name: 'A place for every conversation' });
   await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Switch workspaces… (Another team)' })));
-  expect((screen.getByRole('button', { name: 'Search Another team ⌘ K' }) as HTMLButtonElement).disabled).toBe(true);
+  expect((screen.getByRole('button', { name: 'Search Another team ⌘ K' }) as HTMLButtonElement).disabled).toBe(false);
   await switchWorkspace('Team');
   expect((await screen.findByRole('textbox', { name: 'Message first' })).textContent).toContain('Private draft');
   await userEvent.click(screen.getByRole('button', { name: 'second', exact: true }));
@@ -1350,14 +1346,14 @@ it('opens Activity from the rail and routes its notification to the source messa
   expect(await screen.findByRole('textbox',{name:'Message first'})).toBeTruthy();
 });
 
-it('opens search from a Home shortcut after the conversation destination is restored', async () => {
+it('opens workspace search from a Home shortcut without leaving it', async () => {
   mockPaginatedChat(() => messagePage([paginatedMessage('Search destination', '1')]));
   render(<Chat />);
   await screen.findByText('Search destination');
   await userEvent.click(screen.getByRole('button', {name:'Threads',exact:true}));
   await screen.findByRole('heading',{name:'Threads',exact:true});
   await userEvent.click(screen.getByRole('button',{name:'Search Team ⌘ K',exact:true}));
-  expect(await screen.findByRole('combobox',{name:'Search messages'})).toBeTruthy();
+  expect(await screen.findByRole('searchbox',{name:'Search messages'})).toBeTruthy();
 });
 
 it('does not return focus to the old reply trigger when switching from a thread to Files', async () => {
@@ -1438,4 +1434,48 @@ it('updates incoming messages without replacing existing rows or the composer',a
  await screen.findByText('Incoming render check');
  expect(screen.getByText('Destination parent').closest('article')).toBe(existing);expect(screen.getByRole('textbox',{name:'Message first'})).toBe(editor);
  console.log('RENDER_INCOMING',JSON.stringify({historyPasses:mocks.timelineRenders-before,existingRowReused:true,composerReused:true}));
+});
+
+it('searches the whole workspace from a hub and opens an older cross-channel message', async () => {
+  mockPaginatedChat(() => messagePage([paginatedMessage('Latest message', '5')]));
+  const original = vi.mocked(fetch).getMockImplementation()!;
+  vi.mocked(fetch).mockImplementation(async (...args) => {
+    const path = String(args[0]);
+    if (path.includes('/channels?')) return new Response(JSON.stringify({ items: ['first', 'second'].map(id => ({id,name:id,workspace_id:'workspace',joined:true})), next_cursor:null }), {status:200});
+    const result = path.includes('/workspace/search?') ? { items: [{ id: 'older', channel_id: 'second', channel_name: 'second', channel_kind: 'channel', thread_id: 'old-thread', is_reply: false, text: 'Older indexed message', author: { id: 'user', name: 'Kai' }, created_at: '2026-01-01T00:00:00Z' }], next_cursor: null } : path === '/v1/channels/second' ? { id: 'second', name: 'second', workspace_id: 'workspace', joined: true } : path.endsWith('/second/messages/older') ? { ...paginatedMessage('Freshly authorized old message', '1'), id: 'older', channel_id: 'second' } : undefined;
+    return result ? new Response(JSON.stringify(result), { status: 200 }) : original(...args);
+  });
+  render(<Chat />);
+  await screen.findByText('Latest message');
+  await userEvent.click(screen.getByRole('button', { name: 'Threads', exact: true }));
+  await screen.findByRole('heading', { name: 'Threads', exact: true });
+  await userEvent.click(screen.getByRole('button', { name: 'Search Team ⌘ K', exact: true }));
+  const dialog = await screen.findByRole('dialog', { name: 'Search workspace' });
+  expect(screen.getByRole('heading', { name: 'Threads', exact: true })).toBeTruthy();
+  fireEvent.change(within(dialog).getByRole('searchbox'), { target: { value: 'older' } });
+  await userEvent.click(await within(dialog).findByRole('button', { name: /Older indexed message/ }));
+  const source = await screen.findByRole('dialog', { name: 'Original message in #second' });
+  await within(source).findByText('Freshly authorized old message');
+  const searchRequest = vi.mocked(fetch).mock.calls.find(([url]) => String(url).includes('/workspace/search?'));
+  expect(String(searchRequest?.[0])).not.toContain('channel_id=');
+});
+
+it('opens an indexed reply outside loaded channel history with fresh source authorization', async () => {
+  mockPaginatedChat(() => messagePage([paginatedMessage('Latest channel message', '5')]));
+  const original = vi.mocked(fetch).getMockImplementation()!;
+  vi.mocked(fetch).mockImplementation(async (...args) => {
+    const path = String(args[0]);
+    const result = path.includes('/workspace/search?') ? { items: [{ id: 'old-reply', channel_id: 'first', channel_name: 'first', channel_kind: 'channel', thread_id: 'old-thread', is_reply: true, text: 'Indexed old reply', author: { id: 'user', name: 'Kai' }, created_at: '2026-01-01T00:00:00Z' }], next_cursor: null } : path.endsWith('/first/messages/old-reply') ? { ...paginatedMessage('Authorized old reply', '1'), id: 'old-reply', channel_id: 'first' } : undefined;
+    return result ? new Response(JSON.stringify(result), {status:200}) : original(...args);
+  });
+  render(<Chat />);
+  await screen.findByText('Latest channel message');
+  await userEvent.click(screen.getByRole('button', { name: 'Search in first' }));
+  const dialog = await screen.findByRole('dialog', { name: 'Search in first' });
+  fireEvent.change(within(dialog).getByRole('searchbox'), { target: { value: 'old' } });
+  await userEvent.click(await within(dialog).findByRole('button', { name: /Indexed old reply/ }));
+  const source = await screen.findByRole('dialog', { name: 'Original message in #first' });
+  await within(source).findByText('Authorized old reply');
+  expect(screen.getByRole('region', { name: 'Thread', exact: true })).toBeTruthy();
+  expect(vi.mocked(fetch).mock.calls.some(([url]) => String(url).includes('channel_id=first'))).toBe(true);
 });

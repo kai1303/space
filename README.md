@@ -432,6 +432,7 @@ More guides:
 - [Navigator and thread routing](docs/architecture/navigator.md)
 - [Native Jev setup](docs/architecture/jev-navigator.md)
 - [Chat storage and partitioning](docs/architecture/chat-partitioning.md)
+- [Message search and Typesense setup](docs/architecture/message-search.md)
 - [Foundation contracts and grants](docs/architecture/foundation.md)
 - [Frontend structure](docs/architecture/frontend.md)
 - [Design system](docs/design-system.md)
