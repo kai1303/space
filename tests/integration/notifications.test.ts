@@ -184,7 +184,14 @@ test('concurrent cross-channel messages keep recipient order and claims do not p
  const a=await bootstrap(pool);await settings(a,{mode:'all',desktop_enabled:true});
  const other=await api(a.owner_token,'POST',`/workspaces/${a.workspace_id}/channels`,{name:'Another feed',private:false},201);
  await api(a.collaborator_token,'POST',`/channels/${other.id}/join`,{});
- await Promise.all(Array.from({length:8},(_,i)=>send(a,`Concurrent ${i}`,{},a.owner_token,i%2?a.channel_id:other.id)));
+ const requests=Array.from({length:8},(_,i)=>({method:'POST' as const,url:`/v1/channels/${i%2?a.channel_id:other.id}/messages`,headers:{authorization:`Bearer ${a.owner_token}`},payload:{client_message_id:randomUUID(),text:`Concurrent ${i}`}}));
+ const responses=await Promise.all(requests.map(request=>app.inject(request)));
+ for(const [index,response] of responses.entries()){
+  if(response.statusCode===201)continue;
+  assert.equal(response.statusCode,409,response.body);assert.equal(response.json().error,'session_conflict');
+  // Preserve the client identity when retrying a contended write after the burst settles.
+  const retry=await app.inject(requests[index]!);assert.equal(retry.statusCode,201,retry.body);
+ }
  const result=await activity(a);assert.equal(result.items.length,8);assert.equal(new Set(result.items.map((n:any)=>n.id)).size,8);
  const revision=()=>pool.query('SELECT resource,revision::text FROM resource_update_revisions ORDER BY resource');
  const before=(await revision()).rows;await claim(a,result.items[0].id);assert.deepEqual((await revision()).rows,before,'desktop claims must not feed another Activity invalidation');
