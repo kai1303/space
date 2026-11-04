@@ -36,11 +36,19 @@ test('registered retention consumer redacts an expired message after its schedul
     await admin.query(`CREATE SCHEMA ${schema}`);await migrate(pool);
     const a=await bootstrap(pool);
     await pool.query('INSERT INTO workspace_preferences(workspace_id,retention_days) VALUES($1,1)',[a.workspace_id]);
-    for(const [id,days] of [[messageId,1],[recentId,0]] as const)await pool.query(
-      "INSERT INTO messages(id,workspace_id,channel_id,thread_id,author_type,user_id,client_message_id,request_hash,text,created_at) VALUES($1,$2,$3,$4,'human',$5,gen_random_uuid(),'broker-test','Confidential broker message',now()-make_interval(days=>$6)+CASE WHEN $6=1 THEN interval '8 seconds' ELSE interval '0 seconds' END)",
-      [id,a.workspace_id,a.channel_id,a.thread_id,a.owner_id,days]);
-    const outbox=(await pool.query<{id:string;kind:string;aggregate_id:string;payload:Record<string,unknown>;available_at:Date}>(
-      "SELECT id,kind,aggregate_id,payload,available_at FROM event_outbox WHERE kind='retention.message_due' AND aggregate_id=$1",[messageId])).rows[0]!;
+    const writer=await pool.connect();
+    let outbox:{id:string;kind:string;aggregate_id:string;payload:Record<string,unknown>;available_at:Date}|undefined;
+    try {
+      // Read the trigger's event before commit makes it eligible for CDC cleanup.
+      await writer.query('BEGIN');
+      for(const [id,days] of [[messageId,1],[recentId,0]] as const)await writer.query(
+        "INSERT INTO messages(id,workspace_id,channel_id,thread_id,author_type,user_id,client_message_id,request_hash,text,created_at) VALUES($1,$2,$3,$4,'human',$5,gen_random_uuid(),'broker-test','Confidential broker message',now()-make_interval(days=>$6)+CASE WHEN $6=1 THEN interval '8 seconds' ELSE interval '0 seconds' END)",
+        [id,a.workspace_id,a.channel_id,a.thread_id,a.owner_id,days]);
+      outbox=(await writer.query<NonNullable<typeof outbox>>(
+        "SELECT id,kind,aggregate_id,payload,available_at FROM event_outbox WHERE kind='retention.message_due' AND aggregate_id=$1",[messageId])).rows[0]!;
+      await writer.query('COMMIT');
+    } catch(error) { await writer.query('ROLLBACK'); throw error; }
+    finally { writer.release(); }
     assert.ok(outbox);
     const availableAt=outbox.available_at.toISOString();
     await producer.start();

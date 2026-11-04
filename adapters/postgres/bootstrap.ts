@@ -8,11 +8,10 @@ export async function bootstrap(pool: Pool) {
   const seed = { workspace_id: randomUUID(), channel_id: randomUUID(), thread_id: randomUUID(), owner_id: randomUUID(), collaborator_id: randomUUID(), definition_id: randomUUID(), installation_id: randomUUID(), owner_token: randomBytes(32).toString('hex'), collaborator_token: randomBytes(32).toString('hex') };
   await database(pool).transaction(async c => {
     await c.insert(s.users).values([{ id: seed.owner_id, display_name: 'Demo owner' }, { id: seed.collaborator_id, display_name: 'Demo collaborator' }]);
-    await c.insert(s.workspaces).values({ id: seed.workspace_id, name: 'General' });
-    await c.insert(s.workspaceMembers).values([
-      { workspace_id: seed.workspace_id, user_id: seed.owner_id, role: 'owner' },
-      { workspace_id: seed.workspace_id, user_id: seed.collaborator_id, role: 'member' },
-    ]);
+    // Explicit baseline columns also work before the primary-owner migration.
+    await c.execute(sql`INSERT INTO workspaces(id,name) VALUES(${seed.workspace_id},'General')`);
+    await c.execute(sql`INSERT INTO workspace_members(workspace_id,user_id,role)
+      VALUES(${seed.workspace_id},${seed.owner_id},'owner'),(${seed.workspace_id},${seed.collaborator_id},'member')`);
     // Keep the baseline fixture usable when verifying historical migrations.
     await c.execute(sql`INSERT INTO channels(id,workspace_id,name,private,created_by) VALUES(${seed.channel_id},${seed.workspace_id},'general',false,${seed.owner_id})`);
     await c.insert(s.channelMembers).values([seed.owner_id, seed.collaborator_id].map(user_id => ({ workspace_id: seed.workspace_id, channel_id: seed.channel_id, user_id })));

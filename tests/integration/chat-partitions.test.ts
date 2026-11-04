@@ -173,7 +173,9 @@ test('v17 copy preserves all message, asset, event and counter values and failed
       VALUES($1,$2,$3,$4,'old.txt',1,'text/plain',$1::uuid::text,$1::uuid::text,'ready',$5)`,[asset,a.workspace_id,a.channel_id,a.owner_id,human.id]);
     await legacy.query('UPDATE messages SET attachments=$1 WHERE id=$2',[JSON.stringify([{id:asset,name:'old.txt',size:1,type:'text/plain'}]),human.id]);
     // Compare the original v17 fields; later migrations add defaulted runtime state.
-    const snapshot = async () => Promise.all(['messages','assets','channel_events','channels'].map(async table=>(await legacy.query(`SELECT ${table==='messages'?"to_jsonb(t)-'agent_milestone'-'agent_response'-'reaction_sequence'-'agent_session_id'":table==='assets'?"to_jsonb(t)-'processing_token'-'processing_until'":table==='channels'?"to_jsonb(t)-'kind'-'direct_user_low'-'direct_user_high'":'to_jsonb(t)'} AS row FROM ${table} t ORDER BY to_jsonb(t)::text`)).rows));
+    const tables = ['messages','assets','channel_events','channels'];
+    const columns = await Promise.all(tables.map(async table => (await legacy.query(`SELECT * FROM ${table} LIMIT 0`)).fields.map(field => `"${field.name}"`).join(',')));
+    const snapshot = async () => Promise.all(tables.map(async (table,index) => (await legacy.query(`SELECT to_jsonb(t) AS row FROM (SELECT ${columns[index]} FROM ${table}) t ORDER BY to_jsonb(t)::text`)).rows));
     const before = await snapshot();
     // Fail after all migration DDL has run, at the version recording boundary.
     await legacy.query(`CREATE FUNCTION reject_partition_migration() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN

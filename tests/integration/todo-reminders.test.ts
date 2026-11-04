@@ -1,6 +1,7 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomBytes, randomUUID } from 'node:crypto';
+import { EventEmitter, once } from 'node:events';
 import { Pool } from 'pg';
 import { EventBus, type EventDelivery } from '@space/events';
 import { migrate } from '@space/postgres/migrate';
@@ -13,6 +14,10 @@ if (!process.env.TEST_DATABASE_URL) throw new Error('TEST_DATABASE_URL required'
 const schema = `todo_reminders_${randomBytes(8).toString('hex')}`;
 const admin = new Pool({ connectionString: process.env.TEST_DATABASE_URL });
 const pool = new Pool({ connectionString: process.env.TEST_DATABASE_URL, options: `-c search_path=${schema}` });
+const reminderStatements = new EventEmitter();
+pool.on('connect', client => client.on('notice', notice => {
+  if (notice.message === 'test_reminder_statement') reminderStatements.emit('started');
+}));
 class ProbeBus extends EventBus {
   readonly handlers = new Map<string, Parameters<EventBus['subscribe']>[2]>();
   override async start() {}
@@ -34,7 +39,16 @@ class ProbeBus extends EventBus {
 }
 const bus = new ProbeBus('nats://unused', schema);
 const app = createApi(new PostgresStore(pool), { allowDevelopmentTokens: true, realtime: { events: bus } });
-before(async () => { await admin.query(`CREATE SCHEMA ${schema}`); await migrate(pool); await app.ready(); });
+before(async () => {
+  await admin.query(`CREATE SCHEMA ${schema}`); await migrate(pool);
+  // NOTICE arrives before commit, after the reminder statement has acquired its snapshot.
+  await pool.query(`CREATE FUNCTION observe_reminder_statement() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN
+    IF current_query() LIKE 'WITH fired AS (%' THEN RAISE NOTICE 'test_reminder_statement'; END IF;
+    RETURN NULL;
+  END $$;
+  CREATE TRIGGER observe_reminder_statement BEFORE UPDATE ON hub_todos FOR EACH STATEMENT EXECUTE FUNCTION observe_reminder_statement()`);
+  await app.ready();
+});
 after(async () => { await app.close(); await pool.end(); await admin.query(`DROP SCHEMA ${schema} CASCADE`); await admin.end(); });
 
 test('API registers the durable Todo reminder consumer', () => {
@@ -85,20 +99,17 @@ test('canceled and stale generations never fire even when the original timestamp
   assert.ok(await fired(todo.id));
 });
 
-test('delivery waiting behind a concurrent schedule edit rechecks the committed generation', async () => {
+test('delivery overlapping a concurrent schedule edit rechecks the committed generation', async () => {
   const todo = await scheduled(), editor = await pool.connect();
   let delivery: ReturnType<typeof bus.receive> | undefined;
   try {
     await editor.query('BEGIN');
-    const { rows: [{ pid }] } = await editor.query('SELECT pg_backend_pid() AS pid');
     // Ordinary writes retain their normal transaction locks; no explicit lock is acquired.
     await editor.query('UPDATE hub_todos SET remind_at=NULL WHERE id=$1', [todo.id]);
     await editor.query('UPDATE hub_todos SET remind_at=$2 WHERE id=$1', [todo.id, todo.data.remind_at]);
+    const started = once(reminderStatements, 'started', { signal: AbortSignal.timeout(3000) });
     delivery = bus.receive(todo.data);
-    await pool.query('SELECT pg_sleep(0.05)');
-    const overlap = await pool.query(`SELECT EXISTS(SELECT 1 FROM pg_stat_activity
-      WHERE query LIKE 'WITH fired AS (%' AND wait_event_type='Lock' AND $1=ANY(pg_blocking_pids(pid))) AS blocked`, [pid]);
-    assert.equal(overlap.rows[0].blocked, true, 'the old delivery must overlap the uncommitted edit');
+    await started;
     await editor.query('COMMIT');
     assert.deepEqual(await delivery, { acknowledgments: 1, retry: undefined });
     assert.equal(await fired(todo.id), null, 'the stale generation cannot fire the replacement schedule');
@@ -113,13 +124,10 @@ test('delivery preserves a concurrent title edit and advances its optimistic rev
   let delivery: ReturnType<typeof bus.receive> | undefined;
   try {
     await editor.query('BEGIN');
-    const { rows: [{ pid }] } = await editor.query('SELECT pg_backend_pid() AS pid');
     await editor.query("UPDATE hub_todos SET title='Editing' WHERE id=$1", [todo.id]);
+    const started = once(reminderStatements, 'started', { signal: AbortSignal.timeout(3000) });
     delivery = bus.receive(todo.data);
-    await pool.query('SELECT pg_sleep(0.05)');
-    const overlap = await pool.query(`SELECT EXISTS(SELECT 1 FROM pg_stat_activity
-      WHERE query LIKE 'WITH fired AS (%' AND wait_event_type='Lock' AND $1=ANY(pg_blocking_pids(pid))) AS blocked`, [pid]);
-    assert.equal(overlap.rows[0].blocked, true);
+    await started;
     const changed = await editor.query("UPDATE hub_todos SET title='Latest title',updated_at=clock_timestamp() WHERE id=$1 RETURNING updated_at::text", [todo.id]);
     await editor.query('COMMIT');
     await delivery;

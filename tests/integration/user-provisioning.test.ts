@@ -148,7 +148,12 @@ test('version-thirteen upgrade preserves workspace history and roles without res
     await pool.query("INSERT INTO workspace_events(id,workspace_id,actor_id,type,payload) VALUES ($1,$2,$3,'workspace.created','{}')", [event, workspace, owner]);
     const retainedTables = ['users', 'channels', 'threads', 'tasks', 'messages', 'assets', 'workspace_events', 'channel_events', 'agent_definitions', 'agent_connections'] as const;
     const before = new Map<string, unknown>();
-    for (const table of retainedTables) before.set(table, (await pool.query(`SELECT * FROM ${table}`)).rows);
+    const originalColumns = new Map<string, string>();
+    for (const table of retainedTables) {
+      const result = await pool.query(`SELECT * FROM ${table}`);
+      before.set(table, result.rows);
+      originalColumns.set(table, result.fields.map(field => `"${field.name}"`).join(','));
+    }
     const oldWorkspace = (await pool.query('SELECT id,name,created_at FROM workspaces')).rows;
     const oldMemberships = (await pool.query('SELECT workspace_id,user_id,role,joined_at FROM workspace_members ORDER BY user_id')).rows;
     const oldInstallation = (await pool.query('SELECT * FROM agent_installations WHERE id=$1', [installation])).rows[0];
@@ -159,19 +164,13 @@ test('version-thirteen upgrade preserves workspace history and roles without res
     assert.deepEqual((await pool.query('SELECT id,name,created_at FROM workspaces')).rows, oldWorkspace);
     assert.deepEqual((await pool.query('SELECT workspace_id,user_id,role,joined_at FROM workspace_members ORDER BY user_id')).rows, oldMemberships);
     for (const table of retainedTables) {
-      const rows = (await pool.query(`SELECT * FROM ${table}`)).rows;
-      // Compare original columns; later migrations only add the fields excluded here.
-      const originalRows = table === 'messages' ? rows.map(({ sequence, agent_milestone, agent_response, reaction_sequence, agent_session_id, ...message }) => message)
-        : table === 'channels' ? rows.map(({ topic, description, archived_at, kind, direct_user_low, direct_user_high, ...channel }) => {
-          assert.equal(kind, 'channel');
-          assert.equal(direct_user_low, null);
-          assert.equal(direct_user_high, null);
-          return channel;
-        })
-        : table === 'assets' ? rows.map(({ processing_token, processing_until, ...asset }) => asset)
-        : table === 'tasks' ? rows.map(({ request_document, ...task }) => { assert.equal(request_document, null); return task; }) : rows;
-      assert.deepEqual(originalRows, before.get(table), `${table} history changed`);
+      // Additive migrations must preserve every column that existed in v13.
+      const rows = (await pool.query(`SELECT ${originalColumns.get(table)} FROM ${table}`)).rows;
+      assert.deepEqual(rows, before.get(table), `${table} history changed`);
     }
+    assert.deepEqual((await pool.query('SELECT kind,direct_user_low,direct_user_high FROM channels')).rows, [{kind:'channel',direct_user_low:null,direct_user_high:null}]);
+    assert.deepEqual((await pool.query('SELECT request_document FROM tasks')).rows, [{request_document:null}]);
+    assert.deepEqual((await pool.query('SELECT retained_at FROM messages')).rows, [{retained_at:null}]);
     const messageSequence = (await pool.query('SELECT sequence FROM messages WHERE id=$1', [message])).rows[0].sequence;
     const originalMessageEvent = (before.get('channel_events') as { type: string; sequence: string; payload: { id: string } }[])
       .find(row => row.type === 'message.created' && row.payload.id === message)!;
