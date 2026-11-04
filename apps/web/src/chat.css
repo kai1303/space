@@ -63,7 +63,7 @@
 .chat-rail-icon{display:grid;place-items:center;width:36px;height:36px;min-height:36px;border-radius:8px}
 .chat-rail-item:hover,.chat-rail-item.is-active{background:transparent}
 .chat-rail-item:hover .chat-rail-icon{background:rgba(239,225,245,.08)}
-.chat-rail-item.is-active .chat-rail-icon{background:rgba(239,225,245,.25)}
+.chat-rail-item.is-active .chat-rail-icon{background:transparent}
 .chat-rail-item.is-active svg{filter:none}
 .chat-main-area{border-color:rgba(239,225,245,.08)}
 .chat-sidebar{width:var(--chat-sidebar-width,385px)}
@@ -140,3 +140,9 @@
 @media(max-width:720px){.chat-app--sidebar-open .workspace-collection,.chat-app--sidebar-open .workspace-destinations,.chat-app--sidebar-open .composer-drafts{visibility:hidden}}
 
 .chat-destination{display:flex;flex:1;min-width:0;min-height:0;overflow:hidden;position:relative}.chat-destination>.chat-layout{flex:1;min-width:0}
+
+/* Only the active backing moves; icons, labels and focus targets stay in place. */
+.chat-rail-item .chat-rail-icon{position:relative;isolation:isolate}
+.chat-rail-active{position:absolute;inset:0;border-radius:8px;background:rgba(239,225,245,.25);pointer-events:none;z-index:0}
+.chat-rail-glyph{position:relative;display:grid;place-items:center;width:100%;height:100%;z-index:1}
+.chat-rail-item.is-active:hover .chat-rail-icon{background:transparent}

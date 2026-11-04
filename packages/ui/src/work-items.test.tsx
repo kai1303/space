@@ -1,11 +1,14 @@
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Alert, TicketCard, ToolExecution } from "./work-items.js";
 import { CodeBlock } from "./code-block.js";
 import { AgentApproval, type ApprovalDecision } from "./agent-approval.js";
 
-afterEach(() => { cleanup(); vi.restoreAllMocks(); });
+const originalExecCommand = Object.getOwnPropertyDescriptor(document, 'execCommand');
+const legacyCopy = vi.fn(() => false);
+beforeEach(() => { legacyCopy.mockReset().mockReturnValue(false); Object.defineProperty(document, 'execCommand', { configurable: true, value: legacyCopy }); });
+afterEach(() => { cleanup(); vi.restoreAllMocks(); if (originalExecCommand) Object.defineProperty(document, 'execCommand', originalExecCommand); else Reflect.deleteProperty(document, 'execCommand'); });
 
 it("opens a ticket without changing its controlled status", async () => {
   const open = vi.fn();
@@ -52,6 +55,54 @@ it("reports clipboard failure without adding a filename or wrap toolbar", async 
   expect(screen.queryByRole("button", { name: "Wrap code" })).toBeNull();
   await user.click(screen.getByRole("button", { name: "Copy", exact: true }));
   expect(screen.getByRole("alert").textContent).toContain("Could not copy");
+});
+
+it('falls back when clipboard writes are denied, copying inside the active dialog and restoring focus', async () => {
+  const user = userEvent.setup();
+  vi.spyOn(navigator.clipboard, 'writeText').mockRejectedValue(new DOMException('Denied', 'NotAllowedError'));
+  const code = 'const ready = true;\n\tkeepIndent();\n';
+  const { container } = render(<dialog open><CodeBlock code={code} /></dialog>);
+  legacyCopy.mockImplementation(() => {
+    const field = document.activeElement as HTMLTextAreaElement;
+    expect(field.tagName).toBe('TEXTAREA');
+    expect(field.value).toBe(code);
+    expect(field.parentElement).toBe(container.querySelector('dialog'));
+    return true;
+  });
+  const copy = screen.getByRole('button', { name: 'Copy', exact: true });
+  await user.click(copy);
+  expect((await screen.findByRole('status')).textContent).toBe('Copied');
+  expect(legacyCopy).toHaveBeenCalledWith('copy');
+  expect(container.querySelector('textarea')).toBeNull();
+  expect(document.activeElement).toBe(copy);
+});
+
+it('copies when the modern clipboard API is unavailable', async () => {
+  const user = userEvent.setup();
+  const descriptor = Object.getOwnPropertyDescriptor(navigator, 'clipboard');
+  Object.defineProperty(navigator, 'clipboard', { configurable: true, value: undefined });
+  legacyCopy.mockReturnValue(true);
+  try {
+    render(<CodeBlock code="plain code" />);
+    await user.click(screen.getByRole('button', { name: 'Copy', exact: true }));
+    expect((await screen.findByRole('status')).textContent).toBe('Copied');
+    expect(legacyCopy).toHaveBeenCalledWith('copy');
+  } finally {
+    if (descriptor) Object.defineProperty(navigator, 'clipboard', descriptor);
+    else Reflect.deleteProperty(navigator, 'clipboard');
+  }
+});
+
+it('does not change the selection for a fallback after its code block unmounts', async () => {
+  const user = userEvent.setup();
+  let reject!: (reason: Error) => void;
+  vi.spyOn(navigator.clipboard, 'writeText').mockImplementation(() => new Promise((_, fail) => { reject = fail; }));
+  const view = render(<CodeBlock code="previous response" />);
+  await user.click(screen.getByRole('button', { name: 'Copy', exact: true }));
+  view.unmount();
+  await act(async () => { reject(new Error('Denied')); });
+  expect(legacyCopy).not.toHaveBeenCalled();
+  expect(document.querySelector('textarea')).toBeNull();
 });
 
 it("renders Slackbot-style language, line numbers and syntax tokens", async () => {

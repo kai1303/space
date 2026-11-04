@@ -1,8 +1,8 @@
 import {useNotificationDelivery} from './Notifications.js';
 import type {NotificationItem} from '@space/contracts';
-import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
-import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
-import { IconButton, Menu, NavigationIcon, surfaceMotion, useSidebarMotion } from '@space/ui';
+import { useEffect, useId, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import { AnimatePresence, LayoutGroup, motion, useReducedMotion } from 'motion/react';
+import { IconButton, Menu, NavigationIcon, motionTransition, surfaceMotion, useSidebarMotion } from '@space/ui';
 import { ArrowLeft, ArrowRight, BookOpen, CaretDown, Check, ClockCounterClockwise, House, ChatCircle, Bell, List, MagnifyingGlass, Moon, Sun, Users, X, Robot, Files, CheckCircle, Sparkle, GearSix } from '@phosphor-icons/react';
 import { UserSettings } from './UserProfile.js';
 import { SpaceLogo } from './SpaceLogo.js';
@@ -42,6 +42,11 @@ export function ChatShell({ notificationDelivery, onNavigate, activeDestination,
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const shell = useSidebarMotion<HTMLDivElement>(sidebarOpen, '(max-width: 720px)', '.chat-sidebar', workspace);
   const reduced = useReducedMotion();
+  const railId = useId();
+  const railIcon = (active: boolean, content: ReactNode) => <span className="chat-rail-icon">
+    {active && (reduced ? <span className="chat-rail-active" aria-hidden="true"/> : <motion.span className="chat-rail-active" aria-hidden="true" layoutId="active-rail-item" transition={motionTransition(false,.22)}/>)}
+    <span className="chat-rail-glyph">{content}</span>
+  </span>;
   useEffect(() => { setSidebarOpen(false); }, [activeDestination, activityActive, directMessagesActive]);
   const menu = useRef<HTMLDivElement>(null);
   function openSearch() { setSidebarOpen(false); onSearch?.(); }
@@ -77,19 +82,19 @@ export function ChatShell({ notificationDelivery, onNavigate, activeDestination,
       <div className="chat-topbar-end">{activity}<a className="chat-system-link" href="/design-system" aria-label="Open design system"><BookOpen size={19} /></a></div>
     </header>
     <div className="chat-body">
-      <nav className="chat-rail" aria-label="Main navigation">
+      <LayoutGroup id={railId}><nav className="chat-rail" aria-label="Main navigation">
         {onWorkspaceChange ? <WorkspaceSwitcher items={workspaces} value={workspace} onChange={onWorkspaceChange} onCreate={onCreateWorkspace} /> : <div className="chat-workspace-mark" title={name}><SpaceLogo icon /></div>}
-        {onNavigate && <button className={`chat-rail-item${activeDestination === 'spacebot' ? ' is-active' : ''}`} aria-current={activeDestination === 'spacebot' ? 'page' : undefined} onClick={() => onNavigate('spacebot')}><span className="chat-rail-icon"><NavigationIcon name="spacebot" size={20} active={activeDestination === 'spacebot'}/></span><span>Spacebot</span></button>}
-        <a href="/chat" className={`chat-rail-item${directMessagesActive || activityActive || activeDestination ? '' : ' is-active'}`} aria-current={directMessagesActive || activityActive || activeDestination ? undefined : 'page'} onClick={event => { if (onHome) { event.preventDefault(); onHome(); } }}><span className="chat-rail-icon"><NavigationIcon name="home" active={!directMessagesActive && !activityActive && !activeDestination}/></span><span>Home</span></a>
-        {onDirectMessages && <button className={`chat-rail-item${directMessagesActive ? ' is-active' : ''}`} aria-current={directMessagesActive ? 'page' : undefined} onClick={onDirectMessages}><span className="chat-rail-icon"><NavigationIcon name="dms" active={directMessagesActive}/></span><span>DMs</span></button>}
-        {onActivity && <button className={`chat-rail-item${activityActive ? ' is-active' : ''}`} aria-current={activityActive ? 'page' : undefined} aria-label={`Activity${notificationCount ? ` (${notificationCount} unread)` : ''}`} onClick={onActivity}><span className="chat-rail-icon" style={{ position: 'relative' }}><NavigationIcon name="activity" active={activityActive}/>{notificationCount > 0 && <span className="notification-rail-count" aria-hidden="true">{notificationCount > 99 ? '99+' : notificationCount}</span>}</span><span>Activity</span></button>}
-        {onNavigate && ([['files', 'Files'], ['todos', 'To-dos'], ['agents', 'Agents & tools']] as const).map(([view, label]) => <button key={view} className={`chat-rail-item${activeDestination === view ? ' is-active' : ''}`} aria-current={activeDestination === view ? 'page' : undefined} onClick={() => onNavigate(view)}><span className="chat-rail-icon"><NavigationIcon name={view} active={activeDestination === view}/></span><span>{label}</span></button>)}
+        {onNavigate && <button className={`chat-rail-item${activeDestination === 'spacebot' ? ' is-active' : ''}`} aria-current={activeDestination === 'spacebot' ? 'page' : undefined} onClick={() => onNavigate('spacebot')}>{railIcon(activeDestination === 'spacebot',<NavigationIcon name="spacebot" size={20} active={activeDestination === 'spacebot'}/>)}<span>Spacebot</span></button>}
+        <a href="/chat" className={`chat-rail-item${directMessagesActive || activityActive || activeDestination ? '' : ' is-active'}`} aria-current={directMessagesActive || activityActive || activeDestination ? undefined : 'page'} onClick={event => { if (onHome) { event.preventDefault(); onHome(); } }}>{railIcon(!directMessagesActive && !activityActive && !activeDestination,<NavigationIcon name="home" active={!directMessagesActive && !activityActive && !activeDestination}/>)}<span>Home</span></a>
+        {onDirectMessages && <button className={`chat-rail-item${directMessagesActive ? ' is-active' : ''}`} aria-current={directMessagesActive ? 'page' : undefined} onClick={onDirectMessages}>{railIcon(directMessagesActive,<NavigationIcon name="dms" active={directMessagesActive}/>)}<span>DMs</span></button>}
+        {onActivity && <button className={`chat-rail-item${activityActive ? ' is-active' : ''}`} aria-current={activityActive ? 'page' : undefined} aria-label={`Activity${notificationCount ? ` (${notificationCount} unread)` : ''}`} onClick={onActivity}>{railIcon(activityActive,<><NavigationIcon name="activity" active={activityActive}/>{notificationCount > 0 && <span className="notification-rail-count" aria-hidden="true">{notificationCount > 99 ? '99+' : notificationCount}</span>}</>)}<span>Activity</span></button>}
+        {onNavigate && ([['files', 'Files'], ['todos', 'To-dos'], ['agents', 'Agents & tools']] as const).map(([view, label]) => <button key={view} className={`chat-rail-item${activeDestination === view ? ' is-active' : ''}`} aria-current={activeDestination === view ? 'page' : undefined} onClick={() => onNavigate(view)}>{railIcon(activeDestination === view,<NavigationIcon name={view} active={activeDestination === view}/>)}<span>{label}</span></button>)}
         {!!adminItems?.length && <Menu label="Admin" menuLabel="Admin tools" className="chat-admin-menu" floating align="start" trigger={<><span className="chat-rail-icon"><NavigationIcon name="admin"/></span><span>Admin</span></>} items={adminItems}/>}
         <div className="chat-rail-bottom">
           <IconButton label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} theme`} onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}>{theme === 'dark' ? <Sun size={21} /> : <Moon size={21} />}</IconButton>
           <UserSettings user={user} userId={userId} onNameChange={onNameChange} />
         </div>
-      </nav>
+      </nav></LayoutGroup>
       <div className="chat-main-area" onClick={event => {
         if ((event.target as Element).closest('.sp-channel, .sp-sidebar-create, .sp-sidebar-compose, .sp-sidebar-utilities button')) setSidebarOpen(false);
       }}>{children}</div>

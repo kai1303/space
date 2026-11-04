@@ -4,7 +4,9 @@ import userEvent from '@testing-library/user-event';
 import { ChatShell, WorkspacePicker } from './ChatShell.js';
 
 vi.mock('./AuthScreen.js', () => ({ SignOutButton: () => <button>Sign out</button> }));
-afterEach(cleanup);
+const motionPreference=vi.hoisted(()=>({reduced:false}));
+vi.mock('motion/react',async original=>({...await original<typeof import('motion/react')>(),useReducedMotion:()=>motionPreference.reduced}));
+afterEach(()=>{cleanup();motionPreference.reduced=false;});
 const workspaces = [{ id: 'one', name: 'Team' }, { id: 'two', name: 'Another team' }];
 
 it('uses a keyboard-accessible workspace popover instead of a native select', async () => {
@@ -48,4 +50,30 @@ it('matches the eight-item rail while keeping search in the topbar and Admin as 
   await userEvent.click(screen.getByRole('button',{name:'Admin',exact:true}));
   await userEvent.click(screen.getByRole('menuitem',{name:'Manage members'}));
   expect(manage).toHaveBeenCalledOnce();
+});
+
+it('moves one active highlight between rail icons without replacing navigation controls',()=>{
+ const props={name:'Team',user:'Kai',onHome:()=>{},onDirectMessages:()=>{},onActivity:()=>{},onNavigate:()=>{}};
+ const view=render(<ChatShell {...props}><main>Home</main></ChatShell>);
+ const home=screen.getByRole('link',{name:'Home',exact:true}),dms=screen.getByRole('button',{name:'DMs',exact:true});
+ expect(home.querySelector('.chat-rail-active')).toBeTruthy();
+ view.rerender(<ChatShell {...props} directMessagesActive><main>DMs</main></ChatShell>);
+ expect(screen.getByRole('link',{name:'Home',exact:true})).toBe(home);
+ expect(screen.getByRole('button',{name:'DMs',exact:true})).toBe(dms);
+ expect(home.querySelector('.chat-rail-active')).toBeNull();expect(dms.querySelector('.chat-rail-active')).toBeTruthy();
+ expect(view.container.querySelectorAll('[aria-current="page"] .chat-rail-active')).toHaveLength(1);
+ const highlight=dms.querySelector('.chat-rail-active');
+ view.rerender(<ChatShell {...props} directMessagesActive notificationCount={3}><main>DMs update</main></ChatShell>);
+ expect(dms.querySelector('.chat-rail-active')).toBe(highlight);
+ expect(highlight?.getAttribute('aria-hidden')).toBe('true');
+});
+
+it('uses an immediate highlight when reduced motion is requested',()=>{
+ motionPreference.reduced=true;
+ const props={name:'Team',user:'Kai',onHome:()=>{},onActivity:()=>{}};
+ const view=render(<ChatShell {...props}><main>Home</main></ChatShell>);
+ view.rerender(<ChatShell {...props} activityActive><main>Activity</main></ChatShell>);
+ const highlight=screen.getByRole('button',{name:'Activity',exact:true}).querySelector('.chat-rail-active') as HTMLElement;
+ expect(highlight).toBeTruthy();expect(highlight.style.transform).toBe('');expect(highlight.getAnimations?.()??[]).toHaveLength(0);
+ expect(screen.getByRole('link',{name:'Home',exact:true}).querySelector('.chat-rail-active')).toBeNull();
 });

@@ -3,6 +3,39 @@ import { Check, Copy } from "@phosphor-icons/react";
 import { IconButton } from "./primitives.js";
 import { highlightCode, languageName, type CodeToken } from "./syntax-highlight.js";
 
+async function copyCode(code: string, trigger: HTMLElement) {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(code);
+      return;
+    }
+  } catch { /* Embedded browsers can reject the modern clipboard API. */ }
+  if (!trigger.isConnected) throw new Error('Copy control unavailable');
+  const doc = trigger.ownerDocument;
+  const focused = doc.activeElement as HTMLElement | null;
+  const selection = doc.getSelection();
+  const ranges = selection ? Array.from({ length: selection.rangeCount }, (_, index) => selection.getRangeAt(index).cloneRange()) : [];
+  const field = doc.createElement('textarea');
+  field.value = code;
+  field.readOnly = true;
+  field.tabIndex = -1;
+  field.setAttribute('aria-hidden', 'true');
+  field.style.cssText = 'position:fixed;top:0;left:-9999px;opacity:0';
+  (trigger.closest('dialog[open]') ?? doc.body).append(field);
+  try {
+    field.focus({ preventScroll: true });
+    field.select();
+    if (!doc.execCommand?.('copy')) throw new Error('Clipboard unavailable');
+  } finally {
+    field.remove();
+    if (focused?.isConnected) focused.focus({ preventScroll: true });
+    if (selection) {
+      selection.removeAllRanges();
+      for (const range of ranges) if (range.startContainer.isConnected && range.endContainer.isConnected) selection.addRange(range);
+    }
+  }
+}
+
 export function CodeBlock({ code, language = "text" }: {
   code: string;
   language?: string;
@@ -30,10 +63,10 @@ export function CodeBlock({ code, language = "text" }: {
     <div className="sp-code-block" role="group" aria-label={label}>
       <div className="sp-code-header">
         <span className="sp-code-language">{languageName(language)}</span>
-        <IconButton label={copy === "copied" ? "Copied" : "Copy"} size="sm" onClick={async () => {
+        <IconButton label={copy === "copied" ? "Copied" : "Copy"} size="sm" onClick={async event => {
           const version = revision.current;
           try {
-            await navigator.clipboard.writeText(code);
+            await copyCode(code, event.currentTarget);
             if (version === revision.current) setCopy("copied");
           } catch {
             if (version === revision.current) setCopy("error");
