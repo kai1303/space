@@ -1,8 +1,8 @@
-import type { Pool } from 'pg';
+import type { PostgresStore } from '@space/postgres/store';
 import { streamName } from '@space/events';
 
 // Demand-driven probe: no background scans and no event traffic solely to keep health green.
-export async function deliveryHealth(pool: Pick<Pool,'query'>, schema: string) {
+export async function deliveryHealth(pool: Pick<PostgresStore['pool'],'query'>, schema: string) {
   const slots = [`${streamName('*').toLowerCase()}_cdc`, `${streamName(schema).toLowerCase()}_cdc`];
   const [replication, backlog] = await Promise.all([
     pool.query<{active:boolean;retained_bytes:string;wal_status:string}>(
