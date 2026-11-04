@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { fileURLToPath } from 'node:url';
-import { AppError, MAX_MEMORY_IMPORT_BYTES, memorySourceId, parseMemorySettings, parseMemorySource, parseMemoryWrite, record, text, uuid, type ChannelMemory } from '@space/contracts';
+import { AppError, parseAgentMemoryContext, MAX_AGENT_MEMORY_CHARS, MAX_MEMORY_IMPORT_BYTES, memorySourceId, parseMemorySettings, parseMemorySource, parseMemoryWrite, record, text, uuid, type ChannelMemory } from '@space/contracts';
+import type { AgentMemoryContext, Task } from '@space/contracts';
 import type { MemoryProvider } from '@space/core/memory';
 import { MemoryStore, type MemoryChannel } from '@space/postgres/memory';
 import { readThreadContext } from '@space/postgres/thread-context';
@@ -21,6 +22,25 @@ export function memoryProviderFor(providers: Map<string, MemoryProvider>, channe
   if (!provider) throw new AppError(503, 'memory_provider_unavailable');
   return provider;
 }
+// Read external providers outside database transactions, then recheck the live permission.
+export function createAgentMemoryReader(store: MemoryStore, providers = createMemoryProviders()) {
+  let activeReads = 0;
+  return (task: Pick<Task, 'installation_id' | 'requester_id' | 'thread_id'>): Promise<AgentMemoryContext | undefined> => store.agentContext(task, async channel => {
+    const provider = memoryProviderFor(providers, channel);
+    if (activeReads >= 8) throw new AppError(503, 'memory_provider_busy');
+    activeReads++;
+    const reading = Promise.resolve().then(() => provider.read(channel)).finally(() => { activeReads--; });
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const document = await Promise.race([reading, new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new AppError(503, 'memory_provider_timeout')), 5000);
+      })]);
+      let content = document.content.slice(0, MAX_AGENT_MEMORY_CHARS);
+      if (/[\uD800-\uDBFF]$/.test(content)) content = content.slice(0, -1);
+      return parseAgentMemoryContext({ channel_id: channel.channel_id, provider: channel.provider, revision: document.revision, content, truncated: content.length < document.content.length });
+    } finally { clearTimeout(timer); }
+  });
+}
 export function registerMemoryRoutes(app: FastifyInstance, store: MemoryStore, providers = createMemoryProviders()) {
   const providerFor = (channel: MemoryChannel, requireEnabled = true) => {
     return memoryProviderFor(providers, channel, requireEnabled);
@@ -38,6 +58,9 @@ export function registerMemoryRoutes(app: FastifyInstance, store: MemoryStore, p
   app.post<{ Params: { channelId: string; threadId: string } }>(`${threadPath}/connections`, async (r, reply) =>
     reply.code(201).send(await store.createConnection(r.actorId, uuid(r.params.channelId), r.body, uuid(r.params.threadId))));
   const path = '/v1/channels/:channelId/memory';
+  app.get<{ Params: { channelId: string } }>(`${path}/agents`, r => store.agents(r.actorId, uuid(r.params.channelId)));
+  app.post<{ Params: { channelId: string; installationId: string } }>(`${path}/agents/:installationId`, r =>
+    store.setAgentAccess(r.actorId, uuid(r.params.channelId), uuid(r.params.installationId), r.body));
   app.get<{ Params: { channelId: string } }>(`${path}/connections`, r => store.connections(r.actorId, uuid(r.params.channelId)));
   app.post<{ Params: { channelId: string } }>(`${path}/connections`, async (r, reply) => reply.code(201).send(await store.createConnection(r.actorId, uuid(r.params.channelId), r.body)));
   app.post<{ Params: { channelId: string; connectionId: string } }>(`${path}/connections/:connectionId/revoke`, r => {

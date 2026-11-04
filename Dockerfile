@@ -3,9 +3,10 @@ WORKDIR /app
 RUN corepack enable && corepack prepare pnpm@8.10.3 --activate
 COPY . .
 RUN pnpm install --frozen-lockfile
-RUN pnpm exec turbo run build --filter=@space/server... --filter=@space/worker... --filter=@space/tools...
+RUN pnpm exec turbo run build --filter=@space/server... --filter=@space/worker... --filter=@space/tools... --filter=@space/event-service...
 RUN pnpm --filter @space/server deploy --prod /runtime/apps/server \
  && pnpm --filter @space/worker deploy --prod /runtime/apps/worker \
+ && pnpm --filter @space/event-service deploy --prod /runtime/apps/events \
  && pnpm --filter @space/tools deploy --prod /runtime/scripts
 
 FROM node:22-alpine

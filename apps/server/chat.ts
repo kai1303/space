@@ -3,6 +3,10 @@ import { record, uuid } from '@space/contracts';
 import type { ChatStore } from '@space/postgres/chat';
 
 export function registerChatRoutes(app: FastifyInstance, chat: ChatStore) {
+  app.get<{ Params: { workspaceId: string } }>('/v1/workspaces/:workspaceId/direct-messages', r => chat.directMessages.list(r.actorId, uuid(r.params.workspaceId), r.query));
+  app.post<{ Params: { workspaceId: string } }>('/v1/workspaces/:workspaceId/direct-messages', r => chat.directMessages.open(r.actorId, uuid(r.params.workspaceId), r.body));
+  app.get<{ Params: { workspaceId: string } }>('/v1/workspaces/:workspaceId/direct-message-people', r => chat.directMessages.people(r.actorId, uuid(r.params.workspaceId), r.query));
+  app.patch<{ Params: { channelId: string } }>('/v1/channels/:channelId/direct-message', r => chat.directMessages.visibility(r.actorId, uuid(r.params.channelId), r.body));
   app.get<{ Params: { workspaceId: string } }>('/v1/workspaces/:workspaceId/unread', r => chat.unread.summary(r.actorId, uuid(r.params.workspaceId)));
   app.post<{ Params: { channelId: string } }>('/v1/channels/:channelId/read', r => chat.unread.markRead(r.actorId, uuid(r.params.channelId), r.body));
   app.get<{ Params: { channelId: string } }>('/v1/channels/:channelId/mentions', r => chat.mentions.search(r.actorId, uuid(r.params.channelId), r.query));

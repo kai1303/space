@@ -1,3 +1,4 @@
+import { socketCommand } from './socket-command.js';
 import type { ChatEvent, ChatMessage, Page, RichDocument } from '@space/contracts';
 import type { Socket } from 'socket.io-client';
 
@@ -6,10 +7,10 @@ export function mergeEvents(previous: ChatEvent[], incoming: ChatEvent[]): ChatE
   for (const event of incoming) events.set(event.sequence, event);
   return [...events.values()].sort((a, b) => BigInt(a.sequence) < BigInt(b.sequence) ? -1 : 1);
 }
-export async function request<T>(path: string, body?: object, key?: string, method: 'POST' | 'PATCH' | 'DELETE' = 'POST'): Promise<T> {
+export async function request<T>(path: string, body?: object, key?: string, method: 'POST' | 'PATCH' | 'DELETE' = 'POST', signal?: AbortSignal): Promise<T> {
   const response = await fetch(`/v1${path}`, {
     method: method === 'DELETE' ? 'DELETE' : body ? method : 'GET',
-    credentials: 'same-origin',
+    credentials: 'same-origin', signal,
     headers: { ...(body ? { 'content-type': 'application/json' } : {}), ...(key ? { 'idempotency-key': key } : {}) },
     ...(body ? { body: JSON.stringify(body) } : {}),
   });
@@ -29,11 +30,8 @@ export async function listAll<T>(path: string): Promise<T[]> {
   } while (after);
   return items;
 }
-export async function command<T>(socket: Socket, event: string, data: object): Promise<T> {
-  if (!socket.connected) throw new Error('Reconnecting. Try again when connected.');
-  const reply = await socket.timeout(8000).emitWithAck(event, data);
-  if (reply.error) throw new Error(reply.error);
-  return reply.data as T;
+export function command<T>(socket: Socket, event: string, data: object): Promise<T> {
+  return socketCommand<T>(socket, event, data);
 }
 export type MessageAttempt = { current?: { content: string; id: string } };
 // Retain a failed attempt's ID, so retrying after a lost acknowledgment is safe.

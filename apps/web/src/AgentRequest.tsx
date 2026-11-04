@@ -1,10 +1,10 @@
 import { useEffect, useId, useRef, useState, type FormEvent } from 'react';
 import { Button, Reveal } from '@space/ui';
 import { Sparkle } from '@phosphor-icons/react';
-import type { AgentInstallation, NavigatorCandidate } from '@space/contracts';
+import type { AgentInstallation, ChannelAgent, NavigatorCandidate } from '@space/contracts';
 import { request } from './chat-client.js';
 const errorText = (error: unknown) => error instanceof Error ? error.message.replaceAll('_', ' ') : 'Unable to request an agent';
-type LocalAgent = { id: string; name: string; enabled_in_channel: boolean };
+type LocalAgent = ChannelAgent;
 
 export function AgentRequest({ workspace, channel, thread, agents, onCandidates }: {
   workspace: string; channel: string; thread: string; agents: AgentInstallation[];
@@ -18,7 +18,7 @@ export function AgentRequest({ workspace, channel, thread, agents, onCandidates 
   async function refresh(version: number) {
     const [installations, owned, catalog] = await Promise.all([
       request<AgentInstallation[]>(`/agents/installations?workspace_id=${workspace}`),
-      request<LocalAgent[]>(`/channels/${channel}/local-codex`),
+      request<LocalAgent[]>(`/channels/${channel}/agents`),
       request<{ candidates: NavigatorCandidate[] }>(`/channels/${channel}/navigator`),
     ]);
     if (version !== generation.current) return;
@@ -33,14 +33,14 @@ export function AgentRequest({ workspace, channel, thread, agents, onCandidates 
     }
     return () => { generation.current++; };
   }, [open, workspace, channel]);
-  const choices = available.filter(agent => agent.enabled && agent.capabilities.skills.length && (agent.connector_id !== 'codex.local' || candidates.some(candidate => candidate.installation_id === agent.id)));
-  async function enable(agent: LocalAgent, enabled: boolean) {
+  const choices = available.filter(agent => agent.enabled).map(agent => ({ ...agent, capabilities: { ...agent.capabilities, skills: agent.capabilities.skills.filter(skill => candidates.some(candidate => candidate.installation_id === agent.id && candidate.skill === skill)) } })).filter(agent => agent.capabilities.skills.length);
+  async function enable(agent: LocalAgent, skill: string, enabled: boolean) {
     const version = generation.current;
     setBusy(true); setError('');
     try {
-      await request(`/agents/connections/${agent.id}/channels/${channel}`, { enabled });
+      await request(`/agents/connections/${agent.id}/channels/${channel}`, { enabled, skill });
       await refresh(version);
-      if (!enabled && selection.startsWith(`${agent.id}|`)) setSelection('');
+      if (!enabled && selection === `${agent.id}|${skill}`) setSelection('');
     } catch (cause) { if (version === generation.current) setError(errorText(cause)); }
     finally { if (version === generation.current) setBusy(false); }
   }
@@ -58,7 +58,10 @@ export function AgentRequest({ workspace, channel, thread, agents, onCandidates 
   return <section className="chat-agent-request"><button type="button" className="chat-agent-toggle" aria-expanded={open} aria-controls={id} onClick={() => setOpen(value => !value)}><Sparkle size={16} /> Ask an agent</button><Reveal open={open} id={id}>
     {!loaded && <p role="status">Loading agents…</p>}
     {error && <p role="alert">{error}</p>}
-    {local.map(agent => <div key={agent.id}><small>{agent.name} {agent.enabled_in_channel ? 'can receive approved tasks in this channel.' : 'is paired. Enable it to receive approved tasks in this channel.'}</small><Button size="sm" variant="ghost" disabled={busy} aria-label={`${agent.enabled_in_channel ? 'Disable' : 'Enable'} ${agent.name} in this channel`} onClick={() => void enable(agent, !agent.enabled_in_channel)}>{agent.enabled_in_channel ? 'Disable in this channel' : 'Enable in this channel'}</Button></div>)}
+    {local.flatMap(agent => agent.skills.map(skill => {
+      const enabled = agent.granted_skills.includes(skill), label = agent.skills.length === 1 ? agent.name : `${agent.name} · ${skill}`;
+      return <div key={`${agent.id}|${skill}`}><small>{label} {enabled ? 'can receive approved tasks in this channel.' : 'is available. Enable it to receive approved tasks in this channel.'}</small><Button size="sm" variant="ghost" disabled={busy} aria-label={`${enabled ? 'Disable' : 'Enable'} ${label} in this channel`} onClick={() => void enable(agent, skill, !enabled)}>{enabled ? 'Disable in this channel' : 'Enable in this channel'}</Button></div>;
+    }))}
     {loaded && choices.length > 0 ? <form onSubmit={submit}>
       <label>Agent and skill<select required value={selection} onChange={event => setSelection(event.target.value)}><option value="">Choose a skill</option>{choices.flatMap(agent => agent.capabilities.skills.map(skill => <option key={`${agent.id}|${skill}`} value={`${agent.id}|${skill}`}>{candidates.find(candidate => candidate.installation_id === agent.id)?.name ?? agent.connector_id} · {skill}</option>))}</select></label>
       <label>What should the agent do?<textarea required maxLength={4000} value={goal} onChange={event => setGoal(event.target.value)} /></label><small>The agent owner must approve this task before it runs.</small>

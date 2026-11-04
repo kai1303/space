@@ -3,14 +3,14 @@ import { sql } from 'drizzle-orm';
 import { AppError, chatCursor, documentMentions, mentionOperations, parseMention, parseRichDocument, record, uuid, type MentionActivity, type MentionOption, type MentionReference, type MentionSettings, type RichDocument } from '@space/contracts';
 import { database, type DbSession } from './database.js';
 import { hasChannelAccess, requireWorkspaceAccess } from './access.js';
-type Channel = { id: string; workspace_id: string; private: boolean; created_by: string | null };
+type Channel = { kind?: 'channel' | 'direct'; id: string; workspace_id: string; private: boolean; created_by: string | null };
 async function rows<T>(c: DbSession, query: Parameters<DbSession['execute']>[0]): Promise<T[]> { return (await c.execute(query)).rows as T[]; }
 const missing = () => new AppError(404, 'not_found');
 export class MentionStore {
   readonly db;
   constructor(pool: Pool) { this.db = database(pool); }
   private async channel(c: DbSession, actor: string, id: string) {
-    const [channel] = await rows<Channel>(c, sql`SELECT id,workspace_id,private,created_by FROM channels WHERE id=${uuid(id)}`);
+    const [channel] = await rows<Channel>(c, sql`SELECT id,workspace_id,private,created_by,kind FROM channels WHERE id=${uuid(id)}`);
     if (!channel || !await hasChannelAccess(c, actor, channel.workspace_id, id)) throw missing();
     return channel;
   }
@@ -19,6 +19,7 @@ export class MentionStore {
       EXISTS(SELECT 1 FROM channel_members cm WHERE cm.channel_id=${channel.id} AND cm.user_id=u.id) AS joined
       FROM users u JOIN workspace_members wm ON wm.user_id=u.id AND wm.workspace_id=${channel.workspace_id} AND wm.active
       WHERE (${target?.id ?? null}::uuid IS NULL OR u.id=${target?.kind === 'user' ? target.id : null}::uuid)
+      AND (${channel.kind === 'direct'}=false OR EXISTS(SELECT 1 FROM channel_members cm WHERE cm.channel_id=${channel.id} AND cm.user_id=u.id))
       AND (${target?.kind === 'agent'}=false) AND position(lower(${query}) IN lower(u.display_name||' '||u.full_name))>0
       ORDER BY lower(u.display_name),u.id LIMIT 30`);
     const agents = await rows<MentionOption>(c, sql`SELECT DISTINCT 'agent' AS kind,i.id,coalesce(ac.name,d.name) AS label,'Agent' AS detail,NULL::text AS image,true AS joined

@@ -1,3 +1,5 @@
+import { DirectMessageStore } from './direct-messages.js';
+import { sessionTransaction } from './session-concurrency.js';
 import { MentionStore } from './mentions.js';
 import { UnreadStore } from './unread.js';
 import { createHash, randomUUID } from 'node:crypto';
@@ -11,8 +13,8 @@ import * as s from './schema.js';
 const notFound = () => new AppError(404, 'not_found');
 
 export class ChatStore {
-  readonly db; readonly mentions; readonly unread;
-  constructor(readonly pool: Pool) { this.db = database(pool); this.mentions = new MentionStore(pool); this.unread = new UnreadStore(pool); }
+  readonly db; readonly mentions; readonly unread; readonly directMessages;
+  constructor(readonly pool: Pool) { this.db = database(pool); this.directMessages = new DirectMessageStore(this.db); this.mentions = new MentionStore(pool); this.unread = new UnreadStore(pool); }
   async channels(actor: string, workspace: string, query: unknown = {}) {
     const { after, limit } = parsePage(query);
     return this.db.transaction(async c => {
@@ -20,7 +22,7 @@ export class ChatStore {
       const member = c.select({ user_id: s.channelMembers.user_id }).from(s.channelMembers)
         .where(and(eq(s.channelMembers.channel_id, s.channels.id), eq(s.channelMembers.user_id, actor)));
       const rows = await c.select({ channel: s.channels, joined: sql<boolean>`exists (${member})` })
-        .from(s.channels).where(and(eq(s.channels.workspace_id, workspace), or(eq(s.channels.private, false), exists(member)), after ? gt(s.channels.id, after) : undefined))
+        .from(s.channels).where(and(eq(s.channels.workspace_id, workspace), eq(s.channels.kind, 'channel'), or(eq(s.channels.private, false), exists(member)), after ? gt(s.channels.id, after) : undefined))
         .orderBy(s.channels.id).limit(limit + 1);
       return page(rows.map(row => channelDto(row.channel, row.joined)), limit, row => row.id);
     });
@@ -36,20 +38,38 @@ export class ChatStore {
     });
   }
   private async lockedChannel(c: DbSession, id: string) {
-    const [ref] = await c.select({ workspace_id: s.channels.workspace_id }).from(s.channels).where(eq(s.channels.id, uuid(id)));
+    const [ref] = await c.select().from(s.channels).where(eq(s.channels.id, uuid(id)));
     if (!ref) throw notFound();
+    if (ref.kind === 'direct') return ref;
     await lockWorkspace(c, ref.workspace_id);
     return (await c.select().from(s.channels).where(eq(s.channels.id, id)).for('update'))[0]!;
+  }
+  private async channelTransaction<T>(id: string, work: (c: DbSession) => Promise<T>): Promise<T> {
+    const [channel] = await this.db.select({ kind: s.channels.kind }).from(s.channels).where(eq(s.channels.id, uuid(id)));
+    return channel?.kind === 'direct' ? sessionTransaction(this.db, work) : this.db.transaction(work);
   }
   private async authorize(c: DbSession, actor: string, channel: string) {
     const [row] = await c.select().from(s.channels).where(eq(s.channels.id, uuid(channel)));
     if (!row || !await hasChannelAccess(c, actor, row.workspace_id, channel)) throw notFound();
     return row;
   }
+  async typingActor(actor: string, channelId: string, threadId?: string | null) {
+    return this.db.transaction(async c => {
+      const channel = await this.authorize(c, actor, channelId);
+      if (threadId && !(await c.select({id:s.threads.id}).from(s.threads).where(and(eq(s.threads.id,uuid(threadId)),eq(s.threads.channel_id,channel.id)))).length) throw notFound();
+      const [user] = await c.select({id:s.users.id,name:s.users.display_name}).from(s.users).where(eq(s.users.id,actor));
+      if (!user) throw notFound();
+      return {user,archived:!!channel.archived_at};
+    }, {accessMode:'read only'});
+  }
   async details(actor: string, id: string): Promise<ChannelDetails> {
     return this.db.transaction(async c => this.detail(c, actor, await this.authorize(c, actor, id)));
   }
   private async detail(c: DbSession, actor: string, channel: typeof s.channels.$inferSelect): Promise<ChannelDetails> {
+    if (channel.kind === 'direct') {
+      const direct = await this.directMessages.summary(c, actor, channel.workspace_id, channel.id);
+      return { ...direct, creator_name: null, member_count: direct.participants.length, can_manage: false };
+    }
     const [membership] = await c.select().from(s.workspaceMembers).where(and(eq(s.workspaceMembers.workspace_id, channel.workspace_id), eq(s.workspaceMembers.user_id, actor), eq(s.workspaceMembers.active, true)));
     const [creator] = channel.created_by ? await c.select({ name: s.users.display_name }).from(s.users).where(eq(s.users.id, channel.created_by)) : [];
     const [count] = await c.select({ total: sql<number>`count(*)::int` }).from(s.channelMembers)
@@ -89,6 +109,7 @@ export class ChatStore {
     return this.db.transaction(async c => {
       const channel = await this.lockedChannel(c, id);
       await requireWorkspaceAccess(c, actor, channel.workspace_id);
+      if (channel.kind === 'direct') { await this.authorize(c, actor, id); throw new AppError(403, 'direct_message_immutable'); }
       if (channel.private && !await hasChannelAccess(c, actor, channel.workspace_id, id)) throw notFound();
       await c.insert(s.channelMembers).values({ workspace_id: channel.workspace_id, channel_id: id, user_id: actor }).onConflictDoNothing();
       return { joined: true };
@@ -96,6 +117,7 @@ export class ChatStore {
   }
   private async manager(c: DbSession, actor: string, channel: typeof s.channels.$inferSelect) {
     await this.authorize(c, actor, channel.id);
+    if (channel.kind === 'direct') throw new AppError(403, 'direct_message_immutable');
     const [membership] = await c.select().from(s.workspaceMembers)
       .where(and(eq(s.workspaceMembers.workspace_id, channel.workspace_id), eq(s.workspaceMembers.user_id, actor)));
     if (channel.created_by !== actor && membership?.role === 'member') throw new AppError(403, 'channel_management_forbidden');
@@ -116,6 +138,7 @@ export class ChatStore {
     await this.db.transaction(async c => {
       const channel = await this.lockedChannel(c, id);
       await this.authorize(c, actor, id);
+      if (channel.kind === 'direct') throw new AppError(403, 'direct_message_immutable');
       if (actor !== user) await this.manager(c, actor, channel);
       if (channel.private) {
         const managers = await c.select({ id: s.channelMembers.user_id }).from(s.channelMembers)
@@ -130,23 +153,29 @@ export class ChatStore {
   async send(actor: string, channelId: string, input: unknown): Promise<ChatMessage> {
     const request = parseMessageInput(input);
     const hash = createHash('sha256').update(JSON.stringify({ channel_id: channelId, thread_id: request.thread_id, text: request.text, ...(request.document ? { document: request.document } : {}), ...(request.asset_ids?.length ? { asset_ids: request.asset_ids } : {}) })).digest('hex');
-    return this.db.transaction(async c => {
+    return this.channelTransaction(channelId, async c => {
       const channel = await this.lockedChannel(c, channelId);
       await this.authorize(c, actor, channelId);
-      await c.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${`${channel.workspace_id}:${actor}:${request.client_message_id}`}))`);
+      if (channel.kind !== 'direct') await c.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${`${channel.workspace_id}:${actor}:${request.client_message_id}`}))`);
       const [existing] = await c.select().from(s.messageIdentities).where(and(eq(s.messageIdentities.workspace_id, channel.workspace_id), eq(s.messageIdentities.user_id, actor), eq(s.messageIdentities.client_message_id, request.client_message_id)));
       if (existing) {
         if (existing.request_hash !== hash) throw new AppError(409, 'idempotency_conflict');
         return this.message(c, existing.id, existing.channel_id);
       }
       if (channel.archived_at) throw new AppError(409, 'channel_archived');
+      if (channel.kind === 'direct') {
+        const inactive = await c.execute(sql`SELECT 1 FROM workspace_members WHERE workspace_id=${channel.workspace_id}
+          AND user_id IN (${channel.direct_user_low},${channel.direct_user_high}) AND NOT active LIMIT 1`);
+        if (inactive.rows.length) throw new AppError(409, 'direct_message_participant_inactive');
+      }
       const prepared = await this.mentions.prepare(c, actor, channel, request.document, !!request.thread_id, !!request.broadcast_confirmed);
       const threadId = request.thread_id ?? randomUUID();
       if (request.thread_id) {
         if (!(await c.select({ id: s.threads.id }).from(s.threads).where(and(eq(s.threads.id, threadId), eq(s.threads.channel_id, channelId)))).length) throw notFound();
       } else await c.insert(s.threads).values({ id: threadId, workspace_id: channel.workspace_id, channel_id: channelId });
       const id = randomUUID();
-      const files = request.asset_ids?.length ? await c.select().from(s.assets).where(inArray(s.assets.id, request.asset_ids)).orderBy(s.assets.id).for('update') : [];
+      const fileQuery = request.asset_ids?.length ? c.select().from(s.assets).where(inArray(s.assets.id, request.asset_ids)).orderBy(s.assets.id) : null;
+      const files = fileQuery ? await (channel.kind === 'direct' ? fileQuery : fileQuery.for('update')) : [];
       if (files.length !== (request.asset_ids?.length ?? 0) || files.some(file => file.channel_id !== channelId || file.uploader_id !== actor || file.status !== 'ready' || file.message_id || file.expires_at <= new Date())) throw new AppError(409, 'asset_unavailable');
       const attachments = (request.asset_ids ?? []).map(id => {
         const file = files.find(file => file.id === id)!;
@@ -156,13 +185,14 @@ export class ChatStore {
         author_type: 'human', user_id: actor, client_message_id: request.client_message_id, request_hash: hash, text: prepared.document ? prepared.document.ops.map(op => op.insert).join('').trim() : request.text, document: prepared.document ?? null, attachments });
       await this.mentions.notify(c, actor, channel, id, prepared.refs, !!request.thread_id);
       if (files.length) await c.update(s.assets).set({ message_id: id }).where(inArray(s.assets.id, files.map(file => file.id)));
+      if (channel.kind === 'direct') await c.execute(sql`UPDATE direct_message_views SET hidden=false,last_activity_at=now() WHERE channel_id=${channelId}`);
       return this.message(c, id, channelId);
     });
   }
   async react(actor: string, channelId: string, messageId: string, input: unknown): Promise<ChatMessage> {
     const { emoji, active } = parseReactionInput(input);
     messageId = uuid(messageId);
-    return this.db.transaction(async c => {
+    return this.channelTransaction(channelId, async c => {
       const channel = await this.lockedChannel(c, channelId);
       await this.authorize(c, actor, channelId);
       const [message] = await c.select().from(s.messages).where(and(eq(s.messages.channel_id, channelId), eq(s.messages.id, messageId)));
@@ -255,7 +285,7 @@ export class ChatStore {
   }
 }
 function channelDto(channel: typeof s.channels.$inferSelect, joined: boolean): ChannelSummary {
-  return { id: channel.id, workspace_id: channel.workspace_id, name: channel.name, private: channel.private, joined,
+  return { kind: channel.kind, id: channel.id, workspace_id: channel.workspace_id, name: channel.name, private: channel.private, joined,
     topic: channel.topic, description: channel.description, archived_at: channel.archived_at?.toISOString() ?? null,
     created_by: channel.created_by, created_at: channel.created_at.toISOString() };
 }

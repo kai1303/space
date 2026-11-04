@@ -60,3 +60,27 @@ it('immediately clears a hidden key from the DOM during normal motion', async ()
   expect(configuration.isConnected).toBe(false);
   expect(view.container.querySelector('.channel-memory-issued')).toBeNull();
 });
+
+it('sets agent memory permission separately and binds contribute-only keys to the selected installation', async () => {
+  const calls: { path: string; body: any }[] = [];
+  vi.stubGlobal('fetch', vi.fn(async (path: string, options?: RequestInit) => {
+    const body = options?.body ? JSON.parse(String(options.body)) : undefined;
+    if (body) calls.push({ path, body });
+    return { ok: true, json: async () => path.endsWith('/agents') ? { items: [{ id: 'agent-1', name: 'Research agent', access: 'none' }] }
+      : path.endsWith('/agents/agent-1') ? { access: body.access }
+      : body ? { connection: { id: 'bound-key', name: body.name, access: body.access, installation_id: body.installation_id }, token: 'bound-secret' }
+      : { items: [] } };
+  }));
+  render(<MemoryConnections channel="first" enabled />);
+  const permission = await screen.findByRole('combobox', { name: 'Memory access for Research agent' });
+  expect((permission as HTMLSelectElement).value).toBe('none');
+  await userEvent.selectOptions(permission, 'contribute');
+  await screen.findByText('Memory permission updated.');
+  await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Bind key to installation' }), 'agent-1');
+  await userEvent.selectOptions(screen.getByRole('combobox', { name: 'MCP access' }), 'contribute');
+  expect(screen.queryByRole('option', { name: 'Read conversations, read and write memory' })).toBeNull();
+  await userEvent.click(screen.getByRole('button', { name: 'Create MCP key' }));
+  await screen.findByRole('textbox', { name: 'MCP client configuration' });
+  expect(calls[0]).toEqual({ path: '/v1/channels/first/memory/agents/agent-1', body: { access: 'contribute' } });
+  expect(calls[1].body).toEqual({ name: 'Research agent', access: 'contribute', installation_id: 'agent-1' });
+});

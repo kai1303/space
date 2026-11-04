@@ -1,5 +1,6 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import type { Pool } from 'pg';
+import { sql } from 'drizzle-orm';
 import { database } from './database.js';
 import * as s from './schema.js';
 export function tokenHash(token: string): string { return createHash('sha256').update(token).digest('hex'); }
@@ -12,7 +13,8 @@ export async function bootstrap(pool: Pool) {
       { workspace_id: seed.workspace_id, user_id: seed.owner_id, role: 'owner' },
       { workspace_id: seed.workspace_id, user_id: seed.collaborator_id, role: 'member' },
     ]);
-    await c.insert(s.channels).values({ id: seed.channel_id, workspace_id: seed.workspace_id, name: 'general', private: false, created_by: seed.owner_id });
+    // Keep the baseline fixture usable when verifying historical migrations.
+    await c.execute(sql`INSERT INTO channels(id,workspace_id,name,private,created_by) VALUES(${seed.channel_id},${seed.workspace_id},'general',false,${seed.owner_id})`);
     await c.insert(s.channelMembers).values([seed.owner_id, seed.collaborator_id].map(user_id => ({ workspace_id: seed.workspace_id, channel_id: seed.channel_id, user_id })));
     await c.insert(s.threads).values({ id: seed.thread_id, workspace_id: seed.workspace_id, channel_id: seed.channel_id });
     await c.insert(s.humanCredentials).values([{ token_hash: tokenHash(seed.owner_token), user_id: seed.owner_id }, { token_hash: tokenHash(seed.collaborator_token), user_id: seed.collaborator_id }]);

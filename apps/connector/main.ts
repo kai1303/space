@@ -1,4 +1,10 @@
 #!/usr/bin/env node
+import { homedir } from 'node:os';
+import { join } from 'node:path';
+import { parseLocalProvider, type LocalProvider } from '@space/contracts';
+import type { AgentRuntime } from './agent-runtime.js';
+import { startKiro } from './kiro.js';
+import { kiroIdentity, kiroLogin } from './kiro-auth.js';
 import { parseArgs } from 'node:util';
 import { pathToFileURL } from 'node:url';
 import { createInterface } from 'node:readline/promises';
@@ -8,24 +14,35 @@ import { claimPairing, connectPlatform, startCodex, type AuthStatus } from './ru
 
 export function parseOptions(args: string[]) {
   const { values } = parseArgs({ args, strict: true, allowPositionals: false, options: {
-    connect: { type: 'boolean', default: false }, url: { type: 'string' }, pair: { type: 'string' }, login: { type: 'boolean', default: false },
+    provider: { type: 'string' }, connect: { type: 'boolean', default: false }, url: { type: 'string' }, pair: { type: 'string' }, login: { type: 'boolean', default: false },
     logout: { type: 'boolean', default: false }, help: { type: 'boolean', default: false },
   } });
   if (values.logout && (values.login || values.pair || values.url || values.connect)) throw new Error('Use --logout by itself.');
   if (values.pair !== undefined && !/^[A-Za-z0-9_-]{32}$/.test(values.pair)) throw new Error('Use the 32-character pairing code from Space.');
-  return { url: values.url ? platformOrigin(values.url) : undefined, pair: values.pair, login: values.login, logout: values.logout, help: values.help, connect: values.connect };
+  const provider = values.provider === undefined ? undefined : parseLocalProvider(values.provider);
+  return { ...(provider ? { provider } : {}), url: values.url ? platformOrigin(values.url) : undefined, pair: values.pair, login: values.login, logout: values.logout, help: values.help, connect: values.connect };
+}
+
+export function connectorDirectory(provider: LocalProvider) {
+  return join(homedir(), '.config', provider === 'kiro' ? 'space-connector-kiro' : 'space-connector');
+}
+
+export function credentialRenewalDelay(expiresAt: number, now = Date.now()) {
+  const remaining = expiresAt - now;
+  return Math.max(1000, remaining > 60_000 ? remaining - 60_000 : Math.floor(remaining * 0.8));
 }
 
 export async function runConnector(args = process.argv.slice(2)) {
   const options = parseOptions(args);
   if (options.help) {
-    console.log('Space Connector\n\n  --url <origin> --pair <code>  Pair this computer with Space\n  --connect                   Prompt for a new pairing code\n  --login                     Continue with ChatGPT again\n  --logout                    Remove local ChatGPT tokens\n\nRun without arguments to reconnect. Pairing codes are prompted when omitted.\nKeep this terminal running. Codex CLI must be installed on PATH.');
+    console.log('Space Connector\n\n  --provider <codex|kiro>     Select the local agent (default: codex)\n  --url <origin> --pair <code>  Pair this computer with Space\n  --connect                   Prompt for a new pairing code\n  --login                     Sign in to the selected provider\n  --logout                    Sign out of the selected provider\n\nRun without arguments to reconnect. Pairing codes are prompted when omitted.\nKeep this terminal running. The selected provider CLI must be installed on PATH. Kiro requires ACP v3.');
     return;
   }
-  const store = new ConnectorStore();
+  const provider = parseLocalProvider(options.provider);
+  const store = new ConnectorStore(connectorDirectory(provider));
   const unlock = await store.lock();
   const controller = new AbortController();
-  let codex: Awaited<ReturnType<typeof startCodex>> | undefined;
+  let runtime: AgentRuntime | undefined;
   let platform: ReturnType<typeof connectPlatform> | undefined;
   let renewal: NodeJS.Timeout | undefined;
   let renewalTask: Promise<void> | undefined;
@@ -38,6 +55,7 @@ export async function runConnector(args = process.argv.slice(2)) {
   try {
     let state = await store.load();
     if (options.logout) {
+      if (provider === 'kiro') { await kiroLogin(store.directory, controller.signal, true); console.log('Signed out of Kiro for Space on this computer.'); return; }
       if (state.credentials) {
         const revoked = await revokeCredentials(state.credentials);
         delete state.credentials;
@@ -57,42 +75,60 @@ export async function runConnector(args = process.argv.slice(2)) {
         try { code = (await input.question('Pairing code from Space: ', { signal: controller.signal })).trim(); }
         finally { input.close(); }
       }
-      await claimPairing(store, origin, code);
+      await claimPairing(store, origin, code, undefined, provider);
       state = await store.load();
       paired = true;
-      console.log('This computer is paired with Space. ChatGPT credentials stay on this computer.');
+      console.log('This computer is paired with Space. Provider credentials stay on this computer.');
     } else if (options.url && options.url !== state.connection.origin) {
       throw new Error('The saved connector uses a different platform. Provide a new --pair code to change it.');
     }
     if (!state.connection) throw new Error('Pairing did not save a connection.');
+    if (parseLocalProvider(state.connection.provider) !== provider) throw new Error('The saved connection belongs to a different provider.');
     platform = connectPlatform(state.connection, () => {
-      if (status === 'ready' && (!codex?.alive() || !state.credentials || state.credentials.expires_at <= Date.now())) return 'error';
+      if (status === 'ready' && (!runtime?.alive() || (provider === 'codex' && (!state.credentials || state.credentials.expires_at <= Date.now())))) return 'error';
       return status;
     }, () => {
       console.error('Space rejected this connector credential. Create a new pairing code and run with --pair.');
       process.exitCode = 1;
       stop();
     }, async (request, emit, signal) => {
-      if (status !== 'ready' || !codex?.alive()) throw new Error('Codex is not ready.');
-      await codex.invoke(request, emit, signal);
+      if (status !== 'ready' || !runtime?.alive()) throw new Error('The agent is not ready.');
+      await runtime.invoke(request, emit, signal);
     });
     async function activate(credentials: Credentials) {
       if (controller.signal.aborted) return;
       status = 'required';
       platform?.publish();
-      codex?.stop();
-      codex = await startCodex(credentials.access_token, () => {
+      runtime?.stop();
+      runtime = await startCodex(credentials.access_token, () => {
         status = 'error';
         platform?.publish();
         console.error('Codex app-server stopped. Restart the connector to retry.');
-      });
-      if (controller.signal.aborted) { codex.stop(); return; }
-      status = codex.alive() ? 'ready' : 'error';
+      }, undefined, { directory: store.directory, connection: state.connection!, identity: credentials });
+      if (controller.signal.aborted) { runtime.stop(); return; }
+      status = runtime.alive() ? 'ready' : 'error';
       platform?.publish();
       if (status === 'ready') console.log('Connected: ChatGPT authorization and Codex initialization are ready.');
     }
     try {
-      if (options.login || (paired && !state.credentials)) {
+      if (provider === 'kiro') {
+        if (options.login) await kiroLogin(store.directory, controller.signal);
+        let identity;
+        try { identity = await kiroIdentity(store.directory, controller.signal); }
+        catch (error) {
+          if (!paired || options.login || controller.signal.aborted) throw error;
+          console.log('Sign in to Kiro for Space. This uses separate local credentials.');
+          await kiroLogin(store.directory, controller.signal);
+          identity = await kiroIdentity(store.directory, controller.signal);
+        }
+        if (!controller.signal.aborted) {
+          runtime = await startKiro({ directory: store.directory, connection: state.connection, identity }, () => {
+            status = 'error'; platform?.publish(); console.error('Kiro stopped. Restart the connector to retry.');
+          });
+          if (controller.signal.aborted) runtime.stop();
+          else { status = runtime.alive() ? 'ready' : 'error'; platform.publish(); console.log('Connected: Kiro authorization and chat mode are ready.'); }
+        }
+      } else if (options.login || (paired && !state.credentials)) {
         const credentials = await authorize(state.host_id, state.registration, { signal: controller.signal });
         state.registration = { client_id: credentials.client_id, subject: credentials.subject, issuer: credentials.issuer };
         state.credentials = credentials;
@@ -111,28 +147,32 @@ export async function runConnector(args = process.argv.slice(2)) {
       }
     }
     let refreshing = false;
-    renewal = setInterval(() => {
-      if (refreshing || status !== 'ready' || !state.credentials || state.credentials.expires_at > Date.now() + 60_000) return;
-      refreshing = true;
-      renewalTask = (async () => {
-        try {
-          state.credentials = await refreshCredentials(state.credentials!, { signal: controller.signal });
-          await store.save(state);
-          await activate(state.credentials);
-        } catch {
-          status = 'error';
-          codex?.stop();
-          platform?.publish();
-          if (!controller.signal.aborted) console.error('ChatGPT renewal failed. Restart the connector with --login.');
-        } finally { refreshing = false; }
-      })();
-    }, 15_000);
+    const scheduleRenewal = () => {
+      if (provider !== 'codex' || status !== 'ready' || !state.credentials || controller.signal.aborted) return;
+      renewal = setTimeout(() => {
+        if (refreshing || status !== 'ready' || !state.credentials || controller.signal.aborted) return;
+        refreshing = true;
+        renewalTask = (async () => {
+          try {
+            state.credentials = await refreshCredentials(state.credentials!, { signal: controller.signal });
+            await store.save(state);
+            await activate(state.credentials);
+          } catch {
+            status = 'error';
+            runtime?.stop();
+            platform?.publish();
+            if (!controller.signal.aborted) console.error('ChatGPT renewal failed. Restart the connector with --login.');
+          } finally { refreshing = false; scheduleRenewal(); }
+        })();
+      }, credentialRenewalDelay(state.credentials.expires_at));
+    };
+    scheduleRenewal();
     await finished;
   } finally {
-    if (renewal) clearInterval(renewal);
+    if (renewal) clearTimeout(renewal);
     controller.abort();
     await renewalTask;
-    codex?.stop();
+    runtime?.stop();
     platform?.close();
     process.removeListener('SIGINT', stop);
     process.removeListener('SIGTERM', stop);

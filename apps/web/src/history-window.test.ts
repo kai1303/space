@@ -80,3 +80,17 @@ it('keeps reply counts monotonic through duplicate delivery, reaction updates an
   const stale=mergePage(updated,{...previous,messages:[root]},'older');
   expect(stale.messages[0]!.reply_count).toBe(5);
 });
+
+it.each([false,true])('attaches live session references below the root without counting them as replies: rootsOnly=%s',rootsOnly=>{
+ const root={...message(1),thread_root_id:'1',reply_count:0};
+ const ref={...message(2),thread_root_id:'1',reply_count:1,agent_session_id:'session',text:'Research',author:{kind:'agent' as const,id:'agent',name:'Codex'}};
+ const previous={...page(1,1,false),messages:[root]};
+ const once=appendLive(previous,[ref],true,rootsOnly);
+ const twice=appendLive(once,[ref],true,rootsOnly);
+ const updated=twice.messages.find(m=>m.id===root.id)!;
+ expect(updated.agent_sessions).toEqual([{id:'session',title:'Research',agent_name:'Codex'}]);
+ const batched=appendLive({...previous,messages:[],older_cursor:null,newer_cursor:null},[root,ref],true,rootsOnly);
+ expect(batched.messages.find(m=>m.id===root.id)?.agent_sessions).toEqual(updated.agent_sessions);
+ expect(updated.reply_count).toBe(0);
+ expect(mergePage(twice,previous,'older').messages.find(m=>m.id===root.id)?.agent_sessions).toEqual(updated.agent_sessions);
+});

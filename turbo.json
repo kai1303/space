@@ -25,14 +25,20 @@
       "cache": false,
       "passThroughEnv": [
         "TEST_DATABASE_URL",
-        "TEST_REDIS_URL"
+        "TEST_REDIS_URL",
+        "TEST_NATS_URL",
+        "NATS_URL"
       ]
     },
     "test:contracts": {
       "dependsOn": [
         "^build"
       ],
-      "outputs": []
+      "outputs": [],
+      "passThroughEnv": [
+        "TEST_NATS_URL",
+        "NATS_URL"
+      ]
     },
     "test:foundation": {
       "dependsOn": [
@@ -40,7 +46,9 @@
       ],
       "cache": false,
       "passThroughEnv": [
-        "TEST_DATABASE_URL"
+        "TEST_DATABASE_URL",
+        "TEST_NATS_URL",
+        "NATS_URL"
       ]
     },
     "dev": {
@@ -68,7 +76,9 @@
         "ASSET_STORAGE_SECRET_KEY",
         "ASSET_STORAGE_ORIGINS",
         "MEMORY_DIRECTORY",
-        "MEMORY_MCP_ALLOWED_HOSTS"
+        "MEMORY_MCP_ALLOWED_HOSTS",
+        "NATS_URL",
+        "DATABASE_SCHEMA"
       ]
     },
     "start": {
@@ -95,7 +105,9 @@
         "ASSET_STORAGE_SECRET_KEY",
         "ASSET_STORAGE_ORIGINS",
         "MEMORY_DIRECTORY",
-        "MEMORY_MCP_ALLOWED_HOSTS"
+        "MEMORY_MCP_ALLOWED_HOSTS",
+        "NATS_URL",
+        "DATABASE_SCHEMA"
       ]
     },
     "migrate": {
@@ -165,7 +177,9 @@
       "cache": false,
       "passThroughEnv": [
         "TEST_DATABASE_URL",
-        "TEST_REDIS_URL"
+        "TEST_REDIS_URL",
+        "TEST_NATS_URL",
+        "NATS_URL"
       ]
     },
     "test:auth": {
@@ -174,7 +188,9 @@
       ],
       "cache": false,
       "passThroughEnv": [
-        "TEST_DATABASE_URL"
+        "TEST_DATABASE_URL",
+        "TEST_NATS_URL",
+        "NATS_URL"
       ]
     },
     "test:assets": {
@@ -189,7 +205,9 @@
         "ASSET_STORAGE_BUCKET",
         "ASSET_STORAGE_ACCESS_KEY",
         "ASSET_STORAGE_SECRET_KEY",
-        "ASSET_STORAGE_ORIGINS"
+        "ASSET_STORAGE_ORIGINS",
+        "TEST_NATS_URL",
+        "NATS_URL"
       ]
     },
     "test:workspace": {
@@ -198,7 +216,9 @@
       ],
       "cache": false,
       "passThroughEnv": [
-        "TEST_DATABASE_URL"
+        "TEST_DATABASE_URL",
+        "TEST_NATS_URL",
+        "NATS_URL"
       ]
     }
   }

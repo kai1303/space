@@ -1,3 +1,4 @@
+import { subscribeUpdates } from './live-updates.js';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { MentionActivity, MentionNotification, MentionOption, MentionReference, MentionSettings } from '@space/contracts';
 import { Avatar, Button, Dialog, IconButton, type FindMentions } from '@space/ui';
@@ -22,9 +23,10 @@ export function MentionInbox({workspace,onOpen}:{workspace:string;onOpen:(item:M
     catch(error){if(version!==epoch.current||change!==revision.current)return;setActivity({items:[],unread_count:0,next_cursor:null});setSettings(undefined);setError(failure(error));}
   },[workspace]);
   useEffect(()=>{
-    epoch.current++;setActivity({items:[],unread_count:0,next_cursor:null});setSettings(undefined);setOpen(false);setError('');void refresh();
-    const poll=()=>{if(!document.hidden)void refresh();};const timer=setInterval(poll,10000);window.addEventListener('focus',poll);window.addEventListener('space:mentions-changed',poll);
-    return()=>{epoch.current++;clearInterval(timer);window.removeEventListener('focus',poll);window.removeEventListener('space:mentions-changed',poll);};
+    epoch.current++;setActivity({items:[],unread_count:0,next_cursor:null});setSettings(undefined);setOpen(false);setError('');
+    const stop=subscribeUpdates('workspace',workspace,refresh,code=>{epoch.current++;setActivity({items:[],unread_count:0,next_cursor:null});setSettings(undefined);setError(failure(new Error(code)));});
+    const changed=()=>{void refresh();};window.addEventListener('space:mentions-changed',changed);
+    return()=>{epoch.current++;stop();window.removeEventListener('space:mentions-changed',changed);};
   },[workspace,refresh]);
   async function setting(patch:object){const version=epoch.current;setBusy(true);setError('');try{const updated=await request<MentionSettings>(`/workspaces/${workspace}/mention-settings`,patch,undefined,'PATCH');if(version===epoch.current){setSettings(updated);await refresh();}}catch(error){if(version===epoch.current)setError(failure(error));}finally{if(version===epoch.current)setBusy(false);}}
   async function visit(item:MentionNotification){const version=epoch.current;try{await request(`/workspaces/${workspace}/mentions/${item.id}/read`,{});if(version!==epoch.current)return;setOpen(false);onOpen(item);void refresh();}catch(error){if(version===epoch.current){setError(failure(error));void refresh();}}}

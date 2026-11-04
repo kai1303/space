@@ -29,7 +29,8 @@
     "test:auth": "turbo run test:auth --filter=@space/tests",
     "connector": "pnpm --filter @space/connector build && pnpm --filter @space/connector start",
     "test:assets": "turbo run test:assets --filter=@space/tests",
-    "test:workspace": "turbo run test:workspace --filter=@space/tests"
+    "test:workspace": "turbo run test:workspace --filter=@space/tests",
+    "events": "turbo run start --filter=@space/event-service"
   },
   "devDependencies": {
     "turbo": "^2.11.10"

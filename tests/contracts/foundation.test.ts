@@ -41,3 +41,14 @@ test('invocation working memory preserves source references and rejects unbounde
     assert.throws(() => parseInvocation({ ...invocation, context: { ...invocation.context, working_memory: invalid } }));
   }
 });
+
+
+test('saved-session readiness is a true-only progress acknowledgement', () => {
+  const event = { id: randomUUID(), schema_version: '1.0', execution_id: randomUUID(), sequence: 2, type: 'execution.progress', occurred_at: new Date().toISOString(), payload: { text: 'Local session saved', session_ready: true } };
+  assert.deepEqual(parseAgentEvent(event), event);
+  assert.throws(() => parseAgentEvent({ ...event, type: 'execution.started' }));
+  assert.throws(() => parseAgentEvent({ ...event, type: 'execution.completed' }));
+  assert.throws(() => parseAgentEvent({ ...event, payload: { ...event.payload, session_ready: false } }));
+  assert.throws(() => parseAgentEvent({ ...event, payload: { ...event.payload, session_ready: 'true' } }));
+  assert.throws(() => parseAgentEvent({ ...event, payload: { ...event.payload, actor_id: randomUUID() } }));
+});

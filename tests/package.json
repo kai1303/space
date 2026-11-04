@@ -8,7 +8,7 @@
   ],
   "scripts": {
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "tsx --test contracts/*.test.ts integration/*.test.ts",
+    "test": "tsx --test --test-concurrency=4 contracts/*.test.ts integration/*.test.ts",
     "test:contracts": "tsx --test contracts/*.test.ts",
     "test:foundation": "tsx --test contracts/*.test.ts integration/foundation.test.ts",
     "test:workspace": "tsx --test contracts/workspace.test.ts integration/workspace.test.ts integration/user-provisioning.test.ts integration/workspace-isolation.test.ts",
@@ -25,7 +25,10 @@
     "@space/redis": "workspace:*",
     "@space/server": "workspace:*",
     "pg": "^8.23.1",
-    "socket.io-client": "^4.8.4"
+    "socket.io-client": "^4.8.4",
+    "@space/events": "workspace:*",
+    "@space/event-service": "workspace:*",
+    "nats": "2.29.3"
   },
   "devDependencies": {
     "@types/node": "22",

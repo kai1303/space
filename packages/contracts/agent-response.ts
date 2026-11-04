@@ -5,7 +5,36 @@ export type AgentTool = { id: string; name: string; arguments: string; result?: 
 export type AgentComponent =
   | { id: string; type: 'card'; title: string; body: string }
   | { id: string; type: 'table'; title: string; columns: string[]; rows: string[][] };
-export type AgentResponse = { messages: AgentText[]; tools: AgentTool[]; components: AgentComponent[]; step?: string };
+export type AgentSessionOutputs = {
+  preview?: { state: 'starting' | 'ready' | 'stopped'; label: string; url?: string; document?: string };
+  files: { path: string; content: string; language?: string }[];
+  changes: { path: string; patch: string }[];
+};
+export type AgentResponse = { messages: AgentText[]; tools: AgentTool[]; components: AgentComponent[]; step?: string; outputs?: AgentSessionOutputs };
+
+function parseOutputs(input: unknown): AgentSessionOutputs {
+  const v = record(input, ['preview', 'files', 'changes']);
+  const files = list(v.files, 20, item => {
+    const f = record(item, ['path', 'content', 'language']);
+    return { path: text(f.path, 300), content: string(f.content, 32000), ...(f.language === undefined ? {} : { language: text(f.language, 50) }) };
+  });
+  const changes = list(v.changes, 20, item => {
+    const f = record(item, ['path', 'patch']);
+    return { path: text(f.path, 300), patch: string(f.patch, 32000) };
+  });
+  let preview: AgentSessionOutputs['preview'];
+  if (v.preview !== undefined) {
+    const p = record(v.preview, ['state', 'label', 'url', 'document']);
+    if (!['starting', 'ready', 'stopped'].includes(p.state as string)) throw new AppError(400, 'invalid_preview');
+    let url: URL | undefined;
+    if (p.url !== undefined) {
+      try { url = new URL(text(p.url, 2000)); } catch { throw new AppError(400, 'invalid_preview'); }
+    }
+    if (url && (url.protocol !== 'https:' || url.username || url.password)) throw new AppError(400, 'invalid_preview');
+    preview = { state: p.state as NonNullable<typeof preview>['state'], label: text(p.label, 200), ...(url ? {url: url.href} : {}), ...(p.document === undefined ? {} : {document: string(p.document, 32000)}) };
+  }
+  return { ...(preview ? {preview} : {}), files, changes };
+}
 
 function string(value: unknown, max: number): string {
   if (typeof value !== 'string' || value.length > max || value.includes('\0')) throw new AppError(400, 'invalid_agent_response');
@@ -33,7 +62,7 @@ export function parseAgentComponent(input: unknown): AgentComponent {
   throw new AppError(400, 'unsupported_agent_component');
 }
 export function parseAgentResponse(input: unknown): AgentResponse {
-  const v = record(input, ['messages', 'tools', 'components', 'step']);
+  const v = record(input, ['messages', 'tools', 'components', 'step', 'outputs']);
   const messages = unique(list(v.messages, 30, (item): AgentText => {
     const m = record(item, ['id', 'text', 'status']);
     if (m.status !== 'streaming' && m.status !== 'complete') throw new AppError(400, 'invalid_agent_response');
@@ -46,7 +75,7 @@ export function parseAgentResponse(input: unknown): AgentResponse {
       status: t.status as AgentTool['status'], ...(t.result === undefined ? {} : { result: string(t.result, 16000) }) };
   }));
   const components = unique(list(v.components, 20, parseAgentComponent));
-  const result = { messages, tools, components, ...(v.step === undefined ? {} : { step: text(v.step, 200) }) };
+  const result = { messages, tools, components, ...(v.step === undefined ? {} : { step: text(v.step, 200) }), ...(v.outputs === undefined ? {} : { outputs: parseOutputs(v.outputs) }) };
   if (messages.map(message => message.text).join('\n\n').length > 16000 || JSON.stringify(result).length > 64000) throw new AppError(400, 'agent_response_too_large');
   return result;
 }

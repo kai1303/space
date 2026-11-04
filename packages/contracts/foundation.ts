@@ -1,4 +1,5 @@
 import { AppError, record, text, uuid } from './validation.js';
+import { parseAgentMemoryContext } from './memory.js';
 import { parseThreadContext } from './thread-context.js';
 import type { AgentCapabilities, AgentSession, ControlFeature, Execution, InvocationRequest } from './index.js';
 export interface DefinitionInput { name: string; capabilities: AgentCapabilities }
@@ -7,13 +8,14 @@ export interface GrantInput { channel_id: string; skill: string }
 export interface AgentGrant extends GrantInput { workspace_id: string; installation_id: string }
 const controls: ControlFeature[] = ['active_steer', 'queued_followup', 'cancel', 'pause', 'resume', 'progress_stream', 'input_request'];
 export function parseCapabilities(value: unknown): AgentCapabilities {
-  const v = record(value, ['skills', 'controls']);
+  const v = record(value, ['skills', 'controls', 'persistent_sessions']);
   if (!Array.isArray(v.skills) || v.skills.length > 100) throw new AppError(400, 'invalid_skills');
   const skills = v.skills.map(skill => text(skill, 80));
   if (new Set(skills).size !== skills.length) throw new AppError(400, 'duplicate_skill');
   const flags = record(v.controls, controls);
   if (Object.values(flags).some(flag => typeof flag !== 'boolean')) throw new AppError(400, 'invalid_controls');
-  return { skills, controls: { ...flags } as AgentCapabilities['controls'] };
+  if (v.persistent_sessions !== undefined && typeof v.persistent_sessions !== 'boolean') throw new AppError(400, 'invalid_persistent_sessions');
+  return { skills, controls: { ...flags } as AgentCapabilities['controls'], ...(v.persistent_sessions === undefined ? {} : { persistent_sessions: v.persistent_sessions }) };
 }
 export function parseDefinitionInput(value: unknown): DefinitionInput {
   const v = record(value, ['name', 'capabilities']);
@@ -39,21 +41,27 @@ export function parseExecution(value: unknown): Execution {
   return { id: uuid(v.id), task_id: uuid(v.task_id), workspace_id: uuid(v.workspace_id), installation_id: uuid(v.installation_id), session_id: uuid(v.session_id), status: v.status as Execution['status'], last_sequence: v.last_sequence as number };
 }
 export function parseInvocation(value: unknown): InvocationRequest {
-  const v = record(value, ['schema_version', 'task_id', 'execution_id', 'session_id', 'idempotency_key', 'goal', 'skill', 'context']);
+  const v = record(value, ['schema_version', 'task_id', 'execution_id', 'session_id', 'idempotency_key', 'goal', 'skill', 'context', 'persistent_session']);
   if (v.schema_version !== '1.0') throw new AppError(400, 'unsupported_schema_version');
   const execution_id = uuid(v.execution_id);
   if (uuid(v.idempotency_key) !== execution_id) throw new AppError(400, 'invalid_idempotency_key');
   let context:InvocationRequest['context'];
   if (v.context !== undefined) {
-    const ctx = record(v.context, ['thread_id', 'messages', 'working_memory']);
+    const ctx = record(v.context, ['thread_id', 'messages', 'working_memory', 'channel_memory']);
     if (!Array.isArray(ctx.messages) || ctx.messages.length > 16) throw new AppError(400, 'invalid_context');
     const working_memory = ctx.working_memory === undefined ? undefined : parseThreadContext(ctx.working_memory);
     if (working_memory && working_memory.thread_id !== uuid(ctx.thread_id)) throw new AppError(400, 'invalid_context_thread');
-    context = { ...(working_memory ? { working_memory } : {}), thread_id: uuid(ctx.thread_id), messages: ctx.messages.map(raw => {
+    context = { ...(ctx.channel_memory === undefined ? {} : { channel_memory: parseAgentMemoryContext(ctx.channel_memory) }), ...(working_memory ? { working_memory } : {}), thread_id: uuid(ctx.thread_id), messages: ctx.messages.map(raw => {
       const m = record(raw, ['id', 'text', 'author_type']);
       if (m.author_type !== 'human' && m.author_type !== 'agent') throw new AppError(400, 'invalid_context');
       return { id: uuid(m.id), text: text(m.text, 1000), author_type: m.author_type };
     }) };
   }
-  return { ...(context?{context}:{}), schema_version: '1.0', task_id: uuid(v.task_id), execution_id, session_id: uuid(v.session_id), idempotency_key: execution_id, goal: text(v.goal), skill: text(v.skill, 80) };
+  let persistent_session: InvocationRequest['persistent_session'];
+  if (v.persistent_session !== undefined) {
+    const persistent = record(v.persistent_session, ['resume']);
+    if (typeof persistent.resume !== 'boolean') throw new AppError(400, 'invalid_persistent_session');
+    persistent_session = { resume: persistent.resume };
+  }
+  return { ...(persistent_session ? { persistent_session } : {}), ...(context?{context}:{}), schema_version: '1.0', task_id: uuid(v.task_id), execution_id, session_id: uuid(v.session_id), idempotency_key: execution_id, goal: text(v.goal), skill: text(v.skill, 80) };
 }

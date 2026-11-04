@@ -143,3 +143,17 @@ test('a different pairing code generates a fresh pending credential after an unc
     });
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
+
+test('Kiro pairing sends its provider and rejects mismatched provider responses', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'space-provider-'));
+  try {
+    const store = new ConnectorStore(directory);
+    await assert.rejects(claimPairing(store, 'http://localhost:3000', 'k'.repeat(32), async (_url, options) => {
+      assert.equal(JSON.parse(options.body).provider, 'kiro');
+      return Response.json({ installation_id: 'i', workspace_id: 'w', provider: 'codex' });
+    }, 'kiro'), /different agent provider/);
+    assert.equal((await store.load()).connection, undefined);
+    const connection = await claimPairing(store, 'http://localhost:3000', 'k'.repeat(32), async () => Response.json({ installation_id: 'i', workspace_id: 'w', provider: 'kiro' }), 'kiro');
+    assert.equal(connection.provider, 'kiro');
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});

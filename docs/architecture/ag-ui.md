@@ -38,7 +38,7 @@ This creates a new installation each time. Then start the updated worker and req
 
 The HTTP client posts standard AG-UI input with `threadId` equal to Space's agent session ID, `runId` equal to the execution ID, and the user's goal as the input message. `forwardedProps` includes `taskId` and `skill`. No channel history or local filesystem is sent. The backend may keep its own session history keyed by `threadId`.
 
-The `Idempotency-Key` header is the execution ID. Retries must replay the same ordered stream, including stable timestamps when supplied. Space derives receipt IDs from the execution and event sequence. Changed replay envelopes are rejected; the adapter cannot make a backend's external effects idempotent. The current worker uses its existing 10-second invocation deadline and at most three attempts, with a 30-second delivery lease. Long-running agents need a separate lease-renewal change before raising this deadline.
+The `Idempotency-Key` header is the execution ID. Retries must replay the same ordered stream, including stable timestamps when supplied. Space derives receipt IDs from the execution and event sequence. Changed replay envelopes are rejected; the adapter cannot make a backend's external effects idempotent. The worker has a 10-second invocation deadline and an attempt token with a 30-second execution deadline. Failures known to occur before invocation may retry; an interrupted external invocation fails uncertain and is never automatically invoked again. A targeted durable deadline settles a crashed attempt. Long-running agents need an explicit deadline-renewal design before raising this limit.
 
 Supported parent-run events:
 

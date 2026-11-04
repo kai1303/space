@@ -348,15 +348,16 @@ function PopoverPanel({ panelRef, ...props }: React.ComponentProps<typeof motion
   return <motion.div {...props} ref={panelRef} inert={!present} aria-hidden={!present || undefined} />;
 }
 
-export function SidePanel({ children, className, role, "aria-label": label }: {
+export function SidePanel({ children, className, role, hidden, "aria-label": label }: {
   children: ReactNode;
   className: string;
   role?: "region" | "dialog";
+  hidden?: boolean;
   "aria-label"?: string;
 }) {
   const reduced = useReducedMotion();
   const present = useIsPresent();
-  return <motion.aside role={role} className={className} aria-label={label} aria-hidden={!present || undefined} inert={!present} {...surfaceMotion(reduced, "right")}>{children}</motion.aside>;
+  return <motion.aside role={role} hidden={hidden} className={className} aria-label={label} aria-hidden={!present || undefined} inert={!present} {...surfaceMotion(reduced, "right")}>{children}</motion.aside>;
 }
 
 export function Dialog({

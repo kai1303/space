@@ -1,4 +1,4 @@
-export interface NavigatorCandidate { installation_id: string; name: string; skill: string; description: string }
+export interface NavigatorCandidate { persistent_sessions?: boolean; installation_id: string; name: string; skill: string; description: string }
 export interface NavigatorRule { skill: string; keywords: string[] }
 export interface NavigationTask { id: string; title: string; capabilities: string[]; dependsOn: string[] }
 export interface NavigationAssessment {

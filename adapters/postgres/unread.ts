@@ -1,7 +1,8 @@
+import { sessionTransaction } from './session-concurrency.js';
 import type { Pool } from 'pg';
 import { sql } from 'drizzle-orm';
 import { AppError, chatCursor, record, uuid, type WorkspaceUnread } from '@space/contracts';
-import { database } from './database.js';
+import { database, type DbSession } from './database.js';
 import { hasChannelAccess, lockWorkspace, requireWorkspaceAccess } from './access.js';
 
 export class UnreadStore {
@@ -34,12 +35,15 @@ export class UnreadStore {
     const v = record(input, ['sequence']);
     if (v.sequence === undefined) throw new AppError(400, 'invalid_cursor');
     const sequence = chatCursor(v.sequence);
-    return this.db.transaction(async c => {
+    const direct = await this.db.execute<{ kind: string }>(sql`SELECT kind FROM channels WHERE id=${channel}`);
+    const work = async (c: DbSession) => {
       const ref = await c.execute<{ workspace_id: string }>(sql`SELECT workspace_id FROM channels WHERE id=${channel}`);
       if (!ref.rows[0]) throw new AppError(404, 'not_found');
       const workspace = ref.rows[0].workspace_id;
-      await lockWorkspace(c, workspace);
-      await c.execute(sql`SELECT id FROM channels WHERE id=${channel} FOR UPDATE`);
+      if (direct.rows[0]?.kind !== 'direct') {
+        await lockWorkspace(c, workspace);
+        await c.execute(sql`SELECT id FROM channels WHERE id=${channel} FOR UPDATE`);
+      }
       if (!await hasChannelAccess(c, actor, workspace, channel)) throw new AppError(404, 'not_found');
       if (sequence !== '0' && !(await c.execute(sql`SELECT id FROM messages WHERE workspace_id=${workspace} AND channel_id=${channel} AND sequence=${sequence}::bigint`)).rows.length) {
         throw new AppError(400, 'invalid_read_sequence');
@@ -48,6 +52,7 @@ export class UnreadStore {
         WHERE channel_id=${channel} AND user_id=${actor} AND last_read_sequence<${sequence}::bigint`);
       const result = await c.execute<{ last_read_sequence: string }>(sql`SELECT last_read_sequence::text FROM channel_reads WHERE channel_id=${channel} AND user_id=${actor}`);
       return result.rows[0]!;
-    });
+    };
+    return direct.rows[0]?.kind === 'direct' ? sessionTransaction(this.db, work) : this.db.transaction(work);
   }
 }

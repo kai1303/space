@@ -16,7 +16,7 @@ const schema = `unread_${randomBytes(8).toString('hex')}`;
 const admin = new Pool({ connectionString: process.env.TEST_DATABASE_URL });
 const pool = new Pool({ connectionString: process.env.TEST_DATABASE_URL, options: `-c search_path=${schema}` });
 const adapters = [new RedisSocketAdapter(process.env.TEST_REDIS_URL, schema), new RedisSocketAdapter(process.env.TEST_REDIS_URL, schema)];
-const apps = adapters.map(adapter => createApi(new PostgresStore(pool), { allowDevelopmentTokens: true, realtime: { adapter, reconcileMs: 60_000, outboxMs: 20 } }));
+const apps = adapters.map(adapter => createApi(new PostgresStore(pool), { allowDevelopmentTokens: true, realtime: { adapter, } }));
 let addresses: string[];
 before(async () => {
   if (!process.env.TEST_DATABASE_URL) throw Error('TEST_DATABASE_URL required');
@@ -104,9 +104,12 @@ test('migration baselines historical messages without losing future unread messa
       await tx.query('COMMIT');
     } finally { tx.release(); }
     const a = await bootstrap(legacy), chat = new ChatStore(legacy);
-    await chat.send(a.owner_id, a.channel_id, { client_message_id: randomUUID(), text: 'Historical' });
+    // Historical fixtures use the historical schema; current stores include later columns.
+    await legacy.query(`INSERT INTO messages(id,workspace_id,channel_id,thread_id,author_type,user_id,client_message_id,request_hash,text)
+      VALUES($1,$2,$3,$4,'human',$5,$6,'legacy','Historical')`, [randomUUID(),a.workspace_id,a.channel_id,a.thread_id,a.owner_id,randomUUID()]);
     await legacy.query(await readFile(new URL('../../adapters/postgres/migrations/027_channel_reads.sql', import.meta.url), 'utf8'));
     assert.equal((await chat.unread.summary(a.collaborator_id, a.workspace_id)).channels[0]!.unread_count, 0);
+    for (const file of migrationFiles.slice(migrationFiles.indexOf('027_channel_reads.sql') + 1)) await legacy.query(await readFile(new URL(`../../adapters/postgres/migrations/${file}`, import.meta.url), 'utf8'));
     const next = await chat.send(a.owner_id, a.channel_id, { client_message_id: randomUUID(), text: 'After migration' });
     await chat.react(a.collaborator_id, a.channel_id, next.id, { emoji: '👍', active: true });
     assert.equal((await chat.unread.summary(a.collaborator_id, a.workspace_id)).channels[0]!.unread_count, 1, 'reactions must not count as new messages');
@@ -142,9 +145,11 @@ test('workspace realtime covers unopened channels, syncs devices across servers,
     two.socket.disconnect(); await send(a.owner_token, ch.id, 'While offline');
     const resumed = await subscriber(a.collaborator_token, a.workspace_id, 1);
     try { await resumed.wait(hasCount(1)); } finally { resumed.socket.disconnect(); }
-    const disconnected = new Promise<void>(resolve => one.socket.once('disconnect', () => resolve()));
+    const revoked = new Promise<any>(resolve => one.socket.once('workspace.revoked', resolve));
     await pool.query('UPDATE workspace_members SET active=false WHERE workspace_id=$1 AND user_id=$2', [a.workspace_id, a.collaborator_id]);
-    await Promise.race([disconnected, delay(5000).then(() => { throw Error('revoked workspace subscription remained connected'); })]);
+    const notification = await Promise.race([revoked, delay(5000).then(() => { throw Error('workspace subscription was not revoked'); })]);
+    assert.deepEqual(notification, {workspace_id:a.workspace_id,error:'not_found'});
+    assert.equal(one.socket.connected,true,'scoped revocation must preserve the shared connection');
   } finally { one.socket.disconnect(); two.socket.disconnect(); owner.socket.disconnect(); }
 });
 

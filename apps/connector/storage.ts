@@ -1,3 +1,4 @@
+import type { LocalProvider } from '@space/contracts';
 import { randomUUID } from 'node:crypto';
 import { constants } from 'node:fs';
 import { chmod, lstat, mkdir, open, readFile, rename, rm } from 'node:fs/promises';
@@ -9,7 +10,7 @@ export interface Credentials extends Registration {
   access_token: string; refresh_token: string; id_token: string;
   scopes: string[]; expires_at: number;
 }
-export interface Connection { origin: string; credential: string; installation_id: string; workspace_id: string }
+export interface Connection { provider?: LocalProvider; origin: string; credential: string; installation_id: string; workspace_id: string }
 export interface LocalState {
   host_id: string;
   pending?: { origin: string; credential: string; code_hash: string };

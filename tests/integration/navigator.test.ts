@@ -6,6 +6,7 @@ import { migrate } from '@space/postgres/migrate';
 import { bootstrap } from '@space/postgres/bootstrap';
 import { ChatStore } from '@space/postgres/chat';
 import { PostgresStore } from '@space/postgres/store';
+import { AgentSessionStore } from '@space/postgres/agent-sessions';
 import { NavigatorStore } from '@space/postgres/navigator';
 import { MockConnector } from '@space/mock/connector';
 import { deliverOne } from '@space/core/worker';
@@ -51,30 +52,26 @@ test('mention sends atomically wake routing; duplicates make one task and owner 
   assert.equal((await pool.query('SELECT * FROM tasks WHERE thread_id=$1',[s.thread_id])).rowCount,1);
 });
 
-test('owned follow-ups wait for active execution, reuse approved session, and never infer', async () => {
+test('ordinary discussion does not create agent turns after a completed mention', async () => {
   const s = await fixture();
-  await send(s,`@agent-${s.installation_id} draft a guide`); await tick();
-  const first=(await pool.query('SELECT * FROM tasks WHERE thread_id=$1',[s.thread_id])).rows[0];
-  await send(s,'Please make it shorter',s.collaborator_id); await tick();
-  assert.equal((await pool.query('SELECT * FROM tasks WHERE thread_id=$1',[s.thread_id])).rowCount,1);
-  await drainTasks(); await tick(); await drainTasks();
-  const rows=await pool.query('SELECT * FROM tasks WHERE thread_id=$1 ORDER BY created_at',[s.thread_id]);
-  assert.equal(rows.rowCount,2); assert.equal(rows.rows[1].session_id,first.session_id);
-  assert.match(rows.rows[1].goal,/make it shorter/);
-  assert.equal((await pool.query('SELECT * FROM navigator_inferences WHERE channel_id=$1',[s.channel_id])).rowCount,0);
+  await nav.configure(s.owner_id,s.channel_id,{mode:'off'});
+  await send(s,`@agent-${s.installation_id} draft a guide`); await tick(s.thread_id);
+  await send(s,'Please make it shorter',s.collaborator_id); await tick(s.thread_id);
+  await drainTasks();await tick(s.thread_id);
+  assert.equal((await pool.query('SELECT 1 FROM tasks WHERE thread_id=$1',[s.thread_id])).rowCount,1);
+  assert.equal(await nav.subscription(s.owner_id,s.thread_id),null);
+  assert.equal((await pool.query('SELECT 1 FROM navigator_inferences WHERE channel_id=$1',[s.channel_id])).rowCount,0);
 });
 
-test('collaborator mention preserves owner approval, then establishes continuation ownership', async () => {
+test('each explicit collaborator request preserves owner approval instead of inheriting a prior approval', async () => {
   const s = await fixture();
-  await send(s,`@agent-${s.installation_id} draft`,s.collaborator_id); await tick();
+  await send(s,`@agent-${s.installation_id} draft`,s.collaborator_id); await tick(s.thread_id);
   const task=(await pool.query('SELECT * FROM tasks WHERE thread_id=$1',[s.thread_id])).rows[0];
   assert.equal(task.status,'awaiting_approval');
-  assert.equal(await deliverOne(tasks,[new MockConnector()]),false);
   await tasks.approveTask(s.owner_id,task.id); await drainTasks();
-  await send(s,'Add examples',s.collaborator_id); await tick(); await drainTasks();
+  await send(s,`@agent-${s.installation_id} Add examples`,s.collaborator_id); await tick(s.thread_id);
   const follow=(await pool.query('SELECT * FROM tasks WHERE thread_id=$1 ORDER BY created_at DESC',[s.thread_id])).rows[0];
-  assert.equal(follow.session_id,task.session_id ?? (await tasks.readTask(s.owner_id,task.id)).session_id);
-  assert.equal(follow.status,'completed');
+  assert.notEqual(follow.id,task.id);assert.equal(follow.status,'awaiting_approval');
 });
 
 test('rules batch conversation into a suggestion, never execute, and acceptance is idempotent and scoped', async () => {
@@ -126,13 +123,13 @@ test('API exposes scoped catalog, settings and suggestions, and denies unprivile
  } finally {await api.close();}
 });
 
-test('a repeated direct tag queues behind the owner and quoted rich-text tags do not invoke',async()=>{
+test('repeated direct requests start independent runs and quoted rich-text tags do not invoke',async()=>{
  const s=await fixture();
  await send(s,`@agent-${s.installation_id} first`);await tick();
  await send(s,`@agent-${s.installation_id} follow-up`);await tick();
- assert.equal((await pool.query('SELECT * FROM tasks WHERE thread_id=$1',[s.thread_id])).rowCount,1);
+ assert.equal((await pool.query('SELECT * FROM tasks WHERE thread_id=$1',[s.thread_id])).rowCount,2);
  await drainTasks();await tick();await drainTasks();
- assert.equal((await pool.query('SELECT count(DISTINCT session_id)::int AS n FROM tasks WHERE thread_id=$1',[s.thread_id])).rows[0].n,1);
+ assert.equal((await pool.query('SELECT count(DISTINCT session_id)::int AS n FROM tasks WHERE thread_id=$1',[s.thread_id])).rows[0].n,2);
  const other=await fixture(),tag=`@agent-${other.installation_id}`;
  await chat.send(other.owner_id,other.channel_id,{client_message_id:randomUUID(),thread_id:other.thread_id,text:tag,document:{ops:[{insert:tag},{insert:'\n',attributes:{'code-block':true}}]}});await tick();
  assert.equal((await pool.query('SELECT * FROM tasks WHERE thread_id=$1',[other.thread_id])).rowCount,0);
@@ -176,14 +173,14 @@ test('stale cached inference after grant revocation advances the thread without 
  await send(s,`@agent-${s.installation_id} draft this`);await tick();assert.equal((await pool.query('SELECT * FROM tasks WHERE thread_id=$1',[s.thread_id])).rowCount,1);
 });
 
-test('closing ownership stops follow-up routing and unknown tags never block later inputs',async()=>{
+test('legacy subscriptions do not turn unmentioned messages into agent work',async()=>{
  const s=await fixture();await nav.configure(s.owner_id,s.channel_id,{mode:'off'});
- await send(s,`@agent-${s.installation_id} first`);await tick();await drainTasks();
- await send(s,'@unknown-agent hello');await tick();await send(s,'Continue please');await tick();await drainTasks();
- assert.equal((await pool.query('SELECT * FROM tasks WHERE thread_id=$1',[s.thread_id])).rowCount,2);
- await assert.rejects(nav.closeSubscription(s.collaborator_id,s.thread_id),{status:403});
+ await send(s,`@agent-${s.installation_id} first`);await tick(s.thread_id);await drainTasks();
+ const task=(await pool.query('SELECT * FROM tasks WHERE thread_id=$1',[s.thread_id])).rows[0];
+ await pool.query("INSERT INTO agent_thread_subscriptions(thread_id,installation_id,skill,task_id,session_id,approved_by,status) VALUES($1,$2,'demo.echo',$3,$4,$5,'active')",[s.thread_id,s.installation_id,task.id,task.session_id,s.owner_id]);
+ await send(s,'@unknown-agent hello');await tick(s.thread_id);await send(s,'Continue please');await tick(s.thread_id);
+ assert.equal((await pool.query('SELECT 1 FROM tasks WHERE thread_id=$1',[s.thread_id])).rowCount,1);
  await nav.closeSubscription(s.owner_id,s.thread_id);assert.equal(await nav.subscription(s.owner_id,s.thread_id),null);
- await send(s,'Continue again');await tick();assert.equal((await pool.query('SELECT * FROM tasks WHERE thread_id=$1',[s.thread_id])).rowCount,2);
 });
 
 test('first queue wake on an existing thread does not replay historical agent mentions',async()=>{
@@ -240,4 +237,40 @@ test('semantic agent mentions survive renames and semantic people mentions canno
  await chat.send(s.owner_id,s.channel_id,{client_message_id:randomUUID(),thread_id:s.thread_id,text:'@Old label summarize',document:{ops:[{insert:'@Old label',attributes:{mention:agent}},{insert:' summarize\n'}]}});
  await tick(s.thread_id);
  const tasks=await pool.query('SELECT * FROM tasks WHERE thread_id=$1',[s.thread_id]);assert.equal(tasks.rowCount,1);assert.equal(tasks.rows[0].installation_id,s.installation_id);assert.equal(tasks.rows[0].status,'queued');
+});
+
+test('a Codex mention creates one persistent session and a durable thread entry; discussion never becomes a follow-up',async()=>{
+ const s=await fixture();
+ await pool.query('UPDATE agent_definitions SET capabilities=$2 WHERE id=$1',[s.definition_id,{skills:['codex.run'],controls:{},persistent_sessions:true}]);
+ await pool.query("UPDATE agent_installations SET connector_id='codex.local' WHERE id=$1",[s.installation_id]);
+ await pool.query("INSERT INTO agent_connections(installation_id,name) VALUES($1,'Local test agent')",[s.installation_id]);
+ await pool.query("UPDATE agent_grants SET skill='codex.run' WHERE installation_id=$1",[s.installation_id]);
+ await nav.configure(s.owner_id,s.channel_id,{mode:'off'});
+ const input={text:`@agent-${s.installation_id} Remember the project name is Aurora`,thread_id:s.thread_id,client_message_id:randomUUID()};
+ await Promise.all([chat.send(s.owner_id,s.channel_id,input),chat.send(s.owner_id,s.channel_id,input)]);await tick(s.thread_id);
+ const first=(await pool.query('SELECT t.*,a.managed FROM tasks t JOIN agent_sessions a ON a.id=t.session_id WHERE t.thread_id=$1',[s.thread_id])).rows;
+ assert.equal(first.length,1);assert.equal(first[0].managed,true);assert.equal(first[0].status,'queued');
+ const history=await chat.threadHistory(s.owner_id,s.thread_id);
+ const references=history.messages.filter(m=>m.agent_session_id);
+ assert.equal(references.length,1);assert.equal(references[0]!.agent_session_id,first[0].session_id);
+ const parent=history.messages.find(m=>m.author.kind==='human')!;
+ assert.equal(parent.agent_sessions?.[0]?.id,first[0].session_id);
+ assert.equal(parent.reply_count,0);
+ assert.equal((await chat.messageHistory(s.owner_id,s.channel_id)).messages.find(m=>m.id===parent.id)?.agent_sessions?.[0]?.id,first[0].session_id);
+ await send(s,'An ordinary discussion reply',s.collaborator_id);await tick(s.thread_id);
+ assert.equal((await pool.query('SELECT 1 FROM tasks WHERE thread_id=$1',[s.thread_id])).rowCount,1);
+ await send(s,`@agent-${s.installation_id} Start another independent idea`);await tick(s.thread_id);
+ assert.equal((await pool.query('SELECT 1 FROM agent_sessions WHERE origin_thread_id=$1 AND managed',[s.thread_id])).rowCount,2);
+ const delivery=(await tasks.claimDelivery(s.installation_id))!;
+ assert.deepEqual((await tasks.prepareDelivery(delivery))!.request.persistent_session,{resume:false});
+ const event=(sequence:number,type:string,payload:Record<string,unknown>)=>({id:randomUUID(),schema_version:'1.0' as const,execution_id:delivery.execution_id,sequence,type,occurred_at:new Date().toISOString(),payload});
+ await tasks.acceptEvent(s.installation_id,event(1,'execution.started',{text:'Working'}),delivery);
+ await tasks.acceptEvent(s.installation_id,event(2,'execution.progress',{text:'Ready',session_ready:true}),delivery);
+ await tasks.acceptEvent(s.installation_id,event(3,'execution.completed',{text:'A private session answer'}),delivery);await tasks.ackDelivery(delivery);
+ const saved=await chat.threadHistory(s.owner_id,s.thread_id);
+ assert.equal(saved.messages.filter(m=>m.agent_session_id===first[0].session_id).length,1);
+ assert.ok(!saved.messages.some(m=>m.text==='A private session answer'));
+ const sessions=new AgentSessionStore(pool);
+ const continued=await sessions.send(s.owner_id,first[0].session_id,{text:'Continue inside this session'},randomUUID());
+ assert.equal(continued.session_id,first[0].session_id);
 });

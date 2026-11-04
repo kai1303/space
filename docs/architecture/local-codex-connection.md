@@ -76,22 +76,20 @@ sequenceDiagram
 | `/agents`, `agent.task.claim/event/renew/finish/fail` | Scoped task delivery and persisted event acknowledgements |
 
 Local task claims exclude every other installation, and ordinary workers exclude
-`codex.local`. A current ready socket can hold one 30-second lease, renewed during
-a maximum two-minute model turn. Event acceptance rechecks installation, task,
+`codex.local`. Each installation has a durable broker consumer; a ready socket accepts only its offered delivery ID. A conditional write creates one attempt with a renewable 30-second execution deadline during a maximum two-minute model turn. Attempt tokens fence results; expired deadlines never authorize another owner. Event acceptance rechecks installation, task,
 channel access, grant, socket generation, and live lease. Disconnects and expired
 leases fail visibly; uncertain claims are never automatically invoked again.
-The connector uses an ephemeral tool-free runtime with isolated home and working
-directories, and denies unsupported tool or approval requests.
+Legacy tasks use ephemeral tool-free turns. Managed [agent sessions](agent-sessions.md) retain a private, scoped Codex home and resume the same conversation across turns and connector restarts. Both modes deny unsupported tool or approval requests.
 
 PostgreSQL persists enrollment, status, tasks, events, and responses. Socket.IO carries heartbeats directly;
-PostgreSQL is not a message broker. Existing Redis chat distribution is unchanged.
+Committed PostgreSQL WAL feeds durable NATS JetStream work events and deadline messages. Socket.IO delivers the broker offer to the connector, then carries execution commands/results.
 
 ## Verification boundaries
 
 Integration tests cover tenancy, replay/concurrent claims, expiry/cancellation,
 hashed storage, no implicit grants, current membership, stale socket fencing and
 revocation. Connector tests use synthetic OAuth responses, signing keys, loopback
-callbacks, child processes and real Socket.IO connections. UI tests cover polling,
+callbacks, child processes and real Socket.IO connections. UI tests cover socket updates,
 claim/expiry, cancellation, errors and workspace/unmount isolation.
 
 Real ChatGPT authorization, installed Codex 0.146.0 initialization and a completed
@@ -102,3 +100,13 @@ See [real Codex E2E evidence](../real-codex-e2e-qa.md). That historical prompt t
 connector's runtime directly. The chat dispatch path is covered separately by
 `tests/integration/local-codex.test.ts` and connector task tests; real browser
 verification must be recorded separately from these synthetic checks.
+
+## Capability-based integrations
+
+The generic channel integration API is `GET /v1/channels/:channelId/agents`; legacy local-provider listings remain compatibility aliases. Owned installations advertise supported and granted skills plus `persistent_sessions`. Grant each skill explicitly. The historical omitted-skill request is accepted only when an installation supports one skill. Session creation accepts `skill`, requires a matching channel grant and persistent-session capability, and defaults only when one granted skill is unambiguous.
+
+Operators may supply a trusted `pairedConnectors` registry to `createApi`. Each descriptor has `id`, `definition_id`, `name`, `capabilities` (skills, controls, optional `persistent_sessions`) and an optional built-in local `provider`. Existing Codex and Kiro descriptors are the default registry. `GET /v1/agents/connectors` returns the available descriptors. Pairing creation accepts the selected `connector_id`; it persists the trusted descriptor. Claiming a pairing cannot assert its own capabilities. Definition IDs are immutable: changing a descriptor’s definition name or capabilities requires a new definition ID; a conflicting claim fails instead of altering other installations. Adding a descriptor does not implement the external runtime: that connector must speak the existing authenticated socket task/event protocol and honor its advertised capabilities.
+
+Paired delivery is selected by an installation's connection record. Unpaired installations use the remote worker. Migration 037 updates routing and existing built-in session capabilities. The generic session and channel-grant paths no longer depend on a Codex connector ID. Pairing and channel-grant mutations use serializable transactions with bounded retries rather than explicit application locks.
+
+Channel-memory access is independent of skill grants. See [installed agent permissions](channel-memory.md#installed-agent-permissions). Connecting an agent or enabling a skill never grants memory access.

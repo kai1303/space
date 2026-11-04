@@ -28,6 +28,7 @@ export function Message({
   tone = "purple",
   arrival = false,
   actions,
+  footer,
 }: {
   author: string;
   initials: string;
@@ -41,6 +42,7 @@ export function Message({
   tone?: "purple" | "blue" | "green" | "orange";
   arrival?: boolean;
   actions?: MessageActionHandlers;
+  footer?: ReactNode;
 }) {
   const reduced = useReducedMotion();
   return (
@@ -54,7 +56,7 @@ export function Message({
       <div className="sp-message-body">
         <div className="sp-message-meta">
           <strong>{author}</strong>
-          {agent && <Badge>APP</Badge>}
+          {agent && <Badge>Agent</Badge>}
           <span className="sp-message-time">{time}</span>
         </div>
         <div className="sp-message-text">{children}</div>
@@ -81,6 +83,7 @@ export function Message({
             {replyCount} {replyCount === 1 ? "reply" : "replies"}<span>View thread</span>
           </button>
         )}
+        {footer}
       </div>
       {(onReply || onReact || actions) && <MessageActions author={author} onReply={onReply} onReact={onReact} actions={actions} />}
     </motion.article>

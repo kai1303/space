@@ -1,3 +1,4 @@
+import { Megaphone, Robot } from '@phosphor-icons/react';
 import { useEffect, useId, useRef, useState, type RefObject } from 'react';
 import type Quill from 'quill';
 import type { MentionOption } from '@space/contracts';
@@ -7,6 +8,7 @@ export function useMentions(editor: RefObject<Quill|null>, ready: boolean, chann
   const [match,setMatch]=useState<Match|null>(null),[memberCount,setMemberCount]=useState(0);
   const current=useRef(match),finder=useRef(find),epoch=useRef(0),timer=useRef<ReturnType<typeof setTimeout>|undefined>(undefined);
   const id=useId();finder.current=find;
+  const options=useRef<HTMLDivElement>(null);
   function update(next:Match|null){current.current=next;setMatch(next);}
   function close(){epoch.current++;clearTimeout(timer.current);update(null);}
   useEffect(()=>{
@@ -29,14 +31,16 @@ export function useMentions(editor: RefObject<Quill|null>, ready: boolean, chann
         }).catch(()=>{if(epoch.current===version)update({start,length,query,items:[],index:0,pending:false,error:'Could not find mentions. Try typing again.'});});
       },100);
     };
-    q.on('text-change',changed);q.on('selection-change',changed);
-    return()=>{q.off('text-change',changed);q.off('selection-change',changed);epoch.current++;clearTimeout(timer.current);};
+    // Typing updates the caret silently after text-change; editor-change includes that update.
+    q.on('editor-change',changed);
+    return()=>{q.off('editor-change',changed);epoch.current++;clearTimeout(timer.current);};
   },[ready,channel,Boolean(find),editorVersion]);
   useEffect(()=>{
     const root=editor.current?.root;if(!root||!find)return;
-    if(match){root.setAttribute('aria-controls',id);root.setAttribute('aria-expanded','true');if(match.items[match.index])root.setAttribute('aria-activedescendant',`${id}-${match.index}`);}
+    if(match){root.setAttribute('aria-controls',id);root.setAttribute('aria-expanded','true');if(match.items[match.index])root.setAttribute('aria-activedescendant',`${id}-${match.index}`);else root.removeAttribute('aria-activedescendant');}
     else {root.removeAttribute('aria-activedescendant');root.setAttribute('aria-expanded','false');}
   },[match,id,ready]);
+  useEffect(()=>{options.current?.querySelector<HTMLElement>('[aria-selected=true]')?.scrollIntoView?.({block:'nearest'});},[match?.index,match?.items]);
   function choose(index:number){
     const q=editor.current,m=current.current,option=m?.items[index];if(!q||!m||!option)return;
     const ref={kind:option.kind,id:option.id,label:option.label},value=`@${option.label}`;
@@ -66,10 +70,16 @@ export function useMentions(editor: RefObject<Quill|null>, ready: boolean, chann
   }
   function begin(){const q=editor.current;if(!q)return;q.focus();const range=q.getSelection()??{index:q.getLength()-1,length:0};const previous=q.getText(range.index-1,1),value=previous==='@'?'':previous&&!/\s/.test(previous)?' @':'@';q.deleteText(range.index,range.length,'user');q.insertText(range.index,value,{mention:false},'user');q.setSelection(range.index+value.length,0,'user');}
   const suggestions=match&&<div id={id} className="sp-mention-suggestions" role="listbox" aria-label="Mention suggestions">
-    {match.pending?<p role="status">Searching…</p>:match.error?<p role="alert">{match.error}</p>:!match.items.length?<p role="status">No matching people or agents</p>:match.items.map((option,index)=><button key={`${option.kind}:${option.id}`} id={`${id}-${index}`} type="button" role="option" aria-selected={index===match.index} onMouseDown={e=>e.preventDefault()} onClick={()=>choose(index)}>
-      <span className="sp-mention-avatar" aria-hidden="true">{option.image?<img src={option.image} alt=""/>:option.kind==='broadcast'?'@':option.label.slice(0,2).toUpperCase()}</span><span><strong>{option.kind==='broadcast'?'@':''}{option.label}</strong><small>{option.kind==='user'?`${option.detail||'Member'}${match.items.filter(item => item.kind === option.kind && item.label === option.label).length > 1 ? ` · ${option.id.slice(-8)}` : ''}${option.joined===false?' · Not in channel':''}`:option.detail}</small></span>
+    <div className="sp-mention-options" ref={options} role="presentation">
+    {match.pending?<p role="status">Searching…</p>:match.error?<p role="alert">{match.error}</p>:!match.items.length?<p role="status">No matching people or agents</p>:match.items.map((option,index)=><button key={`${option.kind}:${option.id}`} id={`${id}-${index}`} type="button" role="option" aria-selected={index===match.index} onPointerMove={()=>{if(current.current&&current.current.index!==index)update({...current.current,index});}} onMouseDown={e=>e.preventDefault()} onClick={()=>choose(index)}>
+      <span className="sp-mention-avatar" data-mention-kind={option.kind} aria-hidden="true">{option.image?<img src={option.image} alt=""/>:option.kind==='broadcast'?<Megaphone size={16}/>:option.kind==='agent'?<Robot size={16}/>:option.label.slice(0,2).toUpperCase()}</span>
+      <span className="sp-mention-label"><strong>{option.kind==='broadcast'?'@':''}{option.label}</strong>{option.kind==='agent'&&<span className="sp-mention-agent-label">Agent</span>}</span>
+      <small className="sp-mention-detail">{option.kind==='user'?`${option.detail||'Member'}${match.items.filter(item => item.kind === option.kind && item.label === option.label).length > 1 ? ` · ${option.id.slice(-8)}` : ''}`:option.kind==='agent'&&option.detail==='Agent'?'':option.detail}</small>
+      {option.joined===false&&<small className="sp-mention-membership">Not in channel</small>}
+      <kbd className="sp-mention-select-hint" aria-hidden="true">Enter</kbd>
     </button>)}
-    <footer>↑ ↓ to navigate · Enter or Tab to select · Esc to dismiss</footer>
+    </div>
+    <footer><span><kbd>↑ ↓</kbd> to navigate</span><span><kbd>↵</kbd> to select</span><span><kbd>esc</kbd> to dismiss</span></footer>
   </div>;
   return {key,begin,suggestions,memberCount};
 }

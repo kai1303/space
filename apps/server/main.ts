@@ -5,6 +5,7 @@ import { createApi } from './api.js';
 import { RedisSocketAdapter } from '@space/redis';
 import { createAssetStorageFromEnv } from './storage.js';
 if (!process.env.BETTER_AUTH_SECRET || !process.env.BETTER_AUTH_URL) throw new Error('BETTER_AUTH_SECRET and BETTER_AUTH_URL are required');
+if (process.env.NODE_ENV === 'production' && !process.env.NATS_URL) throw new Error('NATS_URL is required');
 const storage = createAssetStorageFromEnv();
 const adapter = new RedisSocketAdapter(process.env.REDIS_URL);
 await adapter.connect();

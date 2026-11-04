@@ -398,7 +398,7 @@
 .sp-rich-content ol,
 .sp-rich-content ul {
   padding-left: 24px;
-  margin: 4px 0;
+  margin: 0;
 }
 .sp-dialog:has(.sp-workspace-search) {
   width: min(780px, calc(100% - 24px));

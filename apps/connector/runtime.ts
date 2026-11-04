@@ -1,13 +1,13 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { io } from 'socket.io-client';
-import { parseInvocation, parseAgentEvent, type AgentEvent } from '@space/contracts';
-import type { InvokeCodex } from './codex.js';
+import { parseInvocation, parseAgentEvent, parseLocalProvider, localProviders, type LocalProvider, type AgentEvent } from '@space/contracts';
+import { AgentSessionStopped, type InvokeAgent } from './agent-runtime.js';
 import { ConnectorStore, platformOrigin, type Connection } from './storage.js';
 
 export type AuthStatus = 'required' | 'ready' | 'error';
 export { startCodex, type SpawnCodex, type InvokeCodex } from './codex.js';
 
-export async function claimPairing(store: ConnectorStore, inputOrigin: string, code: string, request: typeof fetch = fetch): Promise<Connection> {
+export async function claimPairing(store: ConnectorStore, inputOrigin: string, code: string, request: typeof fetch = fetch, provider: LocalProvider = 'codex'): Promise<Connection> {
   const origin = platformOrigin(inputOrigin);
   if (!/^[A-Za-z0-9_-]{32}$/.test(code)) throw new Error('Pairing code must be the 32-character code shown by Space.');
   const state = await store.load();
@@ -15,11 +15,13 @@ export async function claimPairing(store: ConnectorStore, inputOrigin: string, c
   const credential = state.pending?.origin === origin && state.pending.code_hash === code_hash ? state.pending.credential : randomBytes(32).toString('base64url');
   state.pending = { origin, credential, code_hash };
   await store.save(state);
-  const response = await request(`${origin}/v1/agent-pairings/claim`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ code, credential }), signal: AbortSignal.timeout(15_000), redirect: 'error' });
+  const response = await request(`${origin}/v1/agent-pairings/claim`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ code, credential, provider }), signal: AbortSignal.timeout(15_000), redirect: 'error' });
   if (!response.ok) throw new Error('Pairing failed. Check the code and URL, or create a new code in Space.');
-  const result = await response.json() as { installation_id?: unknown; workspace_id?: unknown };
+  const result = await response.json() as { installation_id?: unknown; workspace_id?: unknown; provider?: unknown };
   if (typeof result.installation_id !== 'string' || !result.installation_id || typeof result.workspace_id !== 'string' || !result.workspace_id) throw new Error('The platform returned an invalid pairing response.');
-  const connection: Connection = { origin, credential, installation_id: result.installation_id, workspace_id: result.workspace_id };
+  const selected = parseLocalProvider(result.provider);
+  if (selected !== provider) throw new Error('The pairing belongs to a different agent provider.');
+  const connection: Connection = { provider: selected, origin, credential, installation_id: result.installation_id, workspace_id: result.workspace_id };
   state.connection = connection;
   delete state.pending;
   await store.save(state);
@@ -32,7 +34,7 @@ function unauthorized(error: unknown): boolean {
   const value = error as { code?: unknown; message?: unknown; data?: { code?: unknown } };
   return [value.code, value.data?.code, value.message].some(item => typeof item === 'string' && /unauthorized|unauthenticated|revoked|invalid.token/i.test(item));
 }
-export function connectPlatform(connection: Connection, status: () => AuthStatus, onUnauthorized: () => void, invoke?: InvokeCodex) {
+export function connectPlatform(connection: Connection, status: () => AuthStatus, onUnauthorized: () => void, invoke?: InvokeAgent) {
   const socket = io(`${platformOrigin(connection.origin)}/agents`, {
     transports: ['websocket'], auth: { token: connection.credential },
     reconnection: true, reconnectionAttempts: Infinity, reconnectionDelay: 1_000,
@@ -41,7 +43,7 @@ export function connectPlatform(connection: Connection, status: () => AuthStatus
   let closed = false;
   let reconnect: NodeJS.Timeout | undefined;
   let reconnectDelay = 1_000;
-  let claiming = false, halted = false, readyToClaim = false;
+  let claiming = false, halted = false, readyToClaim = false, claimPending = false;
   let generation = 0, heartbeatRevision = 0;
   let active: AbortController | undefined;
   const seen = new Set<string>();
@@ -53,6 +55,7 @@ export function connectPlatform(connection: Connection, status: () => AuthStatus
       socket.timeout(8_000).emit(name, payload, (error: Error | null, ack?: { data?: unknown; error?: unknown }) => {
         if (error || ack?.error || !ack || !('data' in ack)) {
           if (ack?.error && unauthorized(ack.error)) rejected();
+          if (ack?.error === 'agent_session_stopped' && ['agent.task.event', 'agent.task.renew', 'agent.task.finish'].includes(name)) { reject(new AgentSessionStopped()); return; }
           reject(new Error(name === 'agent.task.claim' && ack?.error === 'agent_not_ready' ? 'agent_not_ready' : 'Space did not acknowledge this task operation.'));
         } else resolve(ack.data);
       });
@@ -69,13 +72,16 @@ export function connectPlatform(connection: Connection, status: () => AuthStatus
   const claim = async () => {
     if (status() !== 'ready') { readyToClaim = false; return; }
     if (!invoke || closed || halted || claiming || active || !socket.connected || !readyToClaim) return;
-    claiming = true;
+    claiming = true; claimPending = false;
     let renewal: NodeJS.Timeout | undefined, deadline: NodeJS.Timeout | undefined;
     let terminal = false, terminalSubmitted = false;
     try {
       const data = await taskRpc('agent.task.claim', {});
       if (data === null) return;
+      // Drain any remaining queued work after this execution finishes.
+      claimPending = true;
       const request = parseInvocation(data);
+      if (request.skill !== localProviders[parseLocalProvider(connection.provider)].skill) throw new Error('The task belongs to a different provider.');
       if (seen.has(request.execution_id)) throw new Error('Space returned an uncertain execution.');
       seen.add(request.execution_id);
       const controller = new AbortController();
@@ -86,25 +92,27 @@ export function connectPlatform(connection: Connection, status: () => AuthStatus
       renewal = setInterval(() => {
         if (renewing || controller.signal.aborted || terminalSubmitted) return;
         renewing = true;
-        void accepted('agent.task.renew', {}, () => !terminalSubmitted && !controller.signal.aborted).catch(() => { halted = true; controller.abort(); }).finally(() => { renewing = false; });
+        void accepted('agent.task.renew', {}, () => !terminalSubmitted && !controller.signal.aborted).catch(error => { if (error instanceof AgentSessionStopped) controller.abort(error); else { halted = true; controller.abort(); } }).finally(() => { renewing = false; });
       }, 5_000);
       await invoke(request, async (value: AgentEvent) => {
         controller.signal.throwIfAborted();
         const event = parseAgentEvent(value);
-        if (terminal || event.execution_id !== request.execution_id || event.sequence !== lastSequence + 1) throw new Error('Invalid Codex event sequence.');
+        if (terminal || event.execution_id !== request.execution_id || event.sequence !== lastSequence + 1) throw new Error('Invalid agent event sequence.');
         if (event.type === 'execution.completed' || event.type === 'execution.failed') {
           terminalSubmitted = true;
           clearInterval(renewal);
         }
-        await accepted('agent.task.event', { event });
+        try { await accepted('agent.task.event', { event }); }
+        catch (error) { if (error instanceof AgentSessionStopped) controller.abort(error); throw error; }
         lastSequence = event.sequence;
         terminal = event.type === 'execution.completed' || event.type === 'execution.failed';
       }, controller.signal);
       controller.signal.throwIfAborted();
-      if (!terminal) throw new Error('Codex did not send a terminal event.');
+      if (!terminal) throw new Error('Agent did not send a terminal event.');
       clearInterval(renewal);
       await accepted('agent.task.finish');
     } catch (error) {
+      if ((error instanceof AgentSessionStopped || active?.signal.reason instanceof AgentSessionStopped) && !closed && !halted && socket.connected && status() === 'ready') return;
       if (!active && error instanceof Error && error.message === 'agent_not_ready' && socket.connected && !closed) {
         readyToClaim = false;
         publish();
@@ -121,13 +129,15 @@ export function connectPlatform(connection: Connection, status: () => AuthStatus
     } finally {
       clearInterval(renewal); clearTimeout(deadline); active = undefined; claiming = false;
       if (halted) publish();
+      else if (claimPending) queueMicrotask(() => { void claim(); });
     }
   };
-  const tasks = setInterval(() => { void claim(); }, 1_000);
-  const close = () => { closed = true; active?.abort(); clearInterval(tasks); clearInterval(heartbeat); clearTimeout(reconnect); socket.disconnect(); };
+  socket.on('agent.tasks.available', () => { claimPending = true; void claim(); });
+  const close = () => { closed = true; active?.abort(); clearInterval(heartbeat); clearTimeout(reconnect); socket.disconnect(); };
   const rejected = () => { if (!closed) { close(); onUnauthorized(); } };
   const publish = () => {
     if (!socket.connected || closed) return;
+    const wasReady = readyToClaim;
     readyToClaim = false;
     const authStatus = halted ? 'error' : status();
     const revision = ++heartbeatRevision, currentGeneration = generation;
@@ -137,7 +147,7 @@ export function connectPlatform(connection: Connection, status: () => AuthStatus
       if (ack?.data?.installation_id && ack.data.installation_id !== connection.installation_id) { rejected(); return; }
       if (!ack?.error && ack?.data?.installation_id === connection.installation_id && authStatus === 'ready' && status() === 'ready' && !halted) {
         readyToClaim = true;
-        void claim();
+        if (!wasReady || claimPending) void claim();
       }
     });
   };

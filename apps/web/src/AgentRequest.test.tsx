@@ -11,7 +11,7 @@ it('discovers a newly paired Codex, enables it explicitly for this channel, then
   let enabled = false;
   api.request.mockImplementation(async (path: string) => {
     if (path.startsWith('/agents/installations')) return [agent];
-    if (path.endsWith('/local-codex')) return [{ id: 'local', name: 'Kai’s Codex', enabled_in_channel: enabled }];
+    if (path.endsWith('/agents')) return [{ id: 'local', name: 'Kai’s Codex', skills:['codex.run'],granted_skills:enabled?['codex.run']:[],enabled_in_channel: enabled }];
     if (path.endsWith('/navigator')) return { candidates: enabled ? [candidate] : [] };
     if (path.endsWith('/channels/channel')) { enabled = true; return { enabled_in_channel: true }; }
     return { id: 'task' };
@@ -20,7 +20,7 @@ it('discovers a newly paired Codex, enables it explicitly for this channel, then
   render(<AgentRequest {...props} />);
   await userEvent.click(screen.getByRole('button', { name: 'Ask an agent' }));
   await userEvent.click(await screen.findByRole('button', { name: 'Enable Kai’s Codex in this channel' }));
-  expect(api.request).toHaveBeenCalledWith('/agents/connections/local/channels/channel', { enabled: true });
+  expect(api.request).toHaveBeenCalledWith('/agents/connections/local/channels/channel', { enabled: true, skill:'codex.run' });
   const select = await screen.findByRole('combobox', { name: 'Agent and skill' });
   await userEvent.selectOptions(select, 'local|codex.run');
   await userEvent.type(screen.getByRole('textbox', { name: 'What should the agent do?' }), 'Say hello');
@@ -35,4 +35,22 @@ it('does not offer an ungranted local skill and makes discovery errors visible',
   await userEvent.click(screen.getByRole('button', { name: 'Ask an agent' }));
   expect(await screen.findByRole('alert')).toHaveProperty('textContent', 'not found');
   expect(screen.queryByRole('option', { name: /codex.run/ })).toBeNull();
+});
+it('grants and revokes each supported skill independently for a custom connector', async () => {
+ const custom={...agent,connector_id:'research.local',capabilities:{skills:['research.run','research.review'],controls:{}}};
+ let grants=['research.review'];
+ api.request.mockImplementation(async(path:string,body?:any)=>{
+  if(path.startsWith('/agents/installations'))return [custom];
+  if(path.endsWith('/agents'))return [{id:'local',name:'Research',skills:custom.capabilities.skills,granted_skills:grants,enabled_in_channel:grants.length>0}];
+  if(path.endsWith('/navigator'))return {candidates:grants.map(skill=>({...candidate,name:'Research',skill}))};
+  if(path.endsWith('/channels/channel')){grants=body.enabled?[...grants,body.skill]:grants.filter(skill=>skill!==body.skill);return {};}
+  return {};
+ });
+ render(<AgentRequest workspace="workspace" channel="channel" thread="thread" agents={[]} onCandidates={()=>{}}/>);
+ await userEvent.click(screen.getByRole('button',{name:'Ask an agent'}));
+ await userEvent.click(await screen.findByRole('button',{name:'Enable Research · research.run in this channel'}));
+ expect(api.request).toHaveBeenCalledWith('/agents/connections/local/channels/channel',{enabled:true,skill:'research.run'});
+ await userEvent.click(await screen.findByRole('button',{name:'Disable Research · research.review in this channel'}));
+ expect(api.request).toHaveBeenCalledWith('/agents/connections/local/channels/channel',{enabled:false,skill:'research.review'});
+ expect(grants).toEqual(['research.run']);
 });

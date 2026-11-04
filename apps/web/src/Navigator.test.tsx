@@ -3,6 +3,8 @@ import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { NavigatorSuggestions, NavigatorSettings } from './Navigator.js';
 import { request } from './chat-client.js';
 vi.mock('./chat-client.js',()=>({request:vi.fn()}));
+const updates = vi.hoisted(() => new Map<string, () => unknown>());
+vi.mock('./live-updates.js', () => ({ subscribeUpdates: (scope: string, id: string, refresh: () => unknown) => { updates.set(`${scope}:${id}`, refresh); void refresh(); return () => updates.delete(`${scope}:${id}`); } }));
 const candidate={installation_id:'agent-1',name:'Writer',skill:'writing.draft',description:'Draft text'};
 beforeAll(()=>{HTMLDialogElement.prototype.showModal=function(){this.open=true;};HTMLDialogElement.prototype.close=function(){this.open=false;};});
 beforeEach(()=>vi.resetAllMocks());
@@ -29,4 +31,14 @@ describe('Navigator in a thread',()=>{
   fireEvent.click(screen.getByRole('button',{name:'Save Navigator settings'}));
   await waitFor(()=>expect(vi.mocked(request).mock.calls.some(c=>c[0]==='/channels/c1/navigator'&&(c[1] as any)?.mode==='semantic')).toBe(true));
  });
+});
+
+it('refreshes suggestions when the channel socket reports a committed change', async () => {
+ let reason = 'First suggestion';
+ vi.mocked(request).mockImplementation(async () => [{id:'s1',thread_id:'t1',decision:{reason},candidates:[candidate]}]);
+ render(<NavigatorSuggestions channel="live-channel" />);
+ await screen.findByText('First suggestion');
+ reason = 'Updated suggestion';
+ await updates.get('channel:live-channel')?.();
+ expect(await screen.findByText('Updated suggestion')).toBeTruthy();
 });

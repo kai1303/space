@@ -16,7 +16,7 @@ Imports accept UTF-8 text up to 100,000 bytes and retain the filename, import ti
 and importing user ID. Chat attachments are referenced by filename when saving a
 message; attachment bytes are not silently imported. Binary/PDF/Word extraction,
 server-side automatic fact extraction, contradiction detection, inferred summaries,
-and agent task context dispatch remain outside this slice. Agents and Navigator can
+remain outside this slice. Authorized agent task dispatch can now include bounded channel-memory excerpts. Agents and Navigator can
 now read context and save their own extracted knowledge through the
 [memory MCP tools](memory-mcp.md).
 
@@ -61,7 +61,7 @@ need no write lock. Every replica must use the same database and shared memory v
 with atomic directory creation/rename; independent local disks are unsupported.
 Stop application writes before editing canonical files externally; direct filesystem
 writers do not participate in the provider's coordination. Short database-only MCP
-key creation still serializes its quota check; no provider is called in that transaction.
+key creation uses serializable transactions and bounded retries for its quota check; no provider is called in that transaction.
 
 Disabling blocks retrieval and writes without touching stored memory. The separate
 **Delete stored memory…** control requires manager permission and confirmation; it
@@ -182,3 +182,17 @@ invoked, and no production, load or deployment verification is implied.
 channel memory opt-in. Thread-scoped MCP keys expose conversation retrieval and
 source-linked Markdown checkpoints on the existing MCP transport. Reusable channel
 knowledge keeps the provider and opt-in behavior described above.
+
+## Installed agent permissions
+
+Channel managers can choose **No memory access**, **Read memory**, or **Read and contribute knowledge** for each installation in Memory → Installed agents. The default is none, including for existing installations. These permissions do not grant execution skills or enable channel memory. An active installation, current owner channel membership, and at least one supported channel skill grant are also required when accessing memory.
+
+`GET /v1/channels/:channelId/memory/agents` lists up to 100 eligible installations and current permissions. `POST /v1/channels/:channelId/memory/agents/:installationId` accepts `{ access: 'none' | 'read' | 'contribute' }`. Changes are manager-only and audited. Migration 038 adds the grants and installation-bound MCP connections without granting existing agents access.
+
+Task preparation supplies at most 6,000 UTF-16 code units of the selected provider's document as `context.channel_memory`, with channel/provider/revision identifiers and a truncation flag. Unicode surrogate pairs are preserved. This is quoted reference data, not privileged instructions. Both the API's paired-agent path and the remote worker use the same reader factory. Provider I/O occurs outside database transactions; membership, permissions, settings, and delivery eligibility are rechecked afterward. Each reader allows at most eight outstanding provider reads and waits at most five seconds per call. A timed-out read retains its concurrency slot until it settles, so a provider that never settles cannot create an unbounded backlog. Custom providers must implement their own I/O cancellation/timeouts.
+
+An unavailable or failing provider fails authorized dispatch rather than silently substituting another provider. Disabled or ungranted memory performs no provider read. Compose mounts the memory volume read-only in the remote worker. Custom deployment adapters must be registered consistently in API and worker processes with `createAgentMemoryReader(new MemoryStore(pool), providers)`.
+
+MCP key creation optionally accepts `installation_id`. Bound keys may request read or contribute access, capped by the live installation permission. Contribute exposes read/search/context and evidence-backed `memory_remember`; it never exposes whole-document `memory_write` or `memory_forget`. Full-write keys remain available for explicitly configured external integrations and cannot be bound to an installation. The UI distinguishes these paths. Built-in runners receive supplied excerpts; granting contribute access does not change their tool restrictions or automatically attach an MCP client. Contribution uses an explicitly configured MCP client.
+
+Revocation blocks later operations and withholds results when access changes during retrieval. Source-backed additions recheck authorization after reading evidence and before starting the provider mutation. A provider mutation already started can finish after revocation; revocation cannot erase data already sent to an external agent or retained conversation. No background extraction or polling is added.

@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { Pool } from 'pg';
-import { and, eq, gt, getTableColumns } from 'drizzle-orm';
+import { and, eq, gt, getTableColumns, sql } from 'drizzle-orm';
 import {
   AppError, parseWorkspaceInput, parseMemberInput, parseRoleInput, parsePage, uuid,
 } from '@space/contracts';
@@ -105,7 +105,7 @@ export class WorkspaceStore {
       if (target.role === 'owner') await this.requireAnotherOwner(c, workspace, user);
       await c.update(agentInstallations).set({ enabled: false })
         .where(and(eq(agentInstallations.workspace_id, workspace), eq(agentInstallations.owner_id, user)));
-      await c.delete(channelMembers).where(and(eq(channelMembers.workspace_id, workspace), eq(channelMembers.user_id, user)));
+      await c.delete(channelMembers).where(and(eq(channelMembers.workspace_id, workspace), eq(channelMembers.user_id, user), sql`NOT EXISTS (SELECT 1 FROM channels ch WHERE ch.id=${channelMembers.channel_id} AND ch.kind='direct')`));
       await c.update(m).set({ active: false }).where(memberKey(workspace, user));
       await this.audit(c, actor, workspace, 'member.removed', { user_id: user, previous_role: target.role });
     });

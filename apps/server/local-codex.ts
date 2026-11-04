@@ -1,19 +1,42 @@
+import type { EventBus, EventDelivery } from '@space/events';
 import type { Socket } from 'socket.io';
 import { AppError, parseAgentEvent, record } from '@space/contracts';
 import type { Delivery } from '@space/core/ports';
 import type { AgentConnectionStore } from '@space/postgres/agent-connections';
 import type { PostgresStore } from '@space/postgres/store';
 
-// Each socket owns one bounded lease; requests never choose an installation or lease.
-export function registerLocalCodexTasks(socket: Socket, connections: AgentConnectionStore, tasks: PostgresStore) {
+// Broker delivery owns work; connector commands never choose an installation or attempt.
+export function registerLocalCodexTasks(socket: Socket, connections: AgentConnectionStore, tasks: PostgresStore, getEvents: () => Promise<EventBus>) {
   const identity = socket.data.agent as { id: string; connection_id: string };
   let active: Delivery | undefined;
+  let offered: EventDelivery | undefined, receipt: EventDelivery | undefined;
+  let releaseReceipt: (() => void) | undefined;
+  let stopped = false;
+  const settle = async (retry = false) => {
+    const current = receipt ?? offered;
+    receipt = undefined; offered = undefined;
+    try { if (current) { if (retry) await current.retry(); else await current.ack(); } }
+    finally { releaseReceipt?.(); releaseReceipt = undefined; }
+  };
+  const subscription = getEvents().then(bus => bus.subscribe(`task.local.ready.${identity.id}`, {
+    durable:`local-${identity.id}`, queue:`local-${identity.id}`, maxPending:1,
+  }, async message => {
+    if (stopped || !socket.connected) { await message.retry(); return; }
+    const due = Date.parse(message.event.available_at ?? '');
+    if (Number.isFinite(due) && due > Date.now()) { await message.retry(due-Date.now()); return; }
+    if (offered || receipt) { await message.retry(); return; }
+    offered = message;
+    const finished = new Promise<void>(resolve => { releaseReceipt = resolve; });
+    socket.emit('agent.tasks.available');
+    await finished;
+  })).catch(() => { if (socket.connected) socket.disconnect(true); return undefined; });
   let deadline = 0;
   let queue = Promise.resolve();
   let pending = 0, count = 0, windowStart = Date.now();
   const fail = async (code: string) => {
     if (active) await tasks.failDelivery(active, code, true);
     active = undefined;
+    await settle();
   };
   const current = () => {
     if (!active) throw new AppError(409, 'no_active_execution');
@@ -24,13 +47,15 @@ export function registerLocalCodexTasks(socket: Socket, connections: AgentConnec
     'agent.task.claim': async (raw: unknown) => {
       record(raw, []);
       if (active) throw new AppError(409, 'agent_busy');
-      active = await tasks.claimDelivery(identity.id) ?? undefined;
-      if (!active) return null;
+      if (!offered) return null;
+      receipt = offered; offered = undefined;
+      active = await tasks.claimDelivery(identity.id, String(receipt.event.data.delivery_id)) ?? undefined;
+      if (!active) { await settle(); return null; }
       deadline = Date.now() + 180_000;
       if (active.attempts > 1) { await fail('local_execution_interrupted'); return null; }
       try {
         const prepared = await tasks.prepareDelivery(active, identity.connection_id);
-        if (!prepared) { await tasks.ackDelivery(active); active = undefined; return null; }
+        if (!prepared) { await tasks.ackDelivery(active); active = undefined; await settle(); return null; }
         return prepared.request;
       } catch (error) { await fail('local_execution_unavailable'); throw error; }
     },
@@ -55,6 +80,7 @@ export function registerLocalCodexTasks(socket: Socket, connections: AgentConnec
       if (!await tasks.executionTerminal(delivery.execution_id)) throw new AppError(409, 'missing_terminal_event');
       if (!await tasks.ackDelivery(delivery)) throw new AppError(409, 'stale_lease');
       active = undefined;
+      await settle();
       return true;
     },
     'agent.task.fail': async (raw: unknown) => { record(raw, []); current(); await fail('local_execution_failed'); return true; },
@@ -70,7 +96,19 @@ export function registerLocalCodexTasks(socket: Socket, connections: AgentConnec
         await connections.authenticateConnection(socket.data.token, identity.connection_id);
         ack({ data: await handle(raw) });
       } catch (error) {
-        const code = error instanceof AppError ? error.code : 'internal_error';
+        let code = error instanceof AppError ? error.code : 'internal_error';
+        if (name === 'agent.task.claim' && receipt && !active) await settle(true);
+        const incoming = raw as { event?: { execution_id?: unknown } } | null;
+        const matchesExecution = name !== 'agent.task.event' || incoming?.event?.execution_id === active?.execution_id;
+        if (active && matchesExecution && ['agent.task.event', 'agent.task.renew', 'agent.task.finish'].includes(name) && ['stale_execution', 'stale_lease', 'session_ended'].includes(code)) {
+          try {
+            if (await tasks.wasSessionStopped(active, identity.id, identity.connection_id)) {
+              active = undefined;
+              await settle();
+              code = 'agent_session_stopped';
+            }
+          } catch (failure) { code = failure instanceof AppError ? failure.code : 'internal_error'; }
+        }
         ack({ error: code });
         if (['unauthorized', 'agent_not_ready', 'connector_timeout'].includes(code)) {
           await fail(code);
@@ -79,5 +117,12 @@ export function registerLocalCodexTasks(socket: Socket, connections: AgentConnec
       } finally { pending--; }
     }).catch(() => { socket.disconnect(true); });
   });
-  socket.on('disconnect', () => { queue = queue.then(() => fail('local_execution_interrupted')).catch(() => {}); });
+  socket.on('disconnect', () => {
+    stopped = true;
+    queue = queue.then(async () => {
+      if (active) await fail('local_execution_interrupted'); else await settle(true);
+    }).catch(() => settle(true));
+    void queue.finally(async () => { const stop = await subscription; await stop?.(); });
+  });
+  return { ready: subscription.then(() => {}), notifyReady: () => { if (offered && socket.connected) socket.emit('agent.tasks.available'); } };
 }

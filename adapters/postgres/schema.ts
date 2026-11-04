@@ -1,5 +1,5 @@
 import { pgTable, primaryKey, uuid, text, boolean, integer, bigint, jsonb, timestamp } from 'drizzle-orm/pg-core';
-import type { AgentCapabilities, AgentEvent, AgentResponse, TaskStatus, MemberRole, RichDocument, AssetAttachment, AssetPreview } from '@space/contracts';
+import type { AgentCapabilities, AgentEvent, AgentResponse, AgentSessionOutputs, TaskStatus, MemberRole, RichDocument, AssetAttachment, AssetPreview } from '@space/contracts';
 
 // Query mappings for the existing database. Reviewed SQL migrations remain the DDL
 // source of truth, including composite foreign keys, indexes, checks and audit triggers.
@@ -21,6 +21,7 @@ export const workspaceEvents = pgTable('workspace_events', {
   payload: jsonb().$type<object>().notNull(), occurred_at: time(),
 });
 export const channels = pgTable('channels', {
+  kind: text().$type<'channel' | 'direct'>().notNull().default('channel'), direct_user_low: uuid(), direct_user_high: uuid(),
   id: id(), workspace_id: uuid().notNull(), name: text().notNull().default('general'), private: boolean().notNull().default(true),
   topic: text().notNull().default(''), description: text().notNull().default(''), archived_at: timestamp({ withTimezone: true }),
   memory_enabled: boolean().notNull().default(false), memory_provider: text().notNull().default('markdown'),
@@ -31,19 +32,24 @@ export const channelEvents = pgTable('channel_events', {
   type: text().notNull(), payload: jsonb().$type<unknown>().notNull(), occurred_at: time(),
 }, table => [primaryKey({ columns: [table.channel_id, table.sequence] })]);
 export const channelMembers = pgTable('channel_members', { workspace_id: uuid().notNull(), channel_id: uuid().notNull(), user_id: uuid().notNull() });
+export const agentMemoryGrants = pgTable('agent_memory_grants', {
+  workspace_id: uuid().notNull(), channel_id: uuid().notNull(), installation_id: uuid().notNull(),
+  access: text().$type<'none' | 'read' | 'contribute'>().notNull(), revision: integer().notNull().default(1),
+}, table => [primaryKey({ columns: [table.channel_id, table.installation_id] })]);
 export const memoryConnections = pgTable('memory_connections', {
-  thread_id: uuid(),
+  thread_id: uuid(), installation_id: uuid(),
   id: id(), workspace_id: uuid().notNull(), channel_id: uuid().notNull(), created_by: uuid().notNull(),
-  name: text().notNull(), access: text().$type<'read' | 'write'>().notNull(), token_hash: text().notNull(), created_at: time(),
+  name: text().notNull(), access: text().$type<'read' | 'contribute' | 'write'>().notNull(), token_hash: text().notNull(), created_at: time(),
 });
 export const threads = pgTable('threads', { id: id(), workspace_id: uuid().notNull(), channel_id: uuid().notNull() });
 export const humanCredentials = pgTable('human_credentials', { token_hash: text().primaryKey(), user_id: uuid().notNull() });
 export const agentDefinitions = pgTable('agent_definitions', { id: id(), name: text().notNull(), capabilities: jsonb().$type<AgentCapabilities>().notNull() });
 export const agentInstallations = pgTable('agent_installations', { id: id(), workspace_id: uuid().notNull(), owner_id: uuid().notNull(), definition_id: uuid().notNull(), connector_id: text().notNull(), enabled: boolean().notNull().default(true) });
 export const agentGrants = pgTable('agent_grants', { workspace_id: uuid().notNull(), installation_id: uuid().notNull(), channel_id: uuid().notNull(), skill: text().notNull() });
-export const agentSessions = pgTable('agent_sessions', { id: id(), workspace_id: uuid().notNull(), installation_id: uuid().notNull(), origin_thread_id: uuid().notNull() });
+export const agentSessions = pgTable('agent_sessions', { id: id(), workspace_id: uuid().notNull(), installation_id: uuid().notNull(), origin_thread_id: uuid().notNull(), revision: integer().notNull().default(1), outputs: jsonb().$type<AgentSessionOutputs>().notNull().default({ files: [], changes: [] }), title: text().notNull().default('Agent run'), state: text().$type<'active' | 'ended'>().notNull().default('active'), managed: boolean().notNull().default(false), created_by: uuid(), created_at: time(), skill: text().notNull().default('codex.run') });
 export const tasks = pgTable('tasks', {
   id: id(), workspace_id: uuid().notNull(), thread_id: uuid().notNull(), installation_id: uuid().notNull(),
+  request_document: jsonb().$type<RichDocument>(),
   goal: text().notNull(), skill: text().notNull(), requester_id: uuid().notNull(), approved_by: uuid(),
   status: text().$type<TaskStatus>().notNull(), session_id: uuid(), active_execution_id: uuid(),
   revision: integer().notNull().default(1), result: text(), idempotency_key: text().notNull(), request_hash: text().notNull(),
@@ -63,6 +69,7 @@ export const messages = pgTable('messages', {
   // The insert trigger replaces this placeholder under the channel row lock.
   sequence: bigint({ mode: 'bigint' }).notNull().default(0n),
   id: uuid().notNull(), workspace_id: uuid().notNull(), channel_id: uuid().notNull(), thread_id: uuid().notNull(), task_id: uuid(), installation_id: uuid(),
+  agent_session_id: uuid(),
   agent_milestone: boolean().notNull().default(false),
   author_type: text().$type<'human' | 'agent'>().notNull().default('agent'), user_id: uuid(), client_message_id: uuid(), request_hash: text(),
   text: text().notNull(), document: jsonb().$type<RichDocument>(), attachments: jsonb().$type<AssetAttachment[]>().notNull().default([]), created_at: time(),
@@ -115,7 +122,7 @@ export const authRateLimits = pgTable('auth_rate_limits', {
 });
 
 export const agentPairings = pgTable('agent_pairings', {
-  id: id(), workspace_id: uuid().notNull(), owner_id: uuid().notNull(), name: text().notNull(), code_hash: text().notNull(),
+  id: id(), workspace_id: uuid().notNull(), owner_id: uuid().notNull(), provider: text().$type<import('@space/contracts').LocalProvider>().default('codex'), connector_id: text().notNull().default('codex.local'), descriptor: jsonb().$type<import('@space/contracts').PairedConnector>(), name: text().notNull(), code_hash: text().notNull(),
   expires_at: timestamp({ withTimezone: true }).notNull(), cancelled_at: timestamp({ withTimezone: true }), installation_id: uuid(), created_at: time(),
 });
 export const agentConnections = pgTable('agent_connections', {

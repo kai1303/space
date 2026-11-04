@@ -85,7 +85,7 @@ people and independently operated agents in the same workplace.
 
 Install **Node.js 22.12+**, **pnpm 8.10.3**, **Docker Compose**, and **OpenSSL**.
 The commands below use a POSIX shell on macOS or Linux. Docker Compose supplies
-PostgreSQL 16, Redis 7, and SeaweedFS for local development.
+PostgreSQL 16, NATS JetStream, Redis 7, and SeaweedFS for local development.
 
 ### 1. Get the project
 
@@ -105,7 +105,7 @@ reuse it between restarts. The other example values target the local services be
 Run these commands from the repository root:
 
 ```sh
-docker compose up -d postgres redis seaweedfs
+docker compose up -d postgres nats redis seaweedfs
 
 # Export the configuration for migrations and the API.
 set -a
@@ -113,6 +113,9 @@ set -a
 set +a
 
 pnpm migrate
+# In a separate terminal, export the same .env and keep the CDC bridge running.
+pnpm events
+# In another terminal with the same environment:
 pnpm server
 ```
 
@@ -160,9 +163,9 @@ The [/workspace](http://127.0.0.1:5173/workspace) route is a synthetic design pr
    and cookie sessions. Workspace roles and channel membership control access.
 2. **Talk in channels and threads.** The React client sends messages through the
    Fastify API. PostgreSQL stores messages and their events in a transaction.
-3. **Stay in sync.** Redis notifies API instances about updates; each instance reads
-   authorized history from PostgreSQL and delivers it over Socket.IO. Reconnect
-   catch-up and periodic reconciliation recover missed notifications.
+3. **Stay in sync.** Committed PostgreSQL WAL feeds NATS JetStream. API instances
+   read authorized history and deliver it over Socket.IO. Reconnect catch-up and
+   durable broker delivery recover missed updates without periodic scans.
 4. **Share files.** The browser uploads directly to private SeaweedFS storage using
    a signed form. The API validates and finalizes the upload, then checks current
    access before issuing download links. Files are limited to 25 MiB each.
@@ -219,7 +222,8 @@ Space is a TypeScript monorepo using pnpm workspaces and Turborepo.
 | Shared UI | Components, rich-text composer, design tokens | [`packages/ui`](packages/ui) |
 | API | Fastify, Better Auth, Socket.IO | [`apps/server`](apps/server) |
 | Persistence | PostgreSQL, Drizzle, versioned SQL migrations | [`adapters/postgres`](adapters/postgres) |
-| Realtime notifications | Redis Pub/Sub | [`adapters/redis`](adapters/redis) |
+| Durable events | PostgreSQL WAL CDC + NATS JetStream | [`adapters/events`](adapters/events), [`apps/events`](apps/events) |
+| Socket.IO adapter | Redis Pub/Sub | [`adapters/redis`](adapters/redis) |
 | Contracts and policy | Shared validation, types, access and approval policy | [`packages/contracts`](packages/contracts), [`packages/core`](packages/core) |
 | Agent worker | Experimental task flow with a mock connector | [`apps/worker`](apps/worker), [`adapters/mock`](adapters/mock) |
 | Local connector | Pairing, local authorization, readiness reporting | [`apps/connector`](apps/connector) |
@@ -250,7 +254,9 @@ See [connector setup](apps/connector/README.md),
 replies, durable history and reconnect catch-up, file uploads and previews, opt-in
 channel memory, scoped memory MCP access, rules-first Navigator suggestions, agent mention/thread routing, and local connector enrollment/status.
 
-**Still ahead:** agent repository access and file modification, direct messages, presence,
+**Direct messages:** Same-workspace one-to-one and self conversations support recipient search, open/resume, threads, reactions, files, unread state, and per-user hide/reopen. See [Slack flow research and implementation](docs/architecture/slack-direct-messages-research.md). Migration 039 is required.
+
+**Still ahead:** agent repository access and file modification, group direct messages, presence,
 message editing/deletion, email invitations, and additional agent adapters.
 The [module roadmap](docs/architecture/module-roadmap.md) tracks the broader scope.
 
@@ -262,8 +268,11 @@ establish production reliability, security certification, or complete Slack pari
 ## Development
 
 Run commands from the repository root. Integration tests require the database and
-Redis URLs exported from `.env` and a test database whose role can create schemas.
-They create and remove isolated schemas; use a development or test database.
+Redis and NATS URLs exported from `.env`, plus a running `pnpm events` bridge.
+The test database role must create schemas and databases: CDC outage tests create
+a separate database so the shared bridge cannot mask a failed publisher. Use a
+development or test database. PostgreSQL must have `wal_level=logical`; Compose
+sets it without replacing the data volume.
 
 ```sh
 pnpm build             # Build workspace packages in dependency order.
@@ -295,9 +304,40 @@ More guides:
 ## Deployment and data
 
 `docker compose up --build` runs the backend stack, including migrations, API,
-worker, database, Redis, and file storage. It does not serve the web frontend or
+worker, CDC bridge, database, NATS JetStream, Redis, and file storage. It does not serve the web frontend or
 create accounts automatically. The quick start above runs the API on the host
 instead; choose one setup to avoid port conflicts.
+
+The CDC service retains its PostgreSQL replication slot across restarts and reads
+committed WAL with `pgoutput`. It publishes each event to JetStream before keyed
+outbox cleanup and only then acknowledges the transaction end LSN. Restarting the
+bridge replays retained WAL; stable event IDs make duplicate delivery safe for
+idempotent handlers. The default publication includes every schema in this database;
+use a dedicated application database, or set `DATABASE_SCHEMA` on the bridge to
+restrict its publication and slot to one schema. Run one bridge per slot; PostgreSQL
+rejects simultaneous readers of the same slot. Never delete the slot or NATS volume
+as a recovery shortcut. A stalled bridge retains WAL and needs disk monitoring.
+
+Each schema has a durable work stream with no time, message count, or per-stream
+byte eviction limits. NATS 2.15.2 schedules future events on separate subjects, so
+future deadlines do not occupy consumer `maxPending` slots. A retry first publishes
+a scheduled copy durably and then acknowledges its original delivery. Schedule
+subjects have no application consumers. Worker ACK removes completed work; filters
+must be disjoint, and multiple instances share a durable name and queue.
+
+The broker limits all file storage to 16 GB and memory storage to 64 MB, with
+`sync_interval: always`. At global storage capacity it rejects writes, retaining
+unpublished source events in PostgreSQL. Native scheduling requires `DiscardOld`,
+so work streams deliberately have no individual eviction limits. Chat invalidations
+retain up to 16 MiB for 24 hours, with database catch-up on reconnect. If storage
+fills while a scheduled message fires, its schedule remains durable; after freeing
+space, restart the broker to clear its in-flight scheduling state. Monitor capacity
+before this condition occurs.
+The CDC transaction spool is bounded at 1 GiB; an oversized transaction stops progress
+without advancing its checkpoint and requires operator intervention. Inspect local
+JetStream storage using `docker compose exec nats wget -qO-
+http://127.0.0.1:8222/jsz?streams=true` and inspect `pg_replication_slots` for retained
+WAL. Broker and database data directories require persistent storage and monitoring.
 
 The Compose configuration uses local development defaults. A deployment needs its
 own secrets, HTTPS, trusted origins, and a reverse proxy supporting WebSocket

@@ -1,0 +1,13 @@
+# Local agent providers
+
+Members can select Codex or Kiro when creating a pairing. The pairing fixes the provider, its connector ID and its skill. Existing Codex pairing requests and saved local state remain compatible. Codex uses `codex.local` / `codex.run`; Kiro uses `kiro.local` / `kiro.run`.
+
+The shared connector capability model owns enrollment, channel grants, managed sessions and broker routing. Both providers advertise persistent sessions. Each installation retains its human owner and explicit channel access. Session follow-ups preserve installation and skill; provider-specific credentials remain on the computer. Pairing and channel-grant mutations use bounded serializable transactions rather than explicit database locks. Migration036 adds pairing provider metadata; migration037 extends this through the shared connector descriptors and capabilities.
+
+Space's connector uses a common runtime interface for invocation, readiness and shutdown. Codex retains its app-server protocol. Kiro implements ACP v3 over newline JSON-RPC with bounded buffers, request deadlines, one active turn, and coalesced response snapshots. Provider-specific state roots allow simultaneous Codex and Kiro processes. Session mappings retain their private permissions and atomic writes; the Codex storage layout is unchanged.
+
+Kiro credentials are managed by `kiro-cli login` inside a Space-owned HOME. The adapter does not import desktop credentials or global project configuration. The generated chat-only profile has no tools, MCP servers, powers, resources or hooks. Startup checks initialization, persistent-session support and a no-inference session in the selected profile. Callbacks cannot grant filesystem, terminal or tool access. Kiro mode changes and unexpected tool events fail the turn. Client restrictions are not an OS filesystem jail.
+
+Each new retained session mapping is saved before Space acknowledges session readiness and before inference begins. Later turns load the same session, ignoring history replay as current output. Missing storage, account changes, malformed output and uncertain transport failures fail visibly. Stop drains in-flight setup or waits for the prompt's cancellation response; a timeout stops the runtime instead of risking overlap. Kiro turns are never automatically replayed.
+
+Setup commands and sign-in guidance are in the [connector guide](../../apps/connector/README.md#kiro). Apply migrations and restart the API and web app to use the updated provider picker. Tests exercise real PostgreSQL and Socket.IO with synthetic provider processes. Real authenticated Kiro inference remains unverified.

@@ -3,7 +3,7 @@ import type { Pool } from 'pg';
 import { and, eq, exists, getTableColumns, or } from 'drizzle-orm';
 import { AppError, parseDefinitionInput, parseInstallationInput, parseGrantInput, uuid, type AgentDefinition, type AgentInstallation, type AgentGrant } from '@space/contracts';
 import { database, type DbSession } from './database.js';
-import { agentDefinitions as d, agentInstallations as i, agentGrants as g, channelMembers as m, foundationEvents } from './schema.js';
+import { agentDefinitions as d, agentInstallations as i, agentGrants as g, channelMembers as m, channels, foundationEvents } from './schema.js';
 import { requireWorkspaceAccess, hasChannelAccess, lockWorkspace } from './access.js';
 const installationColumns = { ...getTableColumns(i), capabilities: d.capabilities };
 export class FoundationStore {
@@ -61,6 +61,8 @@ export class FoundationStore {
     return this.db.transaction(async c => {
       const installation = await this.owned(c, actor, id);
       if (!await hasChannelAccess(c, actor, installation.workspace_id, request.channel_id)) throw new AppError(404, 'not_found');
+      const [channel] = await c.select({ kind: channels.kind }).from(channels).where(eq(channels.id, request.channel_id));
+      if (channel?.kind === 'direct') throw new AppError(403, 'direct_message_agents_forbidden');
       if (!installation.capabilities.skills.includes(request.skill)) throw new AppError(400, 'skill_unsupported');
       const grant = { ...request, workspace_id: installation.workspace_id, installation_id: installation.id };
       const result = await c.insert(g).values(grant).onConflictDoNothing().returning();

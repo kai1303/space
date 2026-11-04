@@ -5,7 +5,7 @@ import { ArrowClockwise, File, FileCode, FilePdf, MusicNote, VideoCamera, X } fr
 import { AssetViewer } from './AssetAttachments.js';
 import './channel-files.css';
 
-type Props = { channel: string; name: string; revision?: string; onClose: () => void; onMessage: (messageId: string) => void; onAccessLost?: () => void };
+type Props = { direct?: boolean; channel: string; name: string; revision?: string; onClose: () => void; onMessage: (messageId: string) => void; onAccessLost?: () => void };
 const kinds = [['all', 'All files'], ['image', 'Images'], ['pdf', 'PDFs'], ['text', 'Text'], ['audio', 'Audio'], ['video', 'Videos'], ['other', 'Other']] as const;
 const assetUrl = (id: string, action: string) => `/v1/assets/${encodeURIComponent(id)}/${action}`;
 function FileThumbnail({ file }: { file: ChannelFile }) {
@@ -18,7 +18,7 @@ function FileThumbnail({ file }: { file: ChannelFile }) {
 
 // A channel change remounts all private state before another channel can paint.
 export function ChannelFiles(props: Props) { return <ChannelFilesPanel key={props.channel} {...props} />; }
-function ChannelFilesPanel({ channel, name, revision, onClose, onMessage, onAccessLost }: Props) {
+function ChannelFilesPanel({ direct, channel, name, revision, onClose, onMessage, onAccessLost }: Props) {
   const [search, setSearch] = useState('');
   const [query, setQuery] = useState('');
   const [kind, setKind] = useState('all');
@@ -94,7 +94,7 @@ function ChannelFilesPanel({ channel, name, revision, onClose, onMessage, onAcce
   }, [channel, query, kind, sort, appliedRevision, refresh]);
   function closeViewer() { setSelected(null); queueMicrotask(() => { if (revision === appliedRevision && opener.current?.isConnected) opener.current.focus(); else searchInput.current?.focus(); }); }
   const filtered = !!query || kind !== 'all';
-  return <SidePanel className="channel-files" role="region" aria-label={`Files in #${name}`}>
+  return <SidePanel className="channel-files" role="region" aria-label={`Files in ${direct ? '' : '#'}${name}`}>
     <header className="channel-files-header"><h2>Files</h2><IconButton label="Close files" onClick={onClose}><X size={20} /></IconButton></header>
     <div className="channel-files-controls">
       <input ref={searchInput} type="search" aria-label="Search filenames" placeholder="Search filenames" maxLength={255} value={search} onChange={event => setSearch(event.target.value)} />

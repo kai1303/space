@@ -45,9 +45,10 @@ add your user to an existing one. Existing workspace APIs remain authoritative.
   development mode for its localhost HTTP setup; the image itself defaults to production.
 - Sign-out revokes the current session. Better Auth also exposes session listing,
   individual/all-session revocation and password change. Sign-out/revocation sends
-  the existing Redis wake-up; every socket command and reconciliation checks the
-  current session, including sockets with no channel subscription. If a wake-up is
-  lost, the normal ten-second reconciliation catches it.
+  a transactional invalidation through committed WAL and NATS JetStream. Every socket
+  command and event-triggered delivery checks the current session, including sockets
+  without a channel subscription. Broker reconnect reattaches the consumer and
+  rechecks connected sessions; no periodic authentication scan runs.
 - A new session for the same user recreates the chat connection. Revoked/expired
   sessions clear chat and refresh the session UI. Slow-connection errors retain
   their existing replay/reconnect behavior.

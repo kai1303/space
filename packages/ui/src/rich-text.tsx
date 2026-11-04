@@ -84,7 +84,7 @@ export function RichContent({ document, onMentionClick, viewerId }: { document: 
         const a = op.attributes ?? {};
         if (a.mention && active.has(opIndex) && !a.code && !a.link) {
           const mention = a.mention, className = `sp-mention-token${mention.kind === 'user' && mention.id === viewerId ? ' is-self' : ''}`;
-          node = onMentionClick && mention.kind !== 'broadcast' ? <button type="button" className={className} onClick={() => onMentionClick(mention)}>{part}</button> : <span className={className}>{part}</span>;
+          node = onMentionClick && mention.kind !== 'broadcast' ? <button type="button" className={className} data-mention-kind={mention.kind} aria-label={mention.kind === 'agent' ? `Agent mention: ${part}` : undefined} onClick={() => onMentionClick(mention)}>{part}</button> : <span className={className} data-mention-kind={mention.kind}>{part}</span>;
         }
         if (a.code) node = <code>{node}</code>;
         if (a.bold) node = <strong>{node}</strong>;

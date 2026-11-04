@@ -6,7 +6,7 @@ const clients = vi.hoisted(() => [] as any[]);
 vi.mock('socket.io-client', () => ({ io: () => {
   const handlers = new Map<string, (...args: any[]) => void>();
   const client = {
-    connected: false,
+    connected: false, off: (name: string, fn: (...args: any[]) => void) => { if (handlers.get(name) === fn) handlers.delete(name); },
     on: (event: string, handler: (...args: any[]) => void) => handlers.set(event, handler),
     connect: () => { client.connected = true; handlers.get('connect')?.(); },
     disconnect: vi.fn(() => { client.connected = false; }),

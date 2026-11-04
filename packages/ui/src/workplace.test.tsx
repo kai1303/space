@@ -281,3 +281,10 @@ it('renders identity-backed mentions as accessible profile controls without acti
  const token=screen.getByRole('button',{name:'@Kai'});expect(token.className).toContain('is-self');await userEvent.click(token);expect(open).toHaveBeenCalledWith(mention);
  expect(container.querySelector('pre button')).toBeNull();expect(container.querySelector('pre')?.textContent).toBe('@Kai');
 });
+
+it('distinguishes people and agent mention tokens without relying on color alone',()=>{
+ const id='00000000-0000-4000-8000-000000000001';
+ const {container}=render(<RichContent onMentionClick={()=>{}} document={{ops:[{insert:'@Kai',attributes:{mention:{kind:'user',id,label:'Kai'}}},{insert:' '},{insert:'@Helper',attributes:{mention:{kind:'agent',id,label:'Helper'}}},{insert:'\n'}]}}/>);
+ expect(container.querySelector('[data-mention-kind="user"]')).not.toBeNull();
+ expect(screen.getByRole('button',{name:'Agent mention: @Helper'}).getAttribute('data-mention-kind')).toBe('agent');
+});

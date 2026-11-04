@@ -132,7 +132,11 @@ test('unfinished, invalid, expired, foreign and cross-channel uploads cannot be 
   await api(b.owner_token, 'POST', `/channels/${b.channel_id}/messages`, { client_message_id: randomUUID(), text: 'Other channel', asset_ids: [asset.id] }, 409);
   await pool.query('UPDATE assets SET expires_at=now()-interval \'1 second\' WHERE id=$1', [asset.id]);
   await api(a.owner_token, 'POST', `/channels/${a.channel_id}/messages`, { client_message_id: randomUUID(), text: 'Expired', asset_ids: [asset.id] }, 409);
-  await api(a.owner_token, 'POST', `/assets/${asset.id}/complete`, {}, 410);
+  // The durable expiry event may already have removed this unattached asset.
+  const expired = await app.inject({ method: 'POST', url: `/v1/assets/${asset.id}/complete`, headers: { authorization: `Bearer ${a.owner_token}` }, payload: {} });
+  assert.ok(expired.statusCode === 410 || expired.statusCode === 404, expired.body);
+  assert.equal(expired.json().error, expired.statusCode === 410 ? 'upload_expired' : 'not_found');
+  if (expired.statusCode === 404) assert.equal((await pool.query('SELECT id FROM assets WHERE id=$1', [asset.id])).rowCount, 0);
 });
 
 test('attachments flow through socket acknowledgments and reconnect events', async () => {

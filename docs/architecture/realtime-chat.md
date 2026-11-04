@@ -3,7 +3,7 @@
 Implemented locally on 2026-11-03. Authentication is now provided by Better Auth;
 see [authentication setup](authentication.md) for required environment variables and
 account/session behavior. The original development-token login has been replaced. Fastify + Socket.IO over WebSocket; the Socket.IO Redis adapter
-connects API instances. A PostgreSQL transactional outbox schedules delivery. PostgreSQL + Drizzle stores permanent messages, threads
+supports cross-instance Socket.IO operations. A PostgreSQL transactional event outbox feeds NATS JetStream through committed WAL CDC. PostgreSQL + Drizzle stores permanent messages, threads
 and channel history. No Centrifugo or PostgreSQL LISTEN/NOTIFY is used for chat.
 
 ```mermaid
@@ -12,9 +12,9 @@ flowchart LR
   UI -->|History, channels, task approvals| API
   API -->|Message, event and outbox in one transaction| DB[(PostgreSQL)]
   Worker[Agent worker] -->|Trusted agent events and outbox| DB
-  DB -->|Claim pending delivery| Publisher[In-process outbox publisher]
-  Publisher -->|Acknowledged inter-server event| Redis[Socket.IO Redis adapter]
-  Redis -->|Schedule channel delivery on API instances| API
+  DB -->|Committed WAL| CDC[CDC bridge]
+  CDC -->|Durable publish acknowledgment| Broker[NATS JetStream]
+  Broker -->|Push targeted events| API
   API -->|Authorize and read newer history| DB
 ```
 
@@ -22,14 +22,16 @@ flowchart LR
 
 ```sh
 pnpm install --frozen-lockfile
-docker compose up -d postgres redis
+docker compose up -d postgres nats redis
 export DATABASE_URL=postgres://workplace:local_demo_only@127.0.0.1:55438/workplace
 export REDIS_URL=redis://127.0.0.1:56380
-pnpm migrate                     # includes migration 019; run before restarting API/worker
+export NATS_URL=nats://127.0.0.1:54222
+pnpm migrate                     # includes migration 032; run before restarting API/worker
 # Set BETTER_AUTH_SECRET / BETTER_AUTH_URL as described in authentication.md
-pnpm server                     # terminal 1
-pnpm worker                     # terminal 2, DATABASE_URL required; no Redis connection
-pnpm web                        # terminal 3; open /chat
+pnpm events                     # terminal 1: committed-WAL bridge
+pnpm server                     # terminal 2
+pnpm worker                     # terminal 3; DATABASE_URL and NATS_URL required
+pnpm web                        # terminal 4; open /chat
 ```
 
 Register or sign in at `/chat` using email/password. The browser sends an HttpOnly
@@ -73,12 +75,18 @@ Authentication and authorization are required regardless of Origin.
 | Event | Payload / acknowledgment |
 | --- | --- |
 | client → `channel.subscribe` | `{channel_id, after: "0"}`; ack `{data: {channel_id, cursor}}` or `{error}` |
+| client → `channel.unsubscribe` | `{channel_id}`; removes only the matching active channel |
+| client → `workspace.subscribe` / `workspace.unsubscribe` | `{workspace_id}`; manages the active unread stream |
+| client → `updates.subscribe` / `updates.unsubscribe` | `{scope, id}`; manages one resource in a bounded map of 64 |
+| server → `channel.revoked` / `workspace.revoked` | `{channel_id, error}` / `{workspace_id, error}`; clears only that stream |
 | client → `message.send` | `{channel_id, client_message_id, text, thread_id?, document?}`; ack `{data: ChatMessage}` or `{error}` |
 | server → `chat.events` | `{channel_id, events, cursor}`; client must acknowledge after accepting the batch |
 | server → `chat.error` | `{error}`; fatal stream/auth error followed by disconnect |
 
-One channel subscription per socket. Switching channels in the UI closes the old
-socket and clears its displayed history while retaining its unsent draft. Every command and replay batch checks identity;
+One browser connection is owned by the signed-in session. It carries one selected
+channel stream, one workspace unread stream and up to 64 resource subscriptions.
+Switching channels unsubscribes the old stream and clears its displayed history while
+retaining its unsent draft; the connection stays open until logout/session replacement. Every command and replay batch checks identity;
 replay also checks active workspace and channel membership. Human sends
 cannot supply their own author identity. Agent messages can only come through the
 trusted task-event acceptance path.
@@ -91,6 +99,29 @@ The UI preserves a failed draft and its retry ID within the mounted composer.
 Unsent drafts survive in-app channel/workspace/thread navigation but are not persisted across reload.
 Acknowledged sends clear the matching draft even after navigation, while preserving newer edits.
 A send finishing in the background preserves focus in another input.
+
+## Resource updates without browser polling
+
+Migration 029 adds durable revision counters alongside the delivery outbox. The
+browser subscribes with `updates.subscribe {scope, id}`, where scope is `workspace`,
+`channel`, `thread`, or `task`. Authentication and current resource access are checked
+on subscription and before each notification. The server emits acknowledged
+`updates.changed {scope, id}` invalidations; views refetch their existing HTTP reads.
+`updates.revoked {scope, id, error}` clears private state immediately and removes only
+that resource subscription. Session authentication failure closes the whole transport.
+
+Channel discovery, mentions, Navigator suggestions, thread agent subscriptions,
+workspace members/pairing and task details use these notifications instead of
+recurring HTTP reads. Views share the session socket and reference-count resource subscriptions, queue a trailing refresh
+when an update arrives during a read, and refresh on reconnect or focus. Task
+progress has its own revision so streaming does not repeatedly refresh workspace
+metadata. Named listeners are registered centrally and cleaned up with the session.
+Commands use a bounded serialized queue; disconnect fences queued commands so they
+cannot run on a replacement connection. Each server stream has an independent
+bounded pump, so a slow acknowledgement does not block unrelated streams. Pairing
+expiry uses one local deadline timer without an API read.
+
+The local connector receives `agent.tasks.available` only when its installation's durable broker consumer has an offer. Claims accept that exact delivery; there is no recurring work lookup. Task and connection deadlines and abandoned-upload cleanup use durable scheduled events. Heartbeats report liveness; attempt tokens fence stale writes and never grant a replacement execution. Reconnect attaches a fresh realtime consumer before reading retained revisions/history once. Idle streams perform no reconciliation queries.
 
 ## Message storage and scrolling
 
@@ -116,8 +147,7 @@ receives acknowledged `workspace.unread` snapshots in the same shape as the HTTP
 summary. It watches all joined channels independently of the selected channel.
 Read updates enqueue transactional outbox hints, so the same user's devices sync
 across API instances. Repeated hints replace snapshots instead of incrementing
-client counters. Every refresh rechecks access; reconnect, focus and periodic
-server reconciliation recover missed events. Membership revocation removes state
+client counters. Every refresh rechecks access; reconnect and focus recover current state, while durable events trigger live refreshes. Membership revocation removes state
 or disconnects the workspace subscription.
 
 The web app displays sidebar counts and preserves a “New messages” divider for
@@ -180,23 +210,9 @@ The full composer sends an optional structured `document: {ops: [{insert, attrib
 - Migration 019 enqueues a `chat_delivery_outbox` row whenever a channel event is inserted,
   in the same transaction. Human messages, agent results and task events all use it.
   Membership and credential/session changes enqueue authorization invalidations as well.
-- Every API runs a small publisher every 250 ms. It claims at most 100 pending rows with
-  `FOR UPDATE SKIP LOCKED`, coalesces channel IDs and uses the official Socket.IO Redis
-  adapter's acknowledged `serverSideEmitWithAck` to schedule delivery on peer instances.
-  Each instance rechecks identity/membership and reads its local subscribers' cursors.
-  Only channel IDs cross the adapter for chat delivery; message bodies remain in the
-  authorized replay path. Cross-instance room operations also use the installed adapter.
-- Pending rows are deleted only after local delivery is scheduled and the peer instances
-  acknowledge scheduling. Failure rolls back the claim; restart or another publisher
-  retries it. A crash after publication can repeat a notification, which is harmless.
-  Publication waits are bounded to three seconds. Writers do not wait for Redis; an
-  unavailable adapter leaves the rows pending. No custom Redis topic or post-commit
-  publish hook remains, and the agent worker no longer connects to Redis.
-- Redis Pub/Sub is still transient. A peer disconnected from Redis is not necessarily
-  counted in adapter acknowledgments. Reconciliation every 10 seconds and reconnect
-  replay repair missed delivery; acknowledgment does not promise every client received
-  a message. On shutdown, an API drains its active publication and closes only its own
-  sockets. This is locally verified behavior, not a production load benchmark.
+- Migration 032 writes `event_outbox` in the business transaction. The CDC bridge reads committed WAL, persists each event in JetStream, and advances the replication checkpoint only after all publications in that transaction succeed. Keyed cleanup runs after broker acknowledgment; there are no row claims or database scan timers.
+- Each API uses its own ephemeral realtime consumer. On broker reconnect it replaces that consumer before performing catch-up. Browser cursors and retained PostgreSQL history/revisions recover state. A broker stream-sequence gap triggers catch-up for all local subscriptions, including quiet channels whose hints were evicted. Redis remains available for Socket.IO adapter operations and is outside the event durability boundary.
+- Worker groups consume targeted task and Navigator events. Broker-native scheduling holds future deadlines outside consumer concurrency slots. Unacknowledged work survives process restart; duplicate effects are rejected with constraints, revision checks and attempt tokens. An uncertain external invocation fails visibly instead of automatically repeating its side effects.
 - Network delivery is not exactly-once. Clients deduplicate channel sequence values;
   message IDs and client request IDs prevent duplicate durable sends. Sequence values
   are decimal strings to preserve bigint precision in JavaScript.
@@ -207,21 +223,21 @@ The full composer sends an optional structured `document: {ops: [{insert, attrib
   limited to 128 KiB for inbound socket frames and HTTP message bodies (other HTTP bodies remain 32 KiB); plain text to 16,000 characters; sockets accept at most 30 commands/s
   with one command executing at a time.
 - Membership and credential/session revocation triggers enqueue delivery invalidations,
-  including direct SQL changes. Reconciliation and commands recheck access as a fallback.
+  including direct SQL changes. Commands and each delivered batch recheck access.
   Already delivered content cannot be recalled from a client. Infrastructure errors during
   authentication are retryable; invalid credentials remain terminal and clear cached access.
 - Migration 005 preserves and backfills old result messages. Earlier task activity
   remains available through the task-event API; it is not invented in chat history.
 
-The existing experimental **agent dispatch outbox** still lives in PostgreSQL. It
-is separate from chat transport and was not migrated in this slice. A future durable
-job-queue decision should address that worker independently.
+The task dispatch outbox remains durable business state in PostgreSQL. JetStream delivers exact delivery IDs to workers; conditional state transitions accept an attempt, and targeted deadline events recover interrupted attempts. See [principles and remaining gaps](principles.md) for authoring/storage locks outside this migration.
 
 ## Scope and verification
 
 ```sh
 export TEST_DATABASE_URL="$DATABASE_URL"
 export TEST_REDIS_URL="$REDIS_URL"
+export TEST_NATS_URL="$NATS_URL"
+# Keep pnpm events running against the test database.
 pnpm test:chat
 pnpm test
 pnpm typecheck
@@ -230,10 +246,9 @@ pnpm build
 
 Chat integration tests use a disposable schema and unique Socket.IO adapter key. They cover
 cross-tenant access, private membership, idempotency, trusted agent authors,
-Redis-adapter cross-instance delivery, missed-notification reconciliation, reconnect
+cross-instance event delivery, reconnect catch-up, reconnect
 replay, >200-message history, malformed commands, Origin checks and revocation.
-Outbox tests cover transactional rollback, failed publication, concurrent claims,
-publication-before-crash retries and API restart recovery. Shutdown tests ensure closing
+CDC tests cover commit/rollback visibility, broker outage beyond the former checkpoint timer, publisher restart and durable redelivery. Worker tests cover duplicate targets, deadline fencing and uncertain invocation safety. Shutdown tests ensure closing
 one API does not disconnect other instances. A child-process regression disconnects Redis
 between adapter server-count and publication, proving the rejected command does not crash
 Node. UI tests cover event deduplication, bigint ordering, retry IDs, offline sends,
@@ -254,3 +269,11 @@ For production, serve the frontend and Socket.IO behind a TLS reverse proxy supp
 WebSocket upgrade; the Vite proxy is development tooling.
 
 Private chat attachments now use self-hosted SeaweedFS. See [asset storage](assets.md) for setup, API contracts, limits and verification.
+
+## Typing presence
+
+Channel and thread composers publish `typing.change` with `{channel_id, thread_id?, active}` on the existing authenticated Socket.IO connection. Text and rich documents are never included. The server validates membership, thread ownership by channel, archive state and user identity; a client cannot supply a display name or user ID. Updates are limited to four per second per socket. Each socket holds at most one channel and one thread activity deadline.
+
+`chat.typing` carries the server-resolved user, source socket, thread scope and expiry. The existing Redis adapter forwards ephemeral signals between API instances. Recipients are authorized again before delivery, with a bounded queue of 64 coalesced source/scope signals per socket. Signals are not persisted, replayed or used for unread counts. A newly joined viewer observes activity from subsequent updates.
+
+The client sends at most one active update every two seconds of editing and a stop after three seconds of inactivity, on blur/hidden navigation, draft clearing or successful send. Server deadlines and recipient expiry provide a six-second fallback for dropped signals or an unclean disconnect. These are one-shot deadlines, not resource polling. Disconnecting or leaving clears only that socket's activity; another tab remains independent. The UI deduplicates people across tabs, excludes the viewer and keeps channel and thread indicators separate. At the user’s request, its fixed-height line sits just above the input and avoids shifting the composer. Names are bold and more than two typists collapse to “Several people are typing”. See [Slack rendering evidence](../research/slack-typing-indicator.md).

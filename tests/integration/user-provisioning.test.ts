@@ -103,7 +103,7 @@ test('version-three upgrade preserves workspace identities, roles, inactive memb
     assert.equal(inactive.active, false);
     assert.equal(inactive.role, 'admin');
     assert.deepEqual((await pool.query('SELECT * FROM workspace_events WHERE id=$1', [event])).rows[0], oldEvent);
-    assert.deepEqual((await pool.query('SELECT * FROM tasks WHERE id=$1', [task])).rows[0], oldTask);
+    assert.deepEqual((await pool.query('SELECT * FROM tasks WHERE id=$1', [task])).rows[0], { ...oldTask, request_document: null });
     await assert.rejects(pool.query('UPDATE workspace_events SET type=$1 WHERE id=$2', ['changed', event]), /append-only/);
     assert.equal((await pool.query('SELECT * FROM schema_migrations')).rowCount, migrationFiles.length);
   } finally {
@@ -161,9 +161,15 @@ test('version-thirteen upgrade preserves workspace history and roles without res
     for (const table of retainedTables) {
       const rows = (await pool.query(`SELECT * FROM ${table}`)).rows;
       // Compare original columns; later migrations only add the fields excluded here.
-      const originalRows = table === 'messages' ? rows.map(({ sequence, agent_milestone, agent_response, reaction_sequence, ...message }) => message)
-        : table === 'channels' ? rows.map(({ topic, description, archived_at, ...channel }) => channel)
-        : table === 'assets' ? rows.map(({ processing_token, processing_until, ...asset }) => asset) : rows;
+      const originalRows = table === 'messages' ? rows.map(({ sequence, agent_milestone, agent_response, reaction_sequence, agent_session_id, ...message }) => message)
+        : table === 'channels' ? rows.map(({ topic, description, archived_at, kind, direct_user_low, direct_user_high, ...channel }) => {
+          assert.equal(kind, 'channel');
+          assert.equal(direct_user_low, null);
+          assert.equal(direct_user_high, null);
+          return channel;
+        })
+        : table === 'assets' ? rows.map(({ processing_token, processing_until, ...asset }) => asset)
+        : table === 'tasks' ? rows.map(({ request_document, ...task }) => { assert.equal(request_document, null); return task; }) : rows;
       assert.deepEqual(originalRows, before.get(table), `${table} history changed`);
     }
     const messageSequence = (await pool.query('SELECT sequence FROM messages WHERE id=$1', [message])).rows[0].sequence;

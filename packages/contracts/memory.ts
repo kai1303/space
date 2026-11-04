@@ -6,7 +6,21 @@ export const MAX_MEMORY_IMPORT_BYTES = 100_000;
 export type MemoryScope = { workspace_id: string; channel_id: string };
 export type MemorySource = { id: string; title: string; text: string; url?: string; fingerprint?: string };
 export type MemoryDocument = { content: string; revision: string; sources: { id: string; title: string; url?: string; fingerprint?: string }[] };
-export type MemoryConnection = { thread_id?: string | null; id: string; name: string; access: 'read' | 'write'; created_at: string };
+export type AgentMemoryAccess = 'none' | 'read' | 'contribute';
+export type AgentMemoryPermission = { id: string; name: string; access: AgentMemoryAccess };
+export type MemoryConnection = { thread_id?: string | null; installation_id?: string | null; id: string; name: string; access: 'read' | 'contribute' | 'write'; created_at: string };
+export const MAX_AGENT_MEMORY_CHARS = 6000;
+export type AgentMemoryContext = { channel_id: string; provider: string; revision: string; content: string; truncated: boolean };
+export function parseAgentMemoryContext(input: unknown): AgentMemoryContext {
+  const v = record(input, ['channel_id', 'provider', 'revision', 'content', 'truncated']);
+  if (typeof v.content !== 'string' || v.content.length > MAX_AGENT_MEMORY_CHARS || v.content.includes('\0') || typeof v.truncated !== 'boolean') throw new AppError(400, 'invalid_memory_context');
+  return { channel_id: uuid(v.channel_id), provider: text(v.provider, 64), revision: text(v.revision, 256), content: v.content, truncated: v.truncated };
+}
+export function parseAgentMemoryAccess(input: unknown): AgentMemoryAccess {
+  const v = record(input, ['access']);
+  if (!['none', 'read', 'contribute'].includes(String(v.access))) throw new AppError(400, 'invalid_memory_access');
+  return v.access as AgentMemoryAccess;
+}
 export type MemoryMatch = { text: string; line: number };
 export type ChannelMemory = {
   enabled: boolean; provider: string; can_manage: boolean;
@@ -21,10 +35,10 @@ export function memorySourceId(input: unknown): string {
   if (!['message', 'document', 'knowledge'].includes(kind!) || value !== `${kind}:${uuid(id)}`) throw new AppError(400, 'invalid_memory_source');
   return value;
 }
-export function parseMemoryConnection(input: unknown): { name: string; access: 'read' | 'write' } {
-  const v = record(input, ['name', 'access']);
-  if (v.access !== 'read' && v.access !== 'write') throw new AppError(400, 'invalid_memory_access');
-  return { name: text(v.name, 100).trim(), access: v.access };
+export function parseMemoryConnection(input: unknown): { name: string; access: MemoryConnection['access']; installation_id?: string } {
+  const v = record(input, ['name', 'access', 'installation_id']);
+  if (v.access !== 'read' && v.access !== 'contribute' && v.access !== 'write') throw new AppError(400, 'invalid_memory_access');
+  return { name: text(v.name, 100).trim(), access: v.access, ...(v.installation_id === undefined ? {} : { installation_id: uuid(v.installation_id) }) };
 }
 export function parseMemoryWrite(input: unknown) {
   const v = record(input, ['content', 'revision']);

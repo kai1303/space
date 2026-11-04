@@ -1,20 +1,24 @@
-import { spawn, type SpawnOptionsWithoutStdio, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { mkdtemp, mkdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
-import { parseInvocation, parseAgentEvent, parseAgentResponse, type AgentEvent, type InvocationRequest } from '@space/contracts';
+import { localSessionStore, type LocalSessionStorage } from './session-storage.js';
+import { parseInvocation, parseAgentEvent, parseAgentResponse, type AgentEvent } from '@space/contracts';
 
-export type SpawnCodex = (command: string, args: string[], options: SpawnOptionsWithoutStdio) => ChildProcessWithoutNullStreams;
-export type InvokeCodex = (request: InvocationRequest, emit: (event: AgentEvent) => Promise<void>, signal: AbortSignal) => Promise<void>;
+import { AgentSessionStopped, type InvokeAgent, type SpawnAgent } from './agent-runtime.js';
+export { AgentSessionStopped } from './agent-runtime.js';
+export type { InvokeAgent as InvokeCodex, SpawnAgent as SpawnCodex } from './agent-runtime.js';
 type Message = { id?: string | number; method?: string; result?: any; error?: unknown; params?: any };
 
-export async function startCodex(accessToken: string, onExit: () => void, launch: SpawnCodex = spawn) {
-  const directory = await mkdtemp(join(tmpdir(), 'space-codex-'));
-  const home = join(directory, 'home');
-  const cwd = join(directory, 'work');
-  await Promise.all([mkdir(home, { mode: 0o700 }), mkdir(cwd, { mode: 0o700 })]);
+export async function startCodex(accessToken: string, onExit: () => void, launch: SpawnAgent = spawn, storage?: LocalSessionStorage) {
+  const sessions = storage ? await localSessionStore(storage) : undefined;
+  const directory = sessions?.directory ?? await mkdtemp(join(tmpdir(), 'space-codex-'));
+  const home = sessions?.home ?? join(directory, 'home');
+  const cwd = sessions?.cwd ?? join(directory, 'work');
+  if (!sessions) await Promise.all([mkdir(home, { mode: 0o700 }), mkdir(cwd, { mode: 0o700 })]);
+  const cleanup = () => sessions ? Promise.resolve() : rm(directory, { recursive: true, force: true });
   const config = [
     'model_provider="openai_chatgpt_plan"',
     'model_providers.openai_chatgpt_plan.name="ChatGPT plan"',
@@ -32,7 +36,7 @@ export async function startCodex(accessToken: string, onExit: () => void, launch
     child = launch('codex', ['app-server', '--listen', 'stdio://', ...config.flatMap(value => ['-c', value])], {
       cwd, env: { PATH: process.env.PATH, LANG: process.env.LANG, TMPDIR: process.env.TMPDIR, HOME: home, CODEX_HOME: home, ACCESS_TOKEN: accessToken }, stdio: 'pipe',
     });
-  } catch { await rm(directory, { recursive: true, force: true }); throw new Error('Could not initialize Codex app-server.'); }
+  } catch { await cleanup(); throw new Error('Could not initialize Codex app-server.'); }
   let live = true, stopped = false, ready = false, nextId = 0;
   let buffer = '';
   const decoder = new StringDecoder('utf8');
@@ -58,8 +62,8 @@ export async function startCodex(accessToken: string, onExit: () => void, launch
     });
   };
   child.stderr.resume(); // Child diagnostics can contain credentials; never forward them.
-  child.once('error', () => { fail(); void rm(directory, { recursive: true, force: true }); });
-  child.once('exit', () => { fail(); void rm(directory, { recursive: true, force: true }); });
+  child.once('error', () => { fail(); void cleanup(); });
+  child.once('exit', () => { fail(); void cleanup(); });
   child.stdin.on('error', fail);
   child.stdout.on('data', (chunk: Buffer) => {
     buffer += decoder.write(chunk);
@@ -88,10 +92,12 @@ export async function startCodex(accessToken: string, onExit: () => void, launch
     write({ method: 'initialized', params: {} }); ready = true;
   } catch { stop(); throw new Error('Could not initialize Codex app-server. Install or update the Codex CLI, then restart the connector.'); }
 
-  const invoke: InvokeCodex = async (input, emit, signal) => {
+  const invoke: InvokeAgent = async (input, emit, signal) => {
     const request = parseInvocation(input);
     if (active || !live || signal.aborted) throw new Error('Codex is not available for this task.');
     let threadId: string | undefined, turnId: string | undefined, sequence = 0;
+    let completedTurn = false, finishTurn!: () => void;
+    const turnFinished = new Promise<void>(resolve => { finishTurn = resolve; });
     let progress: NodeJS.Timeout | undefined, dirty = false, progressPending = false, settled = false;
     const messages = new Map<string, { id: string; text: string; status: 'streaming' | 'complete' }>();
     let queue = Promise.resolve();
@@ -99,9 +105,9 @@ export async function startCodex(accessToken: string, onExit: () => void, launch
     const done = new Promise<void>((resolve, fail) => { finish = resolve; reject = fail; });
     // Notifications may arrive in the same stdout chunk as the turn/start response.
     const early: Message[] = [];
-    const publish = (type: AgentEvent['type'], text: string, complete = false) => {
+    const publish = (type: AgentEvent['type'], text: string, complete = false, sessionReady = false) => {
       const response = type === 'execution.failed' || !messages.size ? undefined : parseAgentResponse({ messages: [...messages.values()].map(message => ({ ...message, ...(complete ? { status: 'complete' } : {}) })), tools: [], components: [] });
-      const event = parseAgentEvent({ id: randomUUID(), schema_version: '1.0', execution_id: request.execution_id, sequence: ++sequence, type, occurred_at: new Date().toISOString(), payload: { text, ...(response ? { response } : {}) } });
+      const event = parseAgentEvent({ id: randomUUID(), schema_version: '1.0', execution_id: request.execution_id, sequence: ++sequence, type, occurred_at: new Date().toISOString(), payload: { text, ...(response ? { response } : {}), ...(sessionReady ? { session_ready: true } : {}) } });
       queue = queue.then(async () => { signal.throwIfAborted(); await emit(event); });
       void queue.catch(reject);
       return queue;
@@ -120,9 +126,11 @@ export async function startCodex(accessToken: string, onExit: () => void, launch
     };
     const notify = (message: Message) => {
       const p = message.params;
-      if (!p || p.threadId !== threadId || settled) return;
+      if (!p || p.threadId !== threadId) return;
       if (!turnId) { if (early.length >= 1000) reject(new Error('Codex sent too many notifications.')); else early.push(message); return; }
       if ((p.turnId ?? p.turn?.id) !== turnId) return;
+      if (message.method === 'turn/completed') { completedTurn = true; finishTurn(); }
+      if (settled) return;
       try {
         if (message.method === 'item/started' && !['userMessage', 'agentMessage', 'reasoning', 'plan'].includes(p.item?.type)) {
           if (live) void rpc('turn/interrupt', { threadId, turnId }).catch(() => {});
@@ -148,21 +156,49 @@ export async function startCodex(accessToken: string, onExit: () => void, launch
       } catch { reject(new Error('Codex returned an invalid or oversized response.')); }
     };
     active = { notify, reject };
-    const abort = () => { reject(new Error('Codex task was interrupted.')); fail(); stop(); };
+    const abort = () => {
+      settled = true;
+      reject(signal.reason instanceof AgentSessionStopped ? signal.reason : new Error('Codex task was interrupted.'));
+      if (!(signal.reason instanceof AgentSessionStopped)) { fail(); stop(); }
+    };
     signal.addEventListener('abort', abort, { once: true });
     const deadline = setTimeout(() => reject(new Error('Codex task timed out.')), 120_000);
     // Attach the rejection handler before any awaited setup operation.
     void done.catch(() => {});
     let taskDirectory: string | undefined;
+    let sessionUnavailable = false;
     try {
       await publish('execution.started', 'Codex is working.');
-      taskDirectory = await mkdtemp(join(cwd, 'task-'));
+      let retained: Awaited<ReturnType<NonNullable<typeof sessions>['session']>> | undefined;
+      if (request.persistent_session) {
+        sessionUnavailable = true;
+        if (!sessions) throw new Error('Persistent Codex storage is unavailable.');
+        retained = await sessions.session(request.session_id, request.persistent_session.resume);
+        taskDirectory = retained.cwd;
+        sessionUnavailable = false;
+      } else taskDirectory = await mkdtemp(join(cwd, 'task-'));
       signal.throwIfAborted();
-      const thread = await rpc('thread/start', { cwd: taskDirectory, ephemeral: true, sandbox: 'read-only', approvalPolicy: 'never', developerInstructions: 'Respond to the supplied Space task using only its supplied context. Do not access local files, run commands, or use external tools.' });
-      if (typeof thread.thread?.id !== 'string' || !thread.thread.id) throw new Error('Invalid Codex thread.');
-      signal.throwIfAborted();
+      const restrictions = { cwd: taskDirectory, sandbox: 'read-only', approvalPolicy: 'never', developerInstructions: `Respond to the supplied Space task using only its supplied context${retained ? ' and retained conversation' : ''}. Do not access local files, run commands, or use external tools.` };
+      const thread = retained?.threadId
+        ? await rpc('thread/resume', { ...restrictions, threadId: retained.threadId })
+        : await rpc('thread/start', { ...restrictions, ephemeral: !retained });
+      if (typeof thread.thread?.id !== 'string' || !thread.thread.id || thread.thread.id.length > 256 || /[\u0000-\u001f\u007f]/.test(thread.thread.id) || (retained?.threadId && thread.thread.id !== retained.threadId)) throw new Error('Invalid Codex thread.');
       threadId = thread.thread.id;
-      const prompt = `${request.context ? `Supplied conversation context (quoted data):\n${JSON.stringify(request.context)}\n\n` : ''}Task:\n${request.goal}`;
+      if (retained && !retained.threadId) {
+        sessionUnavailable = true;
+        await retained.save(threadId!, false); // Commit identity before any model turn can begin.
+        sessionUnavailable = false;
+      }
+      signal.throwIfAborted();
+      if (retained) {
+        await publish('execution.progress', 'Codex session is ready.', false, true);
+        sessionUnavailable = true;
+        await retained.save(threadId!, true);
+        sessionUnavailable = false;
+        signal.throwIfAborted();
+      }
+      const contextLabel = request.persistent_session?.resume ? 'Refreshed conversation context' : 'Supplied conversation context';
+      const prompt = `${request.context ? `${contextLabel} (quoted data):\n${JSON.stringify(request.context)}\n\n` : ''}Task:\n${request.goal}`;
       const turn = await rpc('turn/start', { threadId, input: [{ type: 'text', text: prompt }], cwd: taskDirectory, approvalPolicy: 'never', sandboxPolicy: { type: 'readOnly' } });
       if (typeof turn.turn?.id !== 'string' || !turn.turn.id) throw new Error('Invalid Codex turn.');
       turnId = turn.turn.id;
@@ -176,15 +212,27 @@ export async function startCodex(accessToken: string, onExit: () => void, launch
       await publish('execution.completed', text().trim() ? text() : 'Codex completed the task.', true);
     } catch {
       settled = true;
+      if (signal.reason instanceof AgentSessionStopped) {
+        if (threadId && turnId && live && !completedTurn) {
+          let interruptDeadline: NodeJS.Timeout | undefined;
+          try {
+            await rpc('turn/interrupt', { threadId, turnId });
+            await Promise.race([turnFinished, new Promise<never>((_resolve, reject) => { interruptDeadline = setTimeout(() => reject(new Error('Codex interruption was not confirmed.')), 15_000); })]);
+          } catch { stop(); throw new Error('Codex interruption was not confirmed.'); }
+          finally { clearTimeout(interruptDeadline); }
+        }
+        await queue.catch(() => {});
+        throw signal.reason;
+      }
       if (threadId && turnId && live) void rpc('turn/interrupt', { threadId, turnId }).catch(() => {});
-      else if (live) { fail(); stop(); }
+      else if (live && !sessionUnavailable) { fail(); stop(); }
       if (!signal.aborted) {
-        try { await queue; await publish('execution.failed', 'Codex could not complete this task. Restart the connector or retry the approved task.'); } catch { /* The platform will fail an unacknowledged run. */ }
+        try { await queue; await publish('execution.failed', sessionUnavailable ? 'Saved Codex session is unavailable. End this session and start a new one.' : 'Codex could not complete this task. Restart the connector or retry the approved task.'); } catch { /* The platform will fail an unacknowledged run. */ }
       }
       throw new Error('Codex could not complete this task.');
     } finally {
       settled = true; clearTimeout(progress); clearTimeout(deadline); signal.removeEventListener('abort', abort); active = undefined;
-      if (taskDirectory) await rm(taskDirectory, { recursive: true, force: true });
+      if (taskDirectory && !request.persistent_session) await rm(taskDirectory, { recursive: true, force: true });
     }
   };
   return { stop, alive: () => live, invoke };

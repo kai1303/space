@@ -1,6 +1,7 @@
 services:
   postgres:
     image: postgres:16-alpine
+    command: ["postgres", "-c", "wal_level=logical", "-c", "max_replication_slots=20", "-c", "max_wal_senders=20"]
     environment:
       POSTGRES_USER: workplace
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-local_demo_only}
@@ -12,6 +13,19 @@ services:
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U workplace -d workplace"]
       interval: 2s
+      timeout: 5s
+      retries: 20
+  nats:
+    image: nats:2.15.2-alpine
+    command: ["-c", "/etc/nats/space.conf"]
+    ports:
+      - "127.0.0.1:54222:4222"
+    volumes:
+      - nats_data:/data
+      - ./config/nats.conf:/etc/nats/space.conf:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8222/healthz"]
+      interval: 3s
       timeout: 5s
       retries: 20
   redis:
@@ -49,10 +63,23 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+  events:
+    build: .
+    environment:
+      <<: *database
+      NATS_URL: nats://nats:4222
+    command: ["node", "apps/events/dist/main.js"]
+    restart: unless-stopped
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      nats:
+        condition: service_healthy
   server:
     build: .
     environment:
       <<: *database
+      NATS_URL: nats://nats:4222
       HOST: 0.0.0.0
       NODE_ENV: development
       TRUSTED_PROXY_CIDRS: ${TRUSTED_PROXY_CIDRS:-}
@@ -84,6 +111,7 @@ services:
     build: .
     environment:
       <<: *database
+      NATS_URL: nats://nats:4222
       NAVIGATOR_L1_PROVIDER: ${NAVIGATOR_L1_PROVIDER:-compatible}
       TYPESAFE_API_KEY: ${TYPESAFE_API_KEY:-}
       NAVIGATOR_L1_YES_THRESHOLD: ${NAVIGATOR_L1_YES_THRESHOLD:-0.7}
@@ -96,11 +124,14 @@ services:
       NAVIGATOR_L2_API_KEY: ${NAVIGATOR_L2_API_KEY:-}
       AG_UI_URL: ${AG_UI_URL:-}
       AG_UI_TOKEN: ${AG_UI_TOKEN:-}
+    volumes:
+      - memory_data:/app/.space-memory:ro
     command: ["node", "apps/worker/dist/main.js"]
     depends_on:
       migrate:
         condition: service_completed_successfully
 volumes:
+  nats_data:
   postgres_data:
   seaweedfs_data:
   memory_data:

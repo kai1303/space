@@ -85,17 +85,4 @@ export function registerAssetRoutes(app: FastifyInstance, assets: AssetStore, st
     return reply.redirect(await backend.inline(`previews/${id}/${file}`, 'image/webp'));
   });
 
-  let timer: ReturnType<typeof setInterval> | undefined;
-  let running: Promise<void> | undefined;
-  const cleanup = () => {
-    if (running || !storage) return;
-    running = assets.cleanup(key => storage.remove(key)).then(() => {}, () => { app.log.error('asset_cleanup_failed'); }).finally(() => { running = undefined; });
-  };
-  app.addHook('onReady', async () => {
-    if (!storage) return;
-    cleanup();
-    timer = setInterval(cleanup, 60_000);
-    timer.unref();
-  });
-  app.addHook('preClose', async () => { clearInterval(timer); await running; });
 }

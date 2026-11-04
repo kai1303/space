@@ -39,6 +39,7 @@ import {
 
 export function RichComposer({
   channel,
+  placeholder,
   defaultValue,
   acknowledgedDocument,
   defaultAttachments = [],
@@ -50,9 +51,12 @@ export function RichComposer({
   mentions = [],
   findMentions,
   plainText = false,
+  maxLength = 10000,
   attachmentsEnabled = true,
+  sendDisabledReason,
 }: {
   channel: string;
+  placeholder?: string;
   defaultValue?: RichDocument;
   acknowledgedDocument?: RichDocument;
   defaultAttachments?: Attachment[];
@@ -69,7 +73,9 @@ export function RichComposer({
   mentions?: string[];
   findMentions?: FindMentions;
   plainText?: boolean;
+  maxLength?: number;
   attachmentsEnabled?: boolean;
+  sendDisabledReason?: string;
 }) {
   const mount = useRef<HTMLDivElement>(null);
   const editor = useRef<Quill | null>(null);
@@ -152,19 +158,19 @@ export function RichComposer({
     else root.removeAttribute('aria-activedescendant');
   }, [completion, emojiIndex, suggestionsId, ready]);
   const [editorVersion, setEditorVersion] = useState(0);
-  const mentionsUI = useMentions(editor, ready, channel, plainText ? undefined : findMentions, editorVersion);
+  const mentionsUI = useMentions(editor, ready, channel, findMentions, editorVersion);
   const mentionKeys = useRef(mentionsUI.key); mentionKeys.current = mentionsUI.key;
   const [broadcastWarning, setBroadcastWarning] = useState(false);
   const sendRef = useRef<() => void>(() => {});
   async function send(confirmed = false) {
     const q = editor.current;
-    if (!q || pending.current || filesRef.current.some(file => file.status === "uploading" || file.status === "error")) return;
+    if (!q || pending.current || sendDisabledReason || filesRef.current.some(file => file.status === "uploading" || file.status === "error")) return;
     const raw = q.getText();
     const plain = raw.trim();
     if (!plain && !filesRef.current.length) return;
-    if (raw.length - 1 > 10000) {
+    if (raw.length - 1 > maxLength) {
       setError(
-        "Keep the message under 10,000 characters. Your draft is unchanged.",
+        `Keep the message under ${maxLength.toLocaleString("en-US")} characters. Your draft is unchanged.`,
       );
       return;
     }
@@ -214,8 +220,8 @@ export function RichComposer({
         mount.current.append(node);
         registerMention(Editor);
         const q = new Editor(node, {
-          placeholder: `Message #${channel}`,
-          formats: plainText ? [] : [
+          placeholder: placeholder ?? `Message #${channel}`,
+          formats: plainText ? ["mention"] : [
             "mention",
             "bold",
             "italic",
@@ -298,7 +304,7 @@ export function RichComposer({
       disposed = true;
       cleanup();
     };
-  }, [channel, plainText]);
+  }, [channel, plainText, placeholder]);
   function restore() {
     const q = editor.current;
     if (!q) return;
@@ -502,7 +508,7 @@ export function RichComposer({
             <TextAa size={20} />
           </IconButton>}
           <EmojiPicker label="Choose emoji" disabled={!ready || sending} restoreFocus={false} onSelect={insert} />
-          {!plainText && findMentions && <IconButton label="Mention someone" size="sm" disabled={!ready || sending} onMouseDown={event => event.preventDefault()} onClick={mentionsUI.begin}><At size={19} /></IconButton>}
+          {findMentions && <IconButton label="Mention someone" size="sm" disabled={!ready || sending} onMouseDown={event => event.preventDefault()} onClick={mentionsUI.begin}><At size={19} /></IconButton>}
           {!findMentions && mentions.length > 0 && (
             <Popover className="sp-composer-picker" panelClassName="sp-mention-options" label="Mention someone" trigger={<At size={19} />}>
               {close => <>
@@ -547,7 +553,7 @@ export function RichComposer({
             label="Send now"
             size="sm"
             className="sp-send-rich"
-            disabled={!ready || sending || filesPending || (!text.trim() && !files.length)}
+            disabled={!ready || sending || !!sendDisabledReason || filesPending || (!text.trim() && !files.length)}
             data-send-disabled={sending && ready && !filesPending && Boolean(text.trim() || files.length) || undefined}
             onClick={() => void send()}
           >
@@ -557,12 +563,12 @@ export function RichComposer({
         </div>
       </div>
       <div className="sp-rich-help">
-        <span>
-          {sendingVisible
+        <span role={sendDisabledReason ? "status" : undefined}>
+          {sendDisabledReason ?? (sendingVisible
             ? "Sending…"
             : text.length > 9000
               ? `${text.trim().length}/10,000 characters`
-              : "Enter to send · Shift + Enter to add a new line"}
+              : "Enter to send · Shift + Enter to add a new line")}
         </span>
         {!plainText && attachmentsEnabled && attachments === undefined && <span>Files stay local in this preview</span>}
       </div>

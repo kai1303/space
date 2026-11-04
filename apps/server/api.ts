@@ -1,3 +1,6 @@
+import { registerEventDeadlines } from './event-deadlines.js';
+import { AgentSessionStore } from '@space/postgres/agent-sessions';
+import { registerAgentSessionRoutes } from './agent-sessions.js';
 import { NavigatorStore } from '@space/postgres/navigator';
 import { registerNavigatorRoutes } from './navigator.js';
 import { AgentConnectionStore } from '@space/postgres/agent-connections';
@@ -16,14 +19,14 @@ import { AssetStore } from '@space/postgres/assets';
 import { registerAssetRoutes } from './assets.js';
 import type { AssetStorage } from './storage.js';
 import { MemoryStore } from '@space/postgres/memory';
-import { createMemoryProviders, registerMemoryRoutes, type MemoryOptions } from './memory.js';
+import { createAgentMemoryReader, createMemoryProviders, registerMemoryRoutes, type MemoryOptions } from './memory.js';
 import { MEMORY_MCP_PATH, registerMemoryMcp } from './memory-mcp.js';
 
 declare module 'fastify' {
   interface FastifyRequest { actorId: string }
 }
 
-export function createApi(store: PostgresStore, options: { logger?: boolean; realtime?: RealtimeOptions; auth?: Authentication; allowDevelopmentTokens?: boolean; trustedProxies?: string[]; storage?: AssetStorage; memory?: MemoryOptions } = {}) {
+export function createApi(store: PostgresStore, options: { pairedConnectors?: import('@space/contracts').PairedConnector[]; logger?: boolean; realtime?: RealtimeOptions; auth?: Authentication; allowDevelopmentTokens?: boolean; trustedProxies?: string[]; storage?: AssetStorage; memory?: MemoryOptions } = {}) {
   if (options.allowDevelopmentTokens && process.env.NODE_ENV === 'production') throw new Error('Development tokens are forbidden in production');
   const authenticate = async (headers: IncomingHttpHeaders, socketToken?: unknown) => {
     const actor = await options.auth?.actor(headers);
@@ -72,6 +75,7 @@ export function createApi(store: PostgresStore, options: { logger?: boolean; rea
   app.setNotFoundHandler((_request, reply) => reply.code(404).send({ error: 'not_found' }));
   if (options.auth) registerAuthRoutes(app, options.auth);
   registerWorkspaceRoutes(app, new WorkspaceStore(store.pool));
+  registerAgentSessionRoutes(app, new AgentSessionStore(store.pool));
 
   app.get('/healthz', async () => {
     await store.health();
@@ -108,12 +112,15 @@ export function createApi(store: PostgresStore, options: { logger?: boolean; rea
   registerChatRoutes(app, chat);
   registerNavigatorRoutes(app, new NavigatorStore(store.pool));
   const memory = new MemoryStore(store.pool), memoryProviders = createMemoryProviders(options.memory);
+  store.memoryReader = createAgentMemoryReader(memory, memoryProviders);
   registerMemoryRoutes(app, memory, memoryProviders);
   registerMemoryMcp(app, memory, memoryProviders, options.auth?.origins, process.env.MEMORY_MCP_ALLOWED_HOSTS?.split(',').map(host => host.trim()).filter(Boolean));
-  registerAssetRoutes(app, new AssetStore(store.pool), options.storage);
-  const connections = new AgentConnectionStore(store.pool);
+  const assets = new AssetStore(store.pool);
+  registerAssetRoutes(app, assets, options.storage);
+  const connections = new AgentConnectionStore(store.pool, { connectors: options.pairedConnectors });
   registerAgentConnectionRoutes(app, connections);
-  const { io } = registerRealtime(app, authenticate, chat, { ...options.realtime, ...(options.auth ? { allowedOrigins: [...options.auth.origins], strictOrigins: true } : {}) });
-  registerAgentConnections(app, io, connections, store);
+  const { io, onOutbox, getEvents } = registerRealtime(app, authenticate, chat, { ...options.realtime, ...(options.auth ? { allowedOrigins: [...options.auth.origins], strictOrigins: true } : {}) });
+  registerAgentConnections(app, io, connections, store, onOutbox, getEvents);
+  registerEventDeadlines(app, getEvents, store, assets, options.storage);
   return app;
 }

@@ -71,7 +71,7 @@ test('workspace and private-channel reads, writes, and approvals deny access', a
   await assert.rejects(store.readTask(seed.collaborator_id, task.id), { status: 404 });
 });
 
-test('a new process pool recovers an expired outbox lease after completion without duplicate work', async () => {
+test('a deadline settles a redelivered completed attempt without duplicate work', async () => {
   const { input, owner, seed } = await fixture();
   const task = await store.createTask(owner, input, randomUUID());
   const approved = await store.approveTask(owner, task.id);
@@ -88,15 +88,16 @@ test('a new process pool recovers an expired outbox lease after completion witho
   const connector = new MockConnector();
   connector.invoke = async () => { invocations++; throw new Error('must not reinvoke'); };
   try {
-    assert.equal(await deliverOne(recovered, [connector]), true);
+    assert.equal(await deliverOne(recovered, [connector],10_000,lease.id), false);
     assert.equal(invocations, 0);
+    await recovered.expireDelivery(lease.id,lease.lease_token);
     assert.equal((await recovered.readTask(owner, task.id)).result, 'Recovered result');
     assert.equal((await recovered.messages(owner, seed.thread_id)).length, 1);
     assert.equal(await store.ackDelivery(lease), false, 'old lease cannot acknowledge a newer lease');
   } finally { await recovered.pool.end(); }
 });
 
-test('queued work and in-flight started work survive new store instances', async () => {
+test('an interrupted invocation waits for its exact deadline without running again', async () => {
   const { input, owner, seed } = await fixture();
   const task = await store.createTask(owner, input, randomUUID());
   const approved = await store.approveTask(owner, task.id);
@@ -112,8 +113,11 @@ test('queued work and in-flight started work survive new store instances', async
   await store.pool.query("UPDATE outbox SET lease_until=now()-interval '1 second' WHERE id=$1", [lease.id]);
   const recovered = new PostgresStore(new Pool(options));
   try {
-    await deliverOne(recovered, [new MockConnector()]);
-    assert.equal((await recovered.readTask(owner, task.id)).status, 'completed');
+    await deliverOne(recovered, [new MockConnector()],10_000,lease.id);
+    assert.equal((await recovered.readTask(owner, task.id)).status, 'running');
+    await recovered.expireDelivery(lease.id,lease.lease_token);
+    assert.equal((await recovered.readTask(owner, task.id)).status, 'failed');
+    assert.equal((await recovered.pool.query('SELECT last_error FROM outbox WHERE id=$1',[lease.id])).rows[0].last_error,'execution_interrupted');
   } finally { await recovered.pool.end(); }
 });
 
@@ -150,7 +154,7 @@ test('bounded retries dead-letter deliveries and fail the task', async () => {
   const task = await store.createTask(owner, input, randomUUID());
   await store.approveTask(owner, task.id);
   const connector = new MockConnector();
-  connector.invoke = async () => { throw new Error('secret must not be persisted'); };
+  connector.discover = async () => { throw new Error('secret must not be persisted'); };
   for (let i = 0; i < 3; i++) {
     assert.equal(await deliverOne(store, [connector]), true);
     await store.pool.query("UPDATE outbox SET available_at=now() WHERE state='pending'");
@@ -268,13 +272,14 @@ test('unexpected backend errors never expose exception contents', async () => {
   } finally { store.readTask = original; await app.close(); }
 });
 
-test('concurrent Drizzle workers claim different deliveries and respect live leases', async () => {
+test('concurrent event targets accept different deliveries without replacing attempts', async () => {
   const { input, owner } = await fixture();
   const one = await store.createTask(owner, input, randomUUID());
   const two = await store.createTask(owner, input, randomUUID());
   await store.approveTask(owner, one.id);
   await store.approveTask(owner, two.id);
-  const [a, b] = await Promise.all([store.claimDelivery(), store.claimDelivery()]);
+  const targets=(await store.pool.query('SELECT id FROM outbox WHERE task_id=ANY($1)',[[one.id,two.id]])).rows;
+  const [a, b] = await Promise.all(targets.map(row=>store.claimDelivery(undefined,row.id)));
   assert.ok(a && b);
   assert.notEqual(a.id, b.id);
   assert.deepEqual(new Set([a.task_id, b.task_id]), new Set([one.id, two.id]));

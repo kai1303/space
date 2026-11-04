@@ -175,7 +175,7 @@ export function Components({ notify }: { notify: (text: string) => void }) {
               Offline
             </span>
             <span>
-              <Badge>APP</Badge>Agent
+              <Badge>Agent</Badge>Agent
             </span>
           </div>
         </Sample>

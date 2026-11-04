@@ -9,7 +9,7 @@ import { startCodex, connectPlatform } from '../dist/runtime.js';
 const invocation = {
   schema_version: '1.0', task_id: '11111111-1111-4111-8111-111111111111',
   execution_id: '22222222-2222-4222-8222-222222222222', session_id: '33333333-3333-4333-8333-333333333333',
-  idempotency_key: '22222222-2222-4222-8222-222222222222', goal: 'Say hello', skill: 'chat',
+  idempotency_key: '22222222-2222-4222-8222-222222222222', goal: 'Say hello', skill: 'codex.run',
   context: { thread_id: '44444444-4444-4444-8444-444444444444', messages: [{ id: '55555555-5555-4555-8555-555555555555', text: 'My name is Kai', author_type: 'human' }] },
 };
 function launchFake(behavior, inspect = () => {}) {
@@ -309,4 +309,25 @@ test('a missing lease during an active turn still aborts and fails the run', { t
   });
   try { await failed; assert.equal(renewals, 1); assert.equal(signal.aborted, true); }
   finally { await close(); }
+});
+
+test('idle connectors wait for a socket work notification instead of polling claims', { timeout: 5000 }, async () => {
+  let claims = 0, peer, first, next;
+  const initial = new Promise(resolve => { first = resolve; });
+  const notified = new Promise(resolve => { next = resolve; });
+  const close = await platformFixture(socket => {
+    peer = socket;
+    socket.on('agent.task.claim', (_payload, ack) => {
+      claims++; ack({ data: null });
+      if (claims === 1) first(); else next();
+    });
+  }, async () => assert.fail('empty queue must not invoke Codex'));
+  try {
+    await initial;
+    await new Promise(resolve => setTimeout(resolve, 1250));
+    assert.equal(claims, 1, 'idle connector must not repeatedly claim');
+    peer.emit('agent.tasks.available');
+    await notified;
+    assert.equal(claims, 2);
+  } finally { await close(); }
 });

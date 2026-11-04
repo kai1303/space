@@ -1,16 +1,20 @@
+import type { EventBus } from '@space/events';
 import type { FastifyInstance } from 'fastify';
 import type { Server } from 'socket.io';
-import { AppError, record, uuid } from '@space/contracts';
+import { AppError, localProviderForConnector, record, text, uuid } from '@space/contracts';
 import type { AgentConnectionStore } from '@space/postgres/agent-connections';
 import type { PostgresStore } from '@space/postgres/store';
 import { registerLocalCodexTasks } from './local-codex.js';
 
 export function registerAgentConnectionRoutes(app: FastifyInstance, store: AgentConnectionStore) {
-  app.get<{ Params: { channelId: string } }>('/v1/channels/:channelId/local-codex', r => store.channelAgents(r.actorId, uuid(r.params.channelId)));
+  app.get('/v1/agents/connectors', () => store.connectors);
+  app.get<{ Params: { channelId: string } }>('/v1/channels/:channelId/agents', r => store.channelAgents(r.actorId, uuid(r.params.channelId)));
+  app.get<{ Params: { channelId: string } }>('/v1/channels/:channelId/local-codex', async r => (await store.channelAgents(r.actorId, uuid(r.params.channelId))).filter(agent => localProviderForConnector(agent.connector_id)).map(({ id, name, provider, enabled_in_channel }) => ({ id, name, provider, enabled_in_channel })));
+  app.get<{ Params: { channelId: string } }>('/v1/channels/:channelId/local-agents', async r => (await store.channelAgents(r.actorId, uuid(r.params.channelId))).filter(agent => localProviderForConnector(agent.connector_id)).map(({ id, name, provider, enabled_in_channel }) => ({ id, name, provider, enabled_in_channel })));
   app.post<{ Params: { installationId: string; channelId: string } }>('/v1/agents/connections/:installationId/channels/:channelId', r => {
-    const input = record(r.body, ['enabled']);
+    const input = record(r.body, ['enabled', 'skill']);
     if (typeof input.enabled !== 'boolean') throw new AppError(400, 'invalid_enabled');
-    return store.setChannelEnabled(r.actorId, uuid(r.params.installationId), uuid(r.params.channelId), input.enabled);
+    return store.setChannelEnabled(r.actorId, uuid(r.params.installationId), uuid(r.params.channelId), input.enabled, input.skill === undefined ? undefined : text(input.skill, 80));
   });
   const claims = new Map<string, { count: number; until: number }>();
   app.post<{ Params: { workspaceId: string } }>('/v1/workspaces/:workspaceId/agent-pairings', async (r, reply) =>
@@ -32,7 +36,7 @@ export function registerAgentConnectionRoutes(app: FastifyInstance, store: Agent
     record(r.body, []); return store.revoke(r.actorId, uuid(r.params.installationId));
   });
 }
-export function registerAgentConnections(app: FastifyInstance, io: Server, store: AgentConnectionStore, tasks: PostgresStore) {
+export function registerAgentConnections(app: FastifyInstance, io: Server, store: AgentConnectionStore, tasks: PostgresStore, onOutbox: (listener: () => void) => () => void, getEvents: () => Promise<EventBus>) {
   const agents = io.of('/agents');
   agents.use(async (socket, next) => {
     try {
@@ -42,36 +46,41 @@ export function registerAgentConnections(app: FastifyInstance, io: Server, store
       next();
     } catch { next(new Error('unauthorized')); }
   });
+  const checks = new Map<string,() => void>();
+  const stopWakes = onOutbox(() => { for (const check of checks.values()) check(); });
   agents.on('connection', socket => {
-    registerLocalCodexTasks(socket, store, tasks);
+    const delivery = registerLocalCodexTasks(socket, store, tasks, getEvents);
     const identity = socket.data.agent as { id: string; connection_id: string };
+    let checking = false, dirty = false;
+    checks.set(socket.id, () => {
+      dirty = true;
+      if (checking) return;
+      checking = true;
+      void (async () => {
+        while (dirty && socket.connected) {
+          dirty = false;
+          try { await store.authenticateConnection(socket.data.token,identity.connection_id); }
+          catch (error) { if (error instanceof AppError && error.code === 'unauthorized') socket.disconnect(true); }
+        }
+      })().finally(() => { checking = false; });
+    });
     let working = false, count = 0, windowStart = Date.now();
     socket.on('agent.heartbeat', async (input: unknown, ack: unknown) => {
       if (typeof ack !== 'function') return;
       if (Date.now() - windowStart >= 1000) { count = 0; windowStart = Date.now(); }
       if (working || ++count > 5) { ack({ error: 'busy' }); return; }
       working = true;
-      try { ack({ data: await store.heartbeat(socket.data.token, identity.connection_id, input) }); }
+      try {
+        await delivery.ready;
+        ack({ data: await store.heartbeat(socket.data.token, identity.connection_id, input) });
+        delivery.notifyReady();
+      }
       catch (e) {
         const code = e instanceof AppError ? e.code : 'internal_error'; ack({ error: code });
         if (code === 'unauthorized') socket.disconnect(true);
       } finally { working = false; }
     });
-    socket.on('disconnect', () => { void store.disconnect(identity.id, identity.connection_id).catch(() => {}); });
+    socket.on('disconnect', () => { checks.delete(socket.id); void store.disconnect(identity.id, identity.connection_id).catch(() => {}); });
   });
-  let timer: ReturnType<typeof setInterval>;
-  let expiring = false;
-  app.addHook('onReady', async () => {
-    timer = setInterval(() => {
-      if (!expiring) {
-        expiring = true;
-        void tasks.expireLocalDeliveries().catch(() => app.log.error('local_delivery_cleanup_failed')).finally(() => { expiring = false; });
-      }
-      for (const socket of agents.sockets.values()) {
-        void store.authenticate(socket.data.token).catch(() => socket.disconnect(true));
-      }
-    }, 10_000);
-    timer.unref();
-  });
-  app.addHook('preClose', async () => { clearInterval(timer); agents.local.disconnectSockets(true); });
+  app.addHook('preClose', async () => { stopWakes(); agents.local.disconnectSockets(true); });
 }

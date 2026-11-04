@@ -2,6 +2,7 @@ import {beforeAll,afterEach,expect,it,vi} from 'vitest';
 import {cleanup,render,screen,waitFor} from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import {MentionInbox,MentionDetails} from './Mentions.js';
+vi.mock('./live-updates.js',()=>({subscribeUpdates:(_scope:string,_id:string,read:()=>unknown)=>{void read();return()=>{};}}));
 beforeAll(()=>{HTMLDialogElement.prototype.showModal=function(){this.open=true;};HTMLDialogElement.prototype.close=function(){this.open=false;this.dispatchEvent(new Event('close'));};});
 afterEach(()=>{cleanup();vi.unstubAllGlobals();});
 const item={id:'1',channel_id:'channel',channel_name:'general',message_id:'message',thread_id:'thread',text:'@Kai please review',author_name:'Jamie',created_at:'2026-11-03T00:00:00Z',read_at:null,silent:false};

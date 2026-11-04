@@ -1,11 +1,13 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomBytes, randomUUID } from 'node:crypto';
-import { setTimeout as delay } from 'node:timers/promises';
 import { Pool } from 'pg';
 import { bootstrap } from '@space/postgres/bootstrap';
 import { migrate } from '@space/postgres/migrate';
 import { PostgresStore } from '@space/postgres/store';
+import { FoundationStore } from '@space/postgres/foundation';
+import { deliverOne } from '@space/core/worker';
+import { MockConnector } from '@space/mock/connector';
 import { createApi } from '@space/server/api';
 
 const url = process.env.TEST_DATABASE_URL;
@@ -120,31 +122,31 @@ test('private channels retain a manager who can invite people and restore the ch
   await api(a.owner_token, 'PATCH', path, { archived: false });
 });
 
-test('task eligibility does not deadlock with a racing channel grant', async () => {
-  const a = await bootstrap(pool);
-  await pool.query('DELETE FROM agent_grants WHERE installation_id=$1', [a.installation_id]);
-  const taskPool = new Pool({ connectionString: url, options: `-c search_path=${schema}`, max: 1 });
-  const taskStore = new PostgresStore(taskPool);
-  const { rows: [{ pid }] } = await taskPool.query('SELECT pg_backend_pid() AS pid');
-  const blocker = await pool.connect();
-  await blocker.query('BEGIN');
-  await blocker.query('SELECT id FROM agent_installations WHERE id=$1 FOR UPDATE', [a.installation_id]);
-  const task = taskStore.createTask(a.collaborator_id, { workspace_id: a.workspace_id, thread_id: a.thread_id,
-    installation_id: a.installation_id, skill: 'demo.echo', goal: 'Racing grant' }, randomUUID());
-  void task.catch(() => {});
-  try {
-    let waiting = false;
-    for (let i = 0; i < 300; i++) {
-      const { rows: [state] } = await pool.query("SELECT wait_event_type='Lock' AND query LIKE '%agent_installations%' AS waiting FROM pg_stat_activity WHERE pid=$1", [pid]);
-      if (state?.waiting) { waiting = true; break; }
-      await delay(10);
-    }
-    assert.ok(waiting, 'task reached installation lock after acquiring channel lock');
-    await blocker.query('INSERT INTO agent_grants(workspace_id,installation_id,channel_id,skill) VALUES($1,$2,$3,$4)', [a.workspace_id,a.installation_id,a.channel_id,'demo.echo']);
-    await blocker.query('COMMIT');
-    assert.equal((await task).status, 'awaiting_approval');
-  } finally {
-    await blocker.query('ROLLBACK'); blocker.release();
-    await task.catch(() => {}); await taskPool.end();
-  }
+test('a racing channel grant preserves task identity and dispatch rechecks revoked authority', async () => {
+  const a = await bootstrap(pool), foundation = new FoundationStore(pool);
+  const grant = { channel_id: a.channel_id, skill: 'demo.echo' };
+  await foundation.revoke(a.owner_id, a.installation_id, grant);
+  const input = { workspace_id: a.workspace_id, thread_id: a.thread_id, installation_id: a.installation_id, skill: 'demo.echo', goal: 'Racing grant' };
+  const key = randomUUID();
+  await assert.rejects(store.createTask(a.collaborator_id, input, key), { code: 'installation_not_authorized' });
+  assert.equal((await pool.query('SELECT 1 FROM tasks WHERE idempotency_key=$1', [key])).rowCount, 0);
+  const [created, granted] = await Promise.allSettled([
+    store.createTask(a.collaborator_id, input, key),
+    foundation.grant(a.owner_id, a.installation_id, grant),
+  ]);
+  assert.equal(granted.status, 'fulfilled');
+  if (created.status === 'rejected') assert.equal(created.reason.code, 'installation_not_authorized');
+  const task = await store.createTask(a.collaborator_id, input, key);
+  if (created.status === 'fulfilled') assert.equal(task.id, created.value.id);
+  assert.equal(task.status, 'awaiting_approval');
+  assert.equal((await pool.query('SELECT 1 FROM tasks WHERE idempotency_key=$1', [key])).rowCount, 1);
+  await store.approveTask(a.owner_id, task.id);
+  await foundation.revoke(a.owner_id, a.installation_id, grant);
+  let invocations = 0;
+  const connector = new MockConnector();
+  connector.invoke = async () => { invocations++; throw new Error('revoked task must not execute'); };
+  const delivery = (await pool.query('SELECT id FROM outbox WHERE task_id=$1', [task.id])).rows[0];
+  assert.equal(await deliverOne(store, [connector], 10_000, delivery.id), true);
+  assert.equal(invocations, 0);
+  assert.equal((await store.readTask(a.owner_id, task.id)).status, 'failed');
 });

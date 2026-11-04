@@ -14,7 +14,7 @@ const schema = `auth_${randomBytes(8).toString('hex')}`;
 const admin = new Pool({ connectionString: url });
 const pool = new Pool({ connectionString: url, options: `-c search_path=${schema}` });
 const auth = createAuthentication(pool, { secret: 'test-only-auth-secret-at-least-32-characters', baseURL: 'http://space.test' });
-const app = createApi(new PostgresStore(pool), { auth, realtime: { reconcileMs: 100 } });
+const app = createApi(new PostgresStore(pool), { auth, realtime: { } });
 let address: string, identity = 0;
 const password = 'Testing-auth-1234!';
 before(async () => { await admin.query(`CREATE SCHEMA ${schema}`); await migrate(pool); address = await app.listen({ host: '127.0.0.1', port: 0 }); });

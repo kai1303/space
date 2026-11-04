@@ -11,10 +11,6 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "exports": {
-    "./chat-outbox": {
-      "types": "./dist/chat-outbox.d.ts",
-      "default": "./dist/chat-outbox.js"
-    },
     "./provisioning": {
       "types": "./dist/provisioning.d.ts",
       "default": "./dist/provisioning.js"
@@ -78,6 +74,10 @@
     "./thread-context": {
       "types": "./dist/thread-context.d.ts",
       "default": "./dist/thread-context.js"
+    },
+    "./agent-sessions": {
+      "types": "./dist/agent-sessions.d.ts",
+      "default": "./dist/agent-sessions.js"
     }
   },
   "dependencies": {

@@ -61,3 +61,53 @@ it.each([false,true])('does not steal focus after a delayed send: failed=%s',asy
   await act(async()=>{if(failed)fail(new Error('offline'));else finish();await submitted.catch(()=>{});});
   expect(document.activeElement).toBe(search);
 });
+it('enforces a smaller session message limit while keeping its draft',async()=>{
+ const send=vi.fn();render(<RichComposer channel="agent session" maxLength={4} onSend={send}/>);
+ const editor=await screen.findByRole('textbox',{name:'Message agent session'});
+ await userEvent.type(editor,'12345');fireEvent.keyDown(editor,{key:'Enter'});
+ expect(screen.getByRole('alert').textContent).toContain('under 4 characters');expect(send).not.toHaveBeenCalled();expect(editor.textContent).toContain('12345');
+});
+
+it('supports identity-backed mention references in a plain session composer without formatting controls',async()=>{
+ const send=vi.fn(),agent={kind:'agent' as const,id:'00000000-0000-4000-8000-000000000099',label:'Helper',detail:'Agent'};
+ render(<RichComposer channel="agent session" plainText findMentions={async()=>({items:[agent],member_count:2})} onSend={send}/>);
+ await screen.findByRole('textbox',{name:'Message agent session'});
+ await userEvent.click(screen.getByRole('button',{name:'Mention someone'}));
+ await userEvent.click(await screen.findByRole('option',{name:/Helper/}));
+ const editor=screen.getByRole('textbox',{name:'Message agent session'});
+ expect(editor.querySelector('[data-mention-kind="agent"]')).not.toBeNull();
+ expect(screen.queryByRole('button',{name:'Bold',exact:true})).toBeNull();
+ fireEvent.keyDown(editor,{key:'Enter'});
+ expect(send).toHaveBeenCalledWith('@Helper',expect.objectContaining({ops:expect.arrayContaining([expect.objectContaining({attributes:expect.objectContaining({mention:expect.objectContaining({kind:'agent',id:agent.id})})})])}),[]);
+});
+it.each([false,true])('opens mention suggestions when typing @ and filters as typing continues: plainText=%s',async plainText=>{
+ const find=vi.fn(async()=>({items:[{kind:'user' as const,id:'00000000-0000-4000-8000-000000000001',label:'Kai',detail:'Member'}],member_count:2}));
+ render(<RichComposer channel="hi" plainText={plainText} findMentions={find} onSend={vi.fn()}/>);
+ const editor=await screen.findByRole('textbox',{name:'Message hi'});
+ await userEvent.type(editor,'@');
+ expect(await screen.findByRole('option',{name:/Kai/})).toBeTruthy();
+ expect(find).toHaveBeenCalledWith('');
+ expect(editor.getAttribute('aria-expanded')).toBe('true');
+ await userEvent.keyboard('Kai');
+ await screen.findByRole('option',{name:/Kai/});
+ expect(find).toHaveBeenLastCalledWith('Kai');
+ await userEvent.keyboard('{Escape}');
+ expect(screen.queryByRole('listbox',{name:'Mention suggestions'})).toBeNull();
+ expect(editor.textContent).toContain('@Kai');
+});
+
+it('keeps the highlighted mention in sync with pointer and keyboard selection',async()=>{
+ const send=vi.fn();
+ const items=[{kind:'user' as const,id:'00000000-0000-4000-8000-000000000001',label:'Kai',detail:'Member'}, {kind:'agent' as const,id:'00000000-0000-4000-8000-000000000002',label:'Helper',detail:'Agent'}];
+ render(<RichComposer channel="hi" findMentions={async()=>({items,member_count:2})} onSend={send}/>);
+ const editor=await screen.findByRole('textbox',{name:'Message hi'});
+ await userEvent.type(editor,'@');
+ const helper=await screen.findByRole('option',{name:/Helper/});
+ fireEvent.pointerMove(helper);
+ expect(helper.getAttribute('aria-selected')).toBe('true');
+ expect(editor.getAttribute('aria-activedescendant')).toBe(helper.id);
+ await userEvent.keyboard('{Enter}');
+ expect(send).not.toHaveBeenCalled();
+ expect(editor.textContent).toContain('@Helper');
+ expect(screen.queryByRole('listbox',{name:'Mention suggestions'})).toBeNull();
+});

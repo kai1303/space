@@ -12,6 +12,19 @@ importers:
         specifier: ^2.11.10
         version: 2.11.10
 
+  adapters/events:
+    dependencies:
+      nats:
+        specifier: 2.29.3
+        version: 2.29.3
+    devDependencies:
+      '@types/node':
+        specifier: '22'
+        version: 22.20.5
+      typescript:
+        specifier: ^7.0.2
+        version: 7.0.2
+
   adapters/mock:
     dependencies:
       '@space/contracts':
@@ -88,6 +101,28 @@ importers:
         specifier: ^7.0.2
         version: 7.0.2
 
+  apps/events:
+    dependencies:
+      '@space/events':
+        specifier: workspace:*
+        version: link:../../adapters/events
+      pg:
+        specifier: ^8.23.1
+        version: 8.23.1
+      pg-logical-replication:
+        specifier: 2.6.0
+        version: 2.6.0
+    devDependencies:
+      '@types/node':
+        specifier: '22'
+        version: 22.20.5
+      '@types/pg':
+        specifier: ^8.23.1
+        version: 8.23.1
+      typescript:
+        specifier: ^7.0.2
+        version: 7.0.2
+
   apps/server:
     dependencies:
       '@aws-sdk/client-s3':
@@ -114,6 +149,9 @@ importers:
       '@space/core':
         specifier: workspace:*
         version: link:../../packages/core
+      '@space/events':
+        specifier: workspace:*
+        version: link:../../adapters/events
       '@space/postgres':
         specifier: workspace:*
         version: link:../../adapters/postgres
@@ -221,12 +259,18 @@ importers:
       '@space/core':
         specifier: workspace:*
         version: link:../../packages/core
+      '@space/events':
+        specifier: workspace:*
+        version: link:../../adapters/events
       '@space/mock':
         specifier: workspace:*
         version: link:../../adapters/mock
       '@space/postgres':
         specifier: workspace:*
         version: link:../../adapters/postgres
+      '@space/server':
+        specifier: workspace:*
+        version: link:../server
     devDependencies:
       '@types/node':
         specifier: '22'
@@ -348,6 +392,12 @@ importers:
       '@space/core':
         specifier: workspace:*
         version: link:../packages/core
+      '@space/event-service':
+        specifier: workspace:*
+        version: link:../apps/events
+      '@space/events':
+        specifier: workspace:*
+        version: link:../adapters/events
       '@space/mock':
         specifier: workspace:*
         version: link:../adapters/mock
@@ -360,6 +410,9 @@ importers:
       '@space/server':
         specifier: workspace:*
         version: link:../apps/server
+      nats:
+        specifier: 2.29.3
+        version: 2.29.3
       pg:
         specifier: ^8.23.1
         version: 8.23.1
@@ -3081,6 +3134,10 @@ packages:
     dependencies:
       '@types/estree': 1.0.10
 
+  /eventemitter2@6.4.9:
+    resolution: {integrity: sha512-JEPTiaOt9f04oa6NOkc4aH+nVp5I3wEjpHbIPqfgCdD5v5bUzy7xQqwcVO2aDQgOWhI28da57HksMrzK9HlRxg==}
+    dev: false
+
   /eventemitter3@5.0.4:
     resolution: {integrity: sha512-mlsTRyGaPBjPedk6Bvw+aqbsXDtoAyAzm5MO7JgU+yVRyMQ5O8bD4Kcci7BS85f93veegeCPkL8R4GLClnjLFw==}
 
@@ -4079,9 +4136,24 @@ packages:
     engines: {node: ^20.0.0 || >=22.0.0}
     dev: false
 
+  /nats@2.29.3:
+    resolution: {integrity: sha512-tOQCRCwC74DgBTk4pWZ9V45sk4d7peoE2njVprMRCBXrhJ5q5cYM7i6W+Uvw2qUrcfOSnuisrX7bEx3b3Wx4QA==}
+    engines: {node: '>= 14.0.0'}
+    deprecated: Package moved. Use @nats-io/transport-node from https://github.com/nats-io/nats.js
+    dependencies:
+      nkeys.js: 1.1.0
+    dev: false
+
   /negotiator@0.6.3:
     resolution: {integrity: sha512-+EUsqGPLsM+j/zdChZjsnX51g4XrHFOIXwfnCVPGlQk/k5giakcKsuxCObBRu6DSm9opw/O6slWbJdghQM4bBg==}
     engines: {node: '>= 0.6'}
+
+  /nkeys.js@1.1.0:
+    resolution: {integrity: sha512-tB/a0shZL5UZWSwsoeyqfTszONTt4k2YS0tuQioMOD180+MbombYVgzDUYHlx+gejYK6rgf08n/2Df99WY0Sxg==}
+    engines: {node: '>=10.0.0'}
+    dependencies:
+      tweetnacl: 1.0.3
+    dev: false
 
   /notepack.io@3.0.1:
     resolution: {integrity: sha512-TKC/8zH5pXIAMVQio2TvVDTtPRX+DJPHDqjRbxogtFiByHyzKmy96RA0JtCQJ+WouyyL4A10xomQzgbUT+1jCg==}
@@ -4163,6 +4235,16 @@ packages:
   /pg-int8@1.0.1:
     resolution: {integrity: sha512-WCtabS6t3c8SkpDBUlb1kjOs7l66xsGdKpIPZsg4wR+B3+u9UAum2odSsF9tnvxg80h4ZxLWMy4pRjOsFIqQpw==}
     engines: {node: '>=4.0.0'}
+
+  /pg-logical-replication@2.6.0:
+    resolution: {integrity: sha512-50Wm6duN30iac91qZVrXwkL5DyrM9ZnDGZSE47Ev3wyRHZIl48UbzPvGqx48ObjGI7dSO5ORKfqxuAz8WrXQgQ==}
+    engines: {node: '>=22.0.0'}
+    dependencies:
+      eventemitter2: 6.4.9
+      pg: 8.23.1
+    transitivePeerDependencies:
+      - pg-native
+    dev: false
 
   /pg-pool@3.14.0(pg@8.23.1):
     resolution: {integrity: sha512-gKtPkFdQPU3DksooVLi9LsjZxrsBUZIpa+7aVx+LV5pNh0KzP4Zleud2po+ConrxbuXGBJ6Hfer6hdgpIBpBaw==}
@@ -4850,6 +4932,10 @@ packages:
       '@turbo/windows-64': 2.11.10
       '@turbo/windows-arm64': 2.11.10
     dev: true
+
+  /tweetnacl@1.0.3:
+    resolution: {integrity: sha512-6rt+RN7aOi1nGMyC4Xa5DdYiukl2UWCbcJft7YhxReBGQD7OAM8Pbxw6YMo4r2diNEA8FEmu32YOn9rhaiE5yw==}
+    dev: false
 
   /typescript@7.0.2:
     resolution: {integrity: sha512-8FYau96o3NKOhbjKi/qNvG/W5jhzxkbdm5sj9AbZ/5T5sWqn3hJgLfGx27sRKZWTvyzCP8dLRBTf5tBTSRVUNA==}

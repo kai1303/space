@@ -1,3 +1,4 @@
+import { sessionTransaction } from './session-concurrency.js';
 import { randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import type { Pool } from 'pg';
@@ -19,8 +20,10 @@ export class AssetStore {
   private async channel(c: DbSession, actor: string, id: string) {
     const [channel] = await c.select().from(channels).where(eq(channels.id, uuid(id)));
     if (!channel) throw notFound();
-    await lockWorkspace(c, channel.workspace_id);
-    await c.select({ id: channels.id }).from(channels).where(eq(channels.id, id)).for('update');
+    if (channel.kind !== 'direct') {
+      await lockWorkspace(c, channel.workspace_id);
+      await c.select({ id: channels.id }).from(channels).where(eq(channels.id, id)).for('update');
+    }
     if (!await hasChannelAccess(c, actor, channel.workspace_id, id)) throw notFound();
     return channel;
   }
@@ -57,9 +60,10 @@ export class AssetStore {
   }
   async create(actor: string, channelId: string, input: unknown): Promise<Asset> {
     const data = parseAssetInput(input);
-    return this.db.transaction(async c => {
+    // All allocations share serializable quota checks, including mixed channel/DM races.
+    return sessionTransaction(this.db, async c => {
       const channel = await this.channel(c, actor, channelId);
-      await c.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${`${channel.workspace_id}:${actor}:assets`}))`);
+      if (channel.kind !== 'direct') await c.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${`${channel.workspace_id}:${actor}:assets`}))`);
       const pending = await c.select({ id: assets.id }).from(assets)
         .where(and(eq(assets.workspace_id, channel.workspace_id), eq(assets.uploader_id, actor), isNull(assets.message_id), sql`${assets.expires_at} > now()`)).limit(20);
       if (pending.length >= 20) throw new AppError(429, 'too_many_uploads');
@@ -175,10 +179,10 @@ export class AssetStore {
     });
     return result!;
   }
-  async cleanup(remove: (key: string) => Promise<void>, limit = 20): Promise<number> {
+  async cleanup(remove: (key: string) => Promise<void>, limit = 20, assetId?: string): Promise<number> {
     let cleaned = 0;
-    for (let i = 0; i < limit; i++) {
-      const [candidate] = await this.db.select({ id: assets.id }).from(assets).where(and(this.available(), or(
+    for (let i = 0; i < (assetId ? 1 : limit); i++) {
+      const [candidate] = await this.db.select({ id: assets.id }).from(assets).where(and(assetId ? eq(assets.id, uuid(assetId)) : undefined, this.available(), or(
           and(isNull(assets.message_id), lt(assets.expires_at, sql`now()`)),
           and(eq(assets.status, 'ready'), isNull(assets.staging_deleted_at), lt(assets.upload_expires_at, sql`now()`)),
         ))).orderBy(assets.expires_at).limit(1);

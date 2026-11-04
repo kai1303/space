@@ -157,18 +157,23 @@ test('v17 copy preserves all message, asset, event and counter values and failed
     const files = (await readdir(directory)).filter(f=>/^0(0\d|1[0-7])_.*\.sql$/.test(f)).sort();
     for (const file of files) await legacy.query(await readFile(new URL(file,directory),'utf8'));
     await legacy.query('CREATE TABLE schema_migrations(version integer PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now()); INSERT INTO schema_migrations(version) SELECT generate_series(1,17)');
-    const a = await bootstrap(legacy), chat = new ChatStore(legacy), taskStore = new PostgresStore(legacy);
+    const a = await bootstrap(legacy), chat = new ChatStore(legacy);
     const human = {id:randomUUID()};
     await legacy.query(`INSERT INTO messages(id,workspace_id,channel_id,thread_id,author_type,user_id,client_message_id,request_hash,text,document)
       VALUES($1,$2,$3,$4,'human',$5,$6,'legacy','Rich history',$7)`,[human.id,a.workspace_id,a.channel_id,a.thread_id,a.owner_id,randomUUID(),{ops:[{insert:'Rich history\n'}]}]);
-    const task = await taskStore.createTask(a.owner_id,{workspace_id:a.workspace_id,thread_id:a.thread_id,installation_id:a.installation_id,goal:'Preserve agent',skill:'demo.echo'},randomUUID());
+    // Seed the historical schema directly; current stores require columns added after v17.
+    const task = { id: randomUUID() };
+    await legacy.query(`INSERT INTO tasks(id,workspace_id,thread_id,installation_id,goal,skill,requester_id,status,idempotency_key,request_hash)
+      VALUES($1,$2,$3,$4,'Preserve agent','demo.echo',$5,'awaiting_approval',$6,'legacy')`,[task.id,a.workspace_id,a.thread_id,a.installation_id,a.owner_id,randomUUID()]);
+    await legacy.query(`INSERT INTO task_events(id,type,workspace_id,actor_id,resource_id,correlation_id,sequence,payload)
+      VALUES($1,'task.proposed',$2,$3,$4,$4,1,$5)`,[randomUUID(),a.workspace_id,a.owner_id,task.id,{goal:'Preserve agent'}]);
     await legacy.query(`INSERT INTO messages(id,workspace_id,channel_id,thread_id,task_id,installation_id,text) VALUES($1,$2,$3,$4,$5,$6,'Agent history')`,[randomUUID(),a.workspace_id,a.channel_id,a.thread_id,task.id,a.installation_id]);
     const asset = randomUUID();
     await legacy.query(`INSERT INTO assets(id,workspace_id,channel_id,uploader_id,name,size,type,staging_key,object_key,status,message_id)
       VALUES($1,$2,$3,$4,'old.txt',1,'text/plain',$1::uuid::text,$1::uuid::text,'ready',$5)`,[asset,a.workspace_id,a.channel_id,a.owner_id,human.id]);
     await legacy.query('UPDATE messages SET attachments=$1 WHERE id=$2',[JSON.stringify([{id:asset,name:'old.txt',size:1,type:'text/plain'}]),human.id]);
     // Compare the original v17 fields; later migrations add defaulted runtime state.
-    const snapshot = async () => Promise.all(['messages','assets','channel_events','channels'].map(async table=>(await legacy.query(`SELECT ${table==='messages'?"to_jsonb(t)-'agent_milestone'-'agent_response'-'reaction_sequence'":table==='assets'?"to_jsonb(t)-'processing_token'-'processing_until'":'to_jsonb(t)'} AS row FROM ${table} t ORDER BY to_jsonb(t)::text`)).rows));
+    const snapshot = async () => Promise.all(['messages','assets','channel_events','channels'].map(async table=>(await legacy.query(`SELECT ${table==='messages'?"to_jsonb(t)-'agent_milestone'-'agent_response'-'reaction_sequence'-'agent_session_id'":table==='assets'?"to_jsonb(t)-'processing_token'-'processing_until'":table==='channels'?"to_jsonb(t)-'kind'-'direct_user_low'-'direct_user_high'":'to_jsonb(t)'} AS row FROM ${table} t ORDER BY to_jsonb(t)::text`)).rows));
     const before = await snapshot();
     // Fail after all migration DDL has run, at the version recording boundary.
     await legacy.query(`CREATE FUNCTION reject_partition_migration() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN
@@ -180,7 +185,7 @@ test('v17 copy preserves all message, asset, event and counter values and failed
     assert.equal((await legacy.query('SELECT max(version) AS version FROM schema_migrations')).rows[0].version,17);
     await legacy.query('DROP TRIGGER reject_partition_migration ON schema_migrations; DROP FUNCTION reject_partition_migration()'); await migrate(legacy);
     assert.deepEqual(await snapshot(),before);
-    assert.equal((await legacy.query('SELECT count(*) FROM messages WHERE reaction_sequence<>0')).rows[0].count,'0');
+    assert.equal((await legacy.query('SELECT count(*) FROM messages WHERE reaction_sequence<>0 OR agent_session_id IS NOT NULL')).rows[0].count,'0');
     assert.equal((await legacy.query('SELECT count(*) FROM assets WHERE processing_token IS NOT NULL OR processing_until IS NOT NULL')).rows[0].count,'0');
     assert.equal((await legacy.query('SELECT count(*) FROM message_identities')).rows[0].count,'2');
     const stats = (await legacy.query(`SELECT DISTINCT tablename FROM pg_stats WHERE schemaname=current_schema()

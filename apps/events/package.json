@@ -1,0 +1,31 @@
+{
+  "name": "@space/event-service",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "start": "node dist/main.js",
+    "dev": "node dist/main.js"
+  },
+  "exports": {
+    "./bridge": {
+      "types": "./dist/bridge.d.ts",
+      "default": "./dist/bridge.js"
+    }
+  },
+  "dependencies": {
+    "@space/events": "workspace:*",
+    "pg": "^8.23.1",
+    "pg-logical-replication": "2.6.0"
+  },
+  "devDependencies": {
+    "@types/node": "22",
+    "@types/pg": "^8.23.1",
+    "typescript": "^7.0.2"
+  }
+}

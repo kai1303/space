@@ -7,7 +7,7 @@ export function registerMention(Editor: typeof Quill) {
   const Inline=Editor.import('blots/inline') as typeof InlineBlot;
   class Mention extends Inline {
     static blotName='mention';static tagName='SPAN';static className='sp-mention-token';
-    static create(value:unknown){const node=super.create();node.setAttribute('data-mention',JSON.stringify(parseMention(value)));node.setAttribute('contenteditable','false');return node;}
+    static create(value:unknown){const node=super.create();const reference=parseMention(value);node.setAttribute('data-mention',JSON.stringify(reference));node.setAttribute('data-mention-kind',reference.kind);node.setAttribute('title',`${reference.kind==='agent'?'Agent':reference.kind==='user'?'Person':'Broadcast'} mention`);node.setAttribute('contenteditable','false');return node;}
     static formats(node:HTMLElement){try{return parseMention(JSON.parse(node.getAttribute('data-mention')??'null'));}catch{return undefined;}}
   }
   Editor.register(Mention,true);

@@ -22,8 +22,8 @@ const admin = new Pool({ connectionString: url });
 const pool = new Pool({ connectionString: url, options: `-c search_path=${schema}`, max: 20 });
 const adapter = new RedisSocketAdapter(process.env.TEST_REDIS_URL, schema);
 const otherAdapter = new RedisSocketAdapter(process.env.TEST_REDIS_URL, schema);
-const store = new PostgresStore(pool), app = createApi(store, { allowDevelopmentTokens: true, realtime: { adapter, reconcileMs: 60_000 } });
-const second = createApi(new PostgresStore(pool), { allowDevelopmentTokens: true, realtime: { adapter: otherAdapter, reconcileMs: 60_000 } });
+const store = new PostgresStore(pool), app = createApi(store, { allowDevelopmentTokens: true, realtime: { adapter, } });
+const second = createApi(new PostgresStore(pool), { allowDevelopmentTokens: true, realtime: { adapter: otherAdapter, } });
 let address: string, secondAddress: string;
 before(async () => {
   await Promise.all([adapter.connect(), otherAdapter.connect()]);
@@ -170,8 +170,9 @@ test('socket authorization rejects cross-channel subscriptions and revokes activ
     client.send({ type: 'subscribe', channel_id: a.channel_id, after: '0' });
     await client.wait('subscribed');
     await new WorkspaceStore(pool).removeMember(a.owner_id, a.workspace_id, a.collaborator_id);
-    const closed = new Promise(resolve => client.ws.once('disconnect', resolve));
-    await Promise.race([closed, delay(5000).then(() => { throw new Error('revocation did not close socket'); })]);
+    const revoked = new Promise(resolve => client.ws.once('channel.revoked', resolve));
+    assert.deepEqual(await Promise.race([revoked, delay(5000).then(() => { throw new Error('channel revocation missing'); })]), { channel_id: a.channel_id, error: 'not_found' });
+    assert.equal(client.ws.connected, true);
     assert.ok(!client.frames.some(frame => frame.type === 'events'));
   } finally { client.ws.disconnect(); }
 });
@@ -199,8 +200,8 @@ test('agent progress and completion arrive live with trusted agent identity in t
 });
 
 
-test('reconciliation repairs a committed message without any Redis notification', async () => {
-  const repair = createApi(new PostgresStore(pool), { allowDevelopmentTokens: true, realtime: { reconcileMs: 100 } });
+test('committed WAL delivers a message without any Redis notification', async () => {
+  const repair = createApi(new PostgresStore(pool), { allowDevelopmentTokens: true, realtime: { } });
   const base = await repair.listen({ host: '127.0.0.1', port: 0 });
   const a = await bootstrap(pool), client = await socket(a.owner_token, base);
   try {
@@ -433,7 +434,7 @@ test('replay and socket subscriptions tolerate reserved sequence gaps from direc
 test('closing one API instance does not disconnect clients on another instance', async () => {
   const temporaryAdapter = new RedisSocketAdapter(process.env.TEST_REDIS_URL, schema);
   await temporaryAdapter.connect();
-  const temporary = createApi(new PostgresStore(pool), { allowDevelopmentTokens: true, realtime: { adapter: temporaryAdapter, reconcileMs: 60_000 } });
+  const temporary = createApi(new PostgresStore(pool), { allowDevelopmentTokens: true, realtime: { adapter: temporaryAdapter, } });
   await temporary.listen({ host:'127.0.0.1',port:0 });
   const a = await bootstrap(pool), client = await socket(a.owner_token,secondAddress);
   try {

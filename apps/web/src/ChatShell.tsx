@@ -1,11 +1,14 @@
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import { IconButton, Menu, surfaceMotion, useSidebarMotion } from '@space/ui';
-import { ArrowLeft, ArrowRight, BookOpen, CaretDown, Check, ClockCounterClockwise, House, List, MagnifyingGlass, Moon, Sun, Users, X } from '@phosphor-icons/react';
+import { ArrowLeft, ArrowRight, BookOpen, CaretDown, Check, ClockCounterClockwise, House, ChatCircle, List, MagnifyingGlass, Moon, Sun, Users, X } from '@phosphor-icons/react';
 import { UserSettings } from './UserProfile.js';
 import { SpaceLogo } from './SpaceLogo.js';
 
-export function ChatShell({ name, user, userId, onNameChange, onSearch, onMembers, workspaces = [], workspace = '', onWorkspaceChange, sidebarWidth = 220, onBack, onForward, history = [], activity, children }: {
+export function ChatShell({ onHome, onDirectMessages, directMessagesActive = false, name, user, userId, onNameChange, onSearch, onMembers, workspaces = [], workspace = '', onWorkspaceChange, sidebarWidth = 220, onBack, onForward, history = [], activity, children }: {
+  onHome?: () => void;
+  onDirectMessages?: () => void;
+  directMessagesActive?: boolean;
   name: string;
   user: string;
   userId?: string;
@@ -61,7 +64,8 @@ export function ChatShell({ name, user, userId, onNameChange, onSearch, onMember
     <div className="chat-body">
       <nav className="chat-rail" aria-label="Main navigation">
         {onWorkspaceChange ? <WorkspacePicker items={workspaces} value={workspace} onChange={onWorkspaceChange} compact /> : <div className="chat-workspace-mark" title={name}><SpaceLogo icon /></div>}
-        <a href="/chat" className="chat-rail-item is-active" aria-current="page"><span className="chat-rail-icon"><House size={20} weight="fill" /></span><span>Home</span></a>
+        <a href="/chat" className={`chat-rail-item${directMessagesActive ? '' : ' is-active'}`} aria-current={directMessagesActive ? undefined : 'page'} onClick={event => { if (onHome) { event.preventDefault(); onHome(); } }}><span className="chat-rail-icon"><House size={20} weight="fill" /></span><span>Home</span></a>
+        {onDirectMessages && <button className={`chat-rail-item${directMessagesActive ? ' is-active' : ''}`} aria-current={directMessagesActive ? 'page' : undefined} onClick={onDirectMessages}><span className="chat-rail-icon"><ChatCircle size={22} weight={directMessagesActive ? 'fill' : 'regular'} /></span><span>DMs</span></button>}
         {onSearch && <button className="chat-rail-item" onClick={openSearch}><span className="chat-rail-icon"><MagnifyingGlass size={20} /></span><span>Search</span></button>}
         {onMembers && <button className="chat-rail-item" onClick={onMembers}><span className="chat-rail-icon"><Users size={23} /></span><span>Members</span></button>}
         <div className="chat-rail-bottom">

@@ -4,7 +4,10 @@ import { parseRichDocument, type RichDocument } from './rich-text.js';
 import { parseAssetIds, type AssetAttachment } from './assets.js';
 import type { AgentResponse } from './agent-response.js';
 export interface MessageReaction { emoji: string; count: number; user_ids: string[] }
+export interface MessageAgentSession { id: string; title: string; agent_name: string }
 export interface ChatMessage {
+  agent_sessions?: MessageAgentSession[];
+  agent_session_id?: string | null;
   reactions?: MessageReaction[];
   reaction_sequence?: string;
   id: string; channel_id: string; thread_id: string; task_id: string | null;
@@ -63,10 +66,12 @@ export function parseChannelInput(input: unknown) {
 }
 
 export interface ChannelSummary {
+  kind?: 'channel' | 'direct';
   id: string; workspace_id: string; name: string; private: boolean; joined: boolean;
   topic: string; description: string; archived_at: string | null; created_by: string | null; created_at: string;
 }
 export interface ChannelDetails extends ChannelSummary {
+  participants?: ChannelMember[]; hidden?: boolean; last_message?: DirectMessageSummary['last_message'];
   creator_name: string | null; member_count: number; can_manage: boolean;
 }
 export interface ChannelMember { id: string; name: string; image: string | null; title: string; presence: 'active' | 'away' }
@@ -91,4 +96,9 @@ export function parseReactionInput(input: unknown) {
   const v = record(input, ['emoji', 'active']);
   if (!isUnicodeEmoji(v.emoji) || typeof v.active !== 'boolean') throw new AppError(400, 'invalid_reaction');
   return { emoji: v.emoji, active: v.active };
+}
+
+export interface DirectMessageSummary extends ChannelSummary {
+  kind: 'direct'; participants: ChannelMember[]; hidden: boolean;
+  last_message: { text: string; created_at: string; author_name: string } | null;
 }

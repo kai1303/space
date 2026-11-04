@@ -3,13 +3,19 @@ import type { ChatMessage, MessagePage } from '@space/contracts';
 export const HISTORY_LIMIT = 500;
 export type HistoryDirection = 'older' | 'newer' | 'latest';
 
+function mergeSessionLinks(previous: ChatMessage['agent_sessions'] = [], incoming: ChatMessage['agent_sessions'] = []) {
+  // Match the bounded inline summary returned by message history.
+  return [...new Map([...previous, ...incoming].map(session => [session.id, session])).values()].slice(0, 100);
+}
 function ordered(messages: ChatMessage[]) {
   const unique = new Map<string, ChatMessage>();
   for (const message of messages) {
     const previous = unique.get(message.id);
     const latest = !previous || BigInt(message.reaction_sequence ?? '0') >= BigInt(previous.reaction_sequence ?? '0') ? message : previous;
-    unique.set(message.id, previous?.reply_count !== undefined || message.reply_count !== undefined
-      ? { ...latest, reply_count: Math.max(previous?.reply_count ?? 0, message.reply_count ?? 0) } : latest);
+    let updated = previous?.reply_count !== undefined || message.reply_count !== undefined
+      ? { ...latest, reply_count: Math.max(previous?.reply_count ?? 0, message.reply_count ?? 0) } : latest;
+    if (previous?.agent_sessions || message.agent_sessions) updated = { ...updated, agent_sessions: mergeSessionLinks(previous?.agent_sessions, message.agent_sessions) };
+    unique.set(message.id, updated);
   }
   return [...unique.values()]
     .sort((a, b) => BigInt(a.sequence!) < BigInt(b.sequence!) ? -1 : BigInt(a.sequence!) > BigInt(b.sequence!) ? 1 : 0);
@@ -32,15 +38,18 @@ export function mergePage(previous: MessagePage | null, page: MessagePage, direc
   }, direction === 'older' ? messages.slice(0, HISTORY_LIMIT) : messages.slice(-HISTORY_LIMIT));
 }
 export function appendLive(previous: MessagePage, incoming: ChatMessage[], pinned: boolean, rootsOnly = false): MessagePage {
-  if (rootsOnly) {
-    const counts = new Map<string, number>();
-    for (const message of incoming) if (message.thread_root_id && message.reply_count !== undefined)
-      counts.set(message.thread_root_id, Math.max(counts.get(message.thread_root_id) ?? 0, message.reply_count));
-    incoming = [
-      ...incoming.filter(message => !message.thread_root_id || message.thread_root_id === message.id),
-      ...previous.messages.filter(message => counts.has(message.id)).map(message => ({ ...message, reply_count: Math.max(message.reply_count ?? 0, counts.get(message.id)!) })),
-    ];
+  const counts = new Map<string, number>(), sessions = new Map<string, NonNullable<ChatMessage['agent_sessions']>>();
+  for (const message of incoming) if (message.thread_root_id) {
+    if (!message.agent_session_id && message.reply_count !== undefined) counts.set(message.thread_root_id, Math.max(counts.get(message.thread_root_id) ?? 0, message.reply_count));
+    if (message.agent_session_id) sessions.set(message.thread_root_id, mergeSessionLinks(sessions.get(message.thread_root_id), [{ id: message.agent_session_id, title: message.text, agent_name: message.author.name }]));
   }
+  incoming = [
+    ...incoming.filter(message => !rootsOnly || !message.thread_root_id || message.thread_root_id === message.id),
+    ...[...previous.messages, ...incoming].filter(message => counts.has(message.id) || sessions.has(message.id)).map(message => ({
+      ...message, ...(counts.has(message.id) ? { reply_count: Math.max(message.reply_count ?? 0, counts.get(message.id)!) } : {}),
+      ...(sessions.has(message.id) ? { agent_sessions: mergeSessionLinks(message.agent_sessions, sessions.get(message.id)) } : {}),
+    })),
+  ];
   const present = new Set([...previous.messages.map(message => message.id), ...incoming.filter(message => !message.reaction_sequence || message.reaction_sequence === '0').map(message => message.id)]);
   incoming = incoming.filter(message => present.has(message.id));
   if (!incoming.length) return previous;
