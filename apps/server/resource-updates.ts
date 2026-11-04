@@ -2,7 +2,7 @@ import { AppError, record, uuid } from '@space/contracts';
 import type { ChatStore } from '@space/postgres/chat';
 import { hasChannelAccess, hasThreadAccess, hasWorkspaceAccess } from '@space/postgres/access';
 
-export type ResourceSubscription = { scope: 'workspace' | 'channel' | 'thread' | 'task'; id: string; revision?: string };
+export type ResourceSubscription = { scope: 'workspace' | 'channel' | 'thread' | 'task'; id: string; revision?: string; keys?: string[] };
 export function parseResourceSubscription(input: unknown): ResourceSubscription {
   const value = record(input, ['scope', 'id']);
   if (!['workspace', 'channel', 'thread', 'task'].includes(value.scope as string)) throw new AppError(400, 'invalid_scope');
@@ -28,6 +28,7 @@ export async function resourceRevision(chat: ChatStore, actor: string, subscript
   if (!allowed) throw new AppError(404, 'not_found');
   const keys = ['global', `workspace:${workspace}`, ...(channel ? [`channel:${channel}`] : []),
     ...(scope === 'workspace' ? [`workspace-messages:${workspace}`] : scope === 'thread' || scope === 'task' ? [`${scope}:${id}`] : [])];
+  subscription.keys = [...keys, `actor:${actor}`];
   const revisions = await chat.pool.query<{resource:string;revision:string}>(
     'SELECT resource,revision::text FROM resource_update_revisions WHERE resource=ANY($1::text[]) ORDER BY resource',[keys]);
   return JSON.stringify(revisions.rows);

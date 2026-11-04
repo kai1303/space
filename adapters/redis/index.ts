@@ -28,6 +28,12 @@ export class RedisSocketAdapter {
     catch (error) { await this.close(); throw error; }
   }
   get isReady() { return this.publisher.isReady && this.subscriber.isReady; }
+  onReady(listener: () => void): () => void {
+    const ready = () => { if (this.isReady) listener(); };
+    this.publisher.on('ready', ready); this.subscriber.on('ready', ready);
+    ready();
+    return () => { this.publisher.off('ready', ready); this.subscriber.off('ready', ready); };
+  }
   async close() {
     await Promise.all([this.publisher, this.subscriber].map(async client => {
       if (!client.isOpen) return;

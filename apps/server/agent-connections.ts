@@ -5,6 +5,7 @@ import { AppError, localProviderForConnector, record, text, uuid } from '@space/
 import type { AgentConnectionStore } from '@space/postgres/agent-connections';
 import type { PostgresStore } from '@space/postgres/store';
 import { registerLocalCodexTasks } from './local-codex.js';
+import { SubscriptionIndex, type RealtimeWork } from './realtime-work.js';
 
 export function registerAgentConnectionRoutes(app: FastifyInstance, store: AgentConnectionStore) {
   app.get('/v1/agents/connectors', () => store.connectors);
@@ -36,31 +37,33 @@ export function registerAgentConnectionRoutes(app: FastifyInstance, store: Agent
     record(r.body, []); return store.revoke(r.actorId, uuid(r.params.installationId));
   });
 }
-export function registerAgentConnections(app: FastifyInstance, io: Server, store: AgentConnectionStore, tasks: PostgresStore, onOutbox: (listener: () => void) => () => void, getEvents: () => Promise<EventBus>) {
+export function registerAgentConnections(app: FastifyInstance, io: Server, store: AgentConnectionStore, tasks: PostgresStore, onOutbox: (listener: (keys?: readonly string[]) => void) => () => void, getEvents: () => Promise<EventBus>, work: RealtimeWork) {
   const agents = io.of('/agents');
   agents.use(async (socket, next) => {
+    socket.conn.once('close', () => work.cancel(socket.id));
     try {
       const auth = record(socket.handshake.auth, ['token']);
-      socket.data.agent = await store.connect(auth.token);
+      socket.data.agent = await work.run(socket.id, () => store.connect(auth.token));
+      if (socket.conn.readyState !== 'open') return;
       socket.data.token = auth.token;
       next();
-    } catch { next(new Error('unauthorized')); }
+    } catch (error) { next(new Error(error instanceof AppError ? error.code : 'internal_error')); }
   });
-  const checks = new Map<string,() => void>();
-  const stopWakes = onOutbox(() => { for (const check of checks.values()) check(); });
+  const checks = new SubscriptionIndex();
+  const stopWakes = onOutbox(keys => checks.wake(keys));
   agents.on('connection', socket => {
-    const delivery = registerLocalCodexTasks(socket, store, tasks, getEvents);
-    const identity = socket.data.agent as { id: string; connection_id: string };
+    const delivery = registerLocalCodexTasks(socket, store, tasks, getEvents, work);
+    const identity = socket.data.agent as { id: string; connection_id: string; workspace_id: string; owner_id: string };
     let checking = false, dirty = false;
-    checks.set(socket.id, () => {
+    const stopCheck = checks.add(['global', `workspace:${identity.workspace_id}`, `actor:${identity.owner_id}`], () => {
       dirty = true;
       if (checking) return;
       checking = true;
       void (async () => {
         while (dirty && socket.connected) {
           dirty = false;
-          try { await store.authenticateConnection(socket.data.token,identity.connection_id); }
-          catch (error) { if (error instanceof AppError && error.code === 'unauthorized') socket.disconnect(true); }
+          try { await work.run(socket.id, () => store.authenticateConnection(socket.data.token,identity.connection_id)); }
+          catch (error) { if (error instanceof AppError && ['unauthorized','realtime_overloaded'].includes(error.code)) socket.disconnect(true); }
         }
       })().finally(() => { checking = false; });
     });
@@ -72,7 +75,7 @@ export function registerAgentConnections(app: FastifyInstance, io: Server, store
       working = true;
       try {
         await delivery.ready;
-        ack({ data: await store.heartbeat(socket.data.token, identity.connection_id, input) });
+        ack({ data: await work.run(socket.id, () => store.heartbeat(socket.data.token, identity.connection_id, input)) });
         delivery.notifyReady();
       }
       catch (e) {
@@ -80,7 +83,7 @@ export function registerAgentConnections(app: FastifyInstance, io: Server, store
         if (code === 'unauthorized') socket.disconnect(true);
       } finally { working = false; }
     });
-    socket.on('disconnect', () => { checks.delete(socket.id); void store.disconnect(identity.id, identity.connection_id).catch(() => {}); });
+    socket.on('disconnect', () => { stopCheck(); work.cancel(socket.id); void work.run(`disconnect:${socket.id}`, () => store.disconnect(identity.id, identity.connection_id)).catch(() => {}); });
   });
   app.addHook('preClose', async () => { stopWakes(); agents.local.disconnectSockets(true); });
 }

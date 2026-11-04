@@ -7,7 +7,7 @@ import { MentionStore } from './mentions.js';
 import { UnreadStore } from './unread.js';
 import { createHash, randomUUID } from 'node:crypto';
 import type { Pool } from 'pg';
-import { and, eq, gt, lt, gte, lte, asc, desc, or, exists, inArray, sql } from 'drizzle-orm';
+import { and, eq, gt, lt, gte, lte, asc, desc, or, exists, inArray, isNull, sql } from 'drizzle-orm';
 import { AppError, parseReactionInput, parseMessageInput, parseChannelInput, parseChannelUpdate, parseMessagePage, parsePage, record, uuid, chatCursor, type ChatMessage, type ChatEvent, type ChatHistory, type MessagePage, type ChannelSummary, type ChannelDetails } from '@space/contracts';
 import { database, type DbSession } from './database.js';
 import { hasChannelAccess, requireWorkspaceAccess, lockWorkspace, hasThreadAccess } from './access.js';
@@ -167,10 +167,8 @@ export class ChatStore {
   async send(actor: string, channelId: string, input: unknown): Promise<ChatMessage> {
     const request = parseMessageInput(input);
     const hash = createHash('sha256').update(JSON.stringify({ channel_id: channelId, thread_id: request.thread_id, text: request.text, ...(request.document ? { document: request.document } : {}), ...(request.asset_ids?.length ? { asset_ids: request.asset_ids } : {}) })).digest('hex');
-    return this.channelTransaction(channelId, async c => {
-      const channel = await this.lockedChannel(c, channelId);
-      await this.authorize(c, actor, channelId);
-      if (channel.kind !== 'direct') await c.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${`${channel.workspace_id}:${actor}:${request.client_message_id}`}))`);
+    return sessionTransaction(this.db, async c => {
+      const channel = await this.authorize(c, actor, channelId);
       const [existing] = await c.select().from(s.messageIdentities).where(and(eq(s.messageIdentities.workspace_id, channel.workspace_id), eq(s.messageIdentities.user_id, actor), eq(s.messageIdentities.client_message_id, request.client_message_id)));
       if (existing) {
         if (existing.request_hash !== hash) throw new AppError(409, 'idempotency_conflict');
@@ -189,7 +187,7 @@ export class ChatStore {
       } else await c.insert(s.threads).values({ id: threadId, workspace_id: channel.workspace_id, channel_id: channelId });
       const id = randomUUID();
       const fileQuery = request.asset_ids?.length ? c.select().from(s.assets).where(inArray(s.assets.id, request.asset_ids)).orderBy(s.assets.id) : null;
-      const files = fileQuery ? await (channel.kind === 'direct' ? fileQuery : fileQuery.for('update')) : [];
+      const files = fileQuery ? await fileQuery : [];
       if (files.length !== (request.asset_ids?.length ?? 0) || files.some(file => file.channel_id !== channelId || file.uploader_id !== actor || file.status !== 'ready' || file.message_id || file.expires_at <= new Date())) throw new AppError(409, 'asset_unavailable');
       const attachments = (request.asset_ids ?? []).map(id => {
         const file = files.find(file => file.id === id)!;
@@ -199,10 +197,17 @@ export class ChatStore {
         author_type: 'human', user_id: actor, client_message_id: request.client_message_id, request_hash: hash, text: prepared.document ? prepared.document.ops.map(op => op.insert).join('').trim() : request.text, document: prepared.document ?? null, attachments });
       await this.mentions.notify(c, actor, channel, id, prepared.refs, !!request.thread_id);
       await this.notifications.notify(c, actor, channel, id, threadId, prepared.refs, !!request.thread_id);
-      if (files.length) await c.update(s.assets).set({ message_id: id }).where(inArray(s.assets.id, files.map(file => file.id)));
+      if (files.length) {
+        const attached = await c.update(s.assets).set({ message_id: id }).where(and(
+          inArray(s.assets.id, files.map(file => file.id)), eq(s.assets.channel_id, channelId), eq(s.assets.uploader_id, actor),
+          eq(s.assets.status, 'ready'), isNull(s.assets.message_id), gt(s.assets.expires_at, sql`clock_timestamp()`),
+        )).returning({ id: s.assets.id });
+        if (attached.length !== files.length) throw new AppError(409, 'asset_unavailable');
+      }
       if (channel.kind === 'direct') await c.execute(sql`UPDATE direct_message_views SET hidden=false,last_activity_at=now() WHERE channel_id=${channelId}`);
       return this.message(c, id, channelId);
-    });
+    // Spread channel/recipient contention across five attempts, with less than 3s total backoff.
+    }, 'serializable', 100);
   }
   async react(actor: string, channelId: string, messageId: string, input: unknown): Promise<ChatMessage> {
     const { emoji, active } = parseReactionInput(input);

@@ -28,6 +28,11 @@ async function pair(owner: Awaited<ReturnType<typeof bootstrap>>) {
   const connection = await api(undefined, 'POST', '/agent-pairings/claim', { code: pairing.code, credential }, 201);
   return { pairing, credential, connection };
 }
+async function offboardOwner(owner: Awaited<ReturnType<typeof bootstrap>>) {
+  await pool.query("UPDATE workspace_members SET role='owner' WHERE workspace_id=$1 AND user_id=$2", [owner.workspace_id, owner.collaborator_id]);
+  await pool.query('UPDATE workspaces SET primary_owner_id=$2 WHERE id=$1', [owner.workspace_id, owner.collaborator_id]);
+  await pool.query('UPDATE workspace_members SET active=false WHERE workspace_id=$1 AND user_id=$2', [owner.workspace_id, owner.owner_id]);
+}
 async function connect(credential: string, namespace = '/agents') {
   const socket = io(`${origin}${namespace}`, { transports: ['websocket'], auth: { token: credential }, autoConnect: false, reconnection: false });
   sockets.push(socket);
@@ -65,7 +70,7 @@ test('pairing expiry, cancellation, replacement and owner offboarding prevent cl
   const expired = await create(); await pool.query("UPDATE agent_pairings SET expires_at=now()-interval '1 second' WHERE id=$1", [expired.id]); await claim(expired.code);
   const cancelled = await create(); await api(owner.collaborator_token, 'POST', `/agent-pairings/${cancelled.id}/cancel`, {}, 403); await api(owner.owner_token, 'POST', `/agent-pairings/${cancelled.id}/cancel`, {}); await claim(cancelled.code);
   const old = await create(); const fresh = await create(); await claim(old.code);
-  await pool.query('UPDATE workspace_members SET active=false WHERE workspace_id=$1 AND user_id=$2', [owner.workspace_id, owner.owner_id]);
+  await offboardOwner(owner);
   await claim(fresh.code);
 });
 test('agent namespace reports auth status, fences replaced connections and enforces revocation', async () => {
@@ -92,7 +97,7 @@ test('agent namespace reports auth status, fences replaced connections and enfor
 });
 test('agent heartbeat rechecks workspace membership after connection', async () => {
   const owner = await bootstrap(pool); const { credential } = await pair(owner); const socket = await connect(credential);
-  await pool.query('UPDATE workspace_members SET active=false WHERE workspace_id=$1 AND user_id=$2', [owner.workspace_id, owner.owner_id]);
+  await offboardOwner(owner);
   if (socket.connected) {
     const ack = await socket.timeout(2000).emitWithAck('agent.heartbeat', { auth_status: 'ready' }).catch((error: Error) => {
       assert.match(error.message, /disconnected/); assert.equal(socket.connected, false); return { error: 'unauthorized' };

@@ -310,7 +310,7 @@ test('a transient live authentication failure disconnects without scope revocati
  try {
   await socket.timeout(500).emitWithAck('updates.subscribe',{scope:'channel',id:a.channel_id});
   unavailable=true;
-  await pool.query("SELECT append_chat_event($1,$2,'task.event','{}')",[a.channel_id,a.thread_id]);
+  await pool.query("UPDATE channels SET topic='Recheck subscribed metadata' WHERE id=$1",[a.channel_id]);
   await until(()=>!socket.connected,'transient live authentication failures must disconnect for retry');
   assert.deepEqual(errors,[{error:'internal_error'}]);assert.deepEqual(revoked,[]);
   unavailable=false;
@@ -364,6 +364,9 @@ test('broker reconnect restores ephemeral realtime delivery before catch-up and 
   const before=changes;
   offline=true;for(const connection of connections)connection.destroy();
   await delay(6500); // Exceed the broker's default ephemeral consumer inactivity window.
+  const unavailable=await temporary.inject({method:'GET',url:'/readyz'});
+  assert.equal(unavailable.statusCode,503);
+  assert.equal(unavailable.json().realtime.broker,false);
   await pool.query("UPDATE channels SET description='Changed during outage' WHERE id=$1",[a.channel_id]);
   offline=false;
   const deadline=Date.now()+10000;
@@ -372,6 +375,7 @@ test('broker reconnect restores ephemeral realtime delivery before catch-up and 
   await delay(100);const recovered=changes;
   await pool.query("UPDATE channels SET description='Changed after reconnect' WHERE id=$1",[a.channel_id]);
   await until(()=>changes>recovered,'the replacement ephemeral consumer must deliver future events');
+  assert.equal((await temporary.inject({method:'GET',url:'/readyz'})).statusCode,200);
  }finally{
   offline=false;socket.disconnect();await temporary.close();
   for(const connection of connections)connection.destroy();

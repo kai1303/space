@@ -8,16 +8,23 @@ export class EventBus {
   private connection?: NatsConnection;
   private client?: JetStreamClient;
   private readonly reconnect = new Set<() => void>();
+  private connected = false;
   private readonly subscriptions = new Set<() => Promise<void>>();
   readonly stream: string;
+  get isConnected() { return this.connected && !this.connection?.isClosed(); }
   constructor(readonly url: string, readonly schema: string, readonly instanceId: string = randomUUID()) { this.stream = streamName(schema); }
   async start(): Promise<void> {
     if (this.connection) return;
-    const nc = this.connection = await connect({ servers: this.url, name: `space-${this.instanceId}`, maxReconnectAttempts: -1, reconnectTimeWait: 1000, timeout: 5000 });
+    const nc = this.connection = await connect({ servers: this.url.split(',').map(server => server.trim()).filter(Boolean), name: `space-${this.instanceId}`, maxReconnectAttempts: -1, reconnectTimeWait: 1000, timeout: 5000 });
     this.client = nc.jetstream({ timeout: 10000 });
+    this.connected = true;
     try { if (this.schema !== '*') { await this.ensureStream(this.schema, true); await this.ensureStream(this.schema, false); } }
-    catch (error) { await nc.close(); this.connection = undefined; this.client = undefined; throw error; }
-    void (async () => { for await (const status of nc.status()) if (status.type === 'reconnect') for (const fn of this.reconnect) fn(); })();
+    catch (error) { this.connected = false; await nc.close(); this.connection = undefined; this.client = undefined; throw error; }
+    void nc.closed().then(() => { this.connected = false; });
+    void (async () => { for await (const status of nc.status()) {
+      if (status.type === 'disconnect') this.connected = false;
+      if (status.type === 'reconnect') { this.connected = true; for (const fn of this.reconnect) fn(); }
+    } })();
   }
   private readonly streams = new Set<string>();
   private readonly initializing = new Map<string, Promise<string>>();
@@ -37,8 +44,11 @@ export class EventBus {
     if (this.streams.has(name)) return name;
     if (this.streams.size >= 256) this.streams.delete(this.streams.values().next().value!);
     const manager = await this.connection!.jetstreamManager();
+    const replicas = Number(process.env.NATS_REPLICAS ?? (process.env.NODE_ENV === 'production' ? 3 : 1));
+    if (![1,3,5].includes(replicas) || (process.env.NODE_ENV === 'production' && replicas < 3)) throw new Error('NATS_REPLICAS must be 1, 3 or 5 (at least 3 in production)');
     const config = {
       name,
+      num_replicas: replicas,
       subjects: chat ? [`${prefix}.chat.>`] : [...['task', 'navigator', 'connection', 'delivery', 'asset', 'todo', 'invitation', 'retention'].map(kind => `${prefix}.${kind}.>`), `${prefix}.schedule.>`],
       retention: chat ? RetentionPolicy.Limits : RetentionPolicy.Workqueue,
       max_age: chat ? nanos(24 * 60 * 60 * 1000) : 0,
@@ -52,7 +62,7 @@ export class EventBus {
     };
     // Scheduling requires DiscardOld. WORK has no eviction limits; the broker's global storage limit rejects new writes.
     let exists = false;
-    try { await manager.streams.info(name); exists = true; }
+    try { const info = await manager.streams.info(name); config.num_replicas = Math.max(config.num_replicas, info.config.num_replicas); exists = true; }
     catch (error) { if ((error as { code?: string }).code !== '404') throw error; }
     if (exists) await manager.streams.update(name, config);
     else {
@@ -78,11 +88,12 @@ export class EventBus {
     if (schedule) { metadata.set('Nats-Schedule', `@at ${new Date(at).toISOString()}`); metadata.set('Nats-Schedule-Target', target); }
     await this.client.publish(schedule ? `${prefix}.schedule.${transportId}` : target, new TextEncoder().encode(JSON.stringify(event)), { msgID: transportId, headers: metadata });
   }
-  async subscribe(filter: string, options: { durable?: string; queue?: string; maxPending?: number }, handler: (delivery: EventDelivery) => Promise<void>): Promise<() => Promise<void>> {
+  async subscribe(filter: string, options: { durable?: string; queue?: string; maxPending?: number; onError?: (error: unknown) => void }, handler: (delivery: EventDelivery) => Promise<void>): Promise<() => Promise<void>> {
     if (!this.client || this.schema === '*') throw new Error('event bus not started or unscoped subscriber');
     if (options.maxPending !== undefined && (!Number.isInteger(options.maxPending) || options.maxPending < 1 || options.maxPending > 1024)) throw new Error('invalid consumer concurrency');
     const opts = consumerOpts();
     opts.manualAck(); opts.ackExplicit(); opts.ackWait(300000); opts.maxAckPending(options.maxPending ?? 16);
+    if (options.onError) { opts.idleHeartbeat(5000); opts.flowControl(); }
     opts.deliverTo(options.durable ? `_SPACE_DELIVERY.${createHash('sha256').update(`${this.schema}:${options.durable}`).digest('hex')}` : createInbox());
     if (options.durable) { opts.durable(options.durable); opts.deliverAll(); } else opts.deliverNew();
     if (options.queue) opts.deliverGroup(options.queue);
@@ -90,7 +101,8 @@ export class EventBus {
     const active = new Set<Promise<void>>();
     let stopped = false;
     opts.callback((error, message) => {
-      if (error || !message) return;
+      if (error) { if (!stopped) options.onError?.(error); return; }
+      if (!message) return;
       if (stopped) { message.nak(); return; }
       pending.add(message);
       let event: DomainEvent;
@@ -123,6 +135,7 @@ export class EventBus {
       subscription = await this.client.subscribe(`${this.stream}.${filter}`, opts);
     }
     let stopping: Promise<void> | undefined;
+    void subscription.closed.then(() => { if (!stopped) options.onError?.(new Error('event subscription closed')); });
     const stop = (): Promise<void> => {
       stopping ??= (async () => {
         stopped = true; subscription.unsubscribe();
@@ -138,5 +151,5 @@ export class EventBus {
     return stop;
   }
   onReconnect(fn: () => void): () => void { this.reconnect.add(fn); return () => { this.reconnect.delete(fn); }; }
-  async close(): Promise<void> { for (const stop of [...this.subscriptions]) await stop(); await this.connection?.close(); this.connection = undefined; this.client = undefined; }
+  async close(): Promise<void> { this.connected = false; for (const stop of [...this.subscriptions]) await stop(); await this.connection?.close(); this.connection = undefined; this.client = undefined; }
 }

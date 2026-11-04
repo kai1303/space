@@ -2,7 +2,7 @@ import { AppError } from '@space/contracts';
 import { setTimeout as delay } from 'node:timers/promises';
 import type { Database, DbSession } from './database.js';
 export class SessionConflict extends Error {}
-export async function sessionTransaction<T>(db: Database, work: (c: DbSession) => Promise<T>, isolationLevel: 'serializable' | 'read committed' = 'serializable'): Promise<T> {
+export async function sessionTransaction<T>(db: Database, work: (c: DbSession) => Promise<T>, isolationLevel: 'serializable' | 'read committed' = 'serializable', retryDelayMs = 20): Promise<T> {
   for (let attempt = 0; attempt < 5; attempt++) {
     try { return await db.transaction(work, { isolationLevel }); }
     catch (error) {
@@ -11,7 +11,7 @@ export async function sessionTransaction<T>(db: Database, work: (c: DbSession) =
       if (!(error instanceof SessionConflict) && !['40001', '40P01', '23505'].includes(code ?? '')) throw error;
       if (attempt === 4) throw new AppError(409, 'session_conflict');
       // Let competing commits settle; jitter spreads simultaneous retries.
-      await delay(20 * 2 ** attempt * (1 + Math.random()));
+      await delay(retryDelayMs * 2 ** attempt * (1 + Math.random()));
     }
   }
   throw new AppError(409, 'session_conflict');

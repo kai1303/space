@@ -60,7 +60,7 @@ export function createApi(store: PostgresStore, options: { invitationEmail?: {co
   app.addHook('onRequest', async (request, reply) => {
     reply.header('cache-control', 'no-store');
     reply.header('x-content-type-options', 'nosniff');
-    if (request.routeOptions.url === '/healthz' && request.method === 'GET') return;
+    if (['/healthz','/readyz'].includes(request.routeOptions.url ?? '') && request.method === 'GET') return;
     if (request.routeOptions.url === MEMORY_MCP_PATH) return;
     // This route authenticates a source-scoped token itself; it never grants actor access.
     if (request.routeOptions.url === TODO_SYNC_PATH) return;
@@ -139,8 +139,14 @@ export function createApi(store: PostgresStore, options: { invitationEmail?: {co
   registerAssetRoutes(app, assets, options.storage);
   const connections = new AgentConnectionStore(store.pool, { connectors: options.pairedConnectors });
   registerAgentConnectionRoutes(app, connections);
-  const { io, onOutbox, getEvents } = registerRealtime(app, authenticate, chat, { ...options.realtime, ...(options.auth ? { allowedOrigins: [...options.auth.origins], strictOrigins: true } : {}) });
-  registerAgentConnections(app, io, connections, store, onOutbox, getEvents);
+  const { io, onOutbox, getEvents, work, health } = registerRealtime(app, authenticate, chat, { ...options.realtime, ...(options.auth ? { allowedOrigins: [...options.auth.origins], strictOrigins: true } : {}) });
+  app.get('/readyz', async (_request, reply) => {
+    try {
+      const realtime = await health();
+      return reply.code(realtime.ready ? 200 : 503).send({status:realtime.ready ? 'ready' : 'unavailable', realtime});
+    } catch { return reply.code(503).send({status:'unavailable'}); }
+  });
+  registerAgentConnections(app, io, connections, store, onOutbox, getEvents, work);
   registerEventDeadlines(app, getEvents, store, assets, options.storage);
   registerWorkspaceRetention(app,getEvents,new WorkspaceRetentionStore(store.pool),options.storage);
   if(options.invitationEmail) registerInvitationEmailDelivery(app,getEvents,invitations,options.invitationEmail.mailer);

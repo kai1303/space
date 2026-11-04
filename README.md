@@ -483,6 +483,15 @@ own secrets, HTTPS, trusted origins, and a reverse proxy supporting WebSocket
 upgrades. Email verification, password-reset delivery, human social login, and MFA
 are not configured. Production readiness has not been established.
 
+For replicated realtime delivery, see the [deployment and recovery runbook](docs/architecture/realtime-deployment.md)
+and `deploy/realtime/`. They include a three-node broker failure rehearsal and a
+two-API HAProxy example with `/readyz` routing. Production uses explicit
+`NATS_REPLICAS=3` (or `5`) and comma-separated `NATS_URL` seeds; external HA
+PostgreSQL, backups and independent failure domains must still be provisioned.
+Realtime notifications are scoped to their affected subscriptions, with bounded
+connection/read admission and PostgreSQL cursor replay. The [architecture principles](docs/architecture/principles.md#realtime-admission-and-fanout)
+document limits and recovery behavior.
+
 Back up PostgreSQL, SeaweedFS data, and channel memory together. Database backups
 alone do not contain uploaded bytes or Markdown memory. See the
 [storage guide](docs/architecture/assets.md#self-hosting-and-persistence) and

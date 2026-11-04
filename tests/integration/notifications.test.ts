@@ -119,7 +119,14 @@ test('historical migration preserves safe mention activity and participation wit
   for(const [index,file] of migrationFiles.slice(0,migrationFiles.indexOf('040_notifications.sql')).entries()){
    await old.query(await readFile(new URL(`../../adapters/postgres/migrations/${file}`,import.meta.url),'utf8'));await old.query('INSERT INTO schema_migrations(version) VALUES($1)',[index+1]);
   }
-  const a=await bootstrap(old),id=randomUUID();
+  // Seed only columns present before notification migration 040.
+  const a={workspace_id:randomUUID(),channel_id:randomUUID(),thread_id:randomUUID(),owner_id:randomUUID(),collaborator_id:randomUUID()},id=randomUUID();
+  await old.query("INSERT INTO users(id,display_name) VALUES($1,'Legacy owner'),($2,'Legacy collaborator')",[a.owner_id,a.collaborator_id]);
+  await old.query("INSERT INTO workspaces(id,name) VALUES($1,'Legacy workspace')",[a.workspace_id]);
+  await old.query("INSERT INTO workspace_members(workspace_id,user_id,role) VALUES($1,$2,'owner'),($1,$3,'member')",[a.workspace_id,a.owner_id,a.collaborator_id]);
+  await old.query("INSERT INTO channels(id,workspace_id,name,private,created_by) VALUES($1,$2,'general',false,$3)",[a.channel_id,a.workspace_id,a.owner_id]);
+  await old.query('INSERT INTO channel_members(workspace_id,channel_id,user_id) VALUES($1,$2,$3),($1,$2,$4)',[a.workspace_id,a.channel_id,a.owner_id,a.collaborator_id]);
+  await old.query('INSERT INTO threads(id,workspace_id,channel_id) VALUES($1,$2,$3)',[a.thread_id,a.workspace_id,a.channel_id]);
   await old.query("INSERT INTO messages(id,workspace_id,channel_id,thread_id,author_type,user_id,client_message_id,request_hash,text) VALUES($1,$2,$3,$4,'human',$5,$6,'hash','Old mention')",[id,a.workspace_id,a.channel_id,a.thread_id,a.owner_id,randomUUID()]);
   await old.query('INSERT INTO mention_notifications(workspace_id,channel_id,message_id,user_id,silent,read_at) VALUES($1,$2,$3,$4,true,now())',[a.workspace_id,a.channel_id,id,a.collaborator_id]);
   await migrate(old);await migrate(old);

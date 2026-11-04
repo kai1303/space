@@ -4,9 +4,10 @@ import { AppError, parseAgentEvent, record } from '@space/contracts';
 import type { Delivery } from '@space/core/ports';
 import type { AgentConnectionStore } from '@space/postgres/agent-connections';
 import type { PostgresStore } from '@space/postgres/store';
+import type { RealtimeWork } from './realtime-work.js';
 
 // Broker delivery owns work; connector commands never choose an installation or attempt.
-export function registerLocalCodexTasks(socket: Socket, connections: AgentConnectionStore, tasks: PostgresStore, getEvents: () => Promise<EventBus>) {
+export function registerLocalCodexTasks(socket: Socket, connections: AgentConnectionStore, tasks: PostgresStore, getEvents: () => Promise<EventBus>, work: RealtimeWork) {
   const identity = socket.data.agent as { id: string; connection_id: string };
   let active: Delivery | undefined;
   let offered: EventDelivery | undefined, receipt: EventDelivery | undefined;
@@ -90,11 +91,12 @@ export function registerLocalCodexTasks(socket: Socket, connections: AgentConnec
     if (Date.now() - windowStart >= 1000) { count = 0; windowStart = Date.now(); }
     if (++count > 40 || pending >= 40) { ack({ error: 'busy' }); return; }
     pending++;
-    queue = queue.then(async () => {
+    queue = queue.then(() => work.run(socket.id, async () => {
       try {
         if (!socket.connected) throw new AppError(401, 'unauthorized');
         await connections.authenticateConnection(socket.data.token, identity.connection_id);
-        ack({ data: await handle(raw) });
+        const data = await handle(raw);
+        ack({ data });
       } catch (error) {
         let code = error instanceof AppError ? error.code : 'internal_error';
         if (name === 'agent.task.claim' && receipt && !active) await settle(true);
@@ -114,14 +116,17 @@ export function registerLocalCodexTasks(socket: Socket, connections: AgentConnec
           await fail(code);
           if (code === 'unauthorized') socket.disconnect(true);
         }
-      } finally { pending--; }
-    }).catch(() => { socket.disconnect(true); });
+      }
+    })).catch(error => {
+      ack({error:error instanceof AppError ? error.code : 'internal_error'});
+      socket.disconnect(true);
+    }).finally(() => { pending--; });
   });
   socket.on('disconnect', () => {
     stopped = true;
-    queue = queue.then(async () => {
+    queue = queue.then(() => work.run(`cleanup:${socket.id}`, async () => {
       if (active) await fail('local_execution_interrupted'); else await settle(true);
-    }).catch(() => settle(true));
+    })).catch(() => settle(true)); // If admission fails, broker redelivery and the durable deadline retain recovery.
     void queue.finally(async () => { const stop = await subscription; await stop?.(); });
   });
   return { ready: subscription.then(() => {}), notifyReady: () => { if (offered && socket.connected) socket.emit('agent.tasks.available'); } };

@@ -1,0 +1,50 @@
+# Example app tier. Requires externally operated PostgreSQL, NATS and object storage.
+# Merge with compose.nats.yaml only for a local rehearsal; see deployment runbook.
+x-runtime: &runtime
+  image: ${SPACE_IMAGE:?Set SPACE_IMAGE to an immutable application image}
+  restart: unless-stopped
+  stop_grace_period: 45s
+  environment: &environment
+    NODE_ENV: production
+    DATABASE_URL: ${DATABASE_URL:?External HA PostgreSQL URL required}
+    NATS_URL: ${NATS_URL:?Comma-separated reachable NATS seed URLs required}
+    NATS_REPLICAS: "3"
+
+x-api: &api
+  <<: *runtime
+  environment:
+    <<: *environment
+    HOST: 0.0.0.0
+    PORT: "3000"
+    BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?Generate a production authentication secret}
+    BETTER_AUTH_URL: ${BETTER_AUTH_URL:?Public HTTPS origin required}
+    AUTH_TRUSTED_ORIGINS: ${AUTH_TRUSTED_ORIGINS:?Explicit HTTPS origins required}
+    TRUSTED_PROXY_CIDRS: ${TRUSTED_PROXY_CIDRS:?Set only the private load balancer addresses}
+    ALLOW_DEVELOPMENT_TOKENS: "false"
+    REALTIME_MAX_CONNECTIONS: "1000"
+    REALTIME_MAX_ACTOR_CONNECTIONS: "8"
+    REALTIME_WORK_CONCURRENCY: "4"
+    REALTIME_WORK_QUEUE: "512"
+    # Optional: only typing uses Redis. Keep credentials out of checked-in files.
+    REDIS_URL: ${REDIS_URL:-}
+    ASSET_STORAGE_ENDPOINT: ${ASSET_STORAGE_ENDPOINT:?External S3-compatible endpoint required}
+    ASSET_STORAGE_PUBLIC_ENDPOINT: ${ASSET_STORAGE_PUBLIC_ENDPOINT:?Public HTTPS object endpoint required}
+    ASSET_STORAGE_BUCKET: ${ASSET_STORAGE_BUCKET:?Asset bucket required}
+    ASSET_STORAGE_ACCESS_KEY: ${ASSET_STORAGE_ACCESS_KEY:?Asset credential required}
+    ASSET_STORAGE_SECRET_KEY: ${ASSET_STORAGE_SECRET_KEY:?Asset secret required}
+    ASSET_STORAGE_ORIGINS: ${AUTH_TRUSTED_ORIGINS}
+
+services:
+  api-1:
+    <<: *api
+  api-2:
+    <<: *api
+  events:
+    <<: *runtime
+    command: ["node", "apps/events/dist/main.js"]
+  proxy:
+    image: haproxy:3.0-alpine
+    restart: unless-stopped
+    ports: ["127.0.0.1:58080:8080"]
+    volumes: ["./haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro"]
+    depends_on: [api-1, api-2]
