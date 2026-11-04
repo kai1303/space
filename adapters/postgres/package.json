@@ -102,6 +102,10 @@
     "./search": {
       "types": "./dist/search.d.ts",
       "default": "./dist/search.js"
+    },
+    "./calling": {
+      "types": "./dist/calling.d.ts",
+      "default": "./dist/calling.js"
     }
   },
   "dependencies": {

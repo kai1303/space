@@ -128,7 +128,7 @@ it('searches the complete file library on the server and resets pagination when 
   await screen.findByText('needle.pdf'); expect(screen.queryByText('proposal.pdf')).toBeNull();
   await userEvent.click(screen.getByRole('button', { name: 'Load more' }));
   expect(vi.mocked(fetch).mock.calls.some(([p]) => String(p).includes('q=needle') && String(p).includes('after=older'))).toBe(true);
-  await userEvent.click(screen.getByRole('radio', { name: 'Created by you' }));
+  await userEvent.click(screen.getByRole('tab', { name: 'Created by you' }));
   await waitFor(() => expect(String(vi.mocked(fetch).mock.calls.at(-1)?.[0])).toContain('ownership=created'));
   expect(String(vi.mocked(fetch).mock.calls.at(-1)?.[0])).not.toContain('after=');
 });
@@ -147,7 +147,7 @@ it('applies sender, conversation and inclusive date filters only after Done', as
   fake(path => path.includes('/participants?') ? { items: [{ id: 'person', name: 'Alex', kind: 'human' }], next_cursor: null } : path.includes('/channels?') ? { items: [{ id: 'channel', name: 'general' }], next_cursor: null } : { items: [file], next_cursor: null });
   render(<WorkspaceCollections view="files" workspace="workspace" onOpen={() => {}} />);
   await screen.findByText('proposal.pdf'); await userEvent.click(screen.getByRole('button', { name: 'Filters' }));
-  await screen.findByRole('option', { name: 'Alex' }); await userEvent.selectOptions(screen.getByRole('combobox', { name: 'From' }), 'person'); await userEvent.selectOptions(screen.getByRole('combobox', { name: 'In' }), 'channel');
+  await userEvent.click(screen.getByRole('combobox', { name: 'From' })); await userEvent.click(await screen.findByRole('option', { name: 'Alex', exact: true })); await userEvent.click(screen.getByRole('combobox', { name: 'In' })); await userEvent.click(await screen.findByRole('option', { name: 'general', exact: true }));
   const { fireEvent } = await import('@testing-library/react');
   fireEvent.change(screen.getByLabelText('From date'), { target: { value: '2026-11-04' } }); fireEvent.change(screen.getByLabelText('Through date'), { target: { value: '2026-11-04' } });
   expect(vi.mocked(fetch).mock.calls.some(([p]) => String(p).includes('from=person'))).toBe(false);
@@ -168,7 +168,7 @@ it('ignores delayed file results after search changes and reports star write fai
 it('closes file filters and clears directory data when workspace access is revoked', async () => {
   fake(path => path.includes('/participants?') ? { items: [{ id: 'person', name: 'Private colleague', kind: 'human' }], next_cursor: null } : path.includes('/channels?') ? { items: [{ id: 'private', name: 'private-channel' }], next_cursor: null } : { items: [file], next_cursor: null });
   render(<WorkspaceCollections view="files" workspace="workspace" onOpen={() => {}} />);
-  await screen.findByText('proposal.pdf'); await userEvent.click(screen.getByRole('button',{name:'Filters'})); await screen.findByRole('option',{name:'Private colleague'});
+  await screen.findByText('proposal.pdf'); await userEvent.click(screen.getByRole('button',{name:'Filters'})); await userEvent.click(screen.getByRole('combobox', { name: 'From' })); await screen.findByRole('option',{name:'Private colleague'});
   act(()=>updates.revoke!('not_found'));
   expect(screen.queryByRole('dialog',{name:'Filter by'})).toBeNull(); expect(screen.queryByText('Private colleague')).toBeNull(); expect(screen.queryByText('proposal.pdf')).toBeNull();
 });
@@ -211,4 +211,18 @@ it('keeps the type menu open while combining types, supports none, and resets wi
   expect(screen.getByRole('button', { name: 'File types: 6 Types' }).getAttribute('aria-expanded')).toBe('true');
   expect((screen.getByRole('searchbox', { name: 'Search files' }) as HTMLInputElement).value).toBe('pro');
   expect(screen.queryByRole('menuitem', { name: 'Reset Filters' })).toBeNull();
+});
+
+it('moves the Files ownership highlight while preserving tab controls and keyboard selection',async()=>{
+ fake(()=>({items:[],next_cursor:null}));const view=render(<WorkspaceCollections view="files" workspace="workspace" onOpen={()=>{}}/>);
+ const all=screen.getByRole('tab',{name:'All',exact:true}),created=screen.getByRole('tab',{name:'Created by you',exact:true});
+ expect(all.querySelector('.sp-tab-indicator')).toBeTruthy();
+ await userEvent.click(created);
+ expect(screen.getByRole('tab',{name:'Created by you',exact:true})).toBe(created);
+ expect(created.querySelector('.sp-tab-indicator')).toBeTruthy();expect(all.querySelector('.sp-tab-indicator')).toBeNull();
+ await userEvent.keyboard('{ArrowRight}');const shared=screen.getByRole('tab',{name:'Shared with you',exact:true});
+ expect(shared.getAttribute('aria-selected')).toBe('true');expect(document.activeElement).toBe(shared);
+ expect(shared.querySelector('.sp-tab-indicator')).toBeTruthy();
+ expect(view.container.querySelectorAll('.sp-tab-indicator')).toHaveLength(1);
+ expect(view.container.querySelectorAll('.files-ownership [tabindex="0"]')).toHaveLength(1);
 });

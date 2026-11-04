@@ -1,6 +1,6 @@
 # Space Connector
 
-This local connector pairs Codex or Kiro on one computer with a Space workspace, reports provider readiness, and executes approved chat tasks. Pairing alone grants no channel access. Project file tools are an explicit local opt-in with `--project`.
+This local connector pairs Codex or Kiro on one computer with a Space workspace, reports provider readiness, and executes approved chat tasks. A paired agent inherits its owner’s current conversation access; no separate channel grant is required. Project file tools are an explicit local opt-in with `--project`.
 
 Requirements: Node.js 24+, pnpm, and the selected provider CLI installed on `PATH`. Codex is the default; Kiro requires `kiro-cli` with ACP v3 support.
 
@@ -65,37 +65,17 @@ A project changes the private session namespace. Start a new Space agent session
 
 Space shows Working, Thinking, Responding or Using tools above the shared session composer, based on provider events. States can repeat. Reasoning contents are not forwarded. Tool inputs/results use the existing expandable timeline; older details are shortened to keep accumulated snapshots within the response budget. Completed, stopped and failed turns clear their activity. Unexpected or unconfirmed in-flight failures close the runtime before another tool turn can start.
 
-## Enable a channel
+## Conversation permissions
 
-Pairing and provider sign-in do not grant channel access. The current chat UI has
-no channel-enablement control; the former **Ask an agent** control is not mounted.
-Until a replacement ships, the installation owner must configure grants through
-the authenticated HTTP API. Use the owner's normal Space user session, not the
-connector credential. No model invocation is needed to configure a grant.
+A connected agent inherits its owner's current access to conversations in its workspace. It can use its declared skills wherever the owner is a current member, including private channels and DMs the owner participates in. No separate channel enablement is needed. Losing membership, disabling the installation or revoking the connection prevents further authorized execution. Other users' requests still require the owner's approval.
 
-1. Read `GET /v1/workspaces` and `GET /v1/workspaces/:workspaceId/channels` to find
-   the workspace and channel IDs.
-2. Read `GET /v1/channels/:channelId/agents`. This returns the caller's owned
-   installations, supported `skills` and current `granted_skills`. Use its `id`
-   as `installationId` below; do not use the connector or provider name as an ID.
-3. Send the following request with the same authenticated user session:
+`GET /v1/channels/:channelId/agents` returns owned installations and their effective skills. Connected entries include `inherits_owner_access: true`; the historical `granted_skills` field contains all supported skills for these entries. The legacy enable endpoint accepts `enabled:true` as an idempotent no-op. `enabled:false`, and explicit grant/revoke APIs for a connected installation, return `agent_inherits_owner_access` instead of pretending to restrict it. Revoke the connection or disable the installation to turn it off.
 
-```http
-POST /v1/agents/connections/:installationId/channels/:channelId
-Content-Type: application/json
-
-{"enabled":true,"skill":"codex.run"}
-```
-
-For Kiro, use `kiro.run`; other connectors must use a skill advertised by that
-installation. Set `enabled` to `false` to revoke the same skill. The owner must
-have access to the channel. Direct messages cannot enable agents, and archived
-channels cannot receive new grants. Re-read the channel's agent list to confirm
-the selected skill appears in `granted_skills`.
+Unpaired installations, such as operator-managed hosted endpoints, retain explicit channel grants. Channel memory still requires its own opt-in and access role; DMs have no channel memory.
 
 ## Chat tasks
 
-Enable the paired agent in the channel, then select its mention from the composer and send a request. Space creates a managed agent session linked below that message. Open the link to follow up in the session composer. The owner's requests autoapprove; other people's requests require the installation owner's approval. Ordinary thread discussion does not send agent follow-ups.
+Select the paired agent’s mention from the composer and send a request. Space creates a managed agent session linked below that message. Open the link to follow up in the session composer. The owner's requests autoapprove; other people's requests require the installation owner's approval. Ordinary thread discussion does not send agent follow-ups.
 
 Responses stream into Space. Named agent sessions retain their own Codex conversation and working directory across turns and connector restarts; their conversation and outputs stay inside the session view. The private `~/.config/space-connector/codex/` directory stores session history and atomic `0600` mappings from Space session IDs to Codex thread IDs. Storage is isolated by platform, workspace, installation, pairing credential and authenticated ChatGPT account/client identity, with `0700` directories. Before any model turn, the connector saves the thread mapping, obtains Space’s session-readiness acknowledgment, and records readiness locally. A stop before that acknowledgment can safely reuse the same unused thread. Missing or damaged saved state fails the turn without creating a replacement conversation. Signing out removes OAuth tokens and retains this account-bound session data.
 

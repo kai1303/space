@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { ChannelFile, Page } from '@space/contracts';
-import { Button, IconButton, SidePanel } from '@space/ui/primitives';
+import { Select, Button, IconButton, SidePanel } from '@space/ui/primitives';
 import { ArrowClockwise, File, FileCode, FilePdf, MusicNote, VideoCamera, X } from '@phosphor-icons/react';
 import { AssetViewer } from './AssetAttachments.js';
 import './channel-files.css';
@@ -99,8 +99,8 @@ function ChannelFilesPanel({ direct, channel, name, revision, onClose, onMessage
     <div className="channel-files-controls">
       <input ref={searchInput} type="search" aria-label="Search filenames" placeholder="Search filenames" maxLength={255} value={search} onChange={event => setSearch(event.target.value)} />
       <div className="channel-files-filters">
-        <label>File type<select aria-label="File type" value={kind} onChange={event => setKind(event.target.value)}>{kinds.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
-        <label>Sort files<select aria-label="Sort files" value={sort} onChange={event => setSort(event.target.value)}><option value="newest">Newest shared</option><option value="oldest">Oldest shared</option></select></label>
+        <label>File type<Select aria-label="File type" value={kind} onChange={event => setKind(event.target.value)}>{kinds.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</Select></label>
+        <label>Sort files<Select aria-label="Sort files" value={sort} onChange={event => setSort(event.target.value)}><option value="newest">Newest shared</option><option value="oldest">Oldest shared</option></Select></label>
         <IconButton label="Refresh files" disabled={loading} onClick={() => setRefresh(value => value + 1)}><ArrowClockwise size={20} /></IconButton>
       </div>
     </div>

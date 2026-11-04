@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import type { HubMessage } from '@space/contracts';
-import { Avatar, Button } from '@space/ui/primitives';
+import { Tabs, Avatar, Button } from '@space/ui/primitives';
 import { NavigationIcon } from '@space/ui/navigation';
 import { RichContent } from '@space/ui/rich-text';
 import { WorkspaceFiles } from '../../files/WorkspaceFiles.js';
@@ -23,7 +23,7 @@ export function WorkspaceCollections(props: Props) {
 }
 function SavedCollections(props: Props) {
   const [tab,setTab]=useState('messages');
-  return <div className="saved-collections"><div className="todos-saved-tabs" aria-label="Saved items"><button aria-pressed={tab==='messages'} onClick={()=>setTab('messages')}>Messages</button><button aria-pressed={tab==='todos'} onClick={()=>setTab('todos')}>To-dos</button></div>{tab==='todos'?<WorkspaceTodos workspace={props.workspace} onOpen={props.onOpen} archived/>:<Collection {...props}/>}</div>;
+  return <div className="saved-collections"><Tabs className="todos-saved-tabs" label="Saved items" value={tab} onChange={setTab} items={[{id:'messages',label:'Messages'},{id:'todos',label:'To-dos'}]}/>{tab==='todos'?<WorkspaceTodos workspace={props.workspace} onOpen={props.onOpen} archived/>:<Collection {...props}/>}</div>;
 }
 
 function Collection({ view, workspace, onOpen }: Props) {

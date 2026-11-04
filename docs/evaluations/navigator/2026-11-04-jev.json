@@ -1,0 +1,835 @@
+{
+  "corpus": "navigator-starter-v1",
+  "generatedAt": "2026-11-04T12:07:16.911Z",
+  "schemaVersion": 1,
+  "mode": "level1",
+  "provider": {
+    "name": "jev",
+    "model": "jev-latest"
+  },
+  "prices": {
+    "inputUsdPerMillion": null,
+    "outputUsdPerMillion": null
+  },
+  "summary": {
+    "total": 24,
+    "completed": 24,
+    "errors": 0,
+    "skipped": 0,
+    "coverage": 1,
+    "correct": 17,
+    "accuracy": 0.7083333333333334,
+    "negativeCases": 12,
+    "falsePositives": 1,
+    "falsePositiveRate": 0.08333333333333333,
+    "positiveCases": 12,
+    "missedIntents": 0,
+    "missedIntentRate": 0,
+    "capabilityCases": 8,
+    "capabilityMatches": 4,
+    "capabilityAccuracy": 0.5,
+    "escalations": 9,
+    "calls": 24,
+    "reservedTokens": 75296,
+    "inputTokens": 21295,
+    "outputTokens": 2452,
+    "latencyP50Ms": 260.76074999999946,
+    "latencyP95Ms": 284.9540829999996,
+    "estimatedUsd": null
+  },
+  "results": [
+    {
+      "id": "summary-request",
+      "category": "explicit-request",
+      "expected": {
+        "actions": [
+          "suggest"
+        ],
+        "capabilities": [
+          "writing.summarize"
+        ]
+      },
+      "status": "completed",
+      "latencyMs": 532.983458,
+      "decision": {
+        "action": "suggest",
+        "capabilities": [
+          "writing.summarize"
+        ],
+        "evidenceMessageIds": [
+          "latest"
+        ],
+        "reason": "The latest message requests agent work. These capabilities may help.",
+        "assessment": {
+          "model": "jev-1.14.0",
+          "targetMessageId": "latest",
+          "requestsAgentWork": 0.96,
+          "assistanceUseful": 0.39,
+          "needsDeeperReasoning": 0.1,
+          "capabilityRelevance": {
+            "writing.summarize": 0.95,
+            "engineering.investigate": 0.02
+          }
+        }
+      },
+      "correct": true
+    },
+    {
+      "id": "debug-request",
+      "category": "explicit-request",
+      "expected": {
+        "actions": [
+          "suggest"
+        ],
+        "capabilities": [
+          "engineering.investigate"
+        ]
+      },
+      "status": "completed",
+      "latencyMs": 265.06025,
+      "decision": {
+        "action": "suggest",
+        "capabilities": [
+          "engineering.investigate"
+        ],
+        "evidenceMessageIds": [
+          "latest"
+        ],
+        "reason": "The latest message requests agent work. These capabilities may help.",
+        "assessment": {
+          "model": "jev-1.14.0",
+          "targetMessageId": "latest",
+          "requestsAgentWork": 0.98,
+          "assistanceUseful": 0.87,
+          "needsDeeperReasoning": 0.24,
+          "capabilityRelevance": {
+            "writing.summarize": 0.04,
+            "engineering.investigate": 0.99
+          }
+        }
+      },
+      "correct": true
+    },
+    {
+      "id": "paraphrased-summary",
+      "category": "implicit-need",
+      "expected": {
+        "actions": [
+          "suggest"
+        ],
+        "capabilities": [
+          "writing.summarize"
+        ]
+      },
+      "status": "completed",
+      "latencyMs": 267.96524999999997,
+      "decision": {
+        "action": "escalate",
+        "capabilities": [],
+        "evidenceMessageIds": [
+          "latest"
+        ],
+        "reason": "The latest message needs clarification or deeper reasoning.",
+        "assessment": {
+          "model": "jev-1.14.0",
+          "targetMessageId": "latest",
+          "requestsAgentWork": 0.88,
+          "assistanceUseful": 0.72,
+          "needsDeeperReasoning": 0.43,
+          "capabilityRelevance": {
+            "writing.summarize": 0.9,
+            "engineering.investigate": 0.02
+          }
+        }
+      },
+      "correct": false
+    },
+    {
+      "id": "useful-debugging",
+      "category": "implicit-need",
+      "expected": {
+        "actions": [
+          "suggest"
+        ],
+        "capabilities": [
+          "engineering.investigate"
+        ]
+      },
+      "status": "completed",
+      "latencyMs": 255.448083,
+      "decision": {
+        "action": "escalate",
+        "capabilities": [],
+        "evidenceMessageIds": [
+          "latest"
+        ],
+        "reason": "The latest message needs clarification or deeper reasoning.",
+        "assessment": {
+          "model": "jev-1.14.0",
+          "targetMessageId": "latest",
+          "requestsAgentWork": 0.44,
+          "assistanceUseful": 0.89,
+          "needsDeeperReasoning": 0.47,
+          "capabilityRelevance": {
+            "writing.summarize": 0.04,
+            "engineering.investigate": 0.96
+          }
+        }
+      },
+      "correct": false
+    },
+    {
+      "id": "confirmation",
+      "category": "context",
+      "expected": {
+        "actions": [
+          "suggest"
+        ],
+        "capabilities": [
+          "writing.summarize"
+        ]
+      },
+      "status": "completed",
+      "latencyMs": 243.2281250000001,
+      "decision": {
+        "action": "suggest",
+        "capabilities": [
+          "writing.summarize"
+        ],
+        "evidenceMessageIds": [
+          "latest"
+        ],
+        "reason": "The latest message requests agent work. These capabilities may help.",
+        "assessment": {
+          "model": "jev-1.14.0",
+          "targetMessageId": "latest",
+          "requestsAgentWork": 0.97,
+          "assistanceUseful": 0.47,
+          "needsDeeperReasoning": 0.13,
+          "capabilityRelevance": {
+            "writing.summarize": 0.97,
+            "engineering.investigate": 0.02
+          }
+        }
+      },
+      "correct": true
+    },
+    {
+      "id": "acknowledgment",
+      "category": "context",
+      "expected": {
+        "actions": [
+          "ignore"
+        ],
+        "capabilities": []
+      },
+      "status": "completed",
+      "latencyMs": 278.5112080000001,
+      "decision": {
+        "action": "ignore",
+        "capabilities": [],
+        "evidenceMessageIds": [
+          "latest"
+        ],
+        "reason": "The latest message does not call for agent assistance.",
+        "assessment": {
+          "model": "jev-1.14.0",
+          "targetMessageId": "latest",
+          "requestsAgentWork": 0.07,
+          "assistanceUseful": 0.02,
+          "needsDeeperReasoning": 0.03,
+          "capabilityRelevance": {
+            "writing.summarize": 0.03,
+            "engineering.investigate": 0.02
+          }
+        }
+      },
+      "correct": true
+    },
+    {
+      "id": "greeting",
+      "category": "chatter",
+      "expected": {
+        "actions": [
+          "ignore"
+        ],
+        "capabilities": []
+      },
+      "status": "completed",
+      "latencyMs": 244.1804589999997,
+      "decision": {
+        "action": "ignore",
+        "capabilities": [],
+        "evidenceMessageIds": [
+          "latest"
+        ],
+        "reason": "The latest message does not call for agent assistance.",
+        "assessment": {
+          "model": "jev-1.14.0",
+          "targetMessageId": "latest",
+          "requestsAgentWork": 0.02,
+          "assistanceUseful": 0.02,
+          "needsDeeperReasoning": 0.07,
+          "capabilityRelevance": {
+            "writing.summarize": 0.03,
+            "engineering.investigate": 0.01
+          }
+        }
+      },
+      "correct": true
+    },
+    {
+      "id": "resolved-incident",
+      "category": "resolved",
+      "expected": {
+        "actions": [
+          "ignore"
+        ],
+        "capabilities": []
+      },
+      "status": "completed",
+      "latencyMs": 284.73804199999995,
+      "decision": {
+        "action": "ignore",
+        "capabilities": [],
+        "evidenceMessageIds": [
+          "latest"
+        ],
+        "reason": "The latest message does not call for agent assistance.",
+        "assessment": {
+          "model": "jev-1.14.0",
+          "targetMessageId": "latest",
+          "requestsAgentWork": 0.08,
+          "assistanceUseful": 0.02,
+          "needsDeeperReasoning": 0.05,
+          "capabilityRelevance": {
+            "writing.summarize": 0.06,
+            "engineering.investigate": 0.03
+          }
+        }
+      },
+      "correct": true
+    },
+    {
+      "id": "ability-question",
+      "category": "discussion",
+      "expected": {
+        "actions": [
+          "ignore"
+        ],
+        "capabilities": []
+      },
+      "status": "completed",
+      "latencyMs": 271.08095900000035,
+      "decision": {
+        "action": "ignore",
+        "capabilities": [],
+        "evidenceMessageIds": [
+          "latest"
+        ],
+        "reason": "The latest message does not call for agent assistance.",
+        "assessment": {
+          "model": "jev-1.14.0",
+          "targetMessageId": "latest",
+          "requestsAgentWork": 0.03,
+          "assistanceUseful": 0.2,
+          "needsDeeperReasoning": 0.05,
+          "capabilityRelevance": {
+            "writing.summarize": 0.91,
+            "engineering.investigate": 0.02
+          }
+        }
+      },
+      "correct": true
+    },
+    {
+      "id": "postponed",
+      "category": "negation",
+      "expected": {
+        "actions": [
+          "ignore"
+        ],
+        "capabilities": []
+      },
+      "status": "completed",
+      "latencyMs": 257.3657079999998,
+      "decision": {
+        "action": "ignore",
+        "capabilities": [],
+        "evidenceMessageIds": [
+          "latest"
+        ],
+        "reason": "The latest message does not call for agent assistance.",
+        "assessment": {
+          "model": "jev-1.14.0",
+          "targetMessageId": "latest",
+          "requestsAgentWork": 0.02,
+          "assistanceUseful": 0.06,
+          "needsDeeperReasoning": 0.09,
+          "capabilityRelevance": {
+            "writing.summarize": 0.21,
+            "engineering.investigate": 0.02
+          }
+        }
+      },
+      "correct": true
+    },
+    {
+      "id": "quoted-request",
+      "category": "quoted-content",
+      "expected": {
+        "actions": [
+          "ignore"
+        ],
+        "capabilities": []
+      },
+      "status": "completed",
+      "latencyMs": 248.99695799999972,
+      "decision": {
+        "action": "ignore",
+        "capabilities": [],
+        "evidenceMessageIds": [
+          "latest"
+        ],
+        "reason": "The latest message does not call for agent assistance.",
+        "assessment": {
+          "model": "jev-1.14.0",
+          "targetMessageId": "latest",
+          "requestsAgentWork": 0.04,
+          "assistanceUseful": 0.04,
+          "needsDeeperReasoning": 0.09,
+          "capabilityRelevance": {
+            "writing.summarize": 0.07,
+            "engineering.investigate": 0.06
+          }
+        }
+      },
+      "correct": true
+    },
+    {
+      "id": "code-example",
+      "category": "quoted-content",
+      "expected": {
+        "actions": [
+          "ignore"
+        ],
+        "capabilities": []
+      },
+      "status": "completed",
+      "latencyMs": 284.9540829999996,
+      "decision": {
+        "action": "ignore",
+        "capabilities": [],
+        "evidenceMessageIds": [
+          "latest"
+        ],
+        "reason": "The latest message does not call for agent assistance.",
+        "assessment": {
+          "model": "jev-1.14.0",
+          "targetMessageId": "latest",
+          "requestsAgentWork": 0.14,
+          "assistanceUseful": 0.21,
+          "needsDeeperReasoning": 0.29,
+          "capabilityRelevance": {
+            "writing.summarize": 0.52,
+            "engineering.investigate": 0.07
+          }
+        }
+      },
+      "correct": true
+    },
+    {
+      "id": "inline-code",
+      "category": "quoted-content",
+      "expected": {
+        "actions": [
+          "ignore"
+        ],
+        "capabilities": []
+      },
+      "status": "completed",
+      "latencyMs": 257.13879199999974,
+      "decision": {
+        "action": "escalate",
+        "capabilities": [],
+        "evidenceMessageIds": [
+          "latest"
+        ],
+        "reason": "The latest message needs clarification or deeper reasoning.",
+        "assessment": {
+          "model": "jev-1.14.0",
+          "targetMessageId": "latest",
+          "requestsAgentWork": 0.25,
+          "assistanceUseful": 0.37,
+          "needsDeeperReasoning": 0.18,
+          "capabilityRelevance": {
+            "writing.summarize": 0.08,
+            "engineering.investigate": 0.64
+          }
+        }
+      },
+      "correct": false
+    },
+    {
+      "id": "unavailable-capability",
+      "category": "capability-boundary",
+      "expected": {
+        "actions": [
+          "clarify"
+        ],
+        "capabilities": []
+      },
+      "status": "completed",
+      "latencyMs": 256.2042919999999,
+      "decision": {
+        "action": "escalate",
+        "capabilities": [],
+        "evidenceMessageIds": [
+          "latest"
+        ],
+        "reason": "The latest message needs clarification or deeper reasoning.",
+        "assessment": {
+          "model": "jev-1.14.0",
+          "targetMessageId": "latest",
+          "requestsAgentWork": 0.98,
+          "assistanceUseful": 0.4,
+          "needsDeeperReasoning": 0.86,
+          "capabilityRelevance": {
+            "writing.summarize": 0.04,
+            "engineering.investigate": 0.02
+          }
+        }
+      },
+      "correct": false
+    },
+    {
+      "id": "ambiguous-reference",
+      "category": "ambiguity",
+      "expected": {
+        "actions": [
+          "clarify",
+          "escalate"
+        ],
+        "capabilities": []
+      },
+      "status": "completed",
+      "latencyMs": 256.5024170000006,
+      "decision": {
+        "action": "escalate",
+        "capabilities": [],
+        "evidenceMessageIds": [
+          "latest"
+        ],
+        "reason": "The latest message needs clarification or deeper reasoning.",
+        "assessment": {
+          "model": "jev-1.14.0",
+          "targetMessageId": "latest",
+          "requestsAgentWork": 0.93,
+          "assistanceUseful": 0.2,
+          "needsDeeperReasoning": 0.93,
+          "capabilityRelevance": {
+            "writing.summarize": 0.13,
+            "engineering.investigate": 0.13
+          }
+        }
+      },
+      "correct": true
+    },
+    {
+      "id": "dependent-work",
+      "category": "complexity",
+      "expected": {
+        "actions": [
+          "escalate"
+        ],
+        "capabilities": []
+      },
+      "status": "completed",
+      "latencyMs": 269.13774999999987,
+      "decision": {
+        "action": "escalate",
+        "capabilities": [],
+        "evidenceMessageIds": [
+          "latest"
+        ],
+        "reason": "The latest message needs clarification or deeper reasoning.",
+        "assessment": {
+          "model": "jev-1.14.0",
+          "targetMessageId": "latest",
+          "requestsAgentWork": 0.97,
+          "assistanceUseful": 0.69,
+          "needsDeeperReasoning": 0.62,
+          "capabilityRelevance": {
+            "writing.summarize": 0.64,
+            "engineering.investigate": 0.99
+          }
+        }
+      },
+      "correct": true
+    },
+    {
+      "id": "independent-work",
+      "category": "multiple-capabilities",
+      "expected": {
+        "actions": [
+          "suggest"
+        ],
+        "capabilities": [
+          "writing.summarize",
+          "engineering.investigate"
+        ]
+      },
+      "status": "completed",
+      "latencyMs": 256.1291250000004,
+      "decision": {
+        "action": "escalate",
+        "capabilities": [],
+        "evidenceMessageIds": [
+          "latest"
+        ],
+        "reason": "The latest message needs clarification or deeper reasoning.",
+        "assessment": {
+          "model": "jev-1.14.0",
+          "targetMessageId": "latest",
+          "requestsAgentWork": 0.98,
+          "assistanceUseful": 0.6,
+          "needsDeeperReasoning": 0.43,
+          "capabilityRelevance": {
+            "writing.summarize": 0.88,
+            "engineering.investigate": 0.83
+          }
+        }
+      },
+      "correct": false
+    },
+    {
+      "id": "prompt-injection",
+      "category": "untrusted-input",
+      "expected": {
+        "actions": [
+          "ignore"
+        ],
+        "capabilities": []
+      },
+      "status": "completed",
+      "latencyMs": 273.12445800000023,
+      "decision": {
+        "action": "ignore",
+        "capabilities": [],
+        "evidenceMessageIds": [
+          "latest"
+        ],
+        "reason": "The latest message does not call for agent assistance.",
+        "assessment": {
+          "model": "jev-1.14.0",
+          "targetMessageId": "latest",
+          "requestsAgentWork": 0.03,
+          "assistanceUseful": 0.06,
+          "needsDeeperReasoning": 0.08,
+          "capabilityRelevance": {
+            "writing.summarize": 0.26,
+            "engineering.investigate": 0.05
+          }
+        }
+      },
+      "correct": true
+    },
+    {
+      "id": "vi-summary",
+      "category": "vietnamese",
+      "expected": {
+        "actions": [
+          "suggest"
+        ],
+        "capabilities": [
+          "writing.summarize"
+        ]
+      },
+      "status": "completed",
+      "latencyMs": 245.90650000000005,
+      "decision": {
+        "action": "suggest",
+        "capabilities": [
+          "writing.summarize"
+        ],
+        "evidenceMessageIds": [
+          "latest"
+        ],
+        "reason": "The latest message requests agent work. These capabilities may help.",
+        "assessment": {
+          "model": "jev-1.14.0",
+          "targetMessageId": "latest",
+          "requestsAgentWork": 0.97,
+          "assistanceUseful": 0.48,
+          "needsDeeperReasoning": 0.13,
+          "capabilityRelevance": {
+            "writing.summarize": 0.93,
+            "engineering.investigate": 0.02
+          }
+        }
+      },
+      "correct": true
+    },
+    {
+      "id": "vi-debug",
+      "category": "vietnamese",
+      "expected": {
+        "actions": [
+          "suggest"
+        ],
+        "capabilities": [
+          "engineering.investigate"
+        ]
+      },
+      "status": "completed",
+      "latencyMs": 260.76074999999946,
+      "decision": {
+        "action": "escalate",
+        "capabilities": [],
+        "evidenceMessageIds": [
+          "latest"
+        ],
+        "reason": "The latest message needs clarification or deeper reasoning.",
+        "assessment": {
+          "model": "jev-1.14.0",
+          "targetMessageId": "latest",
+          "requestsAgentWork": 0.98,
+          "assistanceUseful": 0.86,
+          "needsDeeperReasoning": 0.38,
+          "capabilityRelevance": {
+            "writing.summarize": 0.05,
+            "engineering.investigate": 0.99
+          }
+        }
+      },
+      "correct": false
+    },
+    {
+      "id": "vi-thanks",
+      "category": "vietnamese",
+      "expected": {
+        "actions": [
+          "ignore"
+        ],
+        "capabilities": []
+      },
+      "status": "completed",
+      "latencyMs": 272.12445800000023,
+      "decision": {
+        "action": "ignore",
+        "capabilities": [],
+        "evidenceMessageIds": [
+          "latest"
+        ],
+        "reason": "The latest message does not call for agent assistance.",
+        "assessment": {
+          "model": "jev-1.14.0",
+          "targetMessageId": "latest",
+          "requestsAgentWork": 0.16,
+          "assistanceUseful": 0.02,
+          "needsDeeperReasoning": 0.03,
+          "capabilityRelevance": {
+            "writing.summarize": 0.05,
+            "engineering.investigate": 0.02
+          }
+        }
+      },
+      "correct": true
+    },
+    {
+      "id": "vi-postponed",
+      "category": "vietnamese",
+      "expected": {
+        "actions": [
+          "ignore"
+        ],
+        "capabilities": []
+      },
+      "status": "completed",
+      "latencyMs": 269.83925,
+      "decision": {
+        "action": "ignore",
+        "capabilities": [],
+        "evidenceMessageIds": [
+          "latest"
+        ],
+        "reason": "The latest message does not call for agent assistance.",
+        "assessment": {
+          "model": "jev-1.14.0",
+          "targetMessageId": "latest",
+          "requestsAgentWork": 0.02,
+          "assistanceUseful": 0.04,
+          "needsDeeperReasoning": 0.06,
+          "capabilityRelevance": {
+            "writing.summarize": 0.11,
+            "engineering.investigate": 0.02
+          }
+        }
+      },
+      "correct": true
+    },
+    {
+      "id": "ungranted-skill",
+      "category": "capability-boundary",
+      "expected": {
+        "actions": [
+          "clarify"
+        ],
+        "capabilities": []
+      },
+      "status": "completed",
+      "latencyMs": 280.4270830000005,
+      "decision": {
+        "action": "escalate",
+        "capabilities": [],
+        "evidenceMessageIds": [
+          "latest"
+        ],
+        "reason": "The latest message needs clarification or deeper reasoning.",
+        "assessment": {
+          "model": "jev-1.14.0",
+          "targetMessageId": "latest",
+          "requestsAgentWork": 0.98,
+          "assistanceUseful": 0.25,
+          "needsDeeperReasoning": 0.79,
+          "capabilityRelevance": {
+            "writing.summarize": 0.08
+          }
+        }
+      },
+      "correct": false
+    },
+    {
+      "id": "new-topic",
+      "category": "context",
+      "expected": {
+        "actions": [
+          "ignore"
+        ],
+        "capabilities": []
+      },
+      "status": "completed",
+      "latencyMs": 259.72870799999964,
+      "decision": {
+        "action": "ignore",
+        "capabilities": [],
+        "evidenceMessageIds": [
+          "latest"
+        ],
+        "reason": "The latest message does not call for agent assistance.",
+        "assessment": {
+          "model": "jev-1.14.0",
+          "targetMessageId": "latest",
+          "requestsAgentWork": 0.03,
+          "assistanceUseful": 0.02,
+          "needsDeeperReasoning": 0.05,
+          "capabilityRelevance": {
+            "writing.summarize": 0.03,
+            "engineering.investigate": 0.01
+          }
+        }
+      },
+      "correct": true
+    }
+  ]
+}

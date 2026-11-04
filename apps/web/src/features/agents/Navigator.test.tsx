@@ -1,3 +1,4 @@
+import userEvent from '@testing-library/user-event';
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { NavigatorSuggestions, NavigatorSettings } from './Navigator.js';
@@ -26,8 +27,8 @@ describe('Navigator in a thread',()=>{
   vi.mocked(request).mockImplementation(async(_path,body)=>body??{can_manage:true,settings:{mode:'rules',rules:[],daily_token_limit:10000,cooldown_seconds:300},candidates:[candidate]});
   render(<NavigatorSettings channel="c1" onCandidates={()=>{}} />);
   fireEvent.click(screen.getByRole('button',{name:'Navigator settings'}));
-  expect((await screen.findByLabelText('Navigation mode') as HTMLSelectElement).value).toBe('rules');
-  fireEvent.change(screen.getByLabelText('Navigation mode'),{target:{value:'semantic'}});
+  expect((await screen.findByLabelText('Navigation mode')).textContent).toBe('Rules only · no model calls');
+  await userEvent.click(screen.getByLabelText('Navigation mode')); await userEvent.click(screen.getByRole('option', { name: 'Rules + optional model providers' }));
   fireEvent.click(screen.getByRole('button',{name:'Save Navigator settings'}));
   await waitFor(()=>expect(vi.mocked(request).mock.calls.some(c=>c[0]==='/channels/c1/navigator'&&(c[1] as any)?.mode==='semantic')).toBe(true));
  });

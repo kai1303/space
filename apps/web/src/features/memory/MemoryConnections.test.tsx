@@ -15,7 +15,7 @@ it('creates a scoped MCP key, shows configuration once, and revokes it', async (
   render(<MemoryConnections channel="first" enabled />);
   await screen.findByText('No MCP connections yet.');
   fireEvent.change(screen.getByRole('textbox', { name: 'Agent or Navigator name' }), { target: { value: 'Navigator' } });
-  await userEvent.selectOptions(screen.getByRole('combobox', { name: 'MCP access' }), 'write');
+  await userEvent.click(screen.getByRole('combobox', { name: 'MCP access' })); await userEvent.click(await screen.findByRole('option', { name: 'Read conversations, read and write memory', exact: true }));
   await userEvent.click(screen.getByRole('button', { name: 'Create MCP key' }));
   const config = await screen.findByRole('textbox', { name: 'MCP client configuration' });
   expect((config as HTMLTextAreaElement).value).toContain('/mcp/memory');
@@ -73,12 +73,13 @@ it('sets agent memory permission separately and binds contribute-only keys to th
   }));
   render(<MemoryConnections channel="first" enabled />);
   const permission = await screen.findByRole('combobox', { name: 'Memory access for Research agent' });
-  expect((permission as HTMLSelectElement).value).toBe('none');
-  await userEvent.selectOptions(permission, 'contribute');
+  expect(permission.textContent).toBe('No memory access');
+  await userEvent.click(permission); await userEvent.click(await screen.findByRole('option', { name: 'Read and contribute knowledge', exact: true }));
   await screen.findByText('Memory permission updated.');
-  await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Bind key to installation' }), 'agent-1');
-  await userEvent.selectOptions(screen.getByRole('combobox', { name: 'MCP access' }), 'contribute');
+  await userEvent.click(screen.getByRole('combobox', { name: 'Bind key to installation' })); await userEvent.click(await screen.findByRole('option', { name: 'Research agent', exact: true }));
+  await userEvent.click(screen.getByRole('combobox', { name: 'MCP access' }));
   expect(screen.queryByRole('option', { name: 'Read conversations, read and write memory' })).toBeNull();
+  await userEvent.click(await screen.findByRole('option', { name: 'Read and add source-backed knowledge', exact: true }));
   await userEvent.click(screen.getByRole('button', { name: 'Create MCP key' }));
   await screen.findByRole('textbox', { name: 'MCP client configuration' });
   expect(calls[0]).toEqual({ path: '/v1/channels/first/memory/agents/agent-1', body: { access: 'contribute' } });

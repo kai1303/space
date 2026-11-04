@@ -5,7 +5,7 @@ import type { NavigationContext } from '@space/contracts';
 import { JevNavigatorProvider } from '@space/core/jev-navigator';
 import { createNavigatorProviders } from '@space/core/navigator-providers';
 const context:NavigationContext={pendingMessageIds:['m3'],messages:[{id:'m1',text:'We need a launch summary.'},{id:'m2',text:'Should we ask Writer to prepare it?'},{id:'m3',text:'Yes, please do that.'}],candidates:[{installation_id:'writer',name:'Writer',skill:'writing.summarize',description:'Summarize conversations'},{installation_id:'debug',name:'Debug',skill:'engineering.investigate',description:'Investigate failures'}],rules:[]};
-function response(values:Record<string,number>={}){return {model:'jev-1.14.0',answers:Object.fromEntries(Object.entries({requests_agent_work:.97,assistance_useful:.98,needs_deeper_reasoning:.05,capability_0:.95,capability_1:.02,...values}).map(([id,noul])=>[id,{type:'noul',noul}])),usage:{input_tokens:450,output_tokens:30}};}
+function response(values:Record<string,number>={}){return {model:'jev-1.14.0',answers:Object.fromEntries(Object.entries({requests_agent_work:.97,task_clear:.98,continues_existing_work:.05,capability_0:.95,capability_1:.02,...values}).map(([id,noul])=>[id,{type:'noul',noul}])),usage:{input_tokens:450,output_tokens:30}};}
 async function fixture(t:{after:(fn:()=>void)=>void},handler:(req:IncomingMessage,res:ServerResponse)=>void){const s=createServer(handler);await new Promise<void>(r=>s.listen(0,'127.0.0.1',r));t.after(()=>{s.closeAllConnections();s.close();});return `http://127.0.0.1:${(s.address() as {port:number}).port}/v1/systemone`;}
 function provider(body:unknown){return new JevNavigatorProvider({apiKey:'fixture-key',fetch:async()=>new Response(JSON.stringify(body))});}
 
@@ -20,23 +20,25 @@ test('native Jev sends history and last human message separately, with independe
  assert.equal(request.messages,undefined);assert.equal(request.max_tokens,undefined);assert.equal(result.inputTokens,450);assert.equal(result.outputTokens,30);
  assert.ok(p.estimateTokens(context,1)>=Buffer.byteLength(JSON.stringify(request)));
 });
-test('useful assistance is distinct from an explicit request, and capabilities are independently selected',async()=>{
- const result=await provider(response({requests_agent_work:.02,assistance_useful:.98,capability_0:.9,capability_1:.8})).decide(context,1,new AbortController().signal);
- assert.equal(result.decision.action,'suggest');assert.equal(result.decision.assessment?.requestsAgentWork,.02);assert.deepEqual(result.decision.capabilities,['writing.summarize','engineering.investigate']);
- const ignored=await provider(response({requests_agent_work:.01,assistance_useful:.05,capability_0:.99})).decide({...context,messages:[{id:'m3',text:'What can Writer do?'}]},1,new AbortController().signal);assert.equal(ignored.decision.action,'ignore');
+test('only clear new execution requests suggest, even when several capabilities are relevant',async()=>{
+ const result=await provider(response({capability_0:.9,capability_1:.8})).decide({...context,messages:[{id:'m3',text:'Investigate the outage, then summarize the verified root cause.'}]},1,new AbortController().signal);
+ assert.equal(result.decision.action,'suggest');assert.deepEqual(result.decision.capabilities,['writing.summarize','engineering.investigate']);
+ assert.equal(result.decision.assessment?.version,'execution-intent-v1');
 });
-test('uncertain intent, unclear capability and complex work escalate instead of guessing',async()=>{
- const cases:Record<string,number>[]=[{requests_agent_work:.5,assistance_useful:.5},{needs_deeper_reasoning:.9},{capability_0:.5,capability_1:.4}];
- for(const values of cases)assert.equal((await provider(response(values)).decide(context,1,new AbortController().signal)).decision.action,'escalate');
+test('discussion, uncertainty and existing work stay quiet without escalation',async()=>{
+ const cases:Record<string,number>[]=[{requests_agent_work:.02},{requests_agent_work:.5},{task_clear:.5},{task_clear:.1},{continues_existing_work:.9},{continues_existing_work:.4},{capability_0:.5,capability_1:.4}];
+ for(const values of cases)assert.equal((await provider(response(values)).decide(context,1,new AbortController().signal)).decision.action,'ignore');
+ const unavailable=await provider(response({capability_0:.02,capability_1:.01})).decide(context,1,new AbortController().signal);
+ assert.equal(unavailable.decision.action,'clarify');
 });
 test('targets only the last pending human message and rejects missing, agent or ambiguous targets before HTTP',async()=>{
  let calls=0;const p=new JevNavigatorProvider({apiKey:'fixture',fetch:async()=>{calls++;return new Response(JSON.stringify(response()));}});
- for(const invalid of [{...context,pendingMessageIds:['missing']},{...context,messages:[...context.messages,{id:'m3',text:'duplicate'}]},{...context,messages:context.messages.map(m=>m.id==='m3'?{...m,author:{kind:'agent' as const,id:'writer'}}:m)}])await assert.rejects(p.decide(invalid,1,new AbortController().signal));
+ for(const invalid of [{...context,messages:context.messages.map(m=>({...m,truncated:true}))},{...context,pendingMessageIds:['missing']},{...context,messages:[...context.messages,{id:'m3',text:'duplicate'}]},{...context,messages:context.messages.map(m=>m.id==='m3'?{...m,author:{kind:'agent' as const,id:'writer'}}:m)}])await assert.rejects(p.decide(invalid,1,new AbortController().signal));
  await assert.rejects(p.decide(context,2,new AbortController().signal));assert.equal(calls,0);
 });
 test('malformed probabilities, missing answers, invalid usage and secrets in errors fail closed',async()=>{
  const bad=response();delete (bad.answers as any).capability_0;
- for(const body of [response({requests_agent_work:1.1}),response({capability_0:-1}),response({assistance_useful:NaN}),bad,{...response(),usage:{input_tokens:-1,output_tokens:0}},{secret:'secret-response'}])await assert.rejects(provider(body).decide(context,1,new AbortController().signal),e=>!String(e).includes('secret-response'));
+ for(const body of [response({requests_agent_work:1.1}),response({capability_0:-1}),response({task_clear:NaN}),bad,{...response(),usage:{input_tokens:-1,output_tokens:0}},{secret:'secret-response'}])await assert.rejects(provider(body).decide(context,1,new AbortController().signal),e=>!String(e).includes('secret-response'));
 });
 test('provider configuration is explicit, default remains rules-compatible, and Jev cannot occupy Level 2',()=>{
  assert.deepEqual(createNavigatorProviders({}),{});assert.deepEqual(createNavigatorProviders({TYPESAFE_API_KEY:'unused'}),{});
@@ -79,4 +81,16 @@ test('Jev receives working memory as reference data while keeping the last messa
   assert.deepEqual(request.state.working_memory,workingMemory);
   assert.equal(request.state.last_message.id,'m3');
   assert.deepEqual(request.state.history,context.messages.slice(0,2));
+});
+
+test('Jev receives bounded pending proposals and work status as reference data',async()=>{
+ let request:any;let calls=0;
+ const p=new JevNavigatorProvider({apiKey:'fixture',fetch:async(_url,init)=>{calls++;request=JSON.parse(String(init?.body));return new Response(JSON.stringify(response()));}});
+ const workState={pendingProposals:[{id:'proposal',goal:'Summarize the launch',capabilities:['writing.summarize']}],tasks:[{id:'task',goal:'Investigate outage',skill:'engineering.investigate',status:'completed'}],sessions:[{id:'session',title:'Outage investigation',skill:'engineering.investigate',state:'ended'}]};
+ await p.decide({...context,workState},1,new AbortController().signal);
+ assert.deepEqual(request.state.work_state,workState);
+ assert.equal(request.questions.assistance_useful,undefined);assert.equal(request.questions.needs_deeper_reasoning,undefined);
+ assert.match(request.questions.task_clear.instructions,/proposal/);
+ await assert.rejects(p.decide({...context,workState:{...workState,tasks:Array(9).fill(workState.tasks[0])}},1,new AbortController().signal));
+ assert.equal(calls,1);
 });

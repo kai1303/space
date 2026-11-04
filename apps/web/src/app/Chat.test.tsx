@@ -61,7 +61,7 @@ vi.mock('@tanstack/react-virtual', () => ({ useVirtualizer: (options: any) => {
   getVirtualItems: () => Array.from({ length: options.count }, (_, index) => ({ index, key: options.getItemKey(index), start: index * 100 + 44 })),
   measureElement: () => {}, scrollToEnd: () => {}, scrollToIndex: () => {},
 }; } }));
-const mocks = vi.hoisted(() => ({ sockets: [] as any[], sessionId: 'session-a', refetch: vi.fn(), upload: vi.fn(), sendFailures: 0, pendingSend: undefined as undefined | Promise<void>, timelineRenders: 0, badgeOverride: false, setBadge: undefined as undefined | ((count:number)=>void) }));
+const mocks = vi.hoisted(() => ({ sockets: [] as any[], sessionId: 'session-a', authPending: false, refetch: vi.fn(), upload: vi.fn(), sendFailures: 0, pendingSend: undefined as undefined | Promise<void>, timelineRenders: 0, badgeOverride: false, setBadge: undefined as undefined | ((count:number)=>void) }));
 const latestChatSocket = () => mocks.sockets.at(-1);
 vi.mock('../features/files/assets.js', () => ({ uploadAsset: mocks.upload }));
 vi.mock('../features/notifications/Notifications.js', async original => {
@@ -73,19 +73,19 @@ vi.mock('../features/notifications/Notifications.js', async original => {
     return mocks.badgeOverride ? count : delivered;
   } };
 });
-vi.mock('../features/auth/auth-client.js', () => ({ authClient: { useSession: () => ({ data: { user: { id: 'user', name: 'Kai' }, session: { id: mocks.sessionId } }, isPending: false, error: null, refetch: mocks.refetch }), signOut: vi.fn() } }));
+vi.mock('../features/auth/auth-client.js', () => ({ authClient: { useSession: () => ({ data: { user: { id: 'user', name: 'Kai' }, session: { id: mocks.sessionId } }, isPending: mocks.authPending, error: null, refetch: mocks.refetch }), signOut: vi.fn() } }));
 vi.mock('socket.io-client', () => ({ io: () => {
   const handlers = new Map<string, (...args: any[]) => void>();
   const client = { connected: false, off: (name: string, fn: (...args: any[]) => void) => { if (handlers.get(name) === fn) handlers.delete(name); }, on: (name: string, handler: (...args: any[]) => void) => handlers.set(name, handler),
     connect: () => { client.connected = true; handlers.get('connect')?.(); },
     disconnect: vi.fn(() => { client.connected = false; }),
     requests: [] as any[],
-    timeout: () => ({ emitWithAck: async (name: string, data: any) => { client.requests.push({ name, data }); if (name === 'message.send' && mocks.pendingSend) await mocks.pendingSend; if (name === 'message.send' && mocks.sendFailures-- > 0) throw new Error('timed out'); return { data: name === 'message.send' ? { ...paginatedMessage(data.text, '1000', data.thread_id ?? data.client_message_id), id: data.client_message_id, client_message_id: data.client_message_id, document: data.document, thread_root_id: data.thread_id ? 'Send review root' : data.client_message_id } : data }; } }),
+    timeout: () => ({ emitWithAck: async (name: string, data: any) => { client.requests.push({ name, data }); if (name === 'call.subscribe') return {data:{call:null,config:{iceServers:[],iceTransportPolicy:'all',hasTurn:false}}}; if (name === 'message.send' && mocks.pendingSend) await mocks.pendingSend; if (name === 'message.send' && mocks.sendFailures-- > 0) throw new Error('timed out'); return { data: name === 'message.send' ? { ...paginatedMessage(data.text, '1000', data.thread_id ?? data.client_message_id), id: data.client_message_id, client_message_id: data.client_message_id, document: data.document, thread_root_id: data.thread_id ? 'Send review root' : data.client_message_id } : data }; } }),
     receive: (name: string, ...args: any[]) => handlers.get(name)?.(...args),
   };
   mocks.sockets.push(client); return client;
 } }));
-afterEach(() => { localStorage.removeItem('space:composer-drafts:user'); cleanup(); localStorage.clear(); vi.unstubAllGlobals(); mocks.sockets.length = 0; mocks.upload.mockReset(); mocks.sendFailures = 0; mocks.pendingSend = undefined; mocks.badgeOverride = false; mocks.setBadge = undefined; });
+afterEach(() => { localStorage.removeItem('space:composer-drafts:user'); cleanup(); localStorage.clear(); vi.unstubAllGlobals(); mocks.sockets.length = 0; mocks.upload.mockReset(); mocks.sendFailures = 0; mocks.pendingSend = undefined; mocks.badgeOverride = false; mocks.setBadge = undefined; mocks.authPending = false; });
 beforeAll(() => {
   Object.defineProperties(Range.prototype, {
     getBoundingClientRect: { configurable: true, value: () => new DOMRect() },
@@ -353,9 +353,11 @@ it('shows loading instead of empty states and clears the old workspace before th
   expect(mocks.sockets).toHaveLength(1);
   expect(screen.queryByRole('heading', { name: 'A place for every conversation' })).toBeNull();
   expect(screen.queryByText('No conversations found.')).toBeNull();
-  expect(screen.getByRole('status', { name: 'Loading workspace' })).toBeTruthy();
+  expect(screen.getByRole('status', { name: 'Loading workspace' }).classList.contains('sp-sr-only')).toBe(true);
+  expect(screen.getByText('Loading conversations…').classList.contains('sp-sr-only')).toBe(true);
+  expect(document.querySelector('.chat-conversation-skeleton')).toBeTruthy();
   await act(async () => { finishChannels({ items: [{ id: 'second', name: 'second', workspace_id: 'b', joined: true }], next_cursor: null }); });
-  expect(screen.getByRole('status', { name: 'Loading messages' })).toBeTruthy();
+  expect(screen.getByRole('status', { name: 'Loading messages' }).classList.contains('sp-sr-only')).toBe(true);
   expect(screen.queryByRole('heading', { name: 'Opening #second' })).toBeNull();
   await act(async () => { finishHistory(history('second')); });
   const historyMessage = await screen.findByText('History second');
@@ -772,6 +774,31 @@ function mockPaginatedChat(history: (path: string) => MessagePage | Promise<Mess
     return [];
   } })));
 }
+it('updates the Starred sidebar immediately after starring and unstarring without a pushed event', async () => {
+  mockPaginatedChat(() => messagePage());
+  const fallback = vi.mocked(fetch).getMockImplementation()!;
+  let active = false;
+  vi.mocked(fetch).mockImplementation(async (input, init) => {
+    const path = String(input);
+    if (!path.includes('/hub/starred')) return fallback(input, init);
+    if (init?.body) active = JSON.parse(String(init.body)).active;
+    return { ok: true, json: async () => path.includes('/starred/') ? { active } : { items: active ? [{ id: 'first', name: 'first', kind: 'channel', private: false }] : [], next_cursor: null } } as Response;
+  });
+  render(<Chat />);
+  const editor = await screen.findByRole('textbox', { name: 'Message first' });
+  const section = screen.getByRole('button', { name: 'Starred', exact: true }).closest('section')!;
+  expect(within(section).queryByRole('button', { name: 'first', exact: true })).toBeNull();
+  await userEvent.click(screen.getByRole('button', { name: 'Star conversation', exact: true }));
+  await screen.findByRole('button', { name: 'Unstar conversation', exact: true });
+  await within(section).findByRole('button', { name: 'first', exact: true });
+  expect(screen.getAllByRole('button', { name: 'first', exact: true })).toHaveLength(1);
+  expect(screen.getByRole('textbox', { name: 'Message first' })).toBe(editor);
+  await userEvent.click(screen.getByRole('button', { name: 'Unstar conversation', exact: true }));
+  await screen.findByRole('button', { name: 'Star conversation', exact: true });
+  await waitFor(() => expect(within(section).queryByRole('button', { name: 'first', exact: true })).toBeNull());
+  expect(screen.getByRole('button', { name: 'first', exact: true })).toBeTruthy();
+  expect(screen.getByRole('textbox', { name: 'Message first' })).toBe(editor);
+});
 function mockUnreadChat() {
   const root = { ...paginatedMessage('Unread hello', '1'), author: { kind: 'human' as const, id: 'other', name: 'Teammate' } };
   const snapshot = { workspace_id: 'workspace', channels: [
@@ -1436,6 +1463,20 @@ it('updates incoming messages without replacing existing rows or the composer',a
  console.log('RENDER_INCOMING',JSON.stringify({historyPasses:mocks.timelineRenders-before,existingRowReused:true,composerReused:true}));
 });
 
+it('uses a skeleton with a screen-reader announcement during the initial session check',()=>{
+ mocks.authPending=true;const view=render(<Chat/>);
+ expect(screen.getByText('Opening your workspace…').classList.contains('sp-sr-only')).toBe(true);
+ expect(view.container.querySelector('.chat-conversation-skeleton')).toBeTruthy();
+});
+it('uses a skeleton with a screen-reader announcement while workspaces are loading',async()=>{
+ let finish!:(value:unknown)=>void;const pending=new Promise(resolve=>{finish=resolve;});
+ vi.stubGlobal('fetch',vi.fn(async(path:string)=>({ok:true,json:async()=>path.startsWith('/v1/workspaces?')?pending:[]})));
+ const view=render(<Chat/>);
+ expect((await screen.findByText('Loading workspaces…')).classList.contains('sp-sr-only')).toBe(true);
+ expect(view.container.querySelector('.chat-conversation-skeleton')).toBeTruthy();
+ view.unmount();await act(async()=>{finish({items:[],next_cursor:null});await pending;});
+});
+
 it('searches the whole workspace from a hub and opens an older cross-channel message', async () => {
   mockPaginatedChat(() => messagePage([paginatedMessage('Latest message', '5')]));
   const original = vi.mocked(fetch).getMockImplementation()!;
@@ -1478,4 +1519,46 @@ it('opens an indexed reply outside loaded channel history with fresh source auth
   await within(source).findByText('Authorized old reply');
   expect(screen.getByRole('region', { name: 'Thread', exact: true })).toBeTruthy();
   expect(vi.mocked(fetch).mock.calls.some(([url]) => String(url).includes('channel_id=first'))).toBe(true);
+});
+
+it('selects multiple messages and opens a private sidekick handoff without posting to the channel',async()=>{
+ const rows=[paginatedMessage('First selected message','1'),paginatedMessage('Second selected message','2','another-thread')];
+ mockPaginatedChat(()=>messagePage(rows));
+ const fallback=vi.mocked(fetch).getMockImplementation()!;
+ vi.mocked(fetch).mockImplementation(async(input,init)=>{
+  const path=String(input);
+  if(path.endsWith('/sidekick-agents'))return {ok:true,json:async()=>[{id:'mine',name:'My Codex',owner_id:'user',enabled:true,capabilities:{skills:['codex.run'],persistent_sessions:true}}]} as Response;
+  if(path.endsWith('/sidekick-sessions'))return {ok:true,json:async()=>({items:[],next_cursor:null})} as Response;
+  return fallback(input,init);
+ });
+ render(<Chat/>);await screen.findByText(rows[0]!.text);
+ const message=screen.getByText(rows[0]!.text).closest('.chat-message-anchor')!;
+ await userEvent.click(within(message as HTMLElement).getByRole('button',{name:'More actions',exact:true}));
+ await userEvent.click(await screen.findByRole('menuitem',{name:'Select message',exact:true}));
+ await userEvent.click(screen.getByRole('checkbox',{name:/Select message from Kai: Second selected/}));
+ expect(screen.getByText('2 selected')).toBeTruthy();
+ await userEvent.click(within(screen.getByRole('region',{name:'Selected messages'})).getByRole('button',{name:'Discuss with agent'}));
+ const panel=await screen.findByRole('region',{name:'My sidekick'});
+ await within(panel).findByText(/2 selected messages/);
+ expect(latestChatSocket().requests.some((request:any)=>request.name==='message.send')).toBe(false);
+ await userEvent.click(within(panel).getByRole('button',{name:'Close my sidekick'}));
+ expect(screen.queryByRole('checkbox')).toBeNull();
+});
+
+it('hands off the whole thread by ID instead of only its loaded messages',async()=>{
+ const root=paginatedMessage('Whole thread source','1');mockPaginatedChat(()=>messagePage([root],{has_older:true}));
+ const fallback=vi.mocked(fetch).getMockImplementation()!;
+ vi.mocked(fetch).mockImplementation(async(input,init)=>{
+  const path=String(input);
+  if(path.endsWith('/sidekick-agents'))return {ok:true,json:async()=>[]} as Response;
+  if(path.endsWith('/sidekick-sessions'))return {ok:true,json:async()=>({items:[],next_cursor:null})} as Response;
+  return fallback(input,init);
+ });
+ render(<Chat/>);await screen.findByText(root.text);
+ await userEvent.click(screen.getByRole('button',{name:'Reply to Kai'}));
+ const thread=await screen.findByRole('region',{name:'Thread',exact:true});
+ await userEvent.click(within(thread).getByRole('button',{name:'Discuss with agent'}));
+ const panel=await screen.findByRole('region',{name:'My sidekick'});
+ await within(panel).findByText(/The whole thread will be attached/);
+ expect(screen.queryByRole('region',{name:'Thread',exact:true})).toBeNull();
 });

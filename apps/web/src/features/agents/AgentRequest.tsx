@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState, type FormEvent } from 'react';
-import { Button } from '@space/ui/primitives';
+import { Select, Button } from '@space/ui/primitives';
 import { Reveal } from '@space/ui/motion';
 import { Sparkle } from '@phosphor-icons/react';
 import type { AgentInstallation, ChannelAgent, NavigatorCandidate } from '@space/contracts';
@@ -59,12 +59,13 @@ export function AgentRequest({ workspace, channel, thread, agents, onCandidates 
   return <section className="chat-agent-request"><button type="button" className="chat-agent-toggle" aria-expanded={open} aria-controls={id} onClick={() => setOpen(value => !value)}><Sparkle size={16} /> Ask an agent</button><Reveal open={open} id={id}>
     {!loaded && <p role="status">Loading agents…</p>}
     {error && <p role="alert">{error}</p>}
-    {local.flatMap(agent => agent.skills.map(skill => {
+    {local.filter(agent => agent.inherits_owner_access).map(agent => <p key={agent.id}><small>{agent.name} inherits your conversation access.</small></p>)}
+    {local.filter(agent => !agent.inherits_owner_access).flatMap(agent => agent.skills.map(skill => {
       const enabled = agent.granted_skills.includes(skill), label = agent.skills.length === 1 ? agent.name : `${agent.name} · ${skill}`;
       return <div key={`${agent.id}|${skill}`}><small>{label} {enabled ? 'can receive approved tasks in this channel.' : 'is available. Enable it to receive approved tasks in this channel.'}</small><Button size="sm" variant="ghost" disabled={busy} aria-label={`${enabled ? 'Disable' : 'Enable'} ${label} in this channel`} onClick={() => void enable(agent, skill, !enabled)}>{enabled ? 'Disable in this channel' : 'Enable in this channel'}</Button></div>;
     }))}
     {loaded && choices.length > 0 ? <form onSubmit={submit}>
-      <label>Agent and skill<select required value={selection} onChange={event => setSelection(event.target.value)}><option value="">Choose a skill</option>{choices.flatMap(agent => agent.capabilities.skills.map(skill => <option key={`${agent.id}|${skill}`} value={`${agent.id}|${skill}`}>{candidates.find(candidate => candidate.installation_id === agent.id)?.name ?? agent.connector_id} · {skill}</option>))}</select></label>
+      <label>Agent and skill<Select aria-label="Agent and skill" required value={selection} onChange={event => setSelection(event.target.value)}><option value="">Choose a skill</option>{choices.flatMap(agent => agent.capabilities.skills.map(skill => <option key={`${agent.id}|${skill}`} value={`${agent.id}|${skill}`}>{candidates.find(candidate => candidate.installation_id === agent.id)?.name ?? agent.connector_id} · {skill}</option>))}</Select></label>
       <label>What should the agent do?<textarea required maxLength={4000} value={goal} onChange={event => setGoal(event.target.value)} /></label><small>The agent owner must approve this task before it runs.</small>
       <Button size="sm" type="submit" loading={busy}>Request task</Button>
     </form> : loaded && !local.length && !error && <p>No agents are available in this channel.</p>}

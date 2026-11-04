@@ -8,6 +8,7 @@
   ],
   "scripts": {
     "typecheck": "tsc -p tsconfig.json --noEmit",
+    "navigator:eval": "node --env-file-if-exists=../.env --import tsx evaluation/navigator-cli.ts",
     "test": "tsx --test --test-concurrency=4 contracts/*.test.ts integration/*.test.ts",
     "test:contracts": "tsx --test contracts/*.test.ts",
     "test:foundation": "tsx --test contracts/*.test.ts integration/foundation.test.ts",
@@ -16,27 +17,29 @@
     "test:auth": "tsx --test integration/auth.test.ts",
     "test:assets": "tsx --test integration/assets.test.ts storage/assets.test.ts",
     "test:search": "tsx --test contracts/search.test.ts contracts/typesense.test.ts integration/search.test.ts",
-    "test:search:e2e": "tsx --test e2e/search.test.ts"
+    "test:search:e2e": "tsx --test e2e/search.test.ts",
+    "test:calls": "tsx --test contracts/calling.test.ts integration/calling.test.ts integration/calling-realtime.test.ts",
+    "test:calls:e2e": "tsx --test e2e/calling.test.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/client": "2.4.0",
     "@space/contracts": "workspace:*",
     "@space/core": "workspace:*",
+    "@space/event-service": "workspace:*",
+    "@space/events": "workspace:*",
     "@space/mock": "workspace:*",
     "@space/postgres": "workspace:*",
     "@space/redis": "workspace:*",
     "@space/server": "workspace:*",
+    "nats": "2.29.3",
     "pg": "^8.23.1",
-    "socket.io-client": "^4.8.4",
-    "@space/events": "workspace:*",
-    "@space/event-service": "workspace:*",
-    "nats": "2.29.3"
+    "socket.io-client": "^4.8.4"
   },
   "devDependencies": {
+    "@playwright/test": "^1.64.1",
     "@types/node": "22",
     "@types/pg": "^8.23.1",
     "tsx": "^4.23.15",
-    "typescript": "^7.0.2",
-    "@playwright/test": "^1.64.1"
+    "typescript": "^7.0.2"
   }
 }

@@ -1,8 +1,17 @@
 export interface NavigatorCandidate { persistent_sessions?: boolean; installation_id: string; name: string; skill: string; description: string }
 export interface NavigatorRule { skill: string; keywords: string[] }
 export interface NavigationTask { id: string; title: string; capabilities: string[]; dependsOn: string[] }
-export interface NavigationAssessment {
-  model:string; targetMessageId:string; requestsAgentWork:number; assistanceUseful:number; needsDeeperReasoning:number; capabilityRelevance:Record<string,number>;
+interface AssessmentBase {
+  model:string; targetMessageId:string; requestsAgentWork:number; capabilityRelevance:Record<string,number>;
+}
+export type NavigationAssessment = AssessmentBase & (
+  | {version:'execution-intent-v1';workStateHash:string;taskClear:number;continuesExistingWork:number}
+  | {version?:never;assistanceUseful:number;needsDeeperReasoning:number}
+);
+export interface NavigationWorkState {
+  pendingProposals:{id:string;goal:string;capabilities:string[]}[];
+  tasks:{id:string;goal:string;skill:string;status:string}[];
+  sessions:{id:string;title:string;skill:string;state:string}[];
 }
 export interface NavigationDecision {
   assessment?:NavigationAssessment;
@@ -13,9 +22,10 @@ export interface NavigationDecision {
   tasks?: NavigationTask[];
 }
 export interface NavigationContext {
+  workState?: NavigationWorkState;
   workingMemory?: Pick<import('./thread-context.js').ThreadContext, 'root' | 'checkpoint'>;
   pendingMessageIds?: string[];
-  messages: { id: string; text: string; author?:{id:string;kind:'human'|'agent';name?:string} }[];
+  messages: { id: string; text: string; truncated?:boolean; author?:{id:string;kind:'human'|'agent';name?:string} }[];
   candidates: NavigatorCandidate[];
   rules: NavigatorRule[];
 }

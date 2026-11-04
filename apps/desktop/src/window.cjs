@@ -1,5 +1,5 @@
 const { BrowserWindow, dialog, shell } = require('electron');
-const { navigationAction, spaceUrl, isAssetDownload } = require('./policy.cjs');
+const { navigationAction, spaceUrl, isAssetDownload, mediaPermissionAllowed } = require('./policy.cjs');
 
 function createSpaceWindow(configuredUrl, { show = true } = {}) {
   const url = spaceUrl(configuredUrl);
@@ -12,9 +12,26 @@ function createSpaceWindow(configuredUrl, { show = true } = {}) {
       webSecurity: true, webviewTag: false,
     },
   });
-  // Permissions are opt-in product work; the initial shell needs none.
-  win.webContents.session.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
-  win.webContents.session.setPermissionCheckHandler(() => false);
+  const approvedMedia = new Set();
+  win.webContents.session.setPermissionRequestHandler((contents, permission, callback, details) => {
+    const origin = details.requestingUrl;
+    const types = details.mediaTypes || [];
+    if (contents !== win.webContents || !mediaPermissionAllowed(permission, origin, url, types)
+      || navigationAction(contents.getURL(), url) !== 'internal') { callback(false); return; }
+    if (types.length && types.every(type => approvedMedia.has(type))) { callback(true); return; }
+    void dialog.showMessageBox(win, {
+      type: 'question', message: 'Allow camera and microphone access for calls?',
+      detail: `${new URL(url).origin} is requesting ${types.join(' and ') || 'media'} access. You control your camera and microphone from the call panel.`,
+      buttons: ['Allow', 'Not now'], defaultId: 1, cancelId: 1,
+    }).then(({ response }) => {
+      const allowed = response === 0 && !win.isDestroyed() && navigationAction(contents.getURL(), url) === 'internal';
+      if (allowed) types.forEach(type => approvedMedia.add(type));
+      callback(allowed);
+    }).catch(() => callback(false));
+  });
+  win.webContents.session.setPermissionCheckHandler((contents, permission, origin, details) =>
+    contents === win.webContents && mediaPermissionAllowed(permission, origin, url)
+      && approvedMedia.has(details.mediaType));
   win.webContents.on('will-attach-webview', event => event.preventDefault());
 
   const openExternal = value => {

@@ -3,7 +3,7 @@
 .channel-memory p{margin:0}.channel-memory small{font-size:12px;color:var(--sp-text-secondary)}
 .channel-memory-heading,.channel-memory-actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
 .channel-memory-heading>span:last-child{color:var(--sp-text-secondary)}
-.channel-memory label{display:grid;gap:6px;font-weight:700}.channel-memory input,.channel-memory textarea,.channel-memory select{width:100%;min-width:0;border:1px solid var(--sp-border-strong);border-radius:5px;background:var(--sp-surface);color:var(--sp-text);padding:9px;font:inherit;box-sizing:border-box}
+.channel-memory label{display:grid;gap:6px;font-weight:700}.channel-memory input,.channel-memory textarea{width:100%;min-width:0;border:1px solid var(--sp-border-strong);border-radius:5px;background:var(--sp-surface);color:var(--sp-text);padding:9px;font:inherit;box-sizing:border-box}
 
 .channel-memory-empty,.channel-memory-selection,.channel-memory-import,.channel-memory-comparison{padding:14px;background:var(--sp-surface);border:1px solid var(--sp-border);border-radius:7px;display:grid;gap:10px;min-width:0}
 .channel-memory-settings,.channel-memory-editor,.channel-memory-sources{display:grid;gap:10px}

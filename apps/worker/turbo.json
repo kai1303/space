@@ -4,6 +4,7 @@
     "start": {
       "passThroughEnv": [
         "DATABASE_URL",
+        "NATS_URL",
         "NODE_ENV",
         "AG_UI_URL",
         "AG_UI_TOKEN",
@@ -15,6 +16,7 @@
     "dev": {
       "passThroughEnv": [
         "DATABASE_URL",
+        "NATS_URL",
         "NODE_ENV",
         "AG_UI_URL",
         "AG_UI_TOKEN",

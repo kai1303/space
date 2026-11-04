@@ -31,7 +31,7 @@ it('opens the right-pane composer and retries uncertain creates with one ID', as
 it('changes filters and sorting on the server rather than only filtering the loaded page',async()=>{
   fake(()=>({items:[todo],next_cursor:'older'})); render(<WorkspaceTodos workspace="w" onOpen={()=>{}}/>);
   await screen.findByRole('button',{name:'Review proposal'}); await userEvent.click(screen.getByRole('button',{name:'Filter'}));
-  await userEvent.selectOptions(screen.getByLabelText('To-do status'),'completed');
+  await userEvent.click(screen.getByLabelText('To-do status')); await userEvent.click(await screen.findByRole('option', { name: 'Completed', exact: true }));
   await waitFor(()=>expect(vi.mocked(fetch).mock.calls.some(([path])=>String(path).includes('status=completed'))).toBe(true));
   await userEvent.click(screen.getByRole('button',{name:'Sort'})); await userEvent.click(screen.getByRole('menuitem',{name:'Latest date created'}));
   await waitFor(()=>expect(vi.mocked(fetch).mock.calls.some(([path])=>String(path).includes('sort=newest'))).toBe(true));

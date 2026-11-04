@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import type { Pool } from 'pg';
 import { sql, eq, and } from 'drizzle-orm';
-import { AppError, record, text, uuid, type NavigatorCandidate, type NavigatorRule, type NavigationContext, type NavigationDecision, type NavigatorProvider, type RichDocument, type Task } from '@space/contracts';
-import { matchAgentMentions, rulesDecision, parseNavigationDecision } from '@space/core/navigator';
+import { AppError, record, text, uuid, type NavigatorCandidate, type NavigatorRule, type NavigationContext, type NavigationDecision, type NavigationWorkState, type NavigatorProvider, type RichDocument, type Task } from '@space/contracts';
+import { matchAgentMentions, rulesDecision, parseNavigationDecision, navigationWorkStateHash } from '@space/core/navigator';
 import { database, type DbSession } from './database.js';
 import { hasChannelAccess } from './access.js';
 import { readThreadContext } from './thread-context.js';
@@ -18,7 +18,7 @@ async function rows<T>(c:DbSession, query:Parameters<DbSession['execute']>[0]):P
 const empty=(reason:string):NavigationDecision=>({action:'ignore',capabilities:[],evidenceMessageIds:[],reason});
 
 // Quill puts block formatting on newline operations; a code/quote line is never an invocation.
-function routingText(message:Message):string {
+function routingText(message:Pick<Message,'text'|'document'>):string {
  if(!message.document)return message.text;
  let line='',visible='';
  for(const op of message.document.ops){const parts=op.insert.split('\n');for(let i=0;i<parts.length;i++){
@@ -42,17 +42,17 @@ export class NavigatorStore {
  }
  private async settings(c:DbSession,channel:string):Promise<Settings> {return (await rows<Settings>(c,sql`SELECT mode,rules,daily_token_limit,cooldown_seconds FROM navigator_settings WHERE channel_id=${channel}`))[0]??{...defaults};}
  private async catalog(c:DbSession,channel:string):Promise<NavigatorCandidate[]> {
-  const candidates=await rows<NavigatorCandidate & {owner_id:string;workspace_id:string}>(c,sql`SELECT i.id AS installation_id,coalesce(ac.name,d.name) AS name,g.skill,
-    coalesce(ac.name,d.name)||' supports '||g.skill AS description,i.owner_id,i.workspace_id,coalesce((d.capabilities->>'persistent_sessions')::boolean,false) AS persistent_sessions
+  const candidates=await rows<NavigatorCandidate & {owner_id:string;workspace_id:string}>(c,sql`SELECT i.id AS installation_id,coalesce(ac.name,d.name) AS name,skill.value AS skill,
+    coalesce(ac.name,d.name)||' supports '||skill.value AS description,i.owner_id,i.workspace_id,coalesce((d.capabilities->>'persistent_sessions')::boolean,false) AS persistent_sessions
     FROM agent_installations i JOIN agent_definitions d ON d.id=i.definition_id
-    JOIN agent_grants g ON g.installation_id=i.id AND g.workspace_id=i.workspace_id
+    CROSS JOIN LATERAL jsonb_array_elements_text(d.capabilities->'skills') AS skill(value)
     LEFT JOIN agent_connections ac ON ac.installation_id=i.id
-    JOIN channels ch ON ch.id=g.channel_id AND ch.workspace_id=i.workspace_id
-    WHERE g.channel_id=${channel} AND i.enabled AND ch.archived_at IS NULL
-    AND d.capabilities->'skills' ? g.skill ORDER BY i.id,g.skill LIMIT 100`);
-  const visible:NavigatorCandidate[]=[];
-  for(const candidate of candidates)if(await hasChannelAccess(c,candidate.owner_id,candidate.workspace_id,channel))visible.push({installation_id:candidate.installation_id,name:candidate.name,skill:candidate.skill,description:candidate.description,persistent_sessions:candidate.persistent_sessions});
-  return visible;
+    JOIN channels ch ON ch.id=${channel} AND ch.workspace_id=i.workspace_id
+    JOIN channel_members cm ON cm.channel_id=ch.id AND cm.workspace_id=i.workspace_id AND cm.user_id=i.owner_id
+    JOIN workspace_members wm ON wm.workspace_id=i.workspace_id AND wm.user_id=i.owner_id AND wm.active
+    WHERE i.enabled AND ac.revoked_at IS NULL AND ch.archived_at IS NULL
+    AND (ac.installation_id IS NOT NULL OR EXISTS(SELECT 1 FROM agent_grants g WHERE g.installation_id=i.id AND g.workspace_id=i.workspace_id AND g.channel_id=ch.id AND g.skill=skill.value)) ORDER BY i.id,skill.value LIMIT 100`);
+  return candidates.map(({installation_id,name,skill,description,persistent_sessions})=>({installation_id,name,skill,description,persistent_sessions}));
  }
  async read(actor:string,channel:string) {return sessionTransaction(this.db,async c=>{const ch=await this.channel(c,actor,channel);return {settings:await this.settings(c,channel),candidates:await this.catalog(c,channel),can_manage:await this.manager(c,actor,ch)};});}
  async configure(actor:string,channel:string,input:unknown) {
@@ -106,6 +106,13 @@ export class NavigatorStore {
    return {thread_id:queued.thread_id,last_sequence:queued.last_sequence,channel_id:thread!.channel_id,workspace_id:thread!.workspace_id,messages,settings:await this.settings(c,thread!.channel_id),candidates:await this.catalog(c,thread!.channel_id)};
   });
  }
+ private async workState(c:DbSession,job:Job):Promise<NavigationWorkState> {
+    // Only public origin tasks: private managed-session follow-up goals never enter channel routing.
+    const pendingProposals=await rows<NavigationWorkState['pendingProposals'][number]>(c,sql`SELECT id,left(goal,512) AS goal,decision->'capabilities' AS capabilities FROM navigator_suggestions WHERE channel_id=${job.channel_id} AND thread_id=${job.thread_id} AND status='pending' ORDER BY created_at DESC,id LIMIT 8`);
+    const tasks=await rows<NavigationWorkState['tasks'][number]>(c,sql`SELECT t.id,left(t.goal,512) AS goal,t.skill,t.status FROM tasks t WHERE t.workspace_id=${job.workspace_id} AND t.thread_id=${job.thread_id} AND (NOT EXISTS(SELECT 1 FROM agent_sessions a WHERE a.id=t.session_id AND a.managed) OR EXISTS(SELECT 1 FROM messages m WHERE m.channel_id=${job.channel_id} AND m.thread_id=${job.thread_id} AND m.task_id=t.id AND m.agent_session_id=t.session_id)) ORDER BY t.created_at DESC,t.id LIMIT 8`);
+    const sessions=await rows<NavigationWorkState['sessions'][number]>(c,sql`SELECT id,left(title,160) AS title,skill,state FROM agent_sessions WHERE workspace_id=${job.workspace_id} AND origin_thread_id=${job.thread_id} AND managed ORDER BY created_at DESC,id LIMIT 8`);
+    return {pendingProposals,tasks,sessions};
+ }
  private async infer(job:Job,context:NavigationContext,level:1|2):Promise<NavigationDecision|null> {
   const provider=level===1?this.providers.level1:this.providers.level2;if(!provider)return null;
   // Reserve conservatively; failed/unknown usage is charged too. Retries never repeat a paid call.
@@ -115,6 +122,14 @@ export class NavigatorStore {
    if(!live.length||!ch||ch.archived_at||(await this.settings(c,job.channel_id)).mode!=='semantic')return {call:false,result:null};
    for(const m of job.messages)if(!await hasChannelAccess(c,m.user_id,job.workspace_id,job.channel_id))return {call:false,result:null};
    context.candidates=await this.catalog(c,job.channel_id);if(!context.candidates.length)return {call:false,result:null};
+   if(provider.name==='jev'){
+    const ids=[...new Set([...context.messages.map(m=>m.id),...(context.workingMemory?.root?[context.workingMemory.root.id]:[])])];
+    const source=await rows<{id:string;text:string;document:RichDocument|null}>(c,sql`SELECT id,text,document FROM messages WHERE channel_id=${job.channel_id} AND thread_id=${job.thread_id} AND id IN (${sql.join(ids.map(id=>sql`${id}`),sql`,`)}) LIMIT 33`);
+    const visible=new Map(source.map(m=>[m.id,routingText(m)]));
+    context.messages=context.messages.map(m=>{const value=visible.get(m.id)??m.text;return {...m,text:value.slice(0,1000).replace(/[\uD800-\uDBFF]$/,''),truncated:value.length>1000};});
+    if(context.workingMemory?.root){const root=context.workingMemory.root;const value=visible.get(root.id)??root.text;context.workingMemory={...context.workingMemory,root:{...root,text:value.slice(0,1000).replace(/[\uD800-\uDBFF]$/,''),text_truncated:value.length>1000}};}
+    context.workState=await this.workState(c,job);
+   }
    let reserve:number;
    try{reserve=provider.estimateTokens?.(context,level)??Buffer.byteLength(JSON.stringify(context),'utf8')+3000+provider.maxOutputTokens;}catch{return {call:false,result:null};}
    if(!Number.isSafeInteger(reserve)||reserve<1||reserve>1000000)return {call:false,result:null};
@@ -125,7 +140,11 @@ export class NavigatorStore {
    if(usage!.tokens+reserve>(await this.settings(c,job.channel_id)).daily_token_limit)return {call:false,result:null};
    await c.execute(sql`INSERT INTO navigator_inferences(thread_id,through_sequence,level,channel_id,provider,model,reserved_tokens) VALUES(${job.thread_id},${through}::bigint,${level},${job.channel_id},${provider.name},${provider.model},${reserve})`);return {call:true,result:null};
   });
-  if(!allowed.call){try{return allowed.result?parseNavigationDecision(allowed.result,context):null;}catch{return null;}}
+  if(!allowed.call){try{
+   // Historical usefulness-based decisions remain readable, but must not route under the new policy.
+   if(provider.name==='jev'&&allowed.result?.assessment?.version!=='execution-intent-v1')return null;
+   return allowed.result?parseNavigationDecision(allowed.result,context):null;
+  }catch{return null;}}
   const started=Date.now();let decision:NavigationDecision|null=null,input:number|null=null,output:number|null=null,error:string|null=null;
   try {const controller=new AbortController();let timer:ReturnType<typeof setTimeout>|undefined;
    try {const result=await Promise.race([provider.decide(context,level,controller.signal),new Promise<never>((_,reject)=>{timer=setTimeout(()=>{controller.abort();reject(new Error('timeout'));},12000);})]);decision=parseNavigationDecision(result.decision,context);input=Number.isSafeInteger(result.inputTokens)&&result.inputTokens>=0?result.inputTokens:null;output=Number.isSafeInteger(result.outputTokens)&&result.outputTokens>=0?result.outputTokens:null;}finally{clearTimeout(timer);}
@@ -144,7 +163,10 @@ export class NavigatorStore {
    if(mention.mentioned){route='mention';if(mention.candidates.length===1)candidate=mention.candidates[0];else if(mention.candidates.length)decision={action:'suggest',capabilities:[...new Set(mention.candidates.map(x=>x.skill))].slice(0,8),evidenceMessageIds:[leading!.id],reason:'Choose which agent capability to use.'};else decision=empty('Mentioned agent unavailable or ambiguous');}
    else if(job.messages.length&&job.settings.mode!=='off') {
     const recent=await this.db.execute(sql`SELECT 1 FROM navigator_suggestions WHERE thread_id=${job.thread_id} AND created_at>now()-(${job.settings.cooldown_seconds}*interval '1 second') LIMIT 1`);
-    if(!recent.rows.length){route='rules';decision=rulesDecision({...context,messages:job.messages.map(m=>({id:m.id,text:m.routing_text??m.text}))});
+    if(!recent.rows.length){
+     const intentOnly=job.settings.mode==='semantic'&&this.providers.level1?.name==='jev';
+     route=intentOnly?'level1':'rules';
+     decision=intentOnly?empty('No clear new execution request'):rulesDecision({...context,messages:job.messages.map(m=>({id:m.id,text:m.routing_text??m.text}))});
      if(decision.action==='ignore'&&job.settings.mode==='semantic'){route='level1';decision=await this.infer(job,context,1)??decision;if(decision.action==='escalate'){route='level2';decision=await this.infer(job,context,2)??empty('Escalation provider unavailable');}}
     }
    }
@@ -156,6 +178,11 @@ export class NavigatorStore {
    const [channel]=await c.select().from(s.channels).where(eq(s.channels.id,job.channel_id));
    const [queue]=await rows<{thread_id:string}>(c,sql`SELECT thread_id FROM navigator_threads WHERE thread_id=${job.thread_id} AND last_sequence=${job.last_sequence}::bigint`);if(!queue)return;
    const liveSettings=await this.settings(c,job.channel_id);
+   if(decision.assessment?.version==='execution-intent-v1'&&['suggest','clarify'].includes(decision.action)){
+    const currentState=await this.workState(c,job);
+    const newer=await rows(c,sql`SELECT 1 FROM messages WHERE channel_id=${job.channel_id} AND thread_id=${job.thread_id} AND author_type='human' AND sequence>${job.messages.at(-1)!.sequence}::bigint LIMIT 1`);
+    if(newer.length||navigationWorkStateHash(currentState)!==decision.assessment.workStateHash)decision={...decision,action:'ignore',capabilities:[],reason:'Conversation or work state changed during classification.'};
+   }
    let authorized=!channel?.archived_at&&(route==='mention'||liveSettings.mode!=='off')&&(!route.startsWith('level')||liveSettings.mode==='semantic');
    for(const m of job.messages)if(!await hasChannelAccess(c,m.user_id,job.workspace_id,job.channel_id))authorized=false;
    const current=await this.catalog(c,job.channel_id);

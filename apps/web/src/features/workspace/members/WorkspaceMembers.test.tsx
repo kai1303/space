@@ -18,7 +18,7 @@ it('pairs a local Codex without repository or channel setup, and cancels an unus
   api.listAll.mockResolvedValue(humans);
   api.request.mockImplementation(async (path: string) => path === '/agents/connectors' ? defaultPairedConnectors : path.endsWith('agent-pairings') ? { id: 'pair', code: 'a'.repeat(32), expires_at: new Date(Date.now()+600_000).toISOString() } : { status: 'pending' });
   render(<WorkspaceMembers {...props} />);
-  await screen.findByText('Kai');
+  await screen.findByRole('button', { name: 'Connect Local Codex' });
   await userEvent.click(screen.getByRole('button', { name: 'Connect Local Codex' }));
   expect(api.request).toHaveBeenCalledWith('/workspaces/workspace/agent-pairings', {connector_id:'codex.local'});
   expect(await screen.findByLabelText('Pairing code')).toBeTruthy();
@@ -29,7 +29,7 @@ it('pairs a local Codex without repository or channel setup, and cancels an unus
   expect(api.request).toHaveBeenCalledWith('/agent-pairings/pair/cancel', {});
   await waitFor(() => expect(screen.queryByLabelText('Pairing code')).toBeNull());
 });
-it('shows humans and agents together, distinguishes offline/auth-required, and limits disconnect to owner', async () => {
+it('shows agent connections separately from people and limits disconnect to the owner', async () => {
   api.listAll.mockResolvedValue([...humans,
     { id: 'agent', name: 'Kai’s Codex', kind: 'agent', owner_id: 'kai', status: 'auth_required' },
     { id: 'other', name: 'Anna’s Codex', kind: 'agent', owner_id: 'anna', status: 'offline' }]);
@@ -38,6 +38,7 @@ it('shows humans and agents together, distinguishes offline/auth-required, and l
   await screen.findByText('Kai’s Codex');
   expect(screen.getByText(/Sign-in required/)).toBeTruthy();
   expect(screen.getByText('Offline')).toBeTruthy();
+  expect(screen.queryByText('Kai')).toBeNull();
   const disconnect = screen.getByRole('button', { name: 'Disconnect Kai’s Codex' });
   expect(screen.queryByRole('button', { name: 'Disconnect Anna’s Codex' })).toBeNull();
   await userEvent.click(disconnect);
@@ -47,7 +48,7 @@ it('displays creation failures and clears member identities when workspace chang
   api.listAll.mockResolvedValue(humans);
   api.request.mockImplementation(async (path:string) => { if(path === '/agents/connectors') return defaultPairedConnectors; throw new Error('rate_limited'); });
   const view = render(<WorkspaceMembers {...props} />);
-  await screen.findByText('Kai');
+  await screen.findByRole('button', { name: 'Connect Local Codex' });
   await userEvent.click(screen.getByRole('button', { name: 'Connect Local Codex' }));
   expect((await screen.findByRole('alert')).textContent).toContain('rate limited');
   api.listAll.mockResolvedValue([]);
@@ -89,7 +90,7 @@ it('offers a fresh code after expiry and unsubscribes when closed', async () => 
 it('ignores old workspace results and cancels pairing created after dialog closure', async () => {
   api.request.mockResolvedValue(defaultPairedConnectors);
   let resolveMembers!: (items: unknown[]) => void;
-  api.listAll.mockImplementation((path: string) => path.includes('/workspace/') ? new Promise(resolve => { resolveMembers = resolve; }) : Promise.resolve([{ id: 'anna', kind: 'human', name: 'Anna' }]));
+  api.listAll.mockImplementation((path: string) => path.includes('/workspace/') ? new Promise(resolve => { resolveMembers = resolve; }) : Promise.resolve([{ id: 'anna', kind: 'agent', name: 'Anna' }]));
   const view = render(<WorkspaceMembers {...props} />);
   view.rerender(<WorkspaceMembers {...props} workspace="other" />);
   await screen.findByText('Anna');
@@ -121,24 +122,59 @@ it('pairs Kiro with its own connector and local sign-in instructions', async () 
   api.listAll.mockResolvedValue(humans);
   api.request.mockImplementation(async (path:string) => path === '/agents/connectors' ? defaultPairedConnectors : { id: 'kiro-pair', provider: 'kiro', code: 'k'.repeat(32), expires_at: new Date(Date.now()+600000).toISOString() });
   render(<WorkspaceMembers {...props} />);
-  await screen.findByText('Kai');
-  await userEvent.selectOptions(screen.getByLabelText('Agent provider'), 'kiro.local');
+  await screen.findByRole('button', { name: 'Connect Local Codex' });
+  await userEvent.click(screen.getByRole('combobox', { name: 'Agent provider' }));
+  await userEvent.click(screen.getByRole('option', { name: 'Kiro' }));
   await userEvent.click(screen.getByRole('button', { name: 'Connect Local Kiro' }));
   expect(api.request).toHaveBeenCalledWith('/workspaces/workspace/agent-pairings', {connector_id:'kiro.local'});
   expect(screen.getByText(/pnpm connector --provider kiro --url/)).toBeTruthy();
   expect(screen.getByText(/Sign in to Kiro/)).toBeTruthy();
   expect(screen.queryByText(/Continue with ChatGPT/)).toBeNull();
-  expect((screen.getByLabelText('Agent provider') as HTMLSelectElement).disabled).toBe(true);
+  expect(screen.queryByRole('combobox', { name: 'Agent provider' })).toBeNull();
 });
 
 it('offers trusted registered connectors beyond built-in providers', async () => {
  api.listAll.mockResolvedValue(humans);
  api.request.mockImplementation(async (path:string) => path === '/agents/connectors' ? [{id:'research.local',definition_id:'research-definition',name:'Research',capabilities:{skills:['research.run'],controls:{},persistent_sessions:true}}] : {id:'research-pair',connector_id:'research.local',code:'r'.repeat(32),expires_at:new Date(Date.now()+600000).toISOString()});
  render(<WorkspaceMembers {...props}/>);
- await screen.findByRole('option',{name:'Research'});
- await userEvent.selectOptions(screen.getByLabelText('Agent provider'),'research.local');
- await userEvent.click(screen.getByRole('button',{name:'Connect Local Research'}));
+ await userEvent.click(await screen.findByRole('button',{name:'Connect Research'}));
  expect(api.request).toHaveBeenCalledWith('/workspaces/workspace/agent-pairings',{connector_id:'research.local'});
  expect(await screen.findByLabelText('Pairing code')).toBeTruthy();
  expect(screen.queryByText(/Continue with ChatGPT/)).toBeNull();
+});
+
+
+it('uses design-system dropdowns and shows a clear cloud setup boundary without creating a pairing', async () => {
+  api.listAll.mockResolvedValue(humans);
+  api.request.mockResolvedValue(defaultPairedConnectors);
+  render(<WorkspaceMembers {...props} />);
+  await screen.findByRole('combobox', { name: 'Agent provider' });
+  expect(screen.getByRole('dialog', { name: 'Connect an agent' })).toBeTruthy();
+  expect(screen.queryByText('Kai')).toBeNull();
+  expect(screen.getByRole('combobox', { name: 'Agent provider' }).tagName).toBe('BUTTON');
+  await userEvent.click(screen.getByRole('combobox', { name: 'Connection type' }));
+  await userEvent.click(screen.getByRole('option', { name: 'Cloud runner' }));
+  expect(screen.getByText('No cloud connectors configured')).toBeTruthy();
+  expect(screen.queryByRole('button', { name: /Connect Local/ })).toBeNull();
+  expect(api.request.mock.calls.some(([path]) => path.endsWith('agent-pairings'))).toBe(false);
+  await userEvent.click(screen.getByRole('combobox', { name: 'Connection type' }));
+  await userEvent.click(screen.getByRole('option', { name: 'Hosted endpoint' }));
+  expect(screen.getByText('Connect a hosted HTTP agent')).toBeTruthy();
+  expect(screen.queryByLabelText('Pairing code')).toBeNull();
+});
+
+it('preselects a registered cloud connector and gives remote instructions through pairing completion', async () => {
+  const cloud = {id:'research.cloud',definition_id:'research-definition',name:'Research',capabilities:{skills:['research.run'],controls:{},persistent_sessions:true}};
+  api.listAll.mockResolvedValue(humans);
+  api.request.mockImplementation(async (path:string) => path === '/agents/connectors' ? [...defaultPairedConnectors, cloud] : path.endsWith('agent-pairings') ? {id:'cloud-pair',connector_id:cloud.id,code:'r'.repeat(32),expires_at:new Date(Date.now()+600000).toISOString()} : {status:'claimed',installation_id:'cloud-agent'});
+  render(<WorkspaceMembers {...props} initialConnector="research.cloud" />);
+  await userEvent.click(await screen.findByRole('button', {name:'Connect Research'}));
+  expect(api.request).toHaveBeenCalledWith('/workspaces/workspace/agent-pairings', {connector_id:'research.cloud'});
+  expect(screen.getByText('Connect Research to your cloud runner')).toBeTruthy();
+  expect(screen.getByLabelText('Space URL')).toBeTruthy();
+  expect(screen.queryByText(/on your computer|local login|Continue with ChatGPT/)).toBeNull();
+  await act(async () => { await updates.get('workspace:workspace')?.(); });
+  expect(screen.getByText('Research paired with this workspace')).toBeTruthy();
+  expect(screen.getByText(/Start your cloud runner/)).toBeTruthy();
+  expect(screen.queryByLabelText('Pairing code')).toBeNull();
 });

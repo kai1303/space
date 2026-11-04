@@ -51,3 +51,9 @@ export type { FindMentions } from "./composer/use-mentions.js";
 
 export { NavigationIcon } from "./navigation/navigation-icons.js";
 export type { NavigationIconName, NavigationIconProps } from "./navigation/navigation-icons.js";
+
+export { Spacebot } from "./navigation/spacebot.js";
+export type { SpacebotProps, BotState } from "./navigation/spacebot.js";
+
+export { Select } from "./primitives/select.js";
+export type { SelectProps } from "./primitives/select.js";

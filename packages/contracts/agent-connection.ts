@@ -14,7 +14,7 @@ export function localProviderForConnector(connector: string) {
 }
 export function isLocalAgentSkill(skill: string) { return Object.values(localProviders).some(provider => provider.skill === skill); }
 export interface PairedConnector { id: string; definition_id: string; name: string; capabilities: AgentCapabilities; provider?: LocalProvider }
-export interface ChannelAgent { id: string; name: string; connector_id: string; provider?: LocalProvider; skills: string[]; granted_skills: string[]; enabled_in_channel: boolean; persistent_sessions: boolean }
+export interface ChannelAgent { inherits_owner_access?: boolean; id: string; name: string; connector_id: string; provider?: LocalProvider; skills: string[]; granted_skills: string[]; enabled_in_channel: boolean; persistent_sessions: boolean }
 export const defaultPairedConnectors: PairedConnector[] = Object.entries(localProviders).map(([provider, entry]) => ({ id: entry.connector, definition_id: entry.definition, name: entry.name, provider: provider as LocalProvider, capabilities: { skills: [entry.skill], controls: { progress_stream: true }, persistent_sessions: true } }));
 export type AgentAuthStatus = 'required' | 'ready' | 'error';
 export interface AgentPairing { id: string; code: string; expires_at: string; connector_id?: string; provider?: LocalProvider }

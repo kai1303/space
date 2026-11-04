@@ -28,10 +28,10 @@ export class MentionStore {
     const agents = await rows<MentionOption>(c, sql`SELECT DISTINCT 'agent' AS kind,i.id,coalesce(ac.name,d.name) AS label,'Agent' AS detail,NULL::text AS image,true AS joined
       FROM agent_installations i JOIN agent_definitions d ON d.id=i.definition_id
       LEFT JOIN agent_connections ac ON ac.installation_id=i.id
-      JOIN agent_grants g ON g.installation_id=i.id AND g.channel_id=${channel.id} AND g.workspace_id=i.workspace_id
       JOIN workspace_members owner ON owner.workspace_id=i.workspace_id AND owner.user_id=i.owner_id AND owner.active
       JOIN channel_members cm ON cm.channel_id=${channel.id} AND cm.user_id=i.owner_id
-      WHERE i.workspace_id=${channel.workspace_id} AND i.enabled AND d.capabilities->'skills' ? g.skill
+      WHERE i.workspace_id=${channel.workspace_id} AND i.enabled AND ac.revoked_at IS NULL
+      AND (ac.installation_id IS NOT NULL OR EXISTS(SELECT 1 FROM agent_grants g WHERE g.installation_id=i.id AND g.channel_id=${channel.id} AND g.workspace_id=i.workspace_id AND d.capabilities->'skills' ? g.skill))
       AND (${target?.id ?? null}::uuid IS NULL OR i.id=${target?.kind === 'agent' ? target.id : null}::uuid)
       AND (${target?.kind === 'user'}=false) AND position(lower(${query}) IN lower(coalesce(ac.name,d.name)))>0 ORDER BY label,i.id LIMIT 30`);
     return [...people,...agents].map(option=>({...option,label:option.label.replace(/[\r\n\t]/g,' ').trim()}));

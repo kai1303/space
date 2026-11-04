@@ -3,9 +3,11 @@ import { ArrowBendUpRight, BellSlash, BookmarkSimple, ChatCircleDots, CheckCircl
 import { EmojiPicker } from '../emoji/emoji-picker.js';
 import { IconButton, Menu } from '../primitives/primitives.js';
 
-export type MessageAction = 'forward' | 'addTodo' | 'askAgent' | 'edit' | 'markUnread' | 'save' | 'saveMemory' | 'remind' | 'toggleReplyNotifications' | 'copyLink' | 'copyMessage' | 'pin' | 'connectApp' | 'delete';
+export type MessageAction = 'selectMessage' | 'discussWithAgent' | 'forward' | 'addTodo' | 'askAgent' | 'edit' | 'markUnread' | 'save' | 'saveMemory' | 'remind' | 'toggleReplyNotifications' | 'copyLink' | 'copyMessage' | 'pin' | 'connectApp' | 'delete';
 export type MessageActionHandlers = Partial<Record<MessageAction, () => void | Promise<void>>>;
 const menuActions = [
+  { key: 'selectMessage', label: 'Select message', icon: CheckCircle },
+  { key: 'discussWithAgent', label: 'Discuss with agent', icon: Sparkle },
   { key: 'edit', label: 'Edit message', icon: PencilSimple },
   { key: 'markUnread', label: 'Mark unread', icon: Tray, separatorBefore: true },
   { key: 'save', label: 'Add to saved', icon: BookmarkSimple },

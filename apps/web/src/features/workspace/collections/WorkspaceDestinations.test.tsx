@@ -42,7 +42,7 @@ it('shows searchable real people, keeps agents in their own directory, and opens
 
 it('filters channels by topic and joins before opening, retaining failures for retry', async () => {
   render(<WorkspaceDestinations view="directories" {...props} />);
-  await userEvent.click(screen.getByRole('button', { name: 'Channels' }));
+  await userEvent.click(screen.getByRole('tab', { name: 'Channels' }));
   await screen.findByText('general');
   await userEvent.click(screen.getByRole('button', { name: 'Open general' }));
   expect(props.onOpenChannel).toHaveBeenCalledWith('general');
@@ -61,42 +61,37 @@ it('filters channels by topic and joins before opening, retaining failures for r
 
 it('exposes honest external and invitation boundaries with working member actions', async () => {
   render(<WorkspaceDestinations view="directories" {...props} />);
-  await userEvent.click(screen.getByRole('button', { name: 'External' }));
+  await userEvent.click(screen.getByRole('tab', { name: 'External' }));
   expect(screen.getByText(/Shared channels with external organizations are not available/)).toBeTruthy();
   await userEvent.click(screen.getByRole('button', { name: 'Browse workspace members' }));
   await screen.findByText('Kai Tran');
-  await userEvent.click(screen.getByRole('button', { name: 'Invitations' }));
+  await userEvent.click(screen.getByRole('tab', { name: 'Invitations' }));
   expect(screen.getByText(/An invitation directory is not available/)).toBeTruthy();
   await userEvent.click(screen.getByRole('button', { name: 'Open workspace members' }));
   expect(props.onOpenMembers).toHaveBeenCalledOnce();
 });
 
-it('uses installed agents and registered connector catalog, with functioning contextual navigation', async () => {
+it('shows workspace agents with functioning contextual navigation', async () => {
   render(<WorkspaceDestinations view="agents" {...props} />);
   await screen.findByText('Kai’s Codex');
-  expect(screen.getByText('Online · Owned by you')).toBeTruthy();
+  expect(screen.getByRole('status').textContent).toBe('Online');
+  expect(screen.getByText('Owned by you')).toBeTruthy();
   await userEvent.click(screen.getByRole('button', { name: 'View connection' }));
   expect(props.onOpenMembers).toHaveBeenCalledOnce();
-  await userEvent.click(screen.getByRole('button', { name: 'Available connectors' }));
-  await userEvent.type(screen.getByRole('searchbox', { name: 'Search agents' }), 'kiro.run');
-  expect(screen.getByRole('heading', { name: 'Kiro' })).toBeTruthy();
-  expect(screen.queryByRole('heading', { name: 'Codex' })).toBeNull();
-  await userEvent.click(screen.getByRole('button', { name: 'Connect Kiro' }));
-  expect(props.onOpenMembers).toHaveBeenCalledTimes(2);
   await userEvent.click(screen.getByRole('button', { name: 'Workflows', exact: true }));
   expect(screen.getByText(/workflow builder and third-party workflow automations are not available/)).toBeTruthy();
-  await userEvent.click(screen.getByRole('button', { name: 'View installed agents' }));
+  await userEvent.click(screen.getByRole('button', { name: 'View your agents' }));
   expect(screen.getByText('Kai’s Codex')).toBeTruthy();
   await userEvent.click(screen.getByRole('button', { name: 'Apps', exact: true }));
-  await userEvent.click(screen.getByRole('button', { name: 'Browse connectors' }));
-  expect(screen.getByRole('heading', { name: 'Codex' })).toBeTruthy();
+  await userEvent.click(within(screen.getByRole('heading', { name: 'Tools that join the conversation' }).closest('section')!).getByRole('button', { name: 'Connect an agent' }));
+  expect(props.onOpenMembers).toHaveBeenCalledTimes(2);
 });
 
 it('Spacebot routes to a real channel with an installed agent and does not invoke a backend model', async () => {
   render(<WorkspaceDestinations view="spacebot" {...props} />);
   await screen.findByRole('button', { name: /Kai’s Codex/ });
   expect(screen.getByText(/agent must be enabled in that channel/)).toBeTruthy();
-  await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Channel' }), 'design');
+  await userEvent.click(screen.getByRole('combobox', { name: 'Channel' })); await userEvent.click(await screen.findByRole('option', { name: '# design · Join channel', exact: true }));
   await userEvent.click(screen.getByRole('button', { name: 'Open channel' }));
   await waitFor(() => expect(props.onOpenChannel).toHaveBeenCalledWith('design'));
   expect(api.request).toHaveBeenCalledWith('/channels/design/join', {});
@@ -211,7 +206,7 @@ it('ignores an older read within a workspace and does not navigate after workspa
   expect(screen.getByText('Fresh member')).toBeTruthy();
   expect(screen.queryByText('Kai Tran')).toBeNull();
   api.request.mockImplementation(async (path: string) => response(path));
-  await userEvent.click(screen.getByRole('button', { name: 'Channels' }));
+  await userEvent.click(screen.getByRole('tab', { name: 'Channels' }));
   await screen.findByText('design');
   let resolveJoin!: (result: unknown) => void;
   api.request.mockImplementationOnce(() => new Promise(done => { resolveJoin = done; }));
@@ -234,10 +229,66 @@ it('does not let a pending channel join navigate away from a newer destination d
  const {DestinationTransition}=await import('../../../app/navigation/DestinationTransition.js');
  const view=render(<DestinationTransition destination="Spacebot"><WorkspaceDestinations view="spacebot" {...props}/></DestinationTransition>);
  await screen.findByRole('combobox',{name:'Channel'});
- await userEvent.selectOptions(screen.getByRole('combobox',{name:'Channel'}),'design');
+ await userEvent.click(screen.getByRole('combobox',{name:'Channel'})); await userEvent.click(await screen.findByRole('option', { name: '# design · Join channel', exact: true }));
  await userEvent.click(screen.getByRole('button',{name:/Open channel/}));
  view.rerender(<DestinationTransition destination="Activity">Latest destination</DestinationTransition>);
  await act(async()=>{finish();await pending;});
  expect(props.onOpenChannel).not.toHaveBeenCalled();
  expect(await screen.findByText('Latest destination')).toBeTruthy();
+});
+
+
+it('shows the live Spacebot welcome without a redundant header',async()=>{
+ const view=render(<WorkspaceDestinations view="spacebot" {...props}/>);
+ await screen.findByRole('heading',{name:'What would you like to work on?'});
+ expect(view.container.querySelector('.wd-bot-mark svg[data-spacebot]')).toBeTruthy();
+ expect(view.container.querySelector('.wd-header')).toBeNull();
+});
+
+
+it('opens agent setup and existing connections directly', async () => {
+ const onConnectAgent = vi.fn(), onOpenConnection = vi.fn();
+ render(<WorkspaceDestinations view="agents" {...props} onConnectAgent={onConnectAgent} onOpenConnection={onOpenConnection}/>);
+ await screen.findByText('Kai’s Codex');
+ await userEvent.click(screen.getByRole('button',{name:'Connect an agent'}));
+ expect(onConnectAgent).toHaveBeenCalledWith(undefined);
+ await userEvent.click(screen.getByRole('button',{name:'View connection'}));
+ expect(onOpenConnection).toHaveBeenCalledWith('agent');
+ expect(props.onOpenMembers).not.toHaveBeenCalled();
+});
+
+
+it('shows a single searchable agent list without a connector catalog', async () => {
+  render(<WorkspaceDestinations view="agents" {...props} />);
+  await screen.findByText('Kai’s Codex');
+  expect(screen.queryByRole('tablist', { name: 'Agent catalog' })).toBeNull();
+  expect(screen.queryByText('Available connectors')).toBeNull();
+  expect(screen.queryByRole('heading', { name: 'Kiro' })).toBeNull();
+  const search = screen.getByRole('searchbox', { name: 'Search agents' });
+  await userEvent.type(search, 'codex.run');
+  expect(screen.getByText('Kai’s Codex')).toBeTruthy();
+  await userEvent.clear(search);
+  await userEvent.type(search, 'No matching agent');
+  expect(screen.getByText('No agents match your search')).toBeTruthy();
+  await userEvent.clear(search);
+  expect(screen.getByText('Kai’s Codex')).toBeTruthy();
+});
+
+it('updates the agent status badge from presence and keeps disabled agents distinct', async () => {
+  let status: string | undefined = 'offline', enabled = true;
+  api.request.mockImplementation(async (path: string) => path.includes('/participants')
+    ? { items: people.map(person => person.kind === 'agent' ? { ...person, status } : person), next_cursor: null }
+    : path.startsWith('/agents/installations?') ? [{ ...installations[0], enabled }] : response(path));
+  render(<WorkspaceDestinations view="agents" {...props} />);
+  await screen.findByText('Kai’s Codex');
+  expect(screen.getByRole('status').textContent).toBe('Offline');
+  status = 'online';
+  await act(async () => { await updates.get('workspace')?.refresh(); });
+  expect(screen.getByRole('status').textContent).toBe('Online');
+  enabled = false;
+  await act(async () => { await updates.get('workspace')?.refresh(); });
+  expect(screen.getByRole('status').textContent).toBe('Disabled');
+  enabled = true; status = undefined;
+  await act(async () => { await updates.get('workspace')?.refresh(); });
+  expect(screen.getByRole('status').textContent).toBe('Status unavailable');
 });

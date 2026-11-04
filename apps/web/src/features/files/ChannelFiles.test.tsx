@@ -52,9 +52,9 @@ it('paginates without duplicates and resets cursor for debounced search, kind, s
   await userEvent.type(screen.getByRole('searchbox'), 'a_%');
   await waitFor(() => expect(vi.mocked(fetch).mock.calls.at(-1)![0]).toContain('q=a_%25'));
   expect(vi.mocked(fetch).mock.calls.at(-1)![0]).not.toContain('after=');
-  await userEvent.selectOptions(screen.getByLabelText('File type'), 'pdf');
+  await userEvent.click(screen.getByLabelText('File type')); await userEvent.click(await screen.findByRole('option', { name: 'PDFs', exact: true }));
   await waitFor(() => expect(vi.mocked(fetch).mock.calls.at(-1)![0]).toContain('kind=pdf'));
-  await userEvent.selectOptions(screen.getByLabelText('Sort files'), 'oldest');
+  await userEvent.click(screen.getByLabelText('Sort files')); await userEvent.click(await screen.findByRole('option', { name: 'Oldest shared', exact: true }));
   await waitFor(() => expect(vi.mocked(fetch).mock.calls.at(-1)![0]).toContain('sort=oldest'));
   const count = vi.mocked(fetch).mock.calls.length;
   await userEvent.click(screen.getByRole('button', { name: 'Refresh files' }));
@@ -97,7 +97,7 @@ it('shows errors with retry, distinguishes filtered empty results and refreshes 
   expect((await screen.findByRole('alert')).textContent).toContain('offline');
   await userEvent.click(screen.getByRole('button', { name: 'Retry' }));
   await screen.findByText('No files shared yet');
-  await userEvent.selectOptions(screen.getByLabelText('File type'), 'text');
+  await userEvent.click(screen.getByLabelText('File type')); await userEvent.click(await screen.findByRole('option', { name: 'Text', exact: true }));
   await screen.findByText('No files match your filters');
   const count = vi.mocked(fetch).mock.calls.length;
   view.rerender(<ChannelFiles {...props} revision="new-attachment" />);

@@ -1,13 +1,13 @@
 # Navigator and conversation routing
 
-Navigator routes human messages and proposes relevant agents inside existing chat threads. The default mode is `rules`; no model credentials, API calls or inference tokens are required. Direct mentions also work when suggestions are off. Ordinary thread replies do not implicitly invoke an agent.
+Navigator routes human messages and proposes relevant agents inside existing chat threads. The default mode is `rules`; no model credentials, API calls or inference tokens are required. Direct mentions also work when suggestions are off. Ordinary thread replies do not implicitly invoke an agent. Connected agents inherit their owner’s current conversation access and need no per-channel skill grants. Unpaired installations retain explicit grants. Workspace boundaries, supported capabilities, connection revocation and owner approval still apply.
 
 ## Routing order
 
 1. An explicit `@tag` selects an eligible installation. The composer’s mention picker lists channel-granted agents. Unique names use normalized tags such as `@writer`; colliding names use the stable `@agent-<installation UUID>` form. Quoted/code examples do not invoke agents, including structured composer code blocks and quotations.
 2. Local Codex requests create a managed persistent session and first turn, with a durable session reference in the source thread. Each explicit request creates an independent session. Non-Codex connectors retain their explicit one-shot dispatch path.
-3. Without a direct target, configured rules match keywords to granted capability IDs. One batch can suggest multiple capabilities; no run starts before a user accepts.
-4. In `semantic` mode only, unresolved batches can call the configured Level 1 provider. It returns ignore, suggest, clarify, or escalate. Escalation may call Level 2 when that provider is configured and budget remains. Level 2 can return bounded task proposals with validated acyclic dependencies. These are proposals; no dependency execution scheduler is provided.
+3. Without a direct target, configured rules match keywords to granted capability IDs in rules-only mode and with compatible providers. Jev semantic mode instead requires a clear execution request; keywords never bypass that gate. One batch can suggest multiple capabilities; no run starts before a user accepts.
+4. In `semantic` mode only, unaddressed batches can call the configured Level 1 provider. Jev uses conversation and bounded public work state to classify new execution requests, staying quiet on ambiguity or existing work; suggestions still require acceptance. For compatible providers, unresolved rules batches can call Level 1. It returns ignore, suggest, clarify, or escalate. Escalation may call Level 2 when that provider is configured and budget remains. Level 2 can return bounded task proposals with validated acyclic dependencies. These are proposals; no dependency execution scheduler is provided.
 
 Unknown/ambiguous tags do not fall back to another agent. Multiple eligible skills on the tagged installation produce a skill-choice suggestion. Selecting a suggestion never silently selects a different installation. Follow-ups belong in the selected agent session composer; ordinary discussion does not inherit a previous request or approval.
 
@@ -35,9 +35,9 @@ Conversational tasks publish milestone progress and final results through normal
 
 Open **Navigator** in a channel. Channel managers can choose:
 
-- **Off:** explicit mentions and subscriptions only.
+- **Off:** explicit mentions only.
 - **Rules only:** deterministic suggestions, no inference.
-- **Rules + optional model providers:** rules first, then optional classification/escalation.
+- **Rules + optional model providers:** rules first with compatible providers; Jev instead requires execution-intent classification for unaddressed messages.
 
 Rules use one line per capability, for example:
 
@@ -46,7 +46,7 @@ writing.draft: announcement, draft, write
 incident.investigate: timeout, incident, failed
 ```
 
-Skills must correspond to actual installed/granted capabilities to produce a useful candidate. Navigator matches up to 100 eligible catalog rows and returns at most eight capability IDs. Suggestions refresh in the channel/thread every five seconds. Selection and dismissal failures remain visible. Navigator settings do not enable channel memory.
+Skills must correspond to actual installed capabilities authorized through owner access or legacy grants to produce a useful candidate. Navigator matches up to 100 eligible catalog rows and returns at most eight capability IDs. Suggestions refresh from authorized realtime channel updates with reconnect catch-up. Selection and dismissal failures remain visible. Navigator settings do not enable channel memory.
 
 For native Jev setup, see [Native Jev navigation](jev-navigator.md). For compatible providers, configure the worker using complete Chat Completions endpoint URLs:
 
@@ -79,7 +79,7 @@ Thread history is available independently of opt-in knowledge memory. Navigator 
 
 ## Verification boundaries
 
-Tests use disposable PostgreSQL schemas and real loopback HTTP model fixtures. They verify routing, independent session creation, approval, batching, no implicit follow-ups, durable session references, permissions, inference escalation/reservations, output validation, timeout/size limits and UI suggestion controls. Navigator provider fixtures do not invoke paid inference. Actual model quality, Jev/DeepSeek deployment compatibility and production load remain unverified. Local Codex execution is covered separately by connector and integration tests.
+Tests use disposable PostgreSQL schemas and real loopback HTTP model fixtures. They verify routing, independent session creation, approval, batching, no implicit follow-ups, durable session references, permissions, inference escalation/reservations, output validation, timeout/size limits and UI suggestion controls. Automated provider fixtures do not invoke paid inference. An explicit live Jev replay and real-worker smoke were run on 2026-11-04; see [evaluation results and test commands](navigator-evaluation.md). Representative model quality, Level 2 deployment compatibility and production load remain unverified. Local Codex execution is covered separately by connector and integration tests.
 
 Verified locally on 2026-11-03: full monorepo test graph passed 457 tests, with build and typecheck passing. Independent review and regressions covered stale cached output after revocation, numeric queue ordering, historical first-wake suppression, batch context boundaries, global final-result uniqueness, and legacy migration rollback/preservation.
 

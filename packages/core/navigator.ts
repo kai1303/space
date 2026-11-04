@@ -1,5 +1,10 @@
+import { createHash } from 'node:crypto';
 import { AppError, record, text } from '@space/contracts';
 import type { NavigationContext, NavigationDecision, NavigationTask, NavigatorCandidate } from '@space/contracts';
+
+export function navigationWorkStateHash(state:NavigationContext['workState']):string {
+  return createHash('sha256').update(JSON.stringify(state??{pendingProposals:[],tasks:[],sessions:[]})).digest('hex');
+}
 
 function invalid(): never { throw new AppError(400, 'invalid_navigation_decision'); }
 function strings(value: unknown, max: number, allowed?: Set<string>): string[] {
@@ -19,12 +24,17 @@ export function parseNavigationDecision(value: unknown, context: NavigationConte
   if ((v.action === 'ignore' && capabilities.length) || (v.action === 'suggest' && (!capabilities.length || !evidenceMessageIds.length))) return invalid();
   const result: NavigationDecision = { action: v.action as NavigationDecision['action'], capabilities, evidenceMessageIds, reason };
   if(v.assessment!==undefined){
-    const a=record(v.assessment,['model','targetMessageId','requestsAgentWork','assistanceUseful','needsDeeperReasoning','capabilityRelevance']);
+    const fields=['model','targetMessageId','requestsAgentWork','capabilityRelevance'];
+    const shape=record(v.assessment,[...fields,'version','workStateHash','taskClear','continuesExistingWork','assistanceUseful','needsDeeperReasoning']);
+    const current=shape.version==='execution-intent-v1';
+    const a=record(v.assessment,[...fields,...(current?['version','workStateHash','taskClear','continuesExistingWork']:['assistanceUseful','needsDeeperReasoning'])]);
     const targetMessageId=text(a.targetMessageId,200);
     if(targetMessageId!==(context.pendingMessageIds?.at(-1)??context.messages.at(-1)?.id))return invalid();
     const probability=(value:unknown):number=>{if(typeof value!=='number'||!Number.isFinite(value)||value<0||value>1)return invalid();return value;};
     const relevance=record(a.capabilityRelevance,context.candidates.map(c=>c.skill));
-    result.assessment={model:text(a.model,200),targetMessageId,requestsAgentWork:probability(a.requestsAgentWork),assistanceUseful:probability(a.assistanceUseful),needsDeeperReasoning:probability(a.needsDeeperReasoning),capabilityRelevance:Object.fromEntries(Object.entries(relevance).map(([id,p])=>[id,probability(p)]))};
+    const base={model:text(a.model,200),targetMessageId,requestsAgentWork:probability(a.requestsAgentWork),capabilityRelevance:Object.fromEntries(Object.entries(relevance).map(([id,p])=>[id,probability(p)]))};
+    if(current&&(typeof a.workStateHash!=='string'||!/^[a-f0-9]{64}$/.test(a.workStateHash)))return invalid();
+    result.assessment=current?{...base,version:'execution-intent-v1',workStateHash:a.workStateHash as string,taskClear:probability(a.taskClear),continuesExistingWork:probability(a.continuesExistingWork)}:{...base,assistanceUseful:probability(a.assistanceUseful),needsDeeperReasoning:probability(a.needsDeeperReasoning)};
   }
   if (v.tasks !== undefined) {
     if (v.action !== 'suggest' || !Array.isArray(v.tasks) || v.tasks.length < 1 || v.tasks.length > 8) return invalid();

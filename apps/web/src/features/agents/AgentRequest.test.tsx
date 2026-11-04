@@ -22,7 +22,7 @@ it('discovers a newly paired Codex, enables it explicitly for this channel, then
   await userEvent.click(await screen.findByRole('button', { name: 'Enable Kai’s Codex in this channel' }));
   expect(api.request).toHaveBeenCalledWith('/agents/connections/local/channels/channel', { enabled: true, skill:'codex.run' });
   const select = await screen.findByRole('combobox', { name: 'Agent and skill' });
-  await userEvent.selectOptions(select, 'local|codex.run');
+  await userEvent.click(select); await userEvent.click(await screen.findByRole('option', { name: 'Kai’s Codex · codex.run', exact: true }));
   await userEvent.type(screen.getByRole('textbox', { name: 'What should the agent do?' }), 'Say hello');
   await userEvent.click(screen.getByRole('button', { name: 'Request task' }));
   await waitFor(() => expect(api.request).toHaveBeenCalledWith('/tasks', { workspace_id: 'workspace', thread_id: 'thread', installation_id: 'local', skill: 'codex.run', goal: 'Say hello' }, expect.any(String)));
@@ -53,4 +53,18 @@ it('grants and revokes each supported skill independently for a custom connector
  await userEvent.click(await screen.findByRole('button',{name:'Disable Research · research.review in this channel'}));
  expect(api.request).toHaveBeenCalledWith('/agents/connections/local/channels/channel',{enabled:false,skill:'research.review'});
  expect(grants).toEqual(['research.run']);
+});
+
+it('shows inherited owner access for connected agents without channel enable or disable controls', async () => {
+ api.request.mockImplementation(async (path:string)=>{
+  if(path.startsWith('/agents/installations'))return [agent];
+  if(path.endsWith('/agents'))return [{id:'local',name:'Kai’s Codex',skills:['codex.run'],granted_skills:['codex.run'],enabled_in_channel:true,inherits_owner_access:true}];
+  if(path.endsWith('/navigator'))return {candidates:[candidate]};
+  return {id:'task'};
+ });
+ render(<AgentRequest workspace="workspace" channel="channel" thread="thread" agents={[]} onCandidates={vi.fn()}/>);
+ await userEvent.click(screen.getByRole('button',{name:'Ask an agent'}));
+ expect(await screen.findByText(/inherits your conversation access/i)).toBeTruthy();
+ expect(screen.queryByRole('button',{name:/Enable .* in this channel|Disable .* in this channel/})).toBeNull();
+ expect(screen.getByRole('combobox',{name:'Agent and skill'})).toBeTruthy();
 });

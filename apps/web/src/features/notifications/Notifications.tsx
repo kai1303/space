@@ -1,7 +1,7 @@
 import {useDestinationPresence} from '../../shared/ui/useDestinationPresence.js';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { NotificationActivity, NotificationItem, NotificationSettings } from '@space/contracts';
-import { Avatar, Button, Dialog, IconButton } from '@space/ui/primitives';
+import { Tabs, Select, Avatar, Button, Dialog, IconButton } from '@space/ui/primitives';
 import { Bell, BellSlash, Check, Checks, GearSix } from '@phosphor-icons/react';
 import { request } from '../../shared/api/request.js';
 import { subscribeUpdates } from '../../shared/realtime/live-updates.js';
@@ -62,11 +62,7 @@ export function Notifications({ workspace, onOpen, viewState }: { viewState?: Sn
   const mark = (item: NotificationItem, read: boolean, open = false) => change(() => request(`/workspaces/${workspace}/notifications/${item.id}`, { read }, undefined, 'PATCH'), open ? () => onOpen(item) : undefined);
   return <main ref={pageRef} onScroll={event=>{view.current.scroll=event.currentTarget.scrollTop;}} id="chat-messages" tabIndex={-1} className="notification-activity">
     <header className="notification-heading"><div><h1>Activity</h1><p>Catch up on the conversations that need you.</p></div><IconButton label="Notification settings" onClick={() => setPreferences(true)}><GearSix size={22}/></IconButton></header>
-    <div role="tablist" aria-label="Activity types" className="notification-tabs">{tabs.map(([value, label],index) => <button key={value} role="tab" tabIndex={kind===value?0:-1} aria-selected={kind === value} onClick={() => { setKind(value); setBefore(''); view.current.scroll=0; }} onKeyDown={event=>{
-      const next=event.key==='Home'?0:event.key==='End'?tabs.length-1:event.key==='ArrowRight'?(index+1)%tabs.length:event.key==='ArrowLeft'?(index+tabs.length-1)%tabs.length:-1;
-      if(next<0)return;event.preventDefault();setKind(tabs[next]![0]);setBefore('');view.current.scroll=0;
-      event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>('[role=tab]')[next]?.focus();
-    }}>{label}</button>)}</div>
+    <Tabs className="notification-tabs" label="Activity types" value={kind} items={tabs.map(([id,label])=>({id,label}))} onChange={value=>{setKind(value);setBefore('');view.current.scroll=0;}}/>
     <div className="notification-toolbar"><label><input type="checkbox" checked={unread} onChange={event => { setUnread(event.target.checked); setBefore(''); }}/>Unreads</label><span>{page.unread_count} unread</span><Button size="sm" disabled={busy || !page.unread_count || !loaded} onClick={() => void change(() => request(`/workspaces/${workspace}/notifications/read`, { through: page.latest_id }))}><Checks size={17}/>Mark all as read</Button></div>
     {(readError || error) && <p role="alert" className="notification-error">{readError || error}<Button size="sm" onClick={() => void refresh()}>Retry</Button></p>}
     {!loaded ? <p role="status" className="notification-empty">Loading activity…</p> : !page.items.length && !readError ? <div className="notification-empty"><Bell size={38}/><h2>You’re all caught up</h2><p>{unread ? 'No unread notifications in this view.' : 'New messages, mentions, replies, and reactions will appear here.'}</p></div> : <ul className="notification-list">{page.items.map(item => <li key={item.id} className={item.read_at ? '' : 'is-unread'}>
@@ -118,7 +114,7 @@ export function NotificationPreferences({ workspace, onClose }: { workspace: str
     <p>Activity keeps your notifications even when alerts are paused. These preferences apply across your workspaces.</p>
     {error && <p role="alert">{error}<Button size="sm" onClick={() => void retry.current()}>Retry preferences</Button></p>}
     {!settings ? <p role="status">Loading preferences…</p> : <>
-      <label>Notify me about<select disabled={busy} value={settings.mode} onChange={event => void save({ mode: event.target.value as NotificationSettings['mode'] })}><option value="mentions">Mentions and direct messages</option><option value="all">All new messages in joined channels</option><option value="none">Nothing — keep Activity only</option></select></label>
+      <label>Notify me about<Select aria-label="Notify me about" disabled={busy} value={settings.mode} onChange={event => void save({ mode: event.target.value as NotificationSettings['mode'] })}><option value="mentions">Mentions and direct messages</option><option value="all">All new messages in joined channels</option><option value="none">Nothing — keep Activity only</option></Select></label>
       <label className="notification-checkbox"><input type="checkbox" checked={settings.thread_replies} disabled={busy} onChange={event => void save({ thread_replies: event.target.checked })}/>Also alert me about followed thread replies</label>
       <section><h3>Desktop alerts</h3><p>Delivered by this browser while Space is open. Your browser and operating system control whether banners appear.</p>
         {permission === 'unsupported' ? <p>This browser does not support desktop alerts.</p> : permission === 'denied' ? <p role="status">Desktop alerts are blocked in your browser. Allow notifications for Space in site settings to enable them.</p> : settings.desktop_enabled && permission === 'granted' ? <Button size="sm" disabled={busy} onClick={() => void save({ desktop_enabled: false })}>Disable desktop alerts</Button> : <Button size="sm" disabled={busy} onClick={() => void enable()}>Enable desktop alerts</Button>}

@@ -14,7 +14,7 @@ function setup(role='owner') {
 }
 it('requires confirmation for finite retention and cancellation keeps the unsaved settings',async()=>{
  setup();render(<WorkspaceSettings workspace="space" open onClose={()=>{}} onRenamed={()=>{}}/>);
- await userEvent.selectOptions(await screen.findByLabelText('Keep messages'),'days');
+ await userEvent.click(await screen.findByLabelText('Keep messages')); await userEvent.click(await screen.findByRole('option', { name: 'For a set number of days', exact: true }));
  await userEvent.type(screen.getByLabelText('Workspace description'),'Unsaved');
  api.request.mockClear();
  await userEvent.click(screen.getByRole('button',{name:'Save settings'}));
@@ -42,7 +42,7 @@ it('confirms a shorter existing retention period while preserving the loaded rev
 it('saves a longer retention period without a destructive confirmation',async()=>{
  setup();api.request.mockResolvedValueOnce({...settings,revision:'8',retention_days:30});
  render(<WorkspaceSettings workspace="space" open onClose={()=>{}} onRenamed={()=>{}}/>);
- await userEvent.selectOptions(await screen.findByLabelText('Keep messages'),'forever');
+ await userEvent.click(await screen.findByLabelText('Keep messages')); await userEvent.click(await screen.findByRole('option', { name: 'Forever', exact: true }));
  await userEvent.click(screen.getByRole('button',{name:'Save settings'}));
  expect(screen.queryByRole('dialog',{name:'Apply retention policy?'})).toBeNull();
  await waitFor(()=>expect(api.request).toHaveBeenCalledWith('/workspaces/space/settings',expect.objectContaining({revision:'8',retention_days:null}),undefined,'PATCH'));
@@ -68,7 +68,7 @@ it('persists settings across tabs and excludes private channels from defaults',a
  await userEvent.type(await screen.findByLabelText('Workspace description'),'Design together');
  await userEvent.click(await screen.findByLabelText('#general'));expect(screen.queryByLabelText('#secret')).toBeNull();
  await userEvent.click(screen.getByRole('tab',{name:'Permissions'}));
- await userEvent.selectOptions(screen.getByLabelText('Who can invite people?'),'members');
+ await userEvent.click(screen.getByLabelText('Who can invite people?')); await userEvent.click(await screen.findByRole('option', { name: 'All members', exact: true }));
  await userEvent.type(screen.getByLabelText('Domains allowed to join'),'example.com, company.org');
  await userEvent.click(screen.getByRole('button',{name:'Save settings'}));
  await waitFor(()=>expect(api.request).toHaveBeenCalledWith('/workspaces/space/settings',expect.objectContaining({revision:'0',description:'Design together',default_channel_ids:['public'],invite_permission:'members',approved_email_domains:['example.com','company.org']}),undefined,'PATCH'));

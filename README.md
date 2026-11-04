@@ -47,8 +47,7 @@ and collaborate with local Codex or Kiro agents.</p>
 <p align="center">
   <img src="docs/images/space-desktop-chat.jpg" alt="Space on macOS: the Orbit Studio sample workspace with channel conversations, a shared checklist, and a thread open alongside the chat" width="1064" />
 </p>
-<p align="center"><sub>Current desktop UI, captured November 4, 2026 with fictional teammates and sample project content. Core chat requires no model API key.</sub></p>
-<p align="center"><a href="docs/media/space-desktop-demo.mp4"><strong>Watch the 40-second walkthrough →</strong></a></p>
+<p align="center"><sub>Desktop captures refreshed November 4, 2026, including the updated navigation, with fictional teammates and sample project content. Core chat requires no model API key.</sub></p>
 
 ## Table of contents
 
@@ -73,11 +72,9 @@ and collaborate with local Codex or Kiro agents.</p>
 ## Demo
 
 Send a message, keep the discussion in a thread, preview a shared checklist, and
-find it again in the workspace file library. This silent recording uses the real
+find it again in the workspace file library. This animated GIF uses the real
 local app and backend in a separate demo account. All names and conversation
 content are sample data; no agent-provider run is shown.
-
-[Watch or download the MP4](docs/media/space-desktop-demo.mp4) · approximately 40 seconds · 1440 × 918
 
 ![Space demo: channel message, thread reply, file preview, and file library](docs/media/space-desktop-demo.gif)
 
@@ -90,9 +87,9 @@ content are sample data; no agent-provider run is shown.
 
 </details>
 
-The video captures the desktop app's content area; the screenshots also include
-its macOS window frame. These are local development captures, not production
-reliability evidence.
+The screenshots and GIF show the desktop app's content area, captured from a
+built frontend snapshot against the local backend. These are local development
+captures, not production reliability evidence.
 
 ---
 

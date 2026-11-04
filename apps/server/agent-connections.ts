@@ -10,8 +10,8 @@ import { SubscriptionIndex, type RealtimeWork } from './realtime-work.js';
 export function registerAgentConnectionRoutes(app: FastifyInstance, store: AgentConnectionStore) {
   app.get('/v1/agents/connectors', () => store.connectors);
   app.get<{ Params: { channelId: string } }>('/v1/channels/:channelId/agents', r => store.channelAgents(r.actorId, uuid(r.params.channelId)));
-  app.get<{ Params: { channelId: string } }>('/v1/channels/:channelId/local-codex', async r => (await store.channelAgents(r.actorId, uuid(r.params.channelId))).filter(agent => localProviderForConnector(agent.connector_id)).map(({ id, name, provider, enabled_in_channel }) => ({ id, name, provider, enabled_in_channel })));
-  app.get<{ Params: { channelId: string } }>('/v1/channels/:channelId/local-agents', async r => (await store.channelAgents(r.actorId, uuid(r.params.channelId))).filter(agent => localProviderForConnector(agent.connector_id)).map(({ id, name, provider, enabled_in_channel }) => ({ id, name, provider, enabled_in_channel })));
+  app.get<{ Params: { channelId: string } }>('/v1/channels/:channelId/local-codex', async r => (await store.channelAgents(r.actorId, uuid(r.params.channelId))).filter(agent => localProviderForConnector(agent.connector_id)).map(({ id, name, provider, enabled_in_channel, inherits_owner_access }) => ({ id, name, provider, enabled_in_channel, inherits_owner_access })));
+  app.get<{ Params: { channelId: string } }>('/v1/channels/:channelId/local-agents', async r => (await store.channelAgents(r.actorId, uuid(r.params.channelId))).filter(agent => localProviderForConnector(agent.connector_id)).map(({ id, name, provider, enabled_in_channel, inherits_owner_access }) => ({ id, name, provider, enabled_in_channel, inherits_owner_access })));
   app.post<{ Params: { installationId: string; channelId: string } }>('/v1/agents/connections/:installationId/channels/:channelId', r => {
     const input = record(r.body, ['enabled', 'skill']);
     if (typeof input.enabled !== 'boolean') throw new AppError(400, 'invalid_enabled');

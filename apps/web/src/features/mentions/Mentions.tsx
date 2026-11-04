@@ -1,7 +1,7 @@
 import { subscribeUpdates } from '../../shared/realtime/live-updates.js';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { MentionActivity, MentionNotification, MentionOption, MentionReference, MentionSettings } from '@space/contracts';
-import { Avatar, Button, Dialog, IconButton } from '@space/ui/primitives';
+import { Select, Avatar, Button, Dialog, IconButton } from '@space/ui/primitives';
 import { type FindMentions } from '@space/ui/composer';
 import { At } from '@phosphor-icons/react';
 import { request } from '../../shared/api/request.js';
@@ -36,7 +36,7 @@ export function MentionInbox({workspace,onOpen}:{workspace:string;onOpen:(item:M
   return <><div className="space-mentions-button"><IconButton label={`Mentions${activity.unread_count?` (${activity.unread_count} unread)`:''}`} onClick={()=>{setOpen(true);void refresh();}}><At size={22}/></IconButton>{activity.unread_count>0&&<span aria-hidden="true">{activity.unread_count>99?'99+':activity.unread_count}</span>}</div>
     <Dialog open={open} title="Mentions" onClose={()=>setOpen(false)}><div className="space-mentions-inbox">
       {error&&<p role="alert">{error}</p>}
-      {settings&&<div className="space-mention-preferences"><p>{paused?'Mention attention is paused. New mentions appear here silently.':'People can get your attention by mentioning you.'}</p><Button size="sm" disabled={busy} onClick={()=>void setting({paused_until:paused?null:new Date(Date.now()+3600000).toISOString()})}>{paused?'Resume notifications':'Pause for 1 hour'}</Button>{settings.can_manage&&<label>Who can use channel-wide mentions<select disabled={busy} value={settings.broadcast_permission} onChange={e=>void setting({broadcast_permission:e.target.value})}><option value="all">All members</option><option value="admins">Owners and admins</option></select></label>}</div>}
+      {settings&&<div className="space-mention-preferences"><p>{paused?'Mention attention is paused. New mentions appear here silently.':'People can get your attention by mentioning you.'}</p><Button size="sm" disabled={busy} onClick={()=>void setting({paused_until:paused?null:new Date(Date.now()+3600000).toISOString()})}>{paused?'Resume notifications':'Pause for 1 hour'}</Button>{settings.can_manage&&<label>Who can use channel-wide mentions<Select aria-label="Who can use channel-wide mentions" disabled={busy} value={settings.broadcast_permission} onChange={e=>void setting({broadcast_permission:e.target.value})}><option value="all">All members</option><option value="admins">Owners and admins</option></Select></label>}</div>}
       {!error&&!activity.items.length&&<p role="status">You’re all caught up. Mentions will appear here.</p>}
       <ul>{activity.items.map(item=><li key={item.id}><button type="button" className={!item.read_at&&!item.silent?'is-unread':''} onClick={()=>void visit(item)}><span><strong>{item.author_name}</strong><small>#{item.channel_name} · {new Date(item.created_at).toLocaleString()}{item.silent?' · Silent':''}</small></span><span>{item.text}</span></button></li>)}</ul>
       {activity.next_cursor&&<Button disabled={busy} onClick={()=>void older()}>Load older mentions</Button>}

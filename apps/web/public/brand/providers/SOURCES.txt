@@ -1,0 +1,8 @@
+Codex: @lobehub/icons-static-svg 1.102.0, icons/codex-color.svg
+https://www.npmjs.com/package/@lobehub/icons-static-svg
+MIT license: LICENSE.lobehub.txt
+
+Kiro: official website app icon, unchanged
+https://kiro.dev/icon.svg?fe599162bb293ea0
+
+Retrieved 2026-11-04. Product names and marks belong to their respective owners.

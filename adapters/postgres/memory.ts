@@ -70,15 +70,19 @@ export class MemoryStore {
       LEFT JOIN agent_connections ac ON ac.installation_id=i.id
       WHERE g.channel_id=${channel.channel_id} AND g.workspace_id=${channel.workspace_id} AND g.installation_id=${installationId}
         AND g.access<>'none' AND i.enabled AND ac.revoked_at IS NULL
-        AND EXISTS (SELECT 1 FROM agent_grants ag JOIN agent_definitions d ON d.id=i.definition_id
-          WHERE ag.installation_id=i.id AND ag.channel_id=g.channel_id AND d.capabilities->'skills' ? ag.skill)`);
+        AND (ac.installation_id IS NOT NULL OR EXISTS (SELECT 1 FROM agent_grants ag JOIN agent_definitions d ON d.id=i.definition_id
+          WHERE ag.installation_id=i.id AND ag.channel_id=g.channel_id AND d.capabilities->'skills' ? ag.skill))`);
     const grant = rows.rows[0];
     if (!grant || !await hasChannelAccess(c, grant.owner_id, channel.workspace_id, channel.channel_id)) return undefined;
     return { access: grant.access, revision: grant.revision };
   }
   async agentContext<T>(task: Pick<Task, 'installation_id' | 'requester_id' | 'thread_id'>, read: (channel: MemoryChannel) => Promise<T>): Promise<T | undefined> {
-    const [thread] = await this.db.select().from(s.threads).where(eq(s.threads.id, task.thread_id));
+    const [thread] = await this.db.select({channel_id:s.threads.channel_id,workspace_id:s.threads.workspace_id,kind:s.channels.kind}).from(s.threads).innerJoin(s.channels,eq(s.channels.id,s.threads.channel_id)).where(eq(s.threads.id, task.thread_id));
     if (!thread) throw new AppError(404, 'not_found');
+    if (thread.kind === 'direct') {
+      if (!await hasChannelAccess(this.db,task.requester_id,thread.workspace_id,thread.channel_id)) throw new AppError(404, 'not_found');
+      return undefined; // DMs have conversation context, but no optional channel memory.
+    }
     const channel = await this.authorize(this.db, task.requester_id, thread.channel_id);
     const grant = channel.enabled ? await this.agentAccess(this.db, channel, task.installation_id) : undefined;
     if (!grant) return undefined;

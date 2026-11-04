@@ -1,0 +1,77 @@
+{
+  "corpus": "navigator-execution-intent-v2",
+  "generatedAt": "2026-11-04T12:32:59.840Z",
+  "schemaVersion": 1,
+  "mode": "level1",
+  "provider": {
+    "name": "jev",
+    "model": "jev-latest"
+  },
+  "prices": {
+    "inputUsdPerMillion": null,
+    "outputUsdPerMillion": null
+  },
+  "summary": {
+    "total": 1,
+    "completed": 1,
+    "errors": 0,
+    "skipped": 0,
+    "coverage": 1,
+    "correct": 0,
+    "accuracy": 0,
+    "negativeCases": 0,
+    "falsePositives": 0,
+    "falsePositiveRate": null,
+    "positiveCases": 1,
+    "missedIntents": 1,
+    "missedIntentRate": 1,
+    "capabilityCases": 1,
+    "capabilityMatches": 0,
+    "capabilityAccuracy": 0,
+    "escalations": 0,
+    "calls": 1,
+    "reservedTokens": 4280,
+    "inputTokens": 1071,
+    "outputTokens": 99,
+    "latencyP50Ms": 501.965291,
+    "latencyP95Ms": 501.965291,
+    "estimatedUsd": null
+  },
+  "results": [
+    {
+      "id": "summary-request",
+      "category": "explicit-request",
+      "expected": {
+        "actions": [
+          "suggest"
+        ],
+        "capabilities": [
+          "writing.summarize"
+        ]
+      },
+      "status": "completed",
+      "latencyMs": 501.965291,
+      "decision": {
+        "action": "ignore",
+        "capabilities": [],
+        "evidenceMessageIds": [
+          "latest"
+        ],
+        "reason": "No clear new execution request in the latest message.",
+        "assessment": {
+          "model": "jev-1.14.0",
+          "targetMessageId": "latest",
+          "requestsAgentWork": 0.95,
+          "capabilityRelevance": {
+            "writing.summarize": 0.95,
+            "engineering.investigate": 0.02
+          },
+          "version": "execution-intent-v1",
+          "taskClear": 0.6,
+          "continuesExistingWork": 0.14
+        }
+      },
+      "correct": false
+    }
+  ]
+}

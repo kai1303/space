@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type { Pool } from 'pg';
 import { and, eq, gt, inArray, sql, getTableColumns } from 'drizzle-orm';
-import { AppError, assertTransition, parseAgentEvent, parseAgentResponse, parseTaskInput, text, uuid, type RichDocument, type Task, type AgentInstallation, type WorkplaceEvent } from '@space/contracts';
+import { AppError, assertTransition, parseAgentEvent, parseAgentResponse, parseTaskInput, text, uuid, type InvocationRequest, type RichDocument, type Task, type AgentInstallation, type WorkplaceEvent } from '@space/contracts';
 import { assertEligible, assertApprover } from '@space/core/policy';
 import type { Delivery, DeliveryStore, PreparedDelivery } from '@space/core/ports';
 import { database, type DbSession } from './database.js';
@@ -55,11 +55,11 @@ export class PostgresStore implements DeliveryStore {
     if (!row) throw notFound();
     return row;
   }
-  async eligible(c: DbSession, task: Pick<Task, 'thread_id' | 'installation_id' | 'skill' | 'workspace_id' | 'requester_id'> & { session_id?: string | null }, optimistic = false): Promise<AgentInstallation> {
+  async eligible(c: DbSession, task: Pick<Task, 'thread_id' | 'installation_id' | 'skill' | 'workspace_id' | 'requester_id'> & { session_id?: string | null }, optimistic = false, allowEnded = false): Promise<AgentInstallation> {
     optimistic = true;
     const ended = await c.execute(sql`SELECT 1 FROM agent_sessions WHERE id=${task.session_id ?? null} AND managed AND state='ended'`);
-    if (ended.rows.length) throw new AppError(409, 'session_ended');
-    const channelQuery = c.select({ archived_at: s.channels.archived_at }).from(s.channels)
+    if (!allowEnded && ended.rows.length) throw new AppError(409, 'session_ended');
+    const channelQuery = c.select({ archived_at: s.channels.archived_at, kind: s.channels.kind }).from(s.channels)
       .innerJoin(s.threads, eq(s.threads.channel_id, s.channels.id)).where(eq(s.threads.id, task.thread_id));
     const [channel] = await channelQuery;
     if (channel?.archived_at) throw new AppError(409, 'channel_archived');
@@ -69,7 +69,14 @@ export class PostgresStore implements DeliveryStore {
       .innerJoin(s.threads, and(eq(s.threads.channel_id, s.agentGrants.channel_id), eq(s.threads.workspace_id, s.agentGrants.workspace_id)))
       .where(and(eq(s.agentGrants.installation_id, installation.id), eq(s.threads.id, task.thread_id), eq(s.agentGrants.skill, task.skill)));
     const grants = await grantsQuery;
-    assertEligible(installation, task.skill, grants.length > 0, await hasThreadAccess(c, task.requester_id, task.thread_id), await hasThreadAccess(c, installation.owner_id, task.thread_id));
+    const [connection] = await c.select({ revoked_at: s.agentConnections.revoked_at }).from(s.agentConnections).where(eq(s.agentConnections.installation_id, installation.id));
+    const sidekick = channel?.kind === 'direct' ? await c.execute(sql`SELECT 1 FROM agent_sessions a JOIN threads t ON t.id=a.origin_thread_id JOIN channels ch ON ch.id=t.channel_id
+      WHERE a.id=${task.session_id ?? null} AND a.handoff_context IS NOT NULL AND a.managed AND a.installation_id=${installation.id}
+        AND a.origin_thread_id=${task.thread_id} AND a.created_by=${task.requester_id} AND a.created_by=${installation.owner_id}
+        AND ch.kind='direct' AND ch.direct_user_low=a.created_by AND ch.direct_user_high=a.created_by`) : undefined;
+    // Connected agents inherit the owner's current access; legacy installations still need a grant.
+    const permitted = connection ? !connection.revoked_at : channel?.kind === 'direct' ? !!sidekick?.rows.length : grants.length > 0;
+    assertEligible(installation, task.skill, permitted, await hasThreadAccess(c, task.requester_id, task.thread_id), await hasThreadAccess(c, installation.owner_id, task.thread_id));
     return installation;
   }
   private async append(c: DbSession, task: Task, type: string, actor: string, payload: Record<string, unknown>, causationId: string | null = null): Promise<void> {
@@ -194,12 +201,13 @@ export class PostgresStore implements DeliveryStore {
       const [origin]=await navigatorPresent(c)?(await c.execute<{through_sequence:string}>(sql`SELECT through_sequence::text FROM navigator_decisions WHERE decision->>'task_id'=${task.id} LIMIT 1`)).rows:[];
       const thread=(await c.select().from(s.threads).where(eq(s.threads.id,task.thread_id)))[0]!;
       const working_memory = await readThreadContext(c, thread.channel_id, task.thread_id, origin?.through_sequence);
-      const context = { thread_id: task.thread_id, working_memory, messages: working_memory.messages.filter(m => m.text.trim()).map(m => ({ id: m.id, text: m.text, author_type: m.author.kind })) };
+      const context: NonNullable<InvocationRequest['context']> = { thread_id: task.thread_id, working_memory, messages: working_memory.messages.filter(m => m.text.trim()).map(m => ({ id: m.id, text: m.text, author_type: m.author.kind })) };
       const [session] = await c.select().from(s.agentSessions).where(eq(s.agentSessions.id, task.session_id!));
+      if (session?.handoff_context) context.handoff = session.handoff_context;
       const priorReady = session?.managed && (await c.execute(sql`SELECT 1 FROM tasks previous JOIN task_events e ON e.correlation_id=previous.id AND e.payload->>'session_ready'='true' WHERE previous.session_id=${task.session_id} AND previous.id<>${task.id} LIMIT 1`)).rows.length > 0;
       return { installation, request: { ...(session?.managed ? { persistent_session: { resume: Boolean(priorReady) } } : {}), schema_version: '1.0', task_id: task.id, session_id: task.session_id!, execution_id: delivery.execution_id, idempotency_key: delivery.execution_id, goal: task.goal, skill: task.skill, context } };
     });
-    if (!prepared || !this.memoryReader) return prepared;
+    if (!prepared || !this.memoryReader || prepared.request.context?.handoff) return prepared;
     const task = await this.task(this.db, delivery.task_id);
     const memory = await this.memoryReader(task);
     // Provider I/O does not hold a database connection. Revalidate the delivery afterwards.
@@ -285,7 +293,7 @@ export class PostgresStore implements DeliveryStore {
         AND EXISTS (SELECT 1 FROM task_events WHERE correlation_id=${task.id} AND type='task.failed' AND payload->>'code'='session_stopped')`);
       if (!stopped.rows.length) return false;
       // Ended sessions may acknowledge their explicit stop; current authority must still hold.
-      await this.eligible(c, { ...task, session_id: null }, true);
+      await this.eligible(c, task, true, true);
       await this.localConnection(c, installationId, connectionId, await this.managed(c, task.session_id));
       return true;
     });

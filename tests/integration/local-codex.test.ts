@@ -61,24 +61,23 @@ function event(execution_id: string, sequence: number, type = 'execution.started
   return { id: randomUUID(), schema_version: '1.0', execution_id, sequence, type, occurred_at: new Date().toISOString(), payload: { text: type === 'execution.completed' ? 'Hello from Codex' : 'Working', response: { messages: type === 'execution.completed' ? [{ id: 'reply', text: 'Hello from Codex', status: 'complete' }] : [], tools: [], components: [] } } };
 }
 
-test('paired Codex advertises execution but requires an explicit owner channel grant', async () => {
+test('paired Codex inherits its owner access without an explicit channel grant', async () => {
   const seed = await fixture(), foreign = await fixture();
   const installations = await api(seed.owner_token, 'GET', `/agents/installations?workspace_id=${seed.workspace_id}`);
   assert.deepEqual(installations.find((a: any) => a.id === seed.installation_id).capabilities.skills, ['codex.run']);
   const path = `/channels/${seed.channel_id}/local-codex`;
   const [agent] = await api(seed.owner_token, 'GET', path);
-  assert.equal(agent.enabled_in_channel, false);
+  assert.equal(agent.enabled_in_channel, true);assert.equal(agent.inherits_owner_access,true);
   assert.deepEqual(await api(seed.collaborator_token, 'GET', path), []);
   await api(foreign.owner_token, 'GET', path, undefined, 404);
-  await assert.rejects(store.createTask(seed.owner_id, { workspace_id: seed.workspace_id, thread_id: seed.thread_id, installation_id: seed.installation_id, skill: 'codex.run', goal: 'hello' }, randomUUID()), /installation_not_authorized/);
+  const task=await store.createTask(seed.owner_id, { workspace_id: seed.workspace_id, thread_id: seed.thread_id, installation_id: seed.installation_id, skill: 'codex.run', goal: 'hello' }, randomUUID());
+  assert.equal(task.status,'awaiting_approval');
   await api(seed.collaborator_token, 'POST', seed.grantPath, { enabled: true }, 403);
   await api(seed.owner_token, 'POST', seed.grantPath, { enabled: true, arbitrary: true }, 400);
   await api(seed.owner_token, 'POST', seed.grantPath, { enabled: true });
-  await api(seed.owner_token, 'POST', seed.grantPath, { enabled: true });
+  assert.equal((await pool.query('SELECT count(*) FROM agent_grants WHERE installation_id=$1', [seed.installation_id])).rows[0].count, '0');
+  await api(seed.owner_token, 'POST', seed.grantPath, { enabled: false },409);
   assert.equal((await api(seed.owner_token, 'GET', path))[0].enabled_in_channel, true);
-  assert.equal((await pool.query('SELECT count(*) FROM agent_grants WHERE installation_id=$1', [seed.installation_id])).rows[0].count, '1');
-  await api(seed.owner_token, 'POST', seed.grantPath, { enabled: false });
-  assert.equal((await api(seed.owner_token, 'GET', path))[0].enabled_in_channel, false);
 });
 
 test('only the ready connector can claim approved local work and stream a persisted reply', async () => {
@@ -129,7 +128,7 @@ test('expired local leases reject writes and fail visibly without invoking the s
   assert.equal((await pool.query('SELECT 1 FROM messages WHERE task_id=$1', [task.id])).rowCount, 0);
 });
 
-test('replacement sockets and revoked grants cannot publish results or renew work', async () => {
+test('replacement sockets and revoked owner access cannot publish results or renew work', async () => {
   const seed = await fixture(), task = await queued(seed);
   const socket = await connect(seed.credential);
   await command(socket, 'agent.heartbeat', { auth_status: 'ready' });
@@ -143,9 +142,9 @@ test('replacement sockets and revoked grants cannot publish results or renew wor
     assert.equal(denied.error,'unauthorized');
   }
   await command(replacement, 'agent.heartbeat', { auth_status: 'ready' });
-  await api(seed.owner_token, 'POST', seed.grantPath, { enabled: false });
+  await pool.query('DELETE FROM channel_members WHERE channel_id=$1 AND user_id=$2',[seed.channel_id,seed.owner_id]);
   assert.notEqual((await command(replacement, 'agent.task.claim')).data?.task_id, task.id);
-  assert.notEqual((await store.readTask(seed.owner_id, task.id)).status, 'completed');
+  assert.notEqual((await store.readTask(seed.collaborator_id, task.id)).status, 'completed');
 });
 
 test('disconnect fails an active local execution and retains its partial response', async () => {
@@ -170,11 +169,11 @@ test('revoking channel access fences the current connector before renewal or res
   await command(socket, 'agent.heartbeat', { auth_status: 'ready' });
   const { data: request } = await claimReady(socket);
   await command(socket, 'agent.task.event', { event: event(request.execution_id, 1) });
-  await api(seed.owner_token, 'POST', seed.grantPath, { enabled: false });
+  await pool.query('DELETE FROM channel_members WHERE channel_id=$1 AND user_id=$2',[seed.channel_id,seed.owner_id]);
   assert.equal((await command(socket, 'agent.task.renew')).error, 'installation_not_authorized');
   assert.equal((await command(socket, 'agent.task.event', { event: event(request.execution_id, 2, 'execution.completed') })).error, 'installation_not_authorized');
   assert.equal((await command(socket, 'agent.task.fail')).data, true);
-  assert.equal((await store.readTask(seed.owner_id, task.id)).status, 'failed');
+  assert.equal((await store.readTask(seed.collaborator_id, task.id)).status, 'failed');
   assert.equal((await pool.query('SELECT 1 FROM messages WHERE task_id=$1', [task.id])).rowCount, 0);
 });
 

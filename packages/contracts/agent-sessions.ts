@@ -6,7 +6,7 @@ export interface AgentSessionSummary extends AgentSession {
   created_by: string | null; created_at: string; skill: string; turn_count: number;
 }
 export interface AgentSessionTurn { task: Task; created_at: string; requester_name: string; response?: AgentResponse; detail: string }
-export interface AgentSessionDetail { outputs?: AgentSessionOutputs; session: AgentSessionSummary; turns: AgentSessionTurn[]; next_cursor: string | null }
+export interface AgentSessionDetail { context?: import('./sidekick.js').SidekickContext; outputs?: AgentSessionOutputs; session: AgentSessionSummary; turns: AgentSessionTurn[]; next_cursor: string | null }
 export function parseAgentSessionInput(value: unknown) {
   const v = record(value, ['client_session_id', 'installation_id', 'title', 'skill']);
   return { skill: v.skill === undefined ? undefined : text(v.skill, 80), client_session_id: uuid(v.client_session_id), installation_id: uuid(v.installation_id), title: text(v.title, 160) };
