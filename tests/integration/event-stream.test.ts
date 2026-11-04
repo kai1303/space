@@ -184,16 +184,24 @@ test('committed transaction publishes with bounded parallelism under broker late
   let stop: (() => Promise<void>) | undefined;
   try {
     await bridge.start();
+    let inFlight = 0, peak = 0;
+    const publish = bridge.bus.publish.bind(bridge.bus);
+    bridge.bus.publish = async (event: unknown) => {
+      peak = Math.max(peak, ++inFlight);
+      try { return await publish(event); }
+      finally { inFlight--; }
+    };
     const ids = new Set<string>();
     let complete!: () => void;
     const delivered = new Promise<void>(resolve => { complete = resolve; });
     stop = await receiver.subscribe('delivery.deadline.batch', { durable: 'batch-latency', maxPending: 32 }, async ({ event, ack }: any) => { ack(); ids.add(event.id); if (ids.size === 100) complete(); });
     const started = performance.now();
     await pool.query("INSERT INTO event_outbox(kind,aggregate_id,payload) SELECT 'delivery.deadline','batch',jsonb_build_object('n',n) FROM generate_series(1,100) n");
-    await deadline(delivered, 2000);
+    await deadline(delivered);
     const elapsed = performance.now() - started;
     console.log(`100-event committed transaction with 50ms injected broker latency: ${Math.round(elapsed)}ms`);
     await bridge.close(); bridge = undefined;
+    assert.ok(peak > 1 && peak <= 16, `expected bounded concurrent publishing, observed ${peak}`);
     assert.equal((await pool.query("SELECT count(*)::int AS n FROM event_outbox WHERE aggregate_id='batch'")).rows[0].n, 0);
   } finally {
     await bridge?.close(); bridge = undefined; await stop?.(); await receiver.close();
