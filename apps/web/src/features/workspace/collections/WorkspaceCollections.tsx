@@ -1,6 +1,5 @@
-import { useState } from 'react';
 import type { HubMessage } from '@space/contracts';
-import { Tabs, Avatar, Button } from '@space/ui/primitives';
+import { Avatar, Button } from '@space/ui/primitives';
 import { NavigationIcon } from '@space/ui/navigation';
 import { RichContent } from '@space/ui/rich-text';
 import { WorkspaceFiles } from '../../files/WorkspaceFiles.js';
@@ -18,12 +17,7 @@ const date = (value: string) => new Date(value).toLocaleString([], { month: 'sho
 export function WorkspaceCollections(props: Props) {
   if (props.view === 'todos') return <WorkspaceTodos key={props.workspace} workspace={props.workspace} onOpen={props.onOpen}/>;
   if (props.view === 'files') return <WorkspaceFiles key={props.workspace} workspace={props.workspace} onOpen={props.onOpen}/>;
-  if (props.view === 'saved') return <SavedCollections key={props.workspace} {...props}/>;
   return <Collection key={`${props.workspace}:${props.view}`} {...props}/>;
-}
-function SavedCollections(props: Props) {
-  const [tab,setTab]=useState('messages');
-  return <div className="saved-collections"><Tabs className="todos-saved-tabs" label="Saved items" value={tab} onChange={setTab} items={[{id:'messages',label:'Messages'},{id:'todos',label:'To-dos'}]}/>{tab==='todos'?<WorkspaceTodos workspace={props.workspace} onOpen={props.onOpen} archived/>:<Collection {...props}/>}</div>;
 }
 
 function Collection({ view, workspace, onOpen }: Props) {
