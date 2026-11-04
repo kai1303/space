@@ -5,6 +5,7 @@ import {spawn,type ChildProcess} from 'node:child_process';
 import {createServer} from 'node:net';
 import {mkdir} from 'node:fs/promises';
 import {fileURLToPath} from 'node:url';
+import {stripVTControlCharacters} from 'node:util';
 import {chromium,expect} from '@playwright/test';
 import {Pool} from 'pg';
 import {migrate} from '@space/postgres/migrate';
@@ -50,7 +51,7 @@ test('browser searches actual Typesense across history, channels and replies wit
   const address=await app.listen({host:'127.0.0.1',port:0});
   const webDirectory=fileURLToPath(new URL('../../apps/web',import.meta.url));
   vite=spawn('pnpm',['exec','vite','--host','127.0.0.1','--port',String(webPort),'--strictPort'],{cwd:webDirectory,env:{...process.env,SPACE_API_URL:address},stdio:['ignore','pipe','pipe']});
-  await new Promise<void>((resolve,reject)=>{let output='';const timer=setTimeout(()=>reject(new Error('Vite startup timeout: '+output)),20000);vite!.stdout!.on('data',chunk=>{output+=chunk;if(output.includes('Local:')){clearTimeout(timer);resolve();}});vite!.stderr!.on('data',chunk=>{output+=chunk;});vite!.once('exit',()=>{clearTimeout(timer);reject(new Error('Vite exited: '+output));});});
+  await new Promise<void>((resolve,reject)=>{let output='';const timer=setTimeout(()=>reject(new Error('Vite startup timeout: '+output)),20000);vite!.stdout!.on('data',chunk=>{output+=chunk;if(stripVTControlCharacters(output).includes('Local:')){clearTimeout(timer);resolve();}});vite!.stderr!.on('data',chunk=>{output+=chunk;});vite!.once('exit',()=>{clearTimeout(timer);reject(new Error('Vite exited: '+output));});});
   browser=await chromium.launch({headless:true});const context=await browser.newContext({viewport:{width:1440,height:1000}});
   const signup=await context.request.post(`${web}/v1/auth/sign-up/email`,{data:{name:'Search browser user',email:`${schema}@example.test`,password:randomBytes(18).toString('hex')},headers:{origin:web}});
   assert.equal(signup.status(),200,await signup.text());const actor=(await signup.json()).user.id;
