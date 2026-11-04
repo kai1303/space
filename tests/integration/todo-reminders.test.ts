@@ -47,6 +47,12 @@ before(async () => {
     RETURN NULL;
   END $$;
   CREATE TRIGGER observe_reminder_statement BEFORE UPDATE ON hub_todos FOR EACH STATEMENT EXECUTE FUNCTION observe_reminder_statement()`);
+  // Capture committed inserts transactionally; CDC may drain the actual outbox before assertions.
+  await pool.query(`CREATE TABLE observed_chat_deliveries(id bigint PRIMARY KEY);
+  CREATE FUNCTION observe_chat_delivery() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN
+    INSERT INTO observed_chat_deliveries(id) VALUES(NEW.id); RETURN NULL;
+  END $$;
+  CREATE TRIGGER observe_chat_delivery AFTER INSERT ON chat_delivery_outbox FOR EACH ROW EXECUTE FUNCTION observe_chat_delivery()`);
   await app.ready();
 });
 after(async () => { await app.close(); await pool.end(); await admin.query(`DROP SCHEMA ${schema} CASCADE`); await admin.end(); });
@@ -65,14 +71,15 @@ async function fired(id: string) { return (await pool.query('SELECT reminder_fir
 
 test('parallel duplicates fire once and enqueue one durable realtime change', async () => {
   const todo = await scheduled();
-  await pool.query('DELETE FROM chat_delivery_outbox');
+  await pool.query('DELETE FROM observed_chat_deliveries');
   const results = await Promise.all([bus.receive(todo.data), bus.receive(todo.data)]);
   assert.ok(await fired(todo.id));
   assert.ok(results.every(result => result.acknowledgments === 1));
-  assert.equal((await pool.query('SELECT count(*)::int AS n FROM chat_delivery_outbox')).rows[0].n, 1);
+  assert.equal((await pool.query('SELECT count(*)::int AS n FROM observed_chat_deliveries')).rows[0].n, 1);
   const first = await fired(todo.id);
   await bus.receive(todo.data);
   assert.deepEqual(await fired(todo.id), first);
+  assert.equal((await pool.query('SELECT count(*)::int AS n FROM observed_chat_deliveries')).rows[0].n, 1);
 });
 
 test('early reminders defer to database time instead of firing', async () => {
