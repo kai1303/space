@@ -17,6 +17,7 @@ const pool=new Pool({connectionString:process.env.TEST_DATABASE_URL,options:`-c 
 class ProbeBus extends EventBus {
   readonly handlers=new Map<string,Parameters<EventBus['subscribe']>[2]>();
   override async start() {}
+  override async subscribeTransient() { return () => {}; }
   override async subscribe(filter: string, _options: Parameters<EventBus['subscribe']>[1], handler: Parameters<EventBus['subscribe']>[2]) { this.handlers.set(filter,handler); return async()=>{this.handlers.delete(filter);}; }
   override async close() {}
   async receive(kind:string,data:Record<string,unknown>,available_at=new Date(0).toISOString()) {

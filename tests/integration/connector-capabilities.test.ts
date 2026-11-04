@@ -15,7 +15,7 @@ const descriptor = { id: 'research.local', definition_id: randomUUID(), name: 'R
 const store = new AgentConnectionStore(pool, { connectors: [descriptor] });
 before(async () => { await admin.query(`CREATE SCHEMA ${schema}`); await migrate(pool); });
 after(async () => { await pool.end(); await admin.query(`DROP SCHEMA ${schema} CASCADE`); await admin.end(); });
-test('trusted custom connector controls enrollment, grants, sessions and local delivery', async () => {
+test('trusted custom connector controls enrollment, inherited access, skill selection and local delivery', async () => {
  const owner = await bootstrap(pool);
  await assert.rejects(store.createPairing(owner.owner_id, owner.workspace_id, { connector_id: 'unknown.local' }), /unknown_connector/);
  const pairing = await store.createPairing(owner.owner_id, owner.workspace_id, { connector_id: descriptor.id });
@@ -27,15 +27,16 @@ test('trusted custom connector controls enrollment, grants, sessions and local d
  const rows = await store.channelAgents(owner.owner_id, owner.channel_id);
  const agent = rows.find(row => row.id === id)!;
  assert.deepEqual(agent.skills, descriptor.capabilities.skills);
- assert.deepEqual(agent.granted_skills, []); assert.equal(agent.persistent_sessions, true);
+ assert.deepEqual(agent.granted_skills, descriptor.capabilities.skills); assert.equal(agent.inherits_owner_access, true); assert.equal(agent.persistent_sessions, true);
  await assert.rejects(store.setChannelEnabled(owner.collaborator_id, id, owner.channel_id, true), /installation_not_owned/);
  await assert.rejects(store.setChannelEnabled(owner.owner_id, id, owner.channel_id, true, 'not.supported'), /skill_not_supported/);
  await Promise.all([1, 2].map(() => store.setChannelEnabled(owner.owner_id, id, owner.channel_id, true, 'research.review')));
- assert.deepEqual((await store.channelAgents(owner.owner_id, owner.channel_id)).find(row => row.id === id)!.granted_skills, ['research.review']);
+ assert.deepEqual((await store.channelAgents(owner.owner_id, owner.channel_id)).find(row => row.id === id)!.granted_skills, descriptor.capabilities.skills);
+ assert.equal((await pool.query('SELECT 1 FROM agent_grants WHERE installation_id=$1',[id])).rowCount,0);
  const sessions = new AgentSessionStore(pool);
- const session = await sessions.create(owner.owner_id, owner.thread_id, { client_session_id: randomUUID(), installation_id: id, title: 'Research session' });
+ const session = await sessions.create(owner.owner_id, owner.thread_id, { client_session_id: randomUUID(), installation_id: id, title: 'Research session', skill: 'research.review' });
  assert.equal(session.skill, 'research.review');
- await assert.rejects(store.setChannelEnabled(owner.owner_id, id, owner.channel_id, true), /skill_required/);
+ assert.equal((await store.setChannelEnabled(owner.owner_id, id, owner.channel_id, true)).inherits_owner_access,true);
  await store.setChannelEnabled(owner.owner_id, id, owner.channel_id, true, 'research.run');
  await assert.rejects(sessions.create(owner.owner_id, owner.thread_id, { client_session_id: randomUUID(), installation_id: id, title: 'Choose skill' }), /session_skill_required/);
  const task = await sessions.send(owner.owner_id, session.id, { text: 'Review this' }, randomUUID());
@@ -65,7 +66,7 @@ test('generic channel grants work for remote installations and sessions require 
  assert.ok(await tasks.claimDelivery());
 });
 
-test('API exposes trusted descriptors and routes custom enrollment and skill grants', async () => {
+test('API exposes trusted descriptors and routes custom enrollment with inherited owner access', async () => {
  const {createApi} = await import('@space/server/api');
  const app = createApi(new PostgresStore(pool), {allowDevelopmentTokens:true,pairedConnectors:[descriptor]});
  try {
@@ -77,7 +78,7 @@ test('API exposes trusted descriptors and routes custom enrollment and skill gra
   const pairing=response.json(),credential=randomBytes(32).toString('base64url');
   const claim=await call('POST','/agent-pairings/claim',{code:pairing.code,credential},false); assert.equal(claim.statusCode,201,claim.body);
   const id=claim.json().installation_id;
-  const grant=await call('POST',`/agents/connections/${id}/channels/${owner.channel_id}`,{enabled:true,skill:'research.run'}); assert.equal(grant.statusCode,200,grant.body); assert.deepEqual(grant.json().granted_skills,['research.run']);
+  const grant=await call('POST',`/agents/connections/${id}/channels/${owner.channel_id}`,{enabled:true,skill:'research.run'}); assert.equal(grant.statusCode,200,grant.body); assert.deepEqual(grant.json().granted_skills,[...descriptor.capabilities.skills].sort()); assert.equal(grant.json().inherits_owner_access,true);
   const generic=await call('GET',`/channels/${owner.channel_id}/agents`); assert.ok(generic.json().some((agent:any)=>agent.id===id&&agent.persistent_sessions));
   const legacy=await call('GET',`/channels/${owner.channel_id}/local-codex`); assert.deepEqual(legacy.json(),[]);
  } finally {await app.close();}

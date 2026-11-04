@@ -50,6 +50,7 @@ test('credential invalidation targets its actor, including sockets without subsc
   class RoutingBus extends EventBus {
     changed!:Parameters<EventBus['subscribe']>[2];
     override async start() {}
+    override async subscribeTransient() { return () => {}; }
     override async close() {}
     override async subscribe(filter:string,_options:Parameters<EventBus['subscribe']>[1],handler:Parameters<EventBus['subscribe']>[2]) {
       if(filter==='chat.changed.*')this.changed=handler;
@@ -180,9 +181,11 @@ test('API starts and delivers chat with an unavailable Redis adapter',async()=>{
 
 test('broker recovery replaces a consumer even when old consumer cleanup fails',async()=>{
   class FailingCleanupBus extends EventBus {
-    attached=0; cleaning=false; reconnectNow:()=>void=()=>{};
+    attached=0; cleaning=false; readonly reconnectHandlers=new Set<()=>void>();
+    reconnectNow(){for(const callback of this.reconnectHandlers)callback();}
     override async start() {}
-    override onReconnect(callback:()=>void){this.reconnectNow=callback;return()=>{};}
+    override async subscribeTransient() { return () => {}; }
+    override onReconnect(callback:()=>void){this.reconnectHandlers.add(callback);return()=>{this.reconnectHandlers.delete(callback);};}
     override async subscribe(filter:string){
       if(filter==='chat.changed.*'){const first=++this.attached===1;return async()=>{if(first&&!this.cleaning)throw new Error('broker disconnected during flush');};}
       return async()=>{};

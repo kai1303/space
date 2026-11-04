@@ -389,6 +389,7 @@ test('a broker sequence gap catches up a quiet channel after its hint is evicted
  class ProbeBus extends EventBus{
   readonly handlers=new Map<string,Handler>();
   override async start(){}
+  override async subscribeTransient(){return()=>{};}
   override async subscribe(filter:string,_options:Parameters<InstanceType<typeof EventBus>['subscribe']>[1],handler:Handler){this.handlers.set(filter,handler);return async()=>{this.handlers.delete(filter);};}
   async send(sequence:number,channel_id:string){await this.handlers.get('chat.changed.*')!({sequence,event:{id:randomUUID(),schema,kind:'chat.changed',aggregate_id:channel_id,data:{channel_id}},ack(){},retry(){}});}
  }
