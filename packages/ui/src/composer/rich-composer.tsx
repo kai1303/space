@@ -55,6 +55,7 @@ export function RichComposer({
   attachmentsEnabled = true,
   sendDisabledReason,
   showUnavailableActions = true,
+  showKeyboardHint = true,
   submitLabel,
   autoFocus = false,
 }: {
@@ -80,6 +81,7 @@ export function RichComposer({
   attachmentsEnabled?: boolean;
   sendDisabledReason?: string;
   showUnavailableActions?: boolean;
+  showKeyboardHint?: boolean;
   submitLabel?: string;
   autoFocus?: boolean;
 }) {
@@ -526,7 +528,7 @@ export function RichComposer({
           <EmojiPicker label="Choose emoji" disabled={!ready || sending} restoreFocus={false} onSelect={insert} />
           {findMentions && <IconButton label="Mention someone" size="sm" disabled={!ready || sending} onMouseDown={event => event.preventDefault()} onClick={mentionsUI.begin}><At size={19} /></IconButton>}
           {!findMentions && mentions.length > 0 && (
-            <Popover className="sp-composer-picker" panelClassName="sp-mention-options" label="Mention someone" trigger={<At size={19} />}>
+            <Popover floating disabled={!ready || sending} className="sp-composer-picker" panelClassName="sp-menu-content sp-mention-options" label="Mention someone" trigger={<At size={19} />}>
               {close => <>
                 {mentions.map((person) => (
                   <button
@@ -578,16 +580,16 @@ export function RichComposer({
           </div>
         </div>
       </div>
-      <div className="sp-rich-help">
+      {(showKeyboardHint || sendDisabledReason || sendingVisible || text.length > 9000 || (!plainText && attachmentsEnabled && attachments === undefined)) && <div className="sp-rich-help">
         <span role={sendDisabledReason ? "status" : undefined}>
           {sendDisabledReason ?? (sendingVisible
             ? "Sending…"
             : text.length > 9000
               ? `${text.trim().length}/10,000 characters`
-              : "Enter to send · Shift + Enter to add a new line")}
+              : showKeyboardHint ? "Enter to send · Shift + Enter to add a new line" : null)}
         </span>
         {!plainText && attachmentsEnabled && attachments === undefined && <span>Files stay local in this preview</span>}
-      </div>
+      </div>}
       {error && (
         <p role="alert" className="sp-field-error">
           {error}

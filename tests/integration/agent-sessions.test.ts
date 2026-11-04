@@ -160,7 +160,14 @@ test('history pages recent twenty turns chronologically with only their latest s
   assert.equal(recent.next_cursor, ids[5]);
   const older = await api(a.owner_token, 'GET', `/agent-sessions/${one.id}?before=${recent.next_cursor}`);
   assert.deepEqual(older.turns.map((t: any) => t.task.id), ids.slice(0, 5)); assert.equal(older.next_cursor, null);
+  assert.equal(recent.has_newer, false); assert.equal(older.has_newer, true);
+  const newer = await api(a.owner_token, 'GET', `/agent-sessions/${one.id}?after=${ids[4]}`);
+  assert.deepEqual(newer.turns.map((t: any) => t.task.id), ids.slice(5)); assert.equal(newer.has_newer, false);
+  const middle = await api(a.owner_token, 'GET', `/agent-sessions/${one.id}?after=${ids[0]}`);
+  assert.deepEqual(middle.turns.map((t: any) => t.task.id), ids.slice(1,21)); assert.equal(middle.has_newer, true);
+  await api(a.owner_token, 'GET', `/agent-sessions/${one.id}?before=${ids[1]}&after=${ids[0]}`, undefined, 400);
   const another = await session(a), foreign = await api(a.collaborator_token, 'POST', `/agent-sessions/${another.id}/messages`, { text: 'Other cursor' }, 201);
+  await api(a.owner_token, 'GET', `/agent-sessions/${one.id}?after=${foreign.id}`, undefined, 404);
   await api(a.owner_token, 'GET', `/agent-sessions/${one.id}?before=${foreign.id}`, undefined, 404);
 });
 
@@ -221,7 +228,7 @@ test('detail and stop retain the latest response snapshot across progress events
   assert.equal(stopped.turns[0].response?.activity, undefined);
 });
 
-test('session lists cap at one hundred and changes wake only their linked thread', async () => {
+test('thread session lists cap at one hundred and turns leave unrelated threads untouched', async () => {
   const a = await fixture();
   const ids = Array.from({ length: 101 }, () => randomUUID());
   await pool.query(`INSERT INTO agent_sessions(id,workspace_id,installation_id,origin_thread_id,title,managed,created_by)
@@ -477,4 +484,32 @@ test('session mention references retain their identity across reads without noti
  assert.deepEqual(detail.turns[0].task.request_document.ops[0].attributes.mention,{...mention,label:'Demo collaborator'});
  assert.equal((await pool.query('SELECT 1 FROM mention_notifications WHERE workspace_id=$1',[a.workspace_id])).rowCount,0);
  assert.equal((await pool.query('SELECT 1 FROM tasks WHERE session_id=$1',[one.id])).rowCount,1);
+});
+
+
+test('workspace session navigation is paginated, includes private handoffs only for their owner, and follows membership', async () => {
+  const a = await fixture(), foreign = await fixture();
+  const created = [];
+  for (let i = 0; i < 21; i++) created.push(await session(a, `Sidebar ${i}`));
+  const path = `/workspaces/${a.workspace_id}/agent-sessions`;
+  const page = await api(a.owner_token, 'GET', path);
+  assert.equal(page.items.length, 20);
+  assert.equal(page.items[0].id, created.at(-1).id);
+  assert.equal(page.items[0].channel_id, a.channel_id);
+  assert.equal(page.items[0].channel_archived, false);
+  const older = await api(a.owner_token, 'GET', `${path}?before=${page.next_cursor}`);
+  assert.deepEqual(older.items.map((item: any) => item.id), [created[0].id]);
+  assert.equal(older.next_cursor, null);
+  await api(foreign.owner_token, 'GET', path, undefined, 404);
+  const source = await api(a.owner_token, 'POST', `/channels/${a.channel_id}/messages`, {client_message_id:randomUUID(),text:'Private sidebar context'}, 201);
+  const privateSession = await api(a.owner_token, 'POST', `/workspaces/${a.workspace_id}/sidekick-sessions`, {client_session_id:randomUUID(),installation_id:a.installation_id,skill:'codex.run',source:{channel_id:a.channel_id,message_ids:[source.id]}}, 201);
+  assert.equal((await api(a.owner_token, 'GET', path)).items[0].id, privateSession.id);
+  assert.ok(!(await api(a.collaborator_token, 'GET', path)).items.some((item: any) => item.id === privateSession.id));
+  await api(a.collaborator_token, 'GET', `${path}?before=${privateSession.id}`, undefined, 404);
+  const revision = await pool.query('SELECT revision FROM resource_update_revisions WHERE resource=$1', [`workspace:${a.workspace_id}`]);
+  await session(a, 'Live sidebar entry');
+  const updated = await pool.query('SELECT revision FROM resource_update_revisions WHERE resource=$1', [`workspace:${a.workspace_id}`]);
+  assert.ok(Number(updated.rows[0].revision) > Number(revision.rows[0].revision));
+  await pool.query('DELETE FROM channel_members WHERE channel_id=$1 AND user_id=$2', [a.channel_id,a.collaborator_id]);
+  assert.deepEqual((await api(a.collaborator_token, 'GET', path)).items, []);
 });

@@ -5,7 +5,7 @@ import { categoryEmoji, emojiById, emojiCategories, emojiNative, searchEmoji, em
 export function EmojiPicker({ label = 'Choose emoji', trigger = <Smiley size={19} />, onSelect, disabled = false, restoreFocus = true, className = '' }: {
   label?: string; trigger?: ReactNode; onSelect: (emoji: string) => void; disabled?: boolean; restoreFocus?: boolean; className?: string;
 }) {
-  return <Popover label={label} trigger={trigger} floating className={`sp-emoji-trigger ${className}`} panelClassName="sp-emoji-popover">
+  return <Popover label={label} trigger={trigger} disabled={disabled} floating className={`sp-emoji-trigger ${className}`} panelClassName="sp-emoji-popover">
     {close => <EmojiOptions label={label} disabled={disabled} onSelect={emoji => { onSelect(emoji); close(restoreFocus); }} />}
   </Popover>;
 }

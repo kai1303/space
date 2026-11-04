@@ -31,14 +31,63 @@ function SessionViews({onAccessLost=()=>{}}:{onAccessLost?:()=>void}){
  const open=(id:string)=>{setSelected(id);setPicking(false);};
  return <><div hidden={!picking}><AgentSessions thread="thread" channel="channel" viewerId="user" onAccessLost={onAccessLost} onOpenSession={open}/></div>{selected&&<div hidden={picking}><button onClick={()=>setPicking(true)}>Back to thread</button><AgentSessions thread="thread" channel="channel" viewerId="user" onAccessLost={onAccessLost} initialSessionId={selected}/></div>}</>;
 }
+beforeAll(()=>{HTMLDialogElement.prototype.showModal=function(){this.open=true;};HTMLDialogElement.prototype.close=function(){this.open=false;};});
 beforeAll(()=>Object.defineProperties(Range.prototype,{getBoundingClientRect:{configurable:true,value:()=>new DOMRect()},getClientRects:{configurable:true,value:()=>[]}}));
 afterEach(()=>{cleanup();vi.unstubAllGlobals();});
 afterAll(()=>{Reflect.deleteProperty(Range.prototype,'getBoundingClientRect');Reflect.deleteProperty(Range.prototype,'getClientRects');});
+it('uses the conversation skeleton through initial message loading without replacing loaded messages on refresh',async()=>{
+ const fetch=setup(),original=fetch.getMockImplementation()!;
+ let finishRead!:(value:any)=>void;
+ fetch.mockImplementation(async(path,init)=>path==='/v1/agent-sessions/one'?new Promise(resolve=>{finishRead=resolve;}):original(path,init));
+ const view=render(<AgentSessions thread="thread" channel="channel" viewerId="user" initialSessionId="one" onAccessLost={()=>{}}/>);
+ expect(screen.getByRole('status',{name:'Loading messages'})).toBeTruthy();
+ expect(view.container.querySelector('.chat-conversation-skeleton')).toBeTruthy();
+ expect(screen.queryByText('This session is unavailable.')).toBeNull();
+ const response={ok:true,json:async()=>({session:session('one','Research'),turns:[turn('Research prompt')],next_cursor:null})};
+ await act(async()=>{finishRead(response);});
+ await screen.findByText('Research prompt');
+ expect(fetch.mock.calls.filter(([path])=>path==='/v1/agent-sessions/one')).toHaveLength(1);
+ expect(screen.queryByRole('status',{name:'Loading messages'})).toBeNull();
+ act(()=>{void mocks.refresh?.();});
+ expect(screen.getByText('Research prompt')).toBeTruthy();
+ expect(view.container.querySelector('.chat-conversation-skeleton')).toBeNull();
+});
+it('lets users retry an initial session load failure',async()=>{
+ const fetch=setup();fetch.mockRejectedValueOnce(new Error('Network unavailable'));
+ const view=render(<AgentSessions thread="thread" channel="channel" viewerId="user" initialSessionId="one" onAccessLost={()=>{}}/>);
+ await screen.findByText(/Network unavailable/);
+ expect(view.container.querySelector('.chat-conversation-skeleton')).toBeNull();
+ expect(screen.queryByText('This session is unavailable.')).toBeNull();
+ await userEvent.click(screen.getByRole('button',{name:'Retry loading messages'}));
+ await screen.findByText('Research prompt');
+ expect(screen.queryByRole('alert')).toBeNull();
+});
+it('switches between messages and outputs in one tab row without remounting the draft',async()=>{
+ setup();const view=render(<AgentSessions thread="thread" channel="channel" viewerId="user" initialSessionId="one" onAccessLost={()=>{}}/>);
+ const editor=await screen.findByRole('textbox',{name:'Message agent session'});
+ await screen.findByText('Research prompt');
+ await userEvent.type(editor,'Keep my draft');
+ const tabs=screen.getByRole('tablist',{name:'Session views'});
+ expect(within(tabs).getAllByRole('tab').map(tab=>tab.textContent)).toEqual(['Messages','Preview','Files 1','Changes 0']);
+ expect(screen.queryByRole('button',{name:'Session details',exact:true})).toBeNull();
+ const messages=within(tabs).getByRole('tab',{name:'Messages',exact:true});
+ await userEvent.click(within(tabs).getByRole('tab',{name:'Files 1'}));
+ const files=screen.getByRole('tabpanel',{name:'Files'});
+ expect(within(files).getByRole('button',{name:'result.txt',exact:true})).toBeTruthy();
+ expect(within(files).queryByText('Research')).toBeNull();
+ expect(screen.queryByRole('textbox',{name:'Message agent session'})).toBeNull();
+ expect(editor.isConnected).toBe(true);
+ await userEvent.keyboard('{Home}');
+ expect(document.activeElement).toBe(messages);
+ expect(messages.getAttribute('aria-selected')).toBe('true');
+ expect(screen.getByRole('textbox',{name:'Message agent session'})).toBe(editor);
+ expect(editor.textContent).toContain('Keep my draft');
+ expect(view.container.querySelectorAll('[role=tablist]')).toHaveLength(1);
+});
 it('opens sessions from their thread and keeps the conversation and files in the same session view',async()=>{
  setup();render(<SessionViews/>);
  await userEvent.click(await screen.findByRole('button',{name:'Research',exact:true}));
  await screen.findByText('Research prompt');
- await userEvent.click(screen.getByRole('button',{name:'Session details',exact:true}));
  await userEvent.click(screen.getByRole('tab',{name:'Files 1'}));
  expect(await screen.findByRole('button',{name:'result.txt',exact:true})).toBeTruthy();
  expect(screen.queryByRole('region',{name:'Agent workspace'})).toBeNull();
@@ -52,7 +101,7 @@ it('creates another session and sends only through its own composer with a retry
  await userEvent.click(await screen.findByRole('button',{name:'New agent session'}));
  await userEvent.type(screen.getByRole('textbox',{name:'Session name'}),'Design review');
  await userEvent.click(screen.getByRole('button',{name:'Start session',exact:true}));
- await screen.findByRole('heading',{name:'Ready when you are',exact:true});
+ await screen.findByText('This is the beginning of your conversation with Codex.');
  const composer=await screen.findByRole('textbox',{name:'Message agent session'});
  await userEvent.type(composer,'Follow up');await userEvent.keyboard('{Enter}');
  await waitFor(()=>expect(fetch.mock.calls.some(([path,init])=>path.endsWith('/messages')&&init?.headers&&new Headers(init.headers).get('idempotency-key'))).toBe(true));
@@ -81,8 +130,7 @@ it('shows session-level saved outputs even when their turn is outside the loaded
  fetch.mockImplementation(async(path,init)=>path==='/v1/agent-sessions/one'?{ok:true,json:async()=>({session:session('one','Research'),turns:[],next_cursor:'older-turn',outputs:{files:[{path:'earlier-output.txt',content:'Saved earlier'}],changes:[]}})}:original(path,init));
  render(<SessionViews/>);
  await userEvent.click(await screen.findByRole('button',{name:'Research',exact:true}));
- await screen.findByText('Ready when you are');
- await userEvent.click(screen.getByRole('button',{name:'Session details',exact:true}));
+ await screen.findByRole('button',{name:'Load older history'});
  await userEvent.click(screen.getByRole('tab',{name:'Files 1'}));
  expect(await screen.findByRole('button',{name:'earlier-output.txt',exact:true})).toBeTruthy();
 });
@@ -118,8 +166,7 @@ it('stops work without losing a prepared draft and makes ended sessions read-onl
  await userEvent.click(await screen.findByRole('button',{name:'Research',exact:true}));
  const editor=await screen.findByRole('textbox',{name:'Message agent session'});await userEvent.type(editor,'A prepared follow-up');
  await userEvent.click(screen.getByRole('button',{name:'Stop',exact:true}));
- await screen.findByText('Codex Stopped');expect(editor.textContent).toContain('A prepared follow-up');
- await userEvent.click(screen.getByRole('button',{name:'Session details',exact:true}));
+ await screen.findByText('This turn stopped. You can send another message or start a new session.');expect(editor.textContent).toContain('A prepared follow-up');
  expect(screen.queryByRole('button',{name:'End session',exact:true})).toBeNull();
  ended=true;await act(async()=>{await mocks.refresh?.();});
  await screen.findByText('This session has ended. Its conversation and outputs are saved.');expect(screen.queryByRole('textbox',{name:'Message agent session'})).toBeNull();
@@ -161,26 +208,36 @@ it('keeps sending blocked after acknowledgment until the accepted turn is observ
  await act(async()=>{finishRead({ok:true,json:async()=>({session:session('one','Research'),turns:[turn('Research prompt'),{...turn('Accepted task'),task:accepted}],next_cursor:null})});});
  expect((screen.getByRole('button',{name:'Send now'}) as HTMLButtonElement).disabled).toBe(true);
 });
-it('uses the thread header, message timeline and full composer together with a separate output sidebar',async()=>{
+it('uses the DM header and timeline with a fixed composer and shared output tabs',async()=>{
  setup();const view=render(<AgentSessions thread="thread" channel="channel" viewerId="user" initialSessionId="one" channelName="hi" onBack={()=>{}} onClose={()=>{}} onAccessLost={()=>{}}/>);
  await screen.findByText('Research prompt');
  const log=screen.getByRole('log',{name:'Session conversation'});
  const editor=await screen.findByRole('textbox',{name:'Message agent session'});
  expect(log.classList.contains('chat-timeline')).toBe(true);
- expect(log.contains(editor)).toBe(true);
+ expect(log.parentElement?.getAttribute('data-align')).toBe('start');
+ expect(log.contains(editor)).toBe(false);
+ expect(screen.getByRole('heading',{name:'Codex',exact:true,level:1})).toBeTruthy();
+ expect(editor.getAttribute('data-placeholder')).toBe('Message Codex');
  expect(view.container.querySelectorAll('.chat-channel-header')).toHaveLength(1);
  expect(view.container.querySelector('.agent-session-header')).toBeNull();
- expect(screen.queryByRole('tablist')).toBeNull();
+ expect(view.container.querySelector('.chat-channel-topic')).toBeNull();
+ expect(screen.getByRole('tablist',{name:'Session views'}).textContent).toBe('MessagesPreviewFiles 1Changes 0');
+ expect(screen.queryByRole('button',{name:/unavailable/i})).toBeNull();
+ expect(screen.getAllByRole('tablist')).toHaveLength(1);
  expect(screen.getByRole('button',{name:'Bold',exact:true})).toBeTruthy();
- expect(screen.getByRole('separator',{name:'1 reply'})).toBeTruthy();
+ expect(screen.queryByRole('separator',{name:'1 reply'})).toBeNull();
+ expect(view.container.querySelectorAll('.sp-conversation-date')).toHaveLength(1);
  await userEvent.type(editor,'Keep this draft');
- await userEvent.click(screen.getByRole('button',{name:'Session details',exact:true}));
- await userEvent.click(screen.getByRole('tab',{name:'Files 1'}));
+ const filesButton=screen.getByRole('tab',{name:'Files 1'});
+ await userEvent.click(filesButton);
+ expect(screen.getByRole('tab',{name:'Files 1'}).getAttribute('aria-selected')).toBe('true');
+ expect(within(screen.getByRole('tabpanel',{name:'Files'})).queryByText('Research')).toBeNull();
  expect(await screen.findByRole('button',{name:'result.txt',exact:true})).toBeTruthy();
- await userEvent.click(screen.getByRole('button',{name:'Close session details',exact:true}));
+ await userEvent.click(screen.getByRole('tab',{name:'Messages',exact:true}));
  expect(screen.getByRole('textbox',{name:'Message agent session'})).toBe(editor);
  expect(editor.textContent).toContain('Keep this draft');
- expect(!!(log.compareDocumentPosition(editor)&Node.DOCUMENT_POSITION_CONTAINED_BY)).toBe(true);
+ expect(document.activeElement).toBe(screen.getByRole('tab',{name:'Messages',exact:true}));
+ expect(log.contains(editor)).toBe(false);
 });
 it('renders and sends rich session requests through the shared thread composer',async()=>{
  const fetch=setup(),original=fetch.getMockImplementation()!;
@@ -213,33 +270,6 @@ it('offers people and agents as references in the session composer and excludes 
  const [,request]=fetch.mock.calls.find(([path])=>path.endsWith('/messages'))!;
  expect(JSON.parse(String(request?.body)).document.ops.some((op:any)=>op.attributes?.mention?.id===agent.id)).toBe(true);
  expect(fetch.mock.calls.some(([path,init])=>init?.method==='POST'&&path.includes('/channels/channel/messages'))).toBe(false);
-});
-
-it('opens outputs in a separate right sidebar while preserving the conversation and draft',async()=>{
- setup();render(<AgentSessions thread="thread" channel="channel" viewerId="user" initialSessionId="one" onAccessLost={()=>{}}/>);
- const editor=await screen.findByRole('textbox',{name:'Message agent session'});
- await screen.findByText('Research prompt');
- await userEvent.type(editor,'Keep working here');
- const trigger=screen.getByRole('button',{name:'Session details',exact:true});
- expect(screen.queryByRole('region',{name:'Session details',exact:true})).toBeNull();
- await userEvent.click(trigger);
- const sidebar=await screen.findByRole('region',{name:'Session details',exact:true});
- expect(trigger.getAttribute('aria-expanded')).toBe('true');
- expect(screen.getByRole('log',{name:'Session conversation'})).toBeTruthy();
- expect(screen.getByRole('textbox',{name:'Message agent session'})).toBe(editor);
- expect(within(sidebar).queryByRole('tab',{name:'Conversation',exact:true})).toBeNull();
- await userEvent.click(within(sidebar).getByRole('tab',{name:'Files 1'}));
- expect(await within(sidebar).findByRole('button',{name:'result.txt',exact:true})).toBeTruthy();
- expect(editor.textContent).toContain('Keep working here');
- await userEvent.keyboard('{Escape}');
- await waitFor(()=>expect(screen.queryByRole('region',{name:'Session details',exact:true})).toBeNull());
- expect(document.activeElement).toBe(trigger);
- expect(screen.getByRole('textbox',{name:'Message agent session'})).toBe(editor);
- expect(editor.textContent).toContain('Keep working here');
- await userEvent.click(trigger);
- expect((await screen.findByRole('tab',{name:'Files 1'})).getAttribute('aria-selected')).toBe('true');
- await userEvent.click(screen.getByRole('button',{name:'Close session details'}));
- await waitFor(()=>expect(screen.queryByRole('region',{name:'Session details',exact:true})).toBeNull());
 });
 
 it('selects persistent sessions by capability and includes the selected skill',async()=>{
@@ -337,4 +367,37 @@ it('clears a remounted composer when its previous pending send is accepted',asyn
  await act(async()=>{finish({...turn('Accepted after return').task,status:'queued'});await pending;});
  await waitFor(()=>expect(editor.textContent?.trim()).toBe(''));
  expect(attempt.current).toBeUndefined();
+});
+
+it('shares the DM introduction, conversation details menu, and file navigation without losing drafts',async()=>{
+ setup();render(<AgentSessions thread="thread" channel="channel" viewerId="user" initialSessionId="one" onAccessLost={()=>{}}/>);
+ const introduction=await screen.findByText('This is the beginning of your conversation with Codex.');
+ expect(introduction.closest('.dm-conversation-intro')).toBeTruthy();
+ const editor=await screen.findByRole('textbox',{name:'Message agent session'});
+ await userEvent.type(editor,'Keep this draft');
+ await userEvent.click(screen.getByRole('button',{name:'More conversation actions'}));
+ await userEvent.click(screen.getByRole('menuitem',{name:'Conversation details'}));
+ expect(within(screen.getByRole('dialog',{name:'Conversation details'})).getByText('Research')).toBeTruthy();
+ await userEvent.click(screen.getByRole('button',{name:'Close dialog'}));
+ await waitFor(()=>expect(screen.queryByRole('dialog')).toBeNull());
+ await userEvent.click(screen.getByRole('button',{name:'More conversation actions'}));
+ await userEvent.click(screen.getByRole('menuitem',{name:'Browse files'}));
+ expect(screen.getByRole('tabpanel',{name:'Files'})).toBeTruthy();
+ await userEvent.click(screen.getByRole('tab',{name:'Messages',exact:true}));
+ expect(screen.getByRole('textbox',{name:'Message agent session'})).toBe(editor);
+ expect(editor.textContent).toContain('Keep this draft');
+});
+it('extends the same agent conversation with selected context instead of replacing its introduction',async()=>{
+ const fetch=setup(),original=fetch.getMockImplementation()!;
+ const context={channel_id:'source',channel_name:'product',captured_at:'2026-11-04T09:00:00Z',messages:[{id:'selected',thread_id:'source-thread',author:'Maya',text:'Selected source message',created_at:'2026-11-04T08:55:00Z',files:[]}]};
+ fetch.mockImplementation(async(path,init)=>path==='/v1/agent-sessions/one'?{ok:true,json:async()=>({session:session('one','Research'),turns:[turn('Research prompt')],next_cursor:null,context})}:original(path,init));
+ render(<AgentSessions thread="thread" channel="channel" viewerId="user" initialSessionId="one" onClose={()=>{}} onAccessLost={()=>{}}/>);
+ const introduction=await screen.findByText('This is the beginning of your conversation with Codex.');
+ const selected=screen.getByRole('region',{name:'Selected messages'}),request=screen.getByText('Research prompt');
+ expect(introduction.compareDocumentPosition(selected)&Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+ expect(selected.compareDocumentPosition(request)&Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+ expect(screen.getByRole('button',{name:'Close agent session'})).toBeTruthy();
+ expect(screen.getByRole('tablist',{name:'Session views'})).toBeTruthy();
+ expect(screen.getByRole('textbox',{name:'Message agent session'})).toBeTruthy();
+ expect(screen.getAllByRole('log',{name:'Session conversation'})).toHaveLength(1);
 });

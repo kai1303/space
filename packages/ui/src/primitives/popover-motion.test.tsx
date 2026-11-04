@@ -52,3 +52,35 @@ it('repositions a floating menu when its content grows near the viewport edge', 
     expect(panel.style.top).toBe('8px');
   } finally { rect.mockRestore(); vi.unstubAllGlobals(); Object.defineProperty(window,'innerHeight',{configurable:true,value:viewportHeight}); }
 });
+
+it('leaves text editing keys and Tab navigation inside a form popover alone', async () => {
+  const user = (await import('@testing-library/user-event')).default;
+  render(<Popover label="Filter form" floating trigger="Filter">{()=> <><input aria-label="Filter text"/><button>Apply filter</button></>}</Popover>);
+  fireEvent.click(screen.getByRole('button',{name:'Filter form'}));
+  const input=screen.getByRole('textbox',{name:'Filter text'});
+  input.focus();
+  expect(fireEvent.keyDown(input,{key:'Home'})).toBe(true);
+  await user.tab();
+  expect(document.activeElement).toBe(screen.getByRole('button',{name:'Apply filter'}));
+  expect(screen.getByRole('button',{name:'Filter form'}).getAttribute('aria-expanded')).toBe('true');
+});
+
+it('dismisses when keyboard focus moves outside and skips disabled menu actions', async () => {
+  render(<><Popover label="Account actions" role="menu" floating trigger="Account">{()=> <><button disabled role="menuitem">Unavailable</button><button role="menuitem">Available</button></>}</Popover><button>Outside</button></>);
+  const trigger=screen.getByRole('button',{name:'Account actions'});
+  fireEvent.keyDown(trigger,{key:'ArrowDown'});
+  await waitFor(()=>expect(document.activeElement).toBe(screen.getByRole('menuitem',{name:'Available'})));
+  act(()=>screen.getByRole('button',{name:'Outside'}).focus());
+  expect(trigger.getAttribute('aria-expanded')).toBe('false');
+});
+
+it('positions using layout dimensions instead of the animated scale',()=>{
+  const rect=vi.spyOn(HTMLElement.prototype,'getBoundingClientRect').mockImplementation(function(){return {left:200,right:300,top:100,bottom:130,width:90,height:90,x:200,y:100,toJSON(){}};});
+  const width=vi.spyOn(HTMLElement.prototype,'offsetWidth','get').mockReturnValue(100);
+  const height=vi.spyOn(HTMLElement.prototype,'offsetHeight','get').mockReturnValue(100);
+  try{
+    render(<Menu label="Stable menu" floating items={[{label:'One',onSelect:()=>{}}]}/>);
+    fireEvent.click(screen.getByRole('button',{name:'Stable menu'}));
+    expect(screen.getByRole('menu').style.left).toBe('200px');
+  }finally{rect.mockRestore();width.mockRestore();height.mockRestore();}
+});

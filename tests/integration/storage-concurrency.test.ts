@@ -12,7 +12,12 @@ const schema = `storage_concurrency_${randomUUID().replaceAll('-', '')}`;
 const admin = new Pool({ connectionString: process.env.TEST_DATABASE_URL });
 const pool = new Pool({ connectionString: process.env.TEST_DATABASE_URL, max: 1, connectionTimeoutMillis: 500,
   options: `-c search_path=${schema} -c statement_timeout=1000` });
-before(async () => { await admin.query(`CREATE SCHEMA ${schema}`); await migrate(pool); });
+before(async () => {
+  await admin.query(`CREATE SCHEMA ${schema}`);
+  // The one-second limit tests storage operations, not schema construction.
+  await pool.query('SET statement_timeout=0');
+  try { await migrate(pool); } finally { await pool.query('SET statement_timeout=1000'); }
+});
 after(async () => { await pool.end(); await admin.query(`DROP SCHEMA ${schema} CASCADE`); await admin.end(); });
 function gate() {
   let enter!: () => void, release!: () => void;

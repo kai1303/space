@@ -21,7 +21,7 @@ import { Avatar, ChannelItem, IconButton } from "../primitives/primitives.js";
 export type SidebarChannel = {
   id: string;
   name: string;
-  section: "starred" | "channels" | "direct" | "apps";
+  section: "starred" | "channels" | "direct" | "sessions" | "apps";
   unread?: number;
   private?: boolean;
   initials?: string;
@@ -29,7 +29,7 @@ export type SidebarChannel = {
   online?: boolean;
 };
 type SidebarState = { query: string; expanded: Record<string, boolean> };
-const initialSidebarState: SidebarState = { query: "", expanded: { starred: true, channels: true, direct: true, apps: true } };
+const initialSidebarState: SidebarState = { query: "", expanded: { starred: true, channels: true, direct: true, sessions: true, apps: true } };
 export function WorkspaceSidebar({
   workspace,
   workspaceId = workspace,
@@ -47,6 +47,7 @@ export function WorkspaceSidebar({
   selectedShortcut,
   workspaceControl,
   footer,
+  sectionFooters,
   onCreateChannel,
   showEmptySections = false,
   loading = false,
@@ -67,6 +68,7 @@ export function WorkspaceSidebar({
   selectedShortcut?: string;
   workspaceControl?: ReactNode;
   footer?: ReactNode;
+  sectionFooters?: Partial<Record<SidebarChannel["section"], ReactNode>>;
   onCreateChannel?: () => void;
   showEmptySections?: boolean;
   loading?: boolean;
@@ -147,7 +149,7 @@ export function WorkspaceSidebar({
           items[next]?.focus();
         }}
       >
-        {(["starred", "channels", "direct", "apps"] as const).map((section) => {
+        {(["starred", "channels", "direct", "sessions", "apps"] as const).map((section) => {
           const items = channels.filter(
             (c) =>
               c.section === section &&
@@ -180,7 +182,7 @@ export function WorkspaceSidebar({
                 <span className="sp-sidebar-section-symbol" aria-hidden="true">
                   <motion.span className="sp-sidebar-section-kind"
                     variants={{ rest: { opacity: 1, scale: 1 }, active: { opacity: 0, scale: reduced ? 1 : 0.8 } }}
-                    transition={transition}>{section === "starred" ? <NavigationIcon name="star" size={16}/> : section === "channels" ? <NavigationIcon name="channels" size={16}/> : section === "direct" ? <NavigationIcon name="dms" size={16}/> : <NavigationIcon name="apps" size={16}/>}</motion.span>
+                    transition={transition}>{section === "starred" ? <NavigationIcon name="star" size={16}/> : section === "channels" ? <NavigationIcon name="channels" size={16}/> : section === "direct" ? <NavigationIcon name="dms" size={16}/> : section === "sessions" ? <NavigationIcon name="agents" size={16}/> : <NavigationIcon name="apps" size={16}/>}</motion.span>
                   <motion.span className="sp-sidebar-section-caret"
                     variants={{ rest: { opacity: 0, scale: reduced ? 1 : 0.8, rotate: isOpen ? 90 : 0 }, active: { opacity: 1, scale: 1, rotate: isOpen ? 90 : 0 } }}
                     transition={transition}><NavigationIcon name="section-chevron" size={14}/></motion.span>
@@ -191,6 +193,7 @@ export function WorkspaceSidebar({
                       starred: "Starred",
                       channels: "Channels",
                       direct: "Direct messages",
+                      sessions: "Agent sessions",
                       apps: "Apps",
                     }[section]
                   }
@@ -210,7 +213,7 @@ export function WorkspaceSidebar({
                     icon={
                       c.section === "direct" ? (
                         <span className="sp-sidebar-avatar" aria-hidden="true"><Avatar name={c.name} initials={c.initials ?? c.name.slice(0, 2).toUpperCase()} image={c.image} size="sm" presence={c.online ? 'online' : 'offline'}/></span>
-                      ) : c.section === "apps" ? (
+                      ) : (c.section === "apps" || c.section === "sessions") ? (
                         <NavigationIcon name="agents" size={16}/>
                       ) : c.section === "starred" ? (
                         <NavigationIcon name="star" size={16}/>
@@ -223,6 +226,7 @@ export function WorkspaceSidebar({
                   />
                   </motion.div>
                 ))}
+                {sectionFooters?.[section]}
                 {section === "channels" && onCreateChannel && <button className="sp-sidebar-section-toggle sp-sidebar-create" type="button" onClick={onCreateChannel}><NavigationIcon name="plus" size={17}/> Add channel</button>}
               </Reveal>
             </motion.section>

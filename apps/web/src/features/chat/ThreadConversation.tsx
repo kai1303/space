@@ -7,19 +7,33 @@ import {ArrowLeft,ChatCircle,X} from '@phosphor-icons/react';
 import {AgentMessageBody} from '../agents/AgentMessageBody.js';
 import {AssetAttachments} from '../files/AssetAttachments.js';
 
-export function ConversationHeader({title,channel,icon=<ChatCircle size={20}/>,status,actions,onBack,onClose,backLabel='Back to thread'}: {
- title:string;channel?:string;icon?:ReactNode;status?:string;actions?:ReactNode;onBack?:()=>void;onClose?:()=>void;backLabel?:string;
+export function ConversationHeader({title,channel,icon=<ChatCircle size={20}/>,status,actions,onBack,onClose,backLabel='Back to thread',heading,topic}: {
+ title:string;channel?:string;icon?:ReactNode;status?:string;actions?:ReactNode;onBack?:()=>void;onClose?:()=>void;backLabel?:string;heading?:ReactNode;topic?:ReactNode;
 }) {
- return <header className="chat-channel-header"><div className="chat-thread-title">{icon}<h2>{title}</h2>{channel&&<span>#{channel}</span>}{status&&<span role="status" className="chat-thread-status">{status}</span>}</div><div className="chat-header-actions">{onBack&&<IconButton label={backLabel} onClick={onBack}><ArrowLeft size={20}/></IconButton>}{actions}{onClose&&<IconButton label={`Close ${title.toLowerCase()}`} onClick={onClose}><X size={20}/></IconButton>}</div></header>;
+ return <header className="chat-channel-header">{heading??<div className="chat-thread-title">{icon}<h2>{title}</h2>{channel&&<span>#{channel}</span>}{status&&<span role="status" className="chat-thread-status">{status}</span>}</div>}{topic}<div className="chat-header-actions">{onBack&&<IconButton label={backLabel} onClick={onBack}><ArrowLeft size={20}/></IconButton>}{actions}{onClose&&<IconButton label={`Close ${title.toLowerCase()}`} onClick={onClose}><X size={20}/></IconButton>}</div></header>;
 }
-export function ConversationComposer({typingIndicator,...props}:ComponentProps<typeof RichComposer>&{typingIndicator?:ReactNode}) {
- return <div className="chat-compose">{typingIndicator}<RichComposer {...props}/></div>;
+export function ConversationNavigation({children}:{children:ReactNode}) {
+ return <div className="chat-channel-tabs"><span><ChatCircle size={15}/> Messages</span>{children}</div>;
 }
-export function ConversationMessage({message,viewerId,arrival,onReact,onReply,replyCount,actions,footer,onMentionClick,streaming,body,children}: {
+export function ConversationIntroduction({title,icon,children}:{title:string;icon:ReactNode;children:ReactNode}) {
+ return <div className="chat-channel-welcome dm-conversation-intro"><div className="chat-empty-icon">{icon}</div><h2>{title}</h2><p>{children}</p></div>;
+}
+export function ConversationComposer({typingIndicator,onBlurCapture,...props}:ComponentProps<typeof RichComposer>&{typingIndicator?:ReactNode;onBlurCapture?:ComponentProps<'div'>['onBlurCapture']}) {
+ return <div className="chat-compose" onBlurCapture={onBlurCapture}>{typingIndicator}<RichComposer showKeyboardHint={false} {...props}/></div>;
+}
+type MessageIdentity = Pick<ChatMessage,'author'|'created_at'>;
+export function continuesMessageGroup(message:MessageIdentity,previous?:MessageIdentity) {
+ if(!previous || message.author.id!==previous.author.id || message.author.kind!==previous.author.kind) return false;
+ const current=new Date(message.created_at), prior=new Date(previous.created_at), elapsed=current.getTime()-prior.getTime();
+ // Five minutes is Space's grouping window; Slack's exact cutoff wasn't observable.
+ return elapsed>=0 && elapsed<5*60*1000 && current.toDateString()===prior.toDateString();
+}
+export function ConversationMessage({message,previous,viewerId,arrival,onReact,onReply,replyCount,actions,footer,onMentionClick,streaming,body,children}: {
+ previous?:MessageIdentity;
  message:ChatMessage;viewerId:string;arrival?:boolean;onReact?:(emoji:string)=>void;onReply?:()=>void;replyCount?:number;
  actions?:ComponentProps<typeof Message>['actions'];footer?:ReactNode;onMentionClick?:(mention:MentionReference)=>void;streaming?:boolean;body?:ReactNode;children?:ReactNode;
 }) {
- return <Message author={message.author.name} initials={message.author.name.slice(0,2).toUpperCase()} agent={message.author.kind==='agent'} tone={message.author.kind==='agent'?'green':message.author.id===viewerId?'blue':'purple'} arrival={arrival} time={new Date(message.created_at).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})} reactions={(message.reactions??[]).map(reaction=>({emoji:reaction.emoji,count:reaction.count,active:reaction.user_ids.includes(viewerId)}))} onReact={onReact} onReply={onReply} replyCount={replyCount??message.reply_count} actions={actions} footer={footer}>
+ return <Message grouped={continuesMessageGroup(message,previous)} author={message.author.name} initials={message.author.name.slice(0,2).toUpperCase()} agent={message.author.kind==='agent'} tone={message.author.kind==='agent'?'green':message.author.id===viewerId?'blue':'purple'} arrival={arrival} time={new Date(message.created_at).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})} reactions={(message.reactions??[]).map(reaction=>({emoji:reaction.emoji,count:reaction.count,active:reaction.user_ids.includes(viewerId)}))} onReact={onReact} onReply={onReply} replyCount={replyCount??message.reply_count} actions={actions} footer={footer}>
   {body??<><AgentMessageBody message={message} viewerId={viewerId} onMentionClick={onMentionClick} streaming={streaming}/>{!!message.attachments?.length&&<AssetAttachments assets={message.attachments}/>}</>}{children}
  </Message>;
 }

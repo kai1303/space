@@ -225,10 +225,14 @@
   display: flex;
   gap: 2px;
   align-items: center;
-  padding: 4px 4px 4px 6px;
+  padding: 0 4px 0 6px;
   min-height: 40px;
 }
 .sp-rich-actions > .sp-button {
+  width: 28px;
+  height: 28px;
+  min-height: 28px;
+  padding: 4px;
   border-radius: 4px;
 }
 .sp-attach-trigger.sp-button { border-radius: 50%; background: var(--sp-surface-hover); }

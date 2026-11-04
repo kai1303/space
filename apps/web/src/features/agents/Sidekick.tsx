@@ -15,10 +15,11 @@ export function Sidekick({ workspace, viewerId, source, onClose, ...draftProps }
   const [page,setPage]=useState<Page>({items:[],next_cursor:null}),[selected,setSelected]=useState<SidekickSession>();
   const [creating,setCreating]=useState(!!source),[loading,setLoading]=useState(true),[busy,setBusy]=useState(false),[error,setError]=useState(''),[retry,setRetry]=useState(0);
   const generation=useRef(0);
+  const autoStarted=useRef(false);
   const alive=useRef(true),attempt=useRef<{fingerprint:string;id:string}|undefined>(undefined),drafts=useRef({});
   const sourceKey=JSON.stringify(source);
   useEffect(()=>{alive.current=true;return()=>{alive.current=false;};},[]);
-  useEffect(()=>{generation.current++;setBusy(false);setCreating(!!source);setSelected(undefined);attempt.current=undefined;setError('');},[sourceKey]);
+  useEffect(()=>{generation.current++;setBusy(false);setCreating(!!source);setSelected(undefined);attempt.current=undefined;autoStarted.current=false;setError('');},[sourceKey]);
   useEffect(()=>{
     let active=true;setLoading(true);
     void Promise.all([request<SidekickAgent[]>(`/workspaces/${workspace}/sidekick-agents`),request<Page>(`/workspaces/${workspace}/sidekick-sessions`)]).then(([available,list])=>{
@@ -41,6 +42,11 @@ export function Sidekick({ workspace, viewerId, source, onClose, ...draftProps }
     } catch(reason) { if(alive.current&&version===generation.current)setError(reason instanceof Error&&reason.message==='sidekick_context_too_large'?'This conversation is too large to attach. Select fewer messages (up to 50).':errorText(reason)); }
     finally { if(alive.current&&version===generation.current)setBusy(false); }
   }
+  useEffect(()=>{
+    if(loading||busy||error||!creating||!source||!choice||autoStarted.current||agents.length!==1||agents[0]!.capabilities.skills.length!==1)return;
+    autoStarted.current=true;
+    void start();
+  },[loading,busy,error,creating,sourceKey,choice,agents]);
   async function older() {
     if(!page.next_cursor||busy)return;setBusy(true);setError('');
     try {const next=await request<Page>(`/workspaces/${workspace}/sidekick-sessions?before=${page.next_cursor}`);if(alive.current)setPage(current=>({items:[...current.items,...next.items],next_cursor:next.next_cursor}));}

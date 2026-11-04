@@ -86,7 +86,7 @@
 }
 .sp-agent-response { display: grid; gap: var(--sp-space-2); min-width: 0; }
 .sp-agent-response > .sp-tool-timeline { margin: 0; }
-.sp-agent-markdown { min-width: 0; overflow-wrap: anywhere; }
+.sp-agent-markdown { min-width: 0; overflow-wrap: anywhere; white-space: normal; }
 .sp-agent-markdown > :first-child { margin-top: 0; }
 .sp-agent-markdown > :last-child { margin-bottom: 0; }
 .sp-agent-markdown a { color: var(--sp-info); text-decoration: underline; }

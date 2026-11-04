@@ -5,6 +5,15 @@ import { Message } from "./index.js";
 
 afterEach(cleanup);
 describe("Space conversation", () => {
+  it("keeps the author and actions accessible in grouped messages", async () => {
+    let opened = 0;
+    const {container} = render(<Message grouped author="Alex" initials="AL" time="10:42" replyCount={1} onReply={()=>opened++}>Another message</Message>);
+    expect(container.querySelector('.sp-avatar')).toBeNull();
+    expect(container.querySelector('.sp-sr-only')?.textContent).toContain('Alex');
+    expect(container.querySelector('.sp-sr-only')?.textContent).toContain('10:42');
+    await userEvent.click(screen.getByRole('button',{name:'1 reply View thread'}));
+    expect(opened).toBe(1);
+  });
   it("opens the thread from its keyboard-focusable reply row", async () => {
     let opened = 0;
     render(<Message author="Alex" initials="AL" time="10:42" replyCount={2} onReply={() => opened++}>Hello</Message>);

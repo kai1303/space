@@ -2,7 +2,15 @@
 
 Space searches accessible workspace conversations through Typesense. PostgreSQL remains authoritative for message content, revision and access. The top search button searches across channels and direct messages without leaving the current view; a conversation's search button fixes the scope to that conversation. Results include older history and ordinary thread replies. Selecting a result uses the existing source-message API, which checks access again, and opens the thread for a reply.
 
-Agent-session messages are excluded. Search covers up to 32,000 characters of message text and rich-text link targets per indexed document. It does not extract attachment contents or search channel memory. Semantic/vector search, relevance customization and result highlighting are not implemented. The production UI uses remote search; gallery demonstrations retain their local examples.
+Agent-session messages are excluded. Search covers up to 32,000 characters of message text and rich-text link targets per indexed document. It does not extract attachment contents or search channel memory. Semantic/vector search and relevance customization are not implemented. The browser highlights literal query terms in authorized message text; it does not render engine-provided HTML. The production UI uses remote search; gallery demonstrations retain their local examples.
+
+## Search interface
+
+The entry palette is aligned with the top search bar. Typing shows a “Show results for” action; Enter expands a wide results surface. From, In, Has a link, Threads only and Date controls compose the supported query syntax. Channel search keeps its fixed channel scope. Author/channel text and UTC date inputs are available through filter popovers; there are no unsupported source tabs or AI search actions.
+
+Results show author avatars, conversation names, timestamps, safe term highlighting and reply labels. Counts describe the messages loaded so far, with a plus when a continuation exists. Sort order is explicitly newest first. Escape closes a focused filter popover first, then search; selecting a result opens the existing authorized source context.
+
+This layout is grounded in live Slack browser observations on 2026-11-04. Space adapts Slack’s full-page results to its shared modal dialog, so keyboard focus remains contained until search closes. Slack’s navigation route, relevance ranking, recent-place suggestions and exact total counts are not reproduced.
 
 ## Query syntax
 
@@ -38,7 +46,7 @@ There is no periodic queue scan, synchronous startup table scan or explicit data
 - The API admits at most 16 simultaneous searches per process and two per actor per process; excess requests return `search_busy`.
 - Each request reads batches of 50 engine candidates, at most five batches, and returns at most 20 hydrated results. An empty page may still have a continuation when stale candidates consumed the work budget.
 - Pagination stops after 5,000 scanned candidates. The browser retains at most 500 results and asks the user to refine the query thereafter.
-- Engine requests time out after ten seconds. The UI debounces query changes, aborts superseded requests, ignores late responses and supports explicit retry and load more; it does not poll.
+- Engine requests time out after ten seconds. The UI submits searches with Enter or the search action, aborts superseded requests, ignores late responses and supports explicit retry and load more; it does not poll.
 
 Results sort by creation time descending, immutable `search_order` descending, then revision descending. A cursor binds the actor, workspace, original query and optional channel to the last candidate's creation time/order, a scanned-candidate count and the first request's time cutoff. Each continuation selects keys strictly below the previous candidate rather than skipping an offset, so deleting an earlier result does not skip the next result. It is still not a database or index snapshot: edits, membership changes and delayed indexing can change which messages match or become available during traversal. The UI deduplicates displayed message IDs. Do not treat a search traversal as an export or exhaustive audit.
 

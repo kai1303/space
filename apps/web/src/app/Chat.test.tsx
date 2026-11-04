@@ -974,7 +974,7 @@ it('retries a failed initial message request and connects after both snapshots r
     return initialFetch(...args);
   });
   render(<Chat />);
-  const retry = await screen.findByRole('button', { name: 'Retry loading messages' });
+  const retry = await screen.findByRole('button', { name: 'Retry loading messages' }, { timeout: 5000 });
   const firstSocket = latestChatSocket();
   expect(firstSocket.connected).toBe(true);
   expect(firstSocket.requests.some((request: any) => request.name === 'channel.subscribe')).toBe(false);
@@ -1024,7 +1024,7 @@ it('opens a task inside its unified agent session and clears the session after r
   await act(async()=>{socket.receive('chat.events',{channel_id:'first',cursor:'2',events:[{channel_id:'first',thread_id:'thread',sequence:'2',occurred_at:'2026-11-03T08:00:00Z',type:'task.event',payload:{task_id:task.id,type:'task.completed',owner_id:'user',actor_id:'agent',installation_id:'agent',data:{goal:task.goal,result:task.result}}}]},vi.fn());});
   await userEvent.click(screen.getByRole('button',{name:'Reply to Kai'}));
   await userEvent.click(await screen.findByRole('button',{name:'Open agent session'}));
-  await screen.findByRole('heading',{name:'Agent session',exact:true});
+  await screen.findByRole('heading',{name:'Research agent',exact:true,level:1});
   await within(screen.getByRole('log',{name:'Session conversation'})).findByText('The result is saved.');
   const panel=screen.getByRole('region',{name:'Agent session',exact:true});
   expect(within(panel).queryByRole('button',{name:'New agent session'})).toBeNull();
@@ -1032,9 +1032,9 @@ it('opens a task inside its unified agent session and clears the session after r
   await waitFor(()=>expect(screen.queryByRole('region',{name:'Thread',exact:true})).toBeNull());
   expect(screen.queryByRole('tab',{name:'Agent sessions',exact:true})).toBeNull();
   expect(screen.queryByRole('region',{name:'Agent workspace'})).toBeNull();
-  await userEvent.click(screen.getByRole('button',{name:'Session details',exact:true}));await screen.findByText('No preview attached');
+  await userEvent.click(screen.getByRole('tab',{name:'Preview',exact:true}));await screen.findByText('No preview attached');
   await act(async()=>{socket.receive('chat.error',{error:'not_found'});});
-  await waitFor(()=>expect(screen.queryByRole('heading',{name:'Agent session',exact:true})).toBeNull());
+  await waitFor(()=>expect(screen.queryByRole('heading',{name:'Research agent',exact:true,level:1})).toBeNull());
   expect(screen.queryByText('Conversation with an agent task')).toBeNull();
 });
 it('renders saved agent replies without session action buttons in the channel or thread', async()=>{
@@ -1222,19 +1222,19 @@ it('opens a persistent agent session from its channel link without duplicating t
  await userEvent.click(await screen.findByRole('button',{name:`Agent session: ${reference.text}`}));
  const editor=await screen.findByRole('textbox',{name:'Message agent session'});
  await userEvent.type(editor,'Retain this session draft');
- await userEvent.click(screen.getByRole('button',{name:'Session details',exact:true}));
- await screen.findByRole('region',{name:'Session details',exact:true});
+ await userEvent.click(screen.getByRole('tab',{name:'Preview',exact:true}));
+ await screen.findByRole('tabpanel',{name:'Preview',exact:true});
  await userEvent.click(screen.getByRole('button',{name:'Close agent session'}));
  expect(document.activeElement).toBe(channelLink);
  expect(sessionPanel.hasAttribute('inert')).toBe(true);
  await waitFor(()=>expect(sessionPanel.hidden).toBe(true));
  await userEvent.click(channelLink);
  expect(document.activeElement).toBe(sessionPanel);
- await userEvent.click(screen.getByRole('button',{name:'Close session details',exact:true}));
+ await userEvent.click(screen.getByRole('tab',{name:'Messages',exact:true}));
  const reopened=await screen.findByRole('textbox',{name:'Message agent session'});
  expect(reopened).toBe(editor);
  expect(reopened.textContent).toContain('Retain this session draft');
- expect(document.activeElement).toBe(screen.getByRole('button',{name:'Session details',exact:true}));
+ expect(document.activeElement).toBe(screen.getByRole('tab',{name:'Messages',exact:true}));
 });
 it('keeps earlier thread history reachable when the current page contains only hidden session reference records',async()=>{
  const root={...paginatedMessage('Parent outside the current page','1'),agent_sessions:[{id:'session',title:'Research',agent_name:'Codex'}]};
@@ -1268,6 +1268,26 @@ it('publishes local typing and displays other people separately in the channel a
  expect(screen.getByText('Ari').closest('main')?.classList.contains('chat-channel')).toBe(true);
  act(()=>socket.receive('disconnect','transport close'));
  expect(screen.queryByText('Ari')).toBeNull();expect(screen.queryByText('Sam')).toBeNull();
+});
+
+it.each([false,true])('keeps the DM introduction before populated history only at its beginning: older=%s', async hasOlder => {
+ const dm={id:'self',workspace_id:'workspace',kind:'direct',name:'Kai (you)',private:true,joined:true,participants:[{id:'user',name:'Kai',image:null,presence:'active'}],hidden:false,topic:'',description:'',archived_at:null};
+ const note={...paginatedMessage('A saved personal note','1'),channel_id:'self'};
+ vi.stubGlobal('fetch',vi.fn(async(path:string)=>({ok:true,status:200,json:async()=>{
+  if(path.startsWith('/v1/workspaces?'))return{items:[{id:'workspace',name:'Team'}],next_cursor:null};
+  if(path.includes('/direct-messages?'))return{items:[dm],next_cursor:null};
+  if(path==='/v1/channels/self')return dm;
+  if(path.includes('/channels?'))return{items:[{id:'first',name:'general',joined:true,workspace_id:'workspace'}],next_cursor:null};
+  if(isMessageHistory(path))return path.includes('/channels/self/')?messagePage([note],{has_older:hasOlder}):messagePage();
+  if(path.includes('/history'))return{events:[],cursor:'0',has_more:false};
+  return[];
+ }})));
+ render(<Chat/>);
+ await userEvent.click(await screen.findByRole('button',{name:'Kai (you)',exact:true}));
+ const content=await screen.findByText(note.text),list=screen.getByLabelText('Messages in Kai (you)');
+ const intro=within(list).queryByText('Your space for notes, links, and files.');
+ if(hasOlder)expect(intro).toBeNull();
+ else{expect(intro).not.toBeNull();expect(intro!.compareDocumentPosition(content)&Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();}
 });
 
 it.each(['channel', 'workspace'] as const)('opens self DMs inside Home and preserves sidebar, drafts and navigation context: revoke=%s', async revokeScope => {
@@ -1494,6 +1514,7 @@ it('searches the whole workspace from a hub and opens an older cross-channel mes
   const dialog = await screen.findByRole('dialog', { name: 'Search workspace' });
   expect(screen.getByRole('heading', { name: 'Threads', exact: true })).toBeTruthy();
   fireEvent.change(within(dialog).getByRole('searchbox'), { target: { value: 'older' } });
+  fireEvent.submit(within(dialog).getByRole('searchbox').closest('form')!);
   await userEvent.click(await within(dialog).findByRole('button', { name: /Older indexed message/ }));
   const source = await screen.findByRole('dialog', { name: 'Original message in #second' });
   await within(source).findByText('Freshly authorized old message');
@@ -1514,6 +1535,7 @@ it('opens an indexed reply outside loaded channel history with fresh source auth
   await userEvent.click(screen.getByRole('button', { name: 'Search in first' }));
   const dialog = await screen.findByRole('dialog', { name: 'Search in first' });
   fireEvent.change(within(dialog).getByRole('searchbox'), { target: { value: 'old' } });
+  fireEvent.submit(within(dialog).getByRole('searchbox').closest('form')!);
   await userEvent.click(await within(dialog).findByRole('button', { name: /Indexed old reply/ }));
   const source = await screen.findByRole('dialog', { name: 'Original message in #first' });
   await within(source).findByText('Authorized old reply');
@@ -1522,43 +1544,91 @@ it('opens an indexed reply outside loaded channel history with fresh source auth
 });
 
 it('selects multiple messages and opens a private sidekick handoff without posting to the channel',async()=>{
+ const user=userEvent.setup();
  const rows=[paginatedMessage('First selected message','1'),paginatedMessage('Second selected message','2','another-thread')];
+ const session={id:'private-session',channel_id:'self',workspace_id:'workspace',origin_thread_id:'private-thread',installation_id:'mine',title:'Selected messages',state:'active',managed:true,created_by:'user',owner_id:'user',agent_name:'My Codex',created_at:rows[0]!.created_at,skill:'codex.run',turn_count:0};
+ const context={channel_id:'first',channel_name:'first',captured_at:rows[0]!.created_at,messages:rows.map(message=>({id:message.id,thread_id:message.thread_id,author:message.author.name,text:message.text,created_at:message.created_at,files:[]}))};
  mockPaginatedChat(()=>messagePage(rows));
  const fallback=vi.mocked(fetch).getMockImplementation()!;
  vi.mocked(fetch).mockImplementation(async(input,init)=>{
   const path=String(input);
   if(path.endsWith('/sidekick-agents'))return {ok:true,json:async()=>[{id:'mine',name:'My Codex',owner_id:'user',enabled:true,capabilities:{skills:['codex.run'],persistent_sessions:true}}]} as Response;
-  if(path.endsWith('/sidekick-sessions'))return {ok:true,json:async()=>({items:[],next_cursor:null})} as Response;
+  if(path.endsWith('/sidekick-sessions'))return {ok:true,json:async()=>init?.method==='POST'?session:{items:[],next_cursor:null}} as Response;
+  if(path==='/v1/agent-sessions/private-session')return {ok:true,json:async()=>({session,context,turns:[],next_cursor:null})} as Response;
   return fallback(input,init);
  });
- render(<Chat/>);await screen.findByText(rows[0]!.text);
- const message=screen.getByText(rows[0]!.text).closest('.chat-message-anchor')!;
- await userEvent.click(within(message as HTMLElement).getByRole('button',{name:'More actions',exact:true}));
- await userEvent.click(await screen.findByRole('menuitem',{name:'Select message',exact:true}));
- await userEvent.click(screen.getByRole('checkbox',{name:/Select message from Kai: Second selected/}));
+ render(<Chat/>);await screen.findByText(rows[0]!.text, {}, { timeout: 5000 });
+ await user.click(screen.getByText(rows[0]!.text));
+ expect(screen.queryByRole('region',{name:'Selected messages'})).toBeNull();
+ await user.keyboard('{Meta>}');
+ await user.click(screen.getByText(rows[0]!.text));
+ await user.keyboard('{/Meta}');
+ expect(screen.getByRole('button',{name:/Select message from Kai: First selected/}).getAttribute('aria-pressed')).toBe('true');
+ expect(screen.queryByRole('checkbox')).toBeNull();
+ const secondSelection=screen.getByRole('button',{name:/Select message from Kai: Second selected/});
+ await user.click(secondSelection);
+ expect(secondSelection.getAttribute('aria-pressed')).toBe('true');
+ await user.keyboard(' ');
+ expect(secondSelection.getAttribute('aria-pressed')).toBe('false');
+ await user.keyboard('{Enter}');
+ expect(secondSelection.getAttribute('aria-pressed')).toBe('true');
  expect(screen.getByText('2 selected')).toBeTruthy();
- await userEvent.click(within(screen.getByRole('region',{name:'Selected messages'})).getByRole('button',{name:'Discuss with agent'}));
+ await user.click(within(screen.getByRole('region',{name:'Selected messages'})).getByRole('button',{name:'Discuss with agent'}));
  const panel=await screen.findByRole('region',{name:'My sidekick'});
- await within(panel).findByText(/2 selected messages/);
+ await within(panel).findByRole('heading',{name:'My Codex',exact:true,level:1});
+ const contextSection=await within(panel).findByRole('region',{name:'Selected messages'});
+ expect(within(contextSection).getByText(rows[0]!.text)).toBeTruthy();
+ expect(within(contextSection).getByText(rows[1]!.text)).toBeTruthy();
+ expect(within(panel).getByRole('log',{name:'Session conversation'}).contains(contextSection)).toBe(true);
+ expect(screen.queryByRole('dialog',{name:'Selected messages'})).toBeNull();
+ const creates=vi.mocked(fetch).mock.calls.filter(([path,init])=>String(path).endsWith('/sidekick-sessions')&&init?.method==='POST');
+ expect(creates).toHaveLength(1);
+ expect(JSON.parse(String(creates[0]![1]?.body))).toMatchObject({installation_id:'mine',source:{channel_id:'first',message_ids:rows.map(row=>row.id)}});
+ expect(vi.mocked(fetch).mock.calls.some(([path,init])=>String(path).endsWith('/messages')&&init?.method==='POST')).toBe(false);
  expect(latestChatSocket().requests.some((request:any)=>request.name==='message.send')).toBe(false);
- await userEvent.click(within(panel).getByRole('button',{name:'Close my sidekick'}));
+ await user.click(within(panel).getByRole('button',{name:'Close agent session'}));
  expect(screen.queryByRole('checkbox')).toBeNull();
 });
 
-it('hands off the whole thread by ID instead of only its loaded messages',async()=>{
+it('keeps the thread header free of the sidekick handoff action',async()=>{
  const root=paginatedMessage('Whole thread source','1');mockPaginatedChat(()=>messagePage([root],{has_older:true}));
- const fallback=vi.mocked(fetch).getMockImplementation()!;
- vi.mocked(fetch).mockImplementation(async(input,init)=>{
-  const path=String(input);
-  if(path.endsWith('/sidekick-agents'))return {ok:true,json:async()=>[]} as Response;
-  if(path.endsWith('/sidekick-sessions'))return {ok:true,json:async()=>({items:[],next_cursor:null})} as Response;
-  return fallback(input,init);
- });
  render(<Chat/>);await screen.findByText(root.text);
  await userEvent.click(screen.getByRole('button',{name:'Reply to Kai'}));
  const thread=await screen.findByRole('region',{name:'Thread',exact:true});
- await userEvent.click(within(thread).getByRole('button',{name:'Discuss with agent'}));
- const panel=await screen.findByRole('region',{name:'My sidekick'});
- await within(panel).findByText(/The whole thread will be attached/);
- expect(screen.queryByRole('region',{name:'Thread',exact:true})).toBeNull();
+ expect(within(thread).queryByRole('button',{name:'Discuss with agent'})).toBeNull();
+ expect(within(thread).getByRole('button',{name:'Close thread'})).toBeTruthy();
+});
+
+it('opens agent sessions below direct messages, retains drafts, and refreshes sidebar entries from workspace events',async()=>{
+ const user=userEvent.setup();
+ mockPaginatedChat(()=>messagePage([paginatedMessage('Channel source','1')]));
+ const fallback=vi.mocked(fetch).getMockImplementation()!;
+ const session={id:'sidebar-session',channel_id:'first',channel_archived:false,workspace_id:'workspace',origin_thread_id:'session-thread',installation_id:'mine',title:'Launch checklist',state:'active',managed:true,created_by:'user',owner_id:'user',agent_name:'My Codex',created_at:'2026-11-04T00:00:00Z',skill:'codex.run',turn_count:0};
+ let items=[session];
+ vi.mocked(fetch).mockImplementation(async(input,init)=>{
+  const path=String(input);
+  if(path==='/v1/workspaces/workspace/agent-sessions')return {ok:true,json:async()=>({items,next_cursor:null})} as Response;
+  if(path==='/v1/agent-sessions/sidebar-session')return {ok:true,json:async()=>({session,turns:[],next_cursor:null})} as Response;
+  return fallback(input,init);
+ });
+ render(<Chat/>);
+ const nav=await screen.findByRole('navigation',{name:'Workspace conversations'});
+ const entry=await within(nav).findByRole('button',{name:'Launch checklist',exact:true});
+ const headings=within(nav).getAllByRole('button').map(button=>button.textContent);
+ expect(headings.indexOf('Agent sessions')).toBeGreaterThan(headings.indexOf('Direct messages'));
+ expect(headings.indexOf('Agent sessions')).toBeLessThan(headings.indexOf('Apps'));
+ await user.click(entry);
+ expect(entry.getAttribute('aria-current')).toBe('page');
+ await screen.findByRole('heading',{name:'My Codex',exact:true,level:1});
+ await user.type(await screen.findByRole('textbox',{name:'Message agent session'}),'Remember this draft');
+ await user.click(within(nav).getByRole('button',{name:'first',exact:true}));
+ await screen.findByRole('textbox',{name:'Message first'});
+ await user.click(entry);
+ expect((await screen.findByRole('textbox',{name:'Message agent session'})).textContent).toContain('Remember this draft');
+ items=[{...session,id:'second-session',title:'New discussion'},session];
+ await act(async()=>{for(const socket of mocks.sockets)socket.receive('updates.changed',{scope:'workspace',id:'workspace'});});
+ expect(await within(nav).findByRole('button',{name:'New discussion',exact:true})).toBeTruthy();
+ await user.type(screen.getByRole('searchbox',{name:'Find a conversation'}),'Launch');
+ expect(within(nav).queryByRole('button',{name:'New discussion',exact:true})).toBeNull();
+ expect(within(nav).getByRole('button',{name:'Launch checklist',exact:true})).toBeTruthy();
 });

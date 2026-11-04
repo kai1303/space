@@ -46,6 +46,7 @@ test('browser searches actual Typesense across history, channels and replies wit
   const root=await chat.send(seed.owner_id,second.id,{client_message_id:randomUUID(),text:'Crosschannelneedle deployment discussion'});
   const reply=await chat.send(seed.owner_id,second.id,{client_message_id:randomUUID(),thread_id:root.thread_id,text:'Replybrowserneedle answer in a thread'});
   const hidden=await chat.createChannel(seed.owner_id,seed.workspace_id,{name:'secret-search',private:true});
+  await chat.send(seed.owner_id,seed.channel_id,{client_message_id:randomUUID(),text:'Filterbrowserneedle docs https://example.test/help'});
   await chat.send(seed.owner_id,hidden.id,{client_message_id:randomUUID(),text:'Privateneedle confidential'});
   await chat.send(outsider.owner_id,outsider.channel_id,{client_message_id:randomUUID(),text:'Otherworkspaceneedle confidential'});
   const address=await app.listen({host:'127.0.0.1',port:0});
@@ -82,12 +83,17 @@ test('browser searches actual Typesense across history, channels and replies wit
   async function search(q:string,channel=false){
     await page.getByRole('button',{name:channel?'Search in general':/^Search General/ ,exact:channel}).click();
     const dialog=page.getByRole('dialog',{name:channel?'Search in general':'Search workspace',exact:true});
-    await dialog.getByRole('searchbox',{name:'Search messages',exact:true}).fill(q);return dialog;
+    const field=dialog.getByRole('searchbox',{name:'Search messages',exact:true});
+    await field.fill(q);
+    await expect(dialog.getByRole('button',{name:`Show results for: ${q}`,exact:true})).toBeVisible();
+    await expect(dialog.getByRole('list',{name:'Search results'})).toHaveCount(0);
+    await field.press('Enter');return dialog;
   }
   let dialog=await search('browserneedle');
   await expect(dialog.getByRole('button',{name:/Old browserneedle deployment message/})).toBeVisible({timeout:20000});
   await mkdir(fileURLToPath(new URL('../test-results/',import.meta.url)),{recursive:true});
   await page.screenshot({path:fileURLToPath(new URL('../test-results/typesense-search.png',import.meta.url)),fullPage:true});
+  await expect(dialog.locator('mark')).toHaveText('browserneedle');
   await dialog.getByRole('button',{name:/Old browserneedle deployment message/}).click();
   let source=page.getByRole('dialog',{name:'Original message in #general',exact:true});
   await expect(source.getByText('Old browserneedle deployment message',{exact:true})).toBeVisible();await page.keyboard.press('Escape');
@@ -116,6 +122,22 @@ test('browser searches actual Typesense across history, channels and replies wit
   await expect(page.getByRole('button',{name:'Search in general',exact:true})).toBeVisible();
   dialog=await search('crosschannelneedle',true);await expect(dialog.getByText('No messages found',{exact:true})).toBeVisible();await page.keyboard.press('Escape');
   dialog=await search('Recent message');await expect(dialog.getByRole('list',{name:'Search results'}).getByRole('button')).toHaveCount(20);await dialog.getByRole('button',{name:'Load more results',exact:true}).click();await expect(dialog.getByRole('list',{name:'Search results'}).getByRole('button')).toHaveCount(40);
+  await page.keyboard.press('Escape');
+  dialog=await search('Filterbrowserneedle');
+  const filterResult=dialog.getByRole('button',{name:/Filterbrowserneedle docs/});
+  await expect(filterResult).toBeVisible();
+  await dialog.getByRole('button',{name:'Has a link',exact:true}).click();
+  await expect(dialog.getByRole('button',{name:'Has a link',exact:true})).toHaveAttribute('aria-pressed','true');
+  await expect(filterResult).toBeVisible();
+  await dialog.getByRole('button',{name:'Threads only',exact:true}).click();
+  await expect(dialog.getByText('No messages found',{exact:true})).toBeVisible();
+  await dialog.getByRole('button',{name:'Threads only',exact:true}).click();
+  await expect(filterResult).toBeVisible();
+  await page.setViewportSize({width:390,height:844});
+  await expect(dialog.getByRole('searchbox')).toBeVisible();
+  assert.ok(await dialog.evaluate(element=>element.scrollWidth<=element.clientWidth+1),'search dialog must not overflow on mobile');
+  await page.screenshot({path:fileURLToPath(new URL('../test-results/typesense-search-mobile.png',import.meta.url)),fullPage:true});
+  await page.keyboard.press('Escape');
   assert.deepEqual(browserErrors,[]);
   t.diagnostic(`Real browser verified message ${old.id}, cross-channel ${root.id}, reply ${reply.id}; screenshot tests/test-results/typesense-search.png`);
 });

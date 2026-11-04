@@ -338,6 +338,12 @@
   padding: 5px;
   box-shadow: var(--sp-shadow);
   min-width: 190px;
+  width: max-content;
+  max-width: calc(100vw - 16px);
+  max-height: calc(100dvh - 16px);
+  overflow-y: auto;
+  box-sizing: border-box;
+  font-family: var(--sp-font-sans);
 }
 .sp-menu-content button {
   width: 100%;
@@ -353,6 +359,7 @@
   font: inherit;
   font-size: 13px;
   cursor: pointer;
+  overflow-wrap: anywhere;
 }
 .sp-menu-content button:hover {
   background: var(--sp-info-soft);
@@ -487,10 +494,13 @@
   width: 100%;
   container: message / inline-size;
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  column-gap: 10px;
-  padding: 12px 20px;
+  grid-template-columns: 36px minmax(0, 1fr);
+  column-gap: 8px;
+  padding: var(--sp-message-block-padding, 8px) 20px;
   color: var(--sp-text);
+}
+.sp-message--grouped {
+  --sp-message-block-padding: 2px;
 }
 .sp-message:hover {
   background: var(--sp-surface-subtle);
@@ -504,10 +514,10 @@
   align-items: center;
   flex-wrap: wrap;
   gap: 7px;
-  min-height: 20px;
+  min-height: 22px;
 }
 .sp-message-meta strong {
-  font-size: 14px;
+  font-size: 15px;
   font-weight: 900;
 }
 .sp-message-meta .sp-badge {
@@ -517,11 +527,11 @@
 }
 .sp-message-time {
   color: var(--sp-text-secondary);
-  font-size: 11px;
+  font-size: 12px;
 }
 .sp-message-text {
-  font-size: 14px;
-  line-height: 1.55;
+  font-size: 15px;
+  line-height: 22px;
   overflow-wrap: anywhere;
   white-space: pre-wrap;
 }
@@ -742,7 +752,7 @@
     display: none;
   }
   .sp-message {
-    padding: 12px;
+    padding: var(--sp-message-block-padding, 12px) 12px;
   }
   .sp-composer-wrap {
     padding: 12px;
@@ -835,3 +845,23 @@
 label > .sp-select { width: 100%; }
 
 .sp-select-error { margin-top: 4px; color: var(--sp-danger); font: 400 12px/1.4 var(--sp-font-sans); }
+
+.sp-conversation-heading{display:flex;align-items:center;gap:5px;min-width:0}
+.sp-conversation-heading>.sp-button{flex-shrink:0}
+.sp-conversation-identity{min-width:0}
+.sp-conversation-title{display:flex;align-items:center;gap:8px;padding:4px 6px;margin-left:-6px;min-width:0;border:0;border-radius:5px;background:transparent;color:var(--sp-text)}
+button.sp-conversation-title{cursor:pointer}button.sp-conversation-title:hover{background:var(--sp-surface-hover)}
+.sp-conversation-title svg,.sp-conversation-title .sp-avatar{flex-shrink:0}
+.sp-conversation-title h1{font:900 18px/24px var(--sp-font-sans);margin:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sp-conversation-status{display:block;font-size:12px;color:var(--sp-text-secondary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sp-conversation-date{display:flex;align-items:center;gap:14px;margin:9px 0 16px;font-size:12px;font-weight:700}
+.sp-conversation-date::before,.sp-conversation-date::after{content:'';height:1px;background:var(--sp-border);flex:1}
+.sp-conversation-date>span{padding:4px 12px;border:1px solid var(--sp-border);border-radius:20px;background:var(--sp-surface);white-space:nowrap}
+@media(max-width:720px){.sp-conversation-title h1{font-size:17px}.sp-conversation-date{gap:8px;font-size:10px}.sp-conversation-date>span{padding:4px 9px}}
+
+.sp-message-compact-time{align-self:start;margin-left:-16px;text-align:right;line-height:22px;font-size:10px;color:var(--sp-text-secondary);white-space:nowrap;opacity:0}
+.sp-message:hover .sp-message-compact-time,.sp-message:focus-within .sp-message-compact-time{opacity:1}
+@media(hover:none){.sp-message-compact-time{opacity:1}}
+
+[data-sp-popover-panel][data-floating=true]{box-sizing:border-box;max-width:calc(100vw - 16px);max-height:calc(100dvh - 16px);overflow-y:auto;overscroll-behavior:contain}
+summary[aria-disabled=true]{opacity:.5;cursor:default}

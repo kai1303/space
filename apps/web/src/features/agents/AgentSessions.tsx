@@ -1,17 +1,19 @@
-import { SidekickContextCard } from './SidekickContextCard.js';
+import { ConversationHeading, ConversationDateDivider, useMessageArrivals } from '@space/ui/conversation';
+import { SidekickContextSection } from './SidekickContextSection.js';
 import {useDestinationPresence} from '../../shared/ui/useDestinationPresence.js';
-import {ConversationHeader,ConversationComposer,ConversationMessage,ConversationReplyDivider} from '../chat/ThreadConversation.js';
+import {ConversationHeader,ConversationComposer,ConversationMessage,ConversationIntroduction} from '../chat/ThreadConversation.js';
 import {MessageTimeline} from '../chat/MessageTimeline.js';
+import {ConversationSkeleton} from '../chat/ConversationSkeleton.js';
+import {useAgentSessionHistory} from './useAgentSessionHistory.js';
 import {useCallback,useEffect,useId,useMemo,useRef,useState,type FormEvent} from 'react';
-import type {ChannelAgent,AgentSessionDetail,AgentSessionSummary,AgentSessionTurn,AgentSessionOutputs,NavigatorCandidate,RichDocument,Task,ChatEvent,ChatMessage} from '@space/contracts';
-import { Select, Button, IconButton, SidePanel, Tabs } from '@space/ui/primitives';
-import {AnimatePresence} from 'motion/react';
-import {SidebarSimple,Plus,Robot,Stop,X} from '@phosphor-icons/react';
+import type {ChannelAgent,AgentSessionDetail,AgentSessionSummary,AgentSessionOutputs,NavigatorCandidate,RichDocument,Task,ChatEvent,ChatMessage,MentionReference} from '@space/contracts';
+import { Select, Button, Tabs, Avatar, Dialog, Menu } from '@space/ui/primitives';
+import {Plus,Robot,Stop,Paperclip,ChatCircle,Browser,GitDiff,DotsThree} from '@phosphor-icons/react';
 import { request } from '../../shared/api/request.js';
 import { type MessageAttempt } from '../composer/message-sender.js';
 import {subscribeUpdates} from '../../shared/realtime/live-updates.js';
 import {TaskPreview,TaskFiles,TaskChanges} from './AgentTaskWorkspace.js';
-import {useMentionSearch} from '../mentions/Mentions.js';
+import {useMentionSearch,MentionDetails} from '../mentions/Mentions.js';
 import {AgentActivityIndicator} from './AgentActivityIndicator.js';
 import './agent-sessions.css';
 
@@ -27,10 +29,11 @@ export function AgentSessions({drafts:externalDrafts,onDraftChange:externalDraft
 }) {
  const present=useDestinationPresence();
  const [sessions,setSessions]=useState<AgentSessionSummary[]>([]);
+ const [detail,setDetail]=useState<AgentSessionDetail>();
  const picker=!!onOpenSession,selected=initialSessionId;
  const [creating,setCreating]=useState(false),[title,setTitle]=useState(''),[agent,setAgent]=useState('');
  const [catalog,setCatalog]=useState<NavigatorCandidate[]>([]),[local,setLocal]=useState<ChannelAgent[]>([]);
- const [error,setError]=useState(''),[loading,setLoading]=useState(true),[saving,setSaving]=useState(false),[revision,setRevision]=useState(0),[revoked,setRevoked]=useState(false);
+ const [error,setError]=useState(''),[loading,setLoading]=useState(true),[saving,setSaving]=useState(false),[revision,setRevision]=useState(0),[revoked,setRevoked]=useState(false),[loadAttempt,setLoadAttempt]=useState(0);
  const drafts=useRef<Record<string,RichDocument>>({}),attempts=useRef(new Map<string,MessageAttempt>());
  const [acknowledged,setAcknowledged]=useState<Record<string,RichDocument>>({});
  const creation=useRef<{body:string;id:string}|undefined>(undefined);
@@ -47,20 +50,20 @@ export function AgentSessions({drafts:externalDrafts,onDraftChange:externalDraft
   const read=async()=>{
    try{
     const [list,available,owned]=await Promise.all([
-     picker?request<{items:AgentSessionSummary[]}>(`/threads/${thread}/agent-sessions`):request<AgentSessionDetail>(`/agent-sessions/${selected}`).then(detail=>({items:[detail.session]})),
+     picker?request<{items:AgentSessionSummary[]}>(`/threads/${thread}/agent-sessions`):request<AgentSessionDetail>(`/agent-sessions/${selected}`).then(detail=>{if(detail.session.id!==selected||!Array.isArray(detail.turns))throw new Error('Could not load this session');if(active)setDetail(detail);return {items:[detail.session]};}),
      picker?request<{candidates:NavigatorCandidate[]}>(`/channels/${channel}/navigator`):Promise.resolve({candidates:[]}),
      picker?request<typeof local>(`/channels/${channel}/agents`):Promise.resolve([]),
     ]);
     if(!active)return;
     if(!Array.isArray(list.items)||!Array.isArray(available.candidates)||!Array.isArray(owned))throw new Error('Could not load agent sessions');
     setSessions(list.items);const choices=available.candidates.filter(item=>item.persistent_sessions === true);setCatalog(choices);setLocal(owned);setAgent(current=>choices.some(item=>`${item.installation_id}|${item.skill}`===current)?current:choices[0]?`${choices[0].installation_id}|${choices[0].skill}`:'');
-    setError('');setRevision(value=>value+1);
+    setError('');
    }catch(reason){if(active){if(denied(reason))revoke();else setError(errorText(reason));}}
    finally{if(active)setLoading(false);}
   };
   const stop=subscribeUpdates('thread',thread,read,revoke);
   return()=>{active=false;stop();};
- },[thread,channel,revoke,picker,selected]);
+ },[thread,channel,revoke,picker,selected,loadAttempt]);
  const refresh=()=>setRevision(value=>value+1);
  async function enable(id:string,skill:string){
   setSaving(true);setError('');
@@ -98,38 +101,37 @@ export function AgentSessions({drafts:externalDrafts,onDraftChange:externalDraft
  return <div className={`agent-sessions${picker?' agent-sessions-picker':''}`}>
   {picker&&<div className="agent-sessions-bar"><strong><Robot size={17}/>Agent sessions</strong><Button size="sm" disabled={archived} onClick={()=>setCreating(true)}><Plus size={15}/>New agent session</Button></div>}
   {!picker&&!current&&<ConversationHeader title="Agent session" channel={channelName} icon={<Robot size={20}/>} onBack={onBack} onClose={onClose}/>}
-  {error&&<p role="alert" className="agent-sessions-error">{error}</p>}
-  {loading&&<p role="status" className="agent-sessions-empty">Loading sessions…</p>}
+  {error&&<p role="alert" className="agent-sessions-error">{error} <Button size="sm" disabled={loading} onClick={()=>{setError('');setLoading(true);setLoadAttempt(value=>value+1);}}>{picker?'Retry loading sessions':'Retry loading messages'}</Button></p>}
+  {loading&&(picker?<p role="status" className="agent-sessions-empty">Loading sessions…</p>:!current&&<div className="chat-timeline-shell"><div className="chat-timeline chat-timeline--virtual" aria-busy="true"><p className="sp-sr-only" role="status" aria-label="Loading messages">Loading messages…</p><ConversationSkeleton/></div></div>)}
   {picker&&<nav aria-label="Sessions in this thread" className="agent-sessions-list">{sessions.map(session=><button key={session.id} type="button" aria-label={session.title} onClick={()=>onOpenSession?.(session.id)}><span>{session.title}</span><small>{session.agent_name} · {session.state==='ended'?'Ended':`${session.turn_count} ${session.turn_count===1?'turn':'turns'}`}</small></button>)}</nav>}
   {picker&&creating&&<form className="agent-session-create" onSubmit={create}><h3>New agent session</h3><label>Session name<input required maxLength={120} value={title} onChange={event=>setTitle(event.target.value)} placeholder="What are we working on?"/></label><label>Agent<Select aria-label="Agent" value={agent} onChange={event=>setAgent(event.target.value)}>{catalog.map(item=><option key={`${item.installation_id}|${item.skill}`} value={`${item.installation_id}|${item.skill}`}>{item.name} · {item.skill}</option>)}</Select></label>{!catalog.length&&<p>No session-capable agent is available in this conversation.</p>}{local.filter(item=>item.persistent_sessions&&!item.inherits_owner_access).flatMap(item=>item.skills.filter(skill=>!item.granted_skills.includes(skill)).map(skill=><Button key={`${item.id}|${skill}`} size="sm" disabled={saving} onClick={()=>void enable(item.id,skill)}>Enable {item.name}{item.skills.length>1?` · ${skill}`:''} in this channel</Button>))}<div><Button type="submit" disabled={saving||!title.trim()||!agent}>Start session</Button><Button variant="ghost" onClick={()=>setCreating(false)}>Cancel</Button></div></form>}
-  {!picker&&current&&<SessionConversation key={current.id} session={current} channel={channel} channelName={channelName} onBack={onBack} onClose={onClose} viewerId={viewerId} revision={revision} draft={getDraft(current.id)} acknowledged={externalAcknowledged?.[draftKey(current.id)]??acknowledged[current.id]} onDraftChange={document=>saveDraft(current.id,document)} onSend={(text,document)=>send(current.id,text,document)} onAccessLost={revoke} archived={archived}/>}
+  {!picker&&current&&detail?.session.id===current.id&&<SessionConversation key={current.id} initial={detail} session={current} channel={channel} channelName={channelName} onBack={onBack} onClose={onClose} viewerId={viewerId} revision={revision} draft={getDraft(current.id)} acknowledged={externalAcknowledged?.[draftKey(current.id)]??acknowledged[current.id]} onDraftChange={document=>saveDraft(current.id,document)} onSend={(text,document)=>send(current.id,text,document)} onAccessLost={revoke} archived={archived}/>}
   {picker&&!loading&&!creating&&!sessions.length&&<p className="agent-sessions-empty">No agent sessions yet.</p>}
-  {!picker&&!loading&&!current&&<p role="alert" className="agent-sessions-empty">This session is unavailable.</p>}
+  {!picker&&!loading&&!current&&!error&&<p role="alert" className="agent-sessions-empty">This session is unavailable.</p>}
  </div>;
 }
-function SessionConversation({session,channel,channelName,onBack,onClose,viewerId,revision,draft,acknowledged,onDraftChange,onSend,onAccessLost,archived}: {
- session:AgentSessionSummary;channel:string;channelName?:string;onBack?:()=>void;onClose?:()=>void;viewerId:string;revision:number;draft?:RichDocument;acknowledged?:RichDocument;onDraftChange:(document:RichDocument)=>void;onSend:(text:string,document:RichDocument)=>Promise<Task>;onAccessLost:()=>void;archived:boolean;
+function SessionConversation({initial,session,channel,channelName,onBack,onClose,viewerId,revision,draft,acknowledged,onDraftChange,onSend,onAccessLost,archived}: {
+ initial:AgentSessionDetail;session:AgentSessionSummary;channel:string;channelName?:string;onBack?:()=>void;onClose?:()=>void;viewerId:string;revision:number;draft?:RichDocument;acknowledged?:RichDocument;onDraftChange:(document:RichDocument)=>void;onSend:(text:string,document:RichDocument)=>Promise<Task>;onAccessLost:()=>void;archived:boolean;
 }) {
  const searchMentions=useMentionSearch(channel);
  const findReferences=useCallback(async(query:string)=>{const result=await searchMentions(query);return {...result,items:result.items.filter(item=>item.kind!=='broadcast').map(item=>({...item,detail:`${item.detail||'Member'} · Reference only`}))};},[searchMentions]);
  const [submittedTask,setSubmittedTask]=useState<string>();
- const [latestVersion,setLatestVersion]=useState(0),[loadingOlder,setLoadingOlder]=useState(false);
- const [data,setData]=useState<AgentSessionDetail>(),[error,setError]=useState(''),[tab,setTab]=useState('preview'),[detailsOpen,setDetailsOpen]=useState(false),[pending,setPending]=useState(false),[retry,setRetry]=useState(0);
+ const [error,setError]=useState(''),[tab,setTab]=useState('messages'),[pending,setPending]=useState(false);
+ const [refreshing,setRefreshing]=useState(false),[detailsOpen,setDetailsOpen]=useState(false);
+ const [selectedMention,setSelectedMention]=useState<MentionReference>();
  const alive=useRef(true),pinned=useRef(true);
- const detailsId=useId(),detailsTrigger=useRef<HTMLSpanElement>(null),detailsClose=useRef<HTMLButtonElement>(null);
- useEffect(()=>{if(detailsOpen)detailsClose.current?.focus();},[detailsOpen]);
- const closeDetails=()=>{setDetailsOpen(false);detailsTrigger.current?.querySelector('button')?.focus();};
+ const viewsId=useId();
  useEffect(()=>{alive.current=true;return()=>{alive.current=false;};},[]);
  const lost=useRef(onAccessLost);lost.current=onAccessLost;
- useEffect(()=>{let active=true;void request<AgentSessionDetail>(`/agent-sessions/${session.id}`).then(result=>{
-  if(!active)return;if(result.session.id!==session.id||!Array.isArray(result.turns))throw new Error('Could not load this session');
-  setData(previous=>({...result,turns:previous?mergeTurns(previous.turns,result.turns):result.turns,next_cursor:previous?.turns.length&&previous.turns.length>result.turns.length?previous.next_cursor:result.next_cursor}));if(pinned.current)setLatestVersion(value=>value+1);setError('');
- }).catch(reason=>{if(active){if(denied(reason)){setData(undefined);lost.current();}else setError(errorText(reason));}});return()=>{active=false;};},[session.id,revision,retry]);
- const turns=data?.turns??[],latest=turns.at(-1)?.task,activeSession=data?.session??session;
- const sendDisabledReason=!data?'Loading session…':busy(latest)?`${status(latest)}. You can draft your next message while you wait.`:submittedTask&&!turns.some(turn=>turn.task.id===submittedTask)?'Updating session. You can draft your next message while you wait.':undefined;
- const outputs=useMemo(()=>{if(data?.outputs)return data.outputs;const files=new Map<string,AgentSessionOutputs['files'][number]>(),changes=new Map<string,AgentSessionOutputs['changes'][number]>();let preview:AgentSessionOutputs['preview'];for(const turn of turns){const output=turn.response?.outputs;if(output?.preview)preview=output.preview;for(const file of output?.files??[])files.set(file.path,file);for(const change of output?.changes??[])changes.set(change.path,change);}return{preview,files:[...files.values()],changes:[...changes.values()]};},[turns,data?.outputs]);
- async function action(path:string){setPending(true);setError('');try{await request(path,{});if(alive.current){setRetry(value=>value+1);}}catch(reason){if(denied(reason)){setData(undefined);lost.current();}else if(alive.current)setError(errorText(reason));}finally{if(alive.current)setPending(false);}}
- async function older(){if(!data?.next_cursor||loadingOlder)return;setLoadingOlder(true);try{const page=await request<AgentSessionDetail>(`/agent-sessions/${session.id}?before=${data.next_cursor}`);if(alive.current)setData(current=>current?{...current,turns:mergeTurns(page.turns,current.turns),next_cursor:page.next_cursor}:page);}catch(reason){if(denied(reason))lost.current();else if(alive.current)setError(errorText(reason));}finally{if(alive.current)setLoadingOlder(false);}}
+ const history=useAgentSessionHistory(initial,pinned,reason=>{if(denied(reason))lost.current();else setError(errorText(reason));});
+ const {data,latestVersion,loading,load}=history;
+ const refresh=async()=>{setError('');setRefreshing(true);try{await load('latest');}finally{if(alive.current)setRefreshing(false);}};
+ const lastRevision=useRef(revision);
+ useEffect(()=>{if(lastRevision.current!==revision){lastRevision.current=revision;void refresh();}},[revision]);
+ const turns=data.turns,latestTurn=history.latest.turns.at(-1),latest=latestTurn?.task,activeSession=history.latest.session;
+ const sendDisabledReason=busy(latest)?`${status(latest)}. You can draft your next message while you wait.`:submittedTask&&!history.latest.turns.some(turn=>turn.task.id===submittedTask)?'Updating session. You can draft your next message while you wait.':undefined;
+ const outputs=useMemo(()=>{if(history.latest.outputs)return history.latest.outputs;const files=new Map<string,AgentSessionOutputs['files'][number]>(),changes=new Map<string,AgentSessionOutputs['changes'][number]>();let preview:AgentSessionOutputs['preview'];for(const turn of turns){const output=turn.response?.outputs;if(output?.preview)preview=output.preview;for(const file of output?.files??[])files.set(file.path,file);for(const change of output?.changes??[])changes.set(change.path,change);}return{preview,files:[...files.values()],changes:[...changes.values()]};},[turns,history.latest.outputs]);
+ async function action(path:string){setPending(true);setError('');try{await request(path,{});if(alive.current){await refresh();}}catch(reason){if(denied(reason)){lost.current();}else if(alive.current)setError(errorText(reason));}finally{if(alive.current)setPending(false);}}
  const manage=viewerId===activeSession.owner_id||viewerId===activeSession.created_by;
  const rows=turns.flatMap((turn,index)=>{
   const base={channel_id:channel,thread_id:session.origin_thread_id,task_id:turn.task.id,client_message_id:null,created_at:turn.created_at??session.created_at};
@@ -138,28 +140,28 @@ function SessionConversation({session,channel,channelName,onBack,onClose,viewerI
    {turn,request:false,message:{...base,id:`${turn.task.id}:response`,sequence:String(index*2+2),text:turn.task.result??(turn.detail==='session_stopped'?'This turn was stopped.':turn.detail||status(turn.task)),agent_response:turn.response,author:{kind:'agent' as const,id:session.installation_id,name:session.agent_name}}},
   ];
  });
+ const arrivals=useMessageArrivals(rows.map(row=>row.message),!loading&&tab==='messages'?session.id:null);
  const events:ChatEvent[]=rows.map(row=>({type:'message.created',channel_id:channel,thread_id:session.origin_thread_id,sequence:row.message.sequence,occurred_at:row.message.created_at,payload:row.message as ChatMessage}));
- const sessionStatus=`${session.agent_name} ${activeSession.state==='ended'?'Ended':!data?'Loading…':turns.at(-1)?.detail==='session_stopped'?'Stopped':status(latest)}`;
 
- const footer=activeSession.state==='ended'?<p className="agent-session-notice">This session has ended. Its conversation and outputs are saved.</p>:!session.managed?<p className="agent-session-notice">Start a new session to continue this earlier run.</p>:!archived?<ConversationComposer typingIndicator={<AgentActivityIndicator name={session.agent_name} turn={turns.at(-1)}/>} channel="agent session" findMentions={findReferences} sendDisabledReason={sendDisabledReason} maxLength={4000} attachmentsEnabled={false} defaultValue={draft} acknowledgedDocument={acknowledged} onDraftChange={onDraftChange} onSend={async(text,document)=>{pinned.current=true;const task=await onSend(text,document);setSubmittedTask(task.id);}}/>:null;
+ const footer=activeSession.state==='ended'?<p className="agent-session-notice">This session has ended. Its conversation and outputs are saved.</p>:!session.managed?<p className="agent-session-notice">Start a new session to continue this earlier run.</p>:!archived?<ConversationComposer typingIndicator={<AgentActivityIndicator name={session.agent_name} turn={latestTurn}/>} channel="agent session" placeholder={`Message ${session.agent_name}`} findMentions={findReferences} sendDisabledReason={sendDisabledReason} maxLength={4000} showUnavailableActions={false} attachmentsEnabled={false} defaultValue={draft} acknowledgedDocument={acknowledged} onDraftChange={onDraftChange} onSend={async(text,document)=>{pinned.current=true;const task=await onSend(text,document);setSubmittedTask(task.id);}}/>:null;
  return <div className="agent-session" aria-label={`Agent session ${session.title}`}>
-  <ConversationHeader title={data?.context?"My sidekick":"Agent session"} backLabel={data?.context?"Back to my sidekick":undefined} channel={channelName} icon={<Robot size={20}/>} status={sessionStatus} onBack={onBack} onClose={onClose} actions={<>{manage&&busy(latest)&&<Button size="sm" disabled={pending} onClick={()=>void action(`/agent-sessions/${session.id}/stop`)}><Stop size={14}/>Stop</Button>}<span ref={detailsTrigger}><IconButton label="Session details" aria-expanded={detailsOpen} aria-controls={detailsOpen?detailsId:undefined} onClick={()=>detailsOpen?closeDetails():setDetailsOpen(true)}><SidebarSimple size={20} weight={detailsOpen?'fill':'regular'}/></IconButton></span></>}/>
-  {error&&<p role="alert" className="agent-sessions-error">{error} <Button size="sm" variant="ghost" onClick={()=>setRetry(value=>value+1)}>Retry</Button></p>}
-  {data?.context&&<SidekickContextCard context={data.context}/>}
-  <div className="agent-session-body"><div className="agent-session-conversation"><MessageTimeline label="Session conversation" role="log" items={events} page={data?{has_older:!!data.next_cursor,has_newer:false}:null} loading={!data?'latest':loadingOlder?'older':null} latestVersion={latestVersion} load={()=>older()} pinned={pinned} busy={!data} footer={footer} render={(_event,index)=>{
+  <ConversationHeader title="Agent session" backLabel={data?.context?"Back to my sidekick":undefined} heading={<ConversationHeading title={session.agent_name} label={`Conversation details for ${session.agent_name}`} onClick={()=>setDetailsOpen(true)} icon={<Avatar name={session.agent_name} initials={session.agent_name.slice(0,2).toUpperCase()} tone="green"/>}/>} channel={channelName} icon={<Robot size={20}/>} onBack={onBack} onClose={onClose} actions={<>{manage&&busy(latest)&&<Button size="sm" disabled={pending} onClick={()=>void action(`/agent-sessions/${session.id}/stop`)}><Stop size={14}/>Stop</Button>}<Menu label="More conversation actions" floating trigger={<DotsThree size={22} weight="bold"/>} items={[{label:"Conversation details",onSelect:()=>setDetailsOpen(true)},{label:"Browse files",onSelect:()=>setTab("files")},...(onClose?[{label:"Close agent session",separatorBefore:true,onSelect:onClose}]:[])]}/></>}/>
+  <Tabs className="agent-session-tabs" label="Session views" value={tab} onChange={setTab} items={[
+   {id:'messages',label:'Messages',icon:<ChatCircle size={15}/>},
+   {id:'preview',label:'Preview',icon:<Browser size={15}/>},
+   {id:'files',label:`Files ${outputs.files.length}`,icon:<Paperclip size={15}/>},
+   {id:'changes',label:`Changes ${outputs.changes.length}`,icon:<GitDiff size={15}/>},
+  ].map(item=>({...item,panelId:`${viewsId}-${item.id}`}))}/>
+
+  {error&&<p role="alert" className="agent-sessions-error">{error} <Button size="sm" variant="ghost" disabled={refreshing||!!loading} onClick={()=>void refresh()}>Retry</Button></p>}
+  <div className="agent-session-body"><div className="agent-session-conversation" role="tabpanel" aria-label="Messages" id={`${viewsId}-messages`} hidden={tab!=='messages'}><MessageTimeline align="start" header={!data.next_cursor&&<><ConversationIntroduction title={session.agent_name} icon={<Avatar name={session.agent_name} initials={session.agent_name.slice(0,2).toUpperCase()} size="lg" tone="green"/>}>This is the beginning of your conversation with {session.agent_name}.</ConversationIntroduction>{data.context&&<><SidekickContextSection context={data.context}/><div className="sidekick-conversation-divider" role="separator" aria-label="Agent conversation"><span>Conversation with {session.agent_name}</span></div></>}</>} label="Session conversation" role="log" items={events} page={{has_older:!!data.next_cursor,has_newer:data.has_newer}} loading={loading} latestVersion={latestVersion} load={load} pinned={pinned} hidden={tab!=='messages'} render={(_event,index)=>{
    const row=rows[index]!,turn=row.turn;
-   return <><ConversationMessage message={row.message as ChatMessage} viewerId={viewerId} streaming={!row.request&&busy(turn.task)} actions={{copyMessage:()=>navigator.clipboard.writeText(row.message.text)}} body={!row.request&&turn.task.status==='awaiting_approval'?<div className="agent-session-approval"><p>Waiting for {session.agent_name}’s owner to approve this request.</p>{viewerId===session.owner_id&&<><Button size="sm" disabled={pending} onClick={()=>void action(`/tasks/${turn.task.id}/approve`)}>Approve request</Button><Button size="sm" variant="ghost" disabled={pending} onClick={()=>void action(`/tasks/${turn.task.id}/reject`)}>Decline</Button></>}</div>:undefined}>{!row.request&&turn.task.status==='failed'&&<p role="status">This turn stopped. You can send another message or start a new session.</p>}</ConversationMessage>{index===0&&<ConversationReplyDivider count={Math.max(0,rows.length-1)}/>}</>;
-  }}>
-   {!data&&!error&&<p role="status">Loading session…</p>}
-   {data&&!turns.length&&<div className="agent-sessions-empty"><h3>Ready when you are</h3><p>Send a message to start working with {session.agent_name}.</p></div>}
-  </MessageTimeline>
-  </div><AnimatePresence>{detailsOpen&&<SidePanel key="details" role="region" className="agent-session-details" aria-label="Session details">
-   <div id={detailsId} className="agent-session-details-inner" onKeyDown={event=>{if(event.key==='Escape'&&!event.defaultPrevented&&!(event.target as Element).closest('dialog')){event.preventDefault();event.stopPropagation();closeDetails();}}}>
-    <header className="agent-session-details-header"><h3>Session details</h3><button ref={detailsClose} type="button" className="agent-workspace-close" aria-label="Close session details" onClick={closeDetails}><X size={20}/></button></header>
-    <Tabs label="Session outputs" value={tab} onChange={setTab} items={[{id:'preview',label:'Preview'},{id:'files',label:`Files ${outputs.files.length}`},{id:'changes',label:`Changes ${outputs.changes.length}`}].map(item=>({...item,panelId:`${detailsId}-${item.id}`}))}/>
-    <div className="agent-session-output" role="tabpanel" id={`${detailsId}-${tab}`} aria-label={tab==='preview'?'Preview':tab==='files'?'Files':'Changes'} tabIndex={0}>{tab==='preview'?<TaskPreview preview={outputs.preview}/>:tab==='files'?<TaskFiles files={outputs.files}/>:<TaskChanges changes={outputs.changes}/>}</div>
-   </div>
-  </SidePanel>}</AnimatePresence></div>
+   return <div id={`chat-message-${row.message.id}`} tabIndex={-1} className="chat-message-anchor"><ConversationDateDivider date={row.message.created_at} previous={rows[index-1]?.message.created_at}/><ConversationMessage message={row.message as ChatMessage} previous={rows[index-1]?.message} viewerId={viewerId} arrival={arrivals.has(row.message.id)} onMentionClick={setSelectedMention} streaming={!row.request&&busy(turn.task)} actions={{copyMessage:()=>navigator.clipboard.writeText(row.message.text)}} body={!row.request&&turn.task.status==='awaiting_approval'?<div className="agent-session-approval"><p>Waiting for {session.agent_name}’s owner to approve this request.</p>{viewerId===session.owner_id&&<><Button size="sm" disabled={pending} onClick={()=>void action(`/tasks/${turn.task.id}/approve`)}>Approve request</Button><Button size="sm" variant="ghost" disabled={pending} onClick={()=>void action(`/tasks/${turn.task.id}/reject`)}>Decline</Button></>}</div>:undefined}>{!row.request&&turn.task.status==='failed'&&<p role="status">This turn stopped. You can send another message or start a new session.</p>}</ConversationMessage></div>;
+  }}/>{footer}
+  </div>{tab!=='messages'&&<div className="agent-session-output-view" role="tabpanel" id={`${viewsId}-${tab}`} aria-label={tab==='preview'?'Preview':tab==='files'?'Files':'Changes'} tabIndex={0}>
+   <div className="agent-session-output">{tab==='preview'?<TaskPreview preview={outputs.preview}/>:tab==='files'?<TaskFiles files={outputs.files}/>:<TaskChanges changes={outputs.changes}/>}</div>
+  </div>}</div>
+  <Dialog open={detailsOpen} title="Conversation details" onClose={()=>setDetailsOpen(false)}><div className="agent-session-details"><h3>{session.title}</h3><p>{session.agent_name}</p><p>{activeSession.state==='ended'?'Ended':'Active'} · {activeSession.turn_count} turns</p>{channelName&&<p>From #{channelName}</p>}<p>Started {new Date(session.created_at).toLocaleString()}</p></div></Dialog>
+  {selectedMention&&<MentionDetails channel={channel} mention={selectedMention} onClose={()=>setSelectedMention(undefined)}/>}
  </div>;
 }
-function mergeTurns(previous:AgentSessionTurn[],incoming:AgentSessionTurn[]){const items=new Map(previous.map(turn=>[turn.task.id,turn]));for(const turn of incoming)items.set(turn.task.id,turn);return [...items.values()];}

@@ -2,13 +2,37 @@ import {createRef} from 'react';
 import {cleanup,fireEvent,render,screen} from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import {afterEach,expect,it,vi} from 'vitest';
-import {MessageTimeline} from './MessageTimeline.js';
-import type {MessagePage} from '@space/contracts';
+import {MessageTimeline, type TimelineHandle} from './MessageTimeline.js';
+import type {ChatEvent,MessagePage} from '@space/contracts';
 
-const mocks=vi.hoisted(()=>({scrollToEnd:vi.fn(),reduced:false}));
+const mocks=vi.hoisted(()=>({scrollToEnd:vi.fn(),scrollToIndex:vi.fn(),reduced:false}));
 vi.mock('motion/react',async original=>({...await original<typeof import('motion/react')>(),useReducedMotion:()=>mocks.reduced}));
-vi.mock('@tanstack/react-virtual',()=>({useVirtualizer:()=>({getVirtualItems:()=>[],getTotalSize:()=>0,scrollToEnd:mocks.scrollToEnd,scrollToIndex:()=>{},measureElement:()=>{}})}));
-afterEach(()=>{cleanup();vi.clearAllMocks();mocks.reduced=false;});
+vi.mock('@tanstack/react-virtual',()=>({useVirtualizer:(options:any)=>({getVirtualItems:()=>Array.from({length:options.count},(_,index)=>({index,key:options.getItemKey(index),start:index*100})),getTotalSize:()=>options.count*100,scrollToEnd:mocks.scrollToEnd,scrollToIndex:mocks.scrollToIndex,measureElement:()=>{}})}));
+afterEach(()=>{cleanup();vi.clearAllMocks();vi.unstubAllGlobals();mocks.reduced=false;});
+
+it.each([true,false])('keeps resize anchored only for readers at the end: %s',atEnd=>{
+ let resize!:()=>void;
+ vi.stubGlobal('ResizeObserver',class{constructor(callback:()=>void){resize=callback;}observe(){}disconnect(){}});
+ const pinned=createRef<boolean>();pinned.current=true;
+ render(<MessageTimeline label="Messages" items={[]} page={null} loading={null} latestVersion={0} load={()=>{}} pinned={pinned} render={()=>null}/>);
+ const scroller=screen.getByLabelText('Messages');
+ let height=100;
+ Object.defineProperties(scroller,{scrollHeight:{value:400},clientHeight:{get:()=>height}});
+ fireEvent.scroll(scroller,{target:{scrollTop:atEnd?300:50}});
+ height=60;resize();
+ expect(scroller.scrollTop).toBe(atEnd?400:50);
+});
+
+it('scrolls an introductory section with the messages and still reveals the right message',()=>{
+ const pinned=createRef<boolean>(),handle=createRef<TimelineHandle|null>();pinned.current=true;
+ const event:ChatEvent={type:'message.created',channel_id:'channel',thread_id:'thread',sequence:'1',occurred_at:'2026-11-04T09:00:00Z',payload:{id:'one',channel_id:'channel',thread_id:'thread',text:'Live message',created_at:'2026-11-04T09:00:00Z',client_message_id:null,author:{kind:'human',id:'user',name:'Kai'}}};
+ render(<MessageTimeline label="Messages" items={[event]} header={<section aria-label="Selected messages">Saved context</section>} page={null} loading={null} latestVersion={0} load={()=>{}} pinned={pinned} handle={handle} render={(_,index)=><p>Message {index+1}</p>}/>);
+ const context=screen.getByRole('region',{name:'Selected messages'}),message=screen.getByText('Message 1');
+ expect(screen.getByLabelText('Messages').contains(context)).toBe(true);
+ expect(context.compareDocumentPosition(message)&Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+ handle.current!.reveal('one');
+ expect(mocks.scrollToIndex).toHaveBeenCalledWith(1,{align:'center'});
+});
 
 it('keeps the jump control mounted for its exit transition but removes it from interaction at the latest message',async()=>{
  const load=vi.fn(),pinned=createRef<boolean>();pinned.current=true;

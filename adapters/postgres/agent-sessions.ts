@@ -2,9 +2,9 @@ import { SidekickStore } from './sidekick.js';
 import { createHash } from 'node:crypto';
 import type { Pool } from 'pg';
 import { and, eq, sql } from 'drizzle-orm';
-import { AppError, parseAgentSessionInput, parseAgentSessionMessage, parseAgentResponse, record, text, uuid, type AgentSessionDetail, type AgentSessionSummary, type AgentSessionTurn, type Task } from '@space/contracts';
+import { AppError, parseAgentSessionInput, parseAgentSessionMessage, parseAgentResponse, record, text, uuid, type AgentSessionDetail, type AgentSessionSummary, type WorkspaceAgentSession, type AgentSessionTurn, type Task } from '@space/contracts';
 import { database, type DbSession } from './database.js';
-import { hasThreadAccess } from './access.js';
+import { hasThreadAccess, requireWorkspaceAccess } from './access.js';
 import { sessionTransaction, SessionConflict } from './session-concurrency.js';
 import { PostgresStore } from './store.js';
 import * as s from './schema.js';
@@ -34,6 +34,26 @@ export class AgentSessionStore {
       return { items: result.rows.map(row => ({ ...row, created_at: new Date(row.created_at).toISOString() })), next_cursor: null };
     }, { isolationLevel: 'repeatable read', accessMode: 'read only' });
   }
+  async listWorkspace(actor: string, workspace: string, raw: unknown = {}) {
+    const input = record(raw, ['before']), before = input.before === undefined ? undefined : uuid(input.before);
+    return this.db.transaction(async c => {
+      await requireWorkspaceAccess(c, actor, workspace);
+      if (before) {
+        const cursor = await this.visible(c, actor, before);
+        if (cursor.workspace_id !== workspace || !cursor.managed) throw notFound();
+      }
+      const result = await c.execute<WorkspaceAgentSession & Record<string, unknown>>(sql`
+        SELECT ${summaryColumns},t.channel_id,ch.archived_at IS NOT NULL AS channel_archived
+        FROM agent_sessions a JOIN threads t ON t.id=a.origin_thread_id
+        JOIN channels ch ON ch.id=t.channel_id
+        JOIN channel_members m ON m.channel_id=t.channel_id AND m.workspace_id=a.workspace_id AND m.user_id=${actor}
+        JOIN agent_installations i ON i.id=a.installation_id JOIN agent_definitions d ON d.id=i.definition_id
+        WHERE a.workspace_id=${workspace} AND a.managed
+        ${before ? sql`AND (a.created_at,a.id)<(SELECT created_at,id FROM agent_sessions WHERE id=${before})` : sql``}
+        ORDER BY a.created_at DESC,a.id DESC LIMIT 21`);
+      return { items: result.rows.slice(0,20).map(row => ({...row,created_at:new Date(row.created_at).toISOString()})), next_cursor: result.rows.length > 20 ? result.rows[19]!.id : null };
+    }, { isolationLevel: 'repeatable read', accessMode: 'read only' });
+  }
   async create(actor: string, threadId: string, raw: unknown): Promise<AgentSessionSummary> {
     const input = parseAgentSessionInput(raw); uuid(threadId);
     return sessionTransaction(this.db, async c => {
@@ -56,22 +76,25 @@ export class AgentSessionStore {
     });
   }
   async read(actor: string, id: string, query: unknown = {}): Promise<AgentSessionDetail> {
-    const v = record(query, ['before']), before = v.before === undefined ? undefined : uuid(v.before);
+    const v = record(query, ['before','after']), before = v.before === undefined ? undefined : uuid(v.before), after = v.after === undefined ? undefined : uuid(v.after);
+    if (before && after) throw new AppError(400, 'invalid_cursor');
+    const cursor = before ?? after;
     return this.db.transaction(async c => {
       const session = await this.visible(c, actor, id);
-      if (before && !(await c.select({ id: s.tasks.id }).from(s.tasks).where(and(eq(s.tasks.id, before), eq(s.tasks.session_id, id)))).length) throw notFound();
+      if (cursor && !(await c.select({ id: s.tasks.id }).from(s.tasks).where(and(eq(s.tasks.id, cursor), eq(s.tasks.session_id, id)))).length) throw notFound();
       const result = await c.execute<{ task: Task & { created_at: string }; requester_name: string; payload: Record<string, unknown> | null; response_payload: Record<string, unknown> | null } & Record<string, unknown>>(sql`
         SELECT to_jsonb(t) AS task,u.display_name AS requester_name,latest.payload,snapshot.payload AS response_payload
         FROM tasks t JOIN users u ON u.id=t.requester_id
         LEFT JOIN LATERAL (SELECT payload FROM task_events WHERE correlation_id=t.id ORDER BY sequence DESC LIMIT 1) latest ON true
         LEFT JOIN LATERAL (SELECT payload FROM task_events WHERE correlation_id=t.id AND payload ? 'response' ORDER BY sequence DESC LIMIT 1) snapshot ON true
         WHERE t.session_id=${id} ${before ? sql`AND (t.created_at,t.id)<(SELECT created_at,id FROM tasks WHERE id=${before} AND session_id=${id})` : sql``}
-        ORDER BY t.created_at DESC,t.id DESC LIMIT 21`);
+        ${after ? sql`AND (t.created_at,t.id)>(SELECT created_at,id FROM tasks WHERE id=${after} AND session_id=${id})` : sql``}
+        ORDER BY t.created_at ${after ? sql`ASC` : sql`DESC`},t.id ${after ? sql`ASC` : sql`DESC`} LIMIT 21`);
       const rows = result.rows.slice(0, 20);
-      const turns: AgentSessionTurn[] = rows.reverse().map(row => ({ task: row.task, created_at: new Date(row.task.created_at).toISOString(), requester_name: row.requester_name,
+      const turns: AgentSessionTurn[] = (after ? rows : rows.reverse()).map(row => ({ task: row.task, created_at: new Date(row.task.created_at).toISOString(), requester_name: row.requester_name,
         ...(row.response_payload?.response ? { response: parseAgentResponse(row.response_payload.response) } : {}),
         detail: String(row.payload?.text ?? row.payload?.result ?? row.payload?.error ?? row.payload?.code ?? '') }));
-      return { ...(session.handoff_context ? {context:session.handoff_context} : {}), ...(session.managed ? { outputs: session.outputs } : {}), session: await this.summary(c, id), turns, next_cursor: result.rows.length > 20 ? turns[0]!.task.id : null };
+      return { ...(session.handoff_context ? {context:session.handoff_context} : {}), ...(session.managed ? { outputs: session.outputs } : {}), session: await this.summary(c, id), turns, next_cursor: (after || result.rows.length > 20) && turns.length ? turns[0]!.task.id : null, has_newer: after ? result.rows.length > 20 : !!before };
     }, { isolationLevel: 'repeatable read', accessMode: 'read only' });
   }
   async send(actor: string, id: string, raw: unknown, key: string): Promise<Task> {

@@ -10,6 +10,13 @@ beforeAll(() => {
   });
 });
 afterEach(cleanup);
+it('hides the idle hint without hiding a disabled-send status', async()=>{
+ const {rerender}=render(<RichComposer channel="agent session" showKeyboardHint={false} attachmentsEnabled={false} onSend={vi.fn()}/>);
+ await screen.findByRole('textbox',{name:'Message agent session'});
+ expect(screen.queryByText(/Enter to send/)).toBeNull();
+ rerender(<RichComposer channel="agent session" showKeyboardHint={false} attachmentsEnabled={false} sendDisabledReason="Waiting for approval" onSend={vi.fn()}/>);
+ expect(screen.getByRole('status').textContent).toBe('Waiting for approval');
+});
 afterAll(() => { Reflect.deleteProperty(Range.prototype, 'getBoundingClientRect'); Reflect.deleteProperty(Range.prototype, 'getClientRects'); });
 it('keeps the mounted composer visually stable during a quick send without allowing a duplicate', async () => {
   let finish!: () => void;

@@ -269,7 +269,7 @@ export function Menu({ label, items, trigger, className = "", menuLabel = label,
   </Popover>;
 }
 
-export function Popover({ label, trigger, children, className = "", panelClassName = "", triggerClassName, panelLabel = label, role, floating = false, align = "end" }: {
+export function Popover({ label, trigger, children, className = "", panelClassName = "", triggerClassName, panelLabel = label, role, floating = false, align = "end", disabled = false }: {
   label: string;
   trigger: ReactNode;
   children: (close: (restoreFocus?: boolean) => void) => ReactNode;
@@ -280,6 +280,7 @@ export function Popover({ label, trigger, children, className = "", panelClassNa
   role?: "menu";
   floating?: boolean;
   align?: "start" | "end";
+  disabled?: boolean;
 }) {
   const ref = useRef<HTMLDetailsElement>(null);
   const panel = useRef<HTMLDivElement>(null);
@@ -287,28 +288,34 @@ export function Popover({ label, trigger, children, className = "", panelClassNa
   const [open, setOpen] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const reduced = useReducedMotion();
-  function show() { setExpanded(true); setOpen(true); }
+  function show() { if (!disabled) { setExpanded(true); setOpen(true); } }
   const [position, setPosition] = useState({ top: 0, left: 0 });
   function close(restoreFocus = false) {
     setOpen(false);
     if (restoreFocus) ref.current?.querySelector("summary")?.focus();
   }
   useEffect(() => {
-    const close = (event: PointerEvent) => {
+    if (!open) return;
+    const close = (event: Event) => {
       if (!ref.current?.contains(event.target as Node) && !panel.current?.contains(event.target as Node))
         setOpen(false);
     };
     document.addEventListener("pointerdown", close);
-    return () => document.removeEventListener("pointerdown", close);
-  }, []);
+    document.addEventListener("focusin", close);
+    return () => { document.removeEventListener("pointerdown", close); document.removeEventListener("focusin", close); };
+  }, [open]);
+  useLayoutEffect(() => { if (disabled) close(); }, [disabled]);
   useLayoutEffect(() => {
     if (!open || !floating) return;
     const place = () => {
       const anchor = ref.current?.getBoundingClientRect(), menu = panel.current?.getBoundingClientRect();
       if (!anchor || !menu) return;
+      // Animation scales the visual bounds; anchor against stable layout dimensions.
+      const width = panel.current!.offsetWidth || menu.width, height = panel.current!.offsetHeight || menu.height;
+      const top = anchor.bottom + height + 6 > window.innerHeight ? anchor.top - height - 6 : anchor.bottom + 6;
       setPosition({
-        left: Math.max(8, Math.min(align === "start" ? anchor.left : anchor.right - menu.width, window.innerWidth - menu.width - 8)),
-        top: Math.max(8, anchor.bottom + menu.height + 6 > window.innerHeight ? anchor.top - menu.height - 6 : anchor.bottom + 6),
+        left: Math.max(8, Math.min(align === "start" ? anchor.left : anchor.right - width, window.innerWidth - width - 8)),
+        top: Math.max(8, Math.min(top, window.innerHeight - height - 8)),
       });
     };
     place();
@@ -320,21 +327,24 @@ export function Popover({ label, trigger, children, className = "", panelClassNa
     return () => { observer?.disconnect(); window.removeEventListener("resize", place); window.removeEventListener("scroll", place, true); };
   }, [open, floating, align]);
   function navigate(event: React.KeyboardEvent) {
-    if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); close(true); return; }
-    if (event.key === "Tab") { close(true); return; }
+    if (disabled || event.defaultPrevented) return;
+    if (event.key === "Escape") { if (open) { event.preventDefault(); event.stopPropagation(); close(true); } return; }
+    if (event.key === "Tab") { if (open && role === "menu") { event.stopPropagation(); close(true); } return; }
+    if ((event.target as HTMLElement).closest('input,textarea,select,[contenteditable=true]')) return;
+    if (role !== "menu" && event.target !== ref.current?.querySelector('summary')) return;
     if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
     event.preventDefault(); event.stopPropagation();
     show();
     requestAnimationFrame(() => {
-      const buttons = [...(panel.current?.querySelectorAll<HTMLButtonElement>("button") ?? [])];
+      const buttons = [...(panel.current?.querySelectorAll<HTMLButtonElement>("button") ?? [])].filter(button => !button.disabled && button.getAttribute('aria-disabled') !== 'true' && !button.closest('[hidden],[inert]'));
       const current = buttons.indexOf(document.activeElement as HTMLButtonElement);
       const next = event.key === "Home" ? 0 : event.key === "End" ? buttons.length - 1 : event.key === "ArrowUp" ? (current < 0 ? buttons.length - 1 : (current - 1 + buttons.length) % buttons.length) : (current + 1) % buttons.length;
       buttons[next]?.focus();
     });
   }
   const content = <AnimatePresence onExitComplete={() => setExpanded(false)}>
-    {open && <PopoverPanel key={id} panelRef={panel} id={id} role={role} aria-label={panelLabel} className={panelClassName}
-      style={{ ...(floating ? { position: "fixed", ...position, zIndex: 100 } : {}), transformOrigin: "center" }} onKeyDown={navigate} {...surfaceMotion(reduced)}>
+    {open && <PopoverPanel key={id} panelRef={panel} id={id} role={role} aria-label={panelLabel} className={panelClassName} data-floating={floating || undefined}
+      style={{ ...(floating ? { position: "fixed", ...position, right: "auto", bottom: "auto", zIndex: 100 } : {}), transformOrigin: "center" }} onKeyDown={navigate} {...surfaceMotion(reduced)}>
       {children((restoreFocus = true) => close(restoreFocus))}
     </PopoverPanel>}
   </AnimatePresence>;
@@ -345,7 +355,7 @@ export function Popover({ label, trigger, children, className = "", panelClassNa
       className={className}
       onKeyDown={navigate}
     >
-      <summary role="button" className={triggerClassName} aria-label={label} aria-haspopup={role} aria-expanded={open} aria-controls={id} onClick={event => { event.preventDefault(); if (open) close(); else show(); }}>
+      <summary role="button" className={triggerClassName} aria-label={label} aria-haspopup={role} aria-disabled={disabled || undefined} tabIndex={disabled ? -1 : undefined} aria-expanded={open} aria-controls={id} onClick={event => { event.preventDefault(); if (open) close(); else show(); }}>
         {trigger}
       </summary>
       {floating ? createPortal(content, ref.current?.closest("dialog") ?? document.body) : content}

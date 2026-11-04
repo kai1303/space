@@ -55,3 +55,15 @@ it('offers six hand swatches and closes only the tone options on Escape', async 
   await userEvent.keyboard('{Escape}');
   expect(screen.queryByRole('dialog',{name:'Choose emoji'})).toBeNull();
 });
+
+it('does not open a disabled picker and closes when it becomes disabled',async()=>{
+ const {rerender}=render(<EmojiPicker disabled onSelect={()=>{}}/>);
+ const trigger=screen.getByRole('button',{name:'Choose emoji'});
+ await userEvent.click(trigger);
+ expect(screen.queryByRole('dialog',{name:'Choose emoji'})).toBeNull();
+ rerender(<EmojiPicker onSelect={()=>{}}/>);
+ await userEvent.click(trigger);
+ expect(screen.getByRole('dialog',{name:'Choose emoji'})).toBeTruthy();
+ rerender(<EmojiPicker disabled onSelect={()=>{}}/>);
+ expect(screen.queryByRole('dialog',{name:'Choose emoji'})).toBeNull();
+});

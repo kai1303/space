@@ -20,6 +20,7 @@ export function Message({
   arrival = false,
   actions,
   footer,
+  grouped = false,
 }: {
   author: string;
   initials: string;
@@ -34,18 +35,19 @@ export function Message({
   arrival?: boolean;
   actions?: MessageActionHandlers;
   footer?: ReactNode;
+  grouped?: boolean;
 }) {
   const reduced = useReducedMotion();
   return (
     <motion.article
-      className="sp-message"
+      className={`sp-message${grouped ? " sp-message--grouped" : ""}`}
       initial={arrival && !reduced ? { opacity: 0 } : false}
       animate={{ opacity: 1 }}
       transition={motionTransition(reduced, 0.14)}
     >
-      <Avatar name={author} initials={initials} tone={tone} />
+      {grouped ? <span className="sp-message-compact-time" aria-hidden="true">{time}</span> : <Avatar name={author} initials={initials} tone={tone} />}
       <div className="sp-message-body">
-        <div className="sp-message-meta">
+        <div className={grouped ? "sp-sr-only" : "sp-message-meta"}>
           <strong>{author}</strong>
           {agent && <Badge>Agent</Badge>}
           <span className="sp-message-time">{time}</span>
