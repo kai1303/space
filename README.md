@@ -79,12 +79,7 @@ content are sample data; no agent-provider run is shown.
 
 [Watch or download the MP4](docs/media/space-desktop-demo.mp4) · approximately 40 seconds · 1440 × 918
 
-<details>
-<summary>Play the animated preview</summary>
-
 ![Space demo: channel message, thread reply, file preview, and file library](docs/media/space-desktop-demo.gif)
-
-</details>
 
 <details>
 <summary>View the file library</summary>
