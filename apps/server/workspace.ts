@@ -16,6 +16,10 @@ export function registerWorkspaceRoutes(app: FastifyInstance, store: WorkspaceSt
     store.rename(request.actorId, uuid(request.params.workspaceId), request.body));
   app.get<{ Params: { workspaceId: string } }>('/v1/workspaces/:workspaceId/members', request =>
     store.members(request.actorId, uuid(request.params.workspaceId), request.query));
+  app.get<{ Params: { workspaceId: string } }>('/v1/workspaces/:workspaceId/directory', request =>
+    store.directory(request.actorId, uuid(request.params.workspaceId), request.query));
+  app.post<{ Params: { workspaceId: string } }>('/v1/workspaces/:workspaceId/transfer-ownership', request => store.transferOwnership(request.actorId, uuid(request.params.workspaceId), request.body));
+  app.get<{ Params: { workspaceId: string } }>('/v1/workspaces/:workspaceId/members.csv', async (request,reply) => reply.type('text/csv; charset=utf-8').header('content-disposition','attachment; filename=workspace-members.csv').send(await store.exportMembers(request.actorId,uuid(request.params.workspaceId))));
   app.post<{ Params: { workspaceId: string } }>('/v1/workspaces/:workspaceId/members', async (request, reply) =>
     reply.code(201).send(await store.addMember(request.actorId, uuid(request.params.workspaceId), request.body)));
   app.patch<{ Params: { workspaceId: string; userId: string } }>('/v1/workspaces/:workspaceId/members/:userId', request =>

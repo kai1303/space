@@ -1,3 +1,4 @@
+import { invitationEmailConfig, createInvitationMailer } from './invitation-email.js';
 import { createPool } from '@space/postgres/database';
 import { PostgresStore } from '@space/postgres/store';
 import { createAuthentication } from './auth.js';
@@ -10,8 +11,10 @@ const storage = createAssetStorageFromEnv();
 const adapter = new RedisSocketAdapter(process.env.REDIS_URL);
 await adapter.connect();
 const pool = createPool(process.env.DATABASE_URL);
-const auth = createAuthentication(pool, { secret: process.env.BETTER_AUTH_SECRET, baseURL: process.env.BETTER_AUTH_URL, trustedOrigins: process.env.AUTH_TRUSTED_ORIGINS?.split(',').filter(Boolean) });
-const app = createApi(new PostgresStore(pool), { logger: true, auth, storage, trustedProxies: process.env.TRUSTED_PROXY_CIDRS?.split(',').filter(Boolean), allowDevelopmentTokens: process.env.ALLOW_DEVELOPMENT_TOKENS === 'true', realtime: { adapter } });
+const emailConfig = invitationEmailConfig();
+const invitationEmail = emailConfig ? {config:emailConfig,mailer:createInvitationMailer(emailConfig)} : undefined;
+const auth = createAuthentication(pool, { secret: process.env.BETTER_AUTH_SECRET, baseURL: process.env.BETTER_AUTH_URL, sendVerificationEmail:invitationEmail?.mailer.verification, trustedOrigins: process.env.AUTH_TRUSTED_ORIGINS?.split(',').filter(Boolean) });
+const app = createApi(new PostgresStore(pool), { logger: true, auth, storage, invitationEmail, trustedProxies: process.env.TRUSTED_PROXY_CIDRS?.split(',').filter(Boolean), allowDevelopmentTokens: process.env.ALLOW_DEVELOPMENT_TOKENS === 'true', realtime: { adapter } });
 app.addHook('onClose', async () => { await pool.end(); });
 for (const signal of ['SIGINT', 'SIGTERM'] as const) process.once(signal, () => {
   void app.close().catch(() => { app.log.error('shutdown_failed'); process.exitCode = 1; });

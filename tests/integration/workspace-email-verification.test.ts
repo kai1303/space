@@ -1,0 +1,21 @@
+import {test,before,after} from 'node:test';
+import assert from 'node:assert/strict';
+import {randomBytes} from 'node:crypto';
+import {Pool} from 'pg';
+import {migrate} from '@space/postgres/migrate';
+import {createAuthentication} from '@space/server/auth';
+const url=process.env.TEST_DATABASE_URL;if(!url)throw new Error('TEST_DATABASE_URL required');
+const schema=`email_verify_${randomBytes(8).toString('hex')}`,admin=new Pool({connectionString:url}),pool=new Pool({connectionString:url,options:`-c search_path=${schema}`});
+before(async()=>{await admin.query(`CREATE SCHEMA ${schema}`);await migrate(pool);});
+after(async()=>{await pool.end();await admin.query(`DROP SCHEMA ${schema} CASCADE`);await admin.end();});
+test('verification callback issues an email-bound link that verifies the account and returns to invitation',async()=>{
+ let delivery:{email:string;url:string}|undefined;
+ const auth=createAuthentication(pool,{secret:'verification-only-test-secret-at-least-32-characters',baseURL:'http://space.test',sendVerificationEmail:async(email,url)=>{delivery={email,url};}});
+ const post=(path:string,body:object,cookie='')=>auth.handler(new Request(`http://space.test/v1/auth/${path}`,{method:'POST',headers:{'content-type':'application/json',origin:'http://space.test',cookie},body:JSON.stringify(body)}));
+ const signup=await post('sign-up/email',{name:'Verify QA',email:'verify@example.test',password:'Only-for-verification-test-123!'});assert.equal(signup.status,200);
+ const cookie=signup.headers.getSetCookie().map(s=>s.split(';')[0]).join('; '),user=(await signup.json()).user;
+ const sent=await post('send-verification-email',{email:'verify@example.test',callbackURL:'http://space.test/chat?invite=test'},cookie);assert.equal(sent.status,200);assert.equal(delivery?.email,'verify@example.test');
+ assert.equal((await pool.query('SELECT email_verified FROM users WHERE id=$1',[user.id])).rows[0].email_verified,false);
+ const verified=await auth.handler(new Request(delivery!.url,{headers:{cookie}}));assert.equal(verified.status,302);assert.equal(verified.headers.get('location'),'http://space.test/chat?invite=test');
+ assert.equal((await pool.query('SELECT email_verified FROM users WHERE id=$1',[user.id])).rows[0].email_verified,true);
+});

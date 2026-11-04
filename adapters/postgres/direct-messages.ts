@@ -1,3 +1,4 @@
+import { visibleWorkspacePeer } from './workspace-access.js';
 import { randomUUID } from 'node:crypto';
 import { sql } from 'drizzle-orm';
 import { AppError, parsePage, record, uuid, type DirectMessageSummary, type ChannelMember } from '@space/contracts';
@@ -32,6 +33,7 @@ export class DirectMessageStore {
       const rows = await c.execute<ChannelMember & Record<string, unknown>>(sql`SELECT u.id,u.display_name AS name,u.image,u.title,u.presence
         FROM workspace_members wm JOIN users u ON u.id=wm.user_id
         WHERE wm.workspace_id=${workspace} AND wm.active AND (${after ?? null}::uuid IS NULL OR u.id>${after ?? null}::uuid)
+          AND ${visibleWorkspacePeer(workspace,actor,sql`u.id`)}
           AND position(lower(${q}) IN lower(u.display_name||' '||u.full_name))>0 ORDER BY u.id LIMIT ${limit + 1}`);
       return page(rows.rows, limit, row => row.id);
     });
@@ -82,6 +84,8 @@ export class DirectMessageStore {
       const found = await c.execute<{ id: string }>(sql`SELECT id FROM channels WHERE workspace_id=${workspace} AND kind='direct' AND direct_user_low=${low} AND direct_user_high=${high}`);
       const id = found.rows[0]?.id ?? randomUUID();
       if (!found.rows.length) {
+        const permitted = await c.execute(sql`SELECT 1 WHERE ${visibleWorkspacePeer(workspace,actor,sql`${user}::uuid`)} AND ${visibleWorkspacePeer(workspace,user,sql`${actor}::uuid`)}`);
+        if (!permitted.rows.length) throw new AppError(403,'guest_direct_message_forbidden');
         await c.execute(sql`INSERT INTO channels(id,workspace_id,name,private,kind,direct_user_low,direct_user_high,created_by)
           VALUES(${id},${workspace},'Direct message',true,'direct',${low},${high},${actor})`);
         for (const member of [...new Set([low, high])]) {

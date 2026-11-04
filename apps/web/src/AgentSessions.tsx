@@ -1,3 +1,4 @@
+import {useDestinationPresence} from './DestinationTransition.js';
 import {ConversationHeader,ConversationComposer,ConversationMessage,ConversationReplyDivider} from './ThreadConversation.js';
 import {MessageTimeline} from './MessageTimeline.js';
 import {useCallback,useEffect,useId,useMemo,useRef,useState,type FormEvent} from 'react';
@@ -5,7 +6,7 @@ import type {ChannelAgent,AgentSessionDetail,AgentSessionSummary,AgentSessionTur
 import {Button,IconButton,SidePanel,Tabs} from '@space/ui';
 import {AnimatePresence} from 'motion/react';
 import {SidebarSimple,Plus,Robot,Stop,X} from '@phosphor-icons/react';
-import {request} from './chat-client.js';
+import {request,type MessageAttempt} from './chat-client.js';
 import {subscribeUpdates} from './live-updates.js';
 import {TaskPreview,TaskFiles,TaskChanges} from './AgentTaskWorkspace.js';
 import {useMentionSearch} from './Mentions.js';
@@ -17,21 +18,28 @@ const errorText=(error:unknown)=>error instanceof Error?error.message.replaceAll
 const busy=(task?:Task)=>!!task&&['awaiting_approval','queued','running'].includes(task.status);
 const status=(task?:Task)=>!task?'Ready':({awaiting_approval:'Waiting for approval',queued:'Queued',running:'Working',completed:'Ready',failed:'Turn failed',rejected:'Request declined'}[task.status]);
 
-export function AgentSessions({thread,channel,viewerId,onAccessLost,initialSessionId,onOpenSession,archived=false,channelName,onBack,onClose}: {
+export function AgentSessions({drafts:externalDrafts,onDraftChange:externalDraftChange,attempt:externalAttempt,acknowledged:externalAcknowledged,onAccepted,thread,channel,viewerId,onAccessLost,initialSessionId,onOpenSession,archived=false,channelName,onBack,onClose}: {
+ acknowledged?:Record<string,RichDocument>;onAccepted?:(key:string,document:RichDocument)=>void;
+ drafts?:Record<string,RichDocument>;onDraftChange?:(key:string,document:RichDocument)=>void;attempt?:(key:string)=>MessageAttempt;
  thread:string;channel:string;viewerId:string;onAccessLost:()=>void;initialSessionId?:string;onOpenSession?:(id:string)=>void;archived?:boolean;channelName?:string;onBack?:()=>void;onClose?:()=>void;
 }) {
+ const present=useDestinationPresence();
  const [sessions,setSessions]=useState<AgentSessionSummary[]>([]);
  const picker=!!onOpenSession,selected=initialSessionId;
  const [creating,setCreating]=useState(false),[title,setTitle]=useState(''),[agent,setAgent]=useState('');
  const [catalog,setCatalog]=useState<NavigatorCandidate[]>([]),[local,setLocal]=useState<ChannelAgent[]>([]);
  const [error,setError]=useState(''),[loading,setLoading]=useState(true),[saving,setSaving]=useState(false),[revision,setRevision]=useState(0),[revoked,setRevoked]=useState(false);
- const drafts=useRef<Record<string,RichDocument>>({}),attempts=useRef(new Map<string,{body:string;key:string}>());
+ const drafts=useRef<Record<string,RichDocument>>({}),attempts=useRef(new Map<string,MessageAttempt>());
  const [acknowledged,setAcknowledged]=useState<Record<string,RichDocument>>({});
  const creation=useRef<{body:string;id:string}|undefined>(undefined);
  const lost=useRef(onAccessLost);lost.current=onAccessLost;
+ const revokedRef=useRef(false);
+ const draftKey=(id:string)=>`session:${channel}:${id}`;
+ const getDraft=(id:string)=>externalDrafts?.[draftKey(id)]??drafts.current[id];
+ const saveDraft=(id:string,document:RichDocument)=>{drafts.current[id]=document;if(externalDrafts)externalDrafts[draftKey(id)]=document;externalDraftChange?.(draftKey(id),document);};
  const alive=useRef(true);
  useEffect(()=>{alive.current=true;return()=>{alive.current=false;};},[]);
- const revoke=useCallback(()=>{if(!alive.current)return;setRevoked(true);setSessions([]);drafts.current={};attempts.current.clear();setAcknowledged({});lost.current();},[]);
+ const revoke=useCallback(()=>{if(!alive.current)return;revokedRef.current=true;setRevoked(true);setSessions([]);drafts.current={};attempts.current.clear();setAcknowledged({});lost.current();},[]);
  useEffect(()=>{
   let active=true;
   const read=async()=>{
@@ -64,19 +72,23 @@ export function AgentSessions({thread,channel,viewerId,onAccessLost,initialSessi
   const body=JSON.stringify({title:title.trim(),installation_id,skill});
   if(creation.current?.body!==body)creation.current={body,id:crypto.randomUUID()};
   try{const session=await request<AgentSessionSummary>(`/threads/${thread}/agent-sessions`,{...JSON.parse(body),client_session_id:creation.current.id});
-   if(!alive.current)return;setSessions(items=>[session,...items.filter(item=>item.id!==session.id)]);setCreating(false);setTitle('');creation.current=undefined;onOpenSession?.(session.id);
+   if(!alive.current||!present.current)return;setSessions(items=>[session,...items.filter(item=>item.id!==session.id)]);setCreating(false);setTitle('');creation.current=undefined;onOpenSession?.(session.id);
   }catch(reason){if(denied(reason))revoke();else setError(errorText(reason));}
   finally{if(alive.current)setSaving(false);}
  }
  async function send(id:string,text:string,document:RichDocument){
   const body=JSON.stringify({text,document});
-  let attempt=attempts.current.get(id);if(attempt?.body!==body){attempt={body,key:crypto.randomUUID()};attempts.current.set(id,attempt);}
+  let state=externalAttempt?.(draftKey(id))??attempts.current.get(id);
+  if(!state){state={};attempts.current.set(id,state);}
+  if(state.current?.content!==body)state.current={content:body,id:crypto.randomUUID()};
+  const attempt=state.current;
   let accepted:Task;
-  try { accepted=await request<Task>(`/agent-sessions/${id}/messages`,{text,document},attempt.key); }
+  try { accepted=await request<Task>(`/agent-sessions/${id}/messages`,{text,document},attempt.id); }
   catch(reason) { if(denied(reason))revoke(); throw reason; }
+  if(state.current===attempt)state.current=undefined;
+  if(!revokedRef.current&&JSON.stringify(getDraft(id))===JSON.stringify(document))saveDraft(id,{ops:[]});
+  if(!revokedRef.current)onAccepted?.(draftKey(id),document);
   if(!alive.current)return accepted;
-  if(attempts.current.get(id)===attempt)attempts.current.delete(id);
-  if(JSON.stringify(drafts.current[id])===JSON.stringify(document))drafts.current[id]={ops:[]};
   setAcknowledged(previous=>({...previous,[id]:document}));refresh();return accepted;
  }
  if(revoked)return <p role="alert">This conversation is no longer available.</p>;
@@ -88,7 +100,7 @@ export function AgentSessions({thread,channel,viewerId,onAccessLost,initialSessi
   {loading&&<p role="status" className="agent-sessions-empty">Loading sessions…</p>}
   {picker&&<nav aria-label="Sessions in this thread" className="agent-sessions-list">{sessions.map(session=><button key={session.id} type="button" aria-label={session.title} onClick={()=>onOpenSession?.(session.id)}><span>{session.title}</span><small>{session.agent_name} · {session.state==='ended'?'Ended':`${session.turn_count} ${session.turn_count===1?'turn':'turns'}`}</small></button>)}</nav>}
   {picker&&creating&&<form className="agent-session-create" onSubmit={create}><h3>New agent session</h3><label>Session name<input required maxLength={120} value={title} onChange={event=>setTitle(event.target.value)} placeholder="What are we working on?"/></label><label>Agent<select value={agent} onChange={event=>setAgent(event.target.value)}>{catalog.map(item=><option key={`${item.installation_id}|${item.skill}`} value={`${item.installation_id}|${item.skill}`}>{item.name} · {item.skill}</option>)}</select></label>{!catalog.length&&<p>No session-capable agent is enabled in this channel.</p>}{local.filter(item=>item.persistent_sessions).flatMap(item=>item.skills.filter(skill=>!item.granted_skills.includes(skill)).map(skill=><Button key={`${item.id}|${skill}`} size="sm" disabled={saving} onClick={()=>void enable(item.id,skill)}>Enable {item.name}{item.skills.length>1?` · ${skill}`:''} in this channel</Button>))}<div><Button type="submit" disabled={saving||!title.trim()||!agent}>Start session</Button><Button variant="ghost" onClick={()=>setCreating(false)}>Cancel</Button></div></form>}
-  {!picker&&current&&<SessionConversation key={current.id} session={current} channel={channel} channelName={channelName} onBack={onBack} onClose={onClose} viewerId={viewerId} revision={revision} draft={drafts.current[current.id]} acknowledged={acknowledged[current.id]} onDraftChange={document=>{drafts.current[current.id]=document;}} onSend={(text,document)=>send(current.id,text,document)} onAccessLost={revoke} archived={archived}/>}
+  {!picker&&current&&<SessionConversation key={current.id} session={current} channel={channel} channelName={channelName} onBack={onBack} onClose={onClose} viewerId={viewerId} revision={revision} draft={getDraft(current.id)} acknowledged={externalAcknowledged?.[draftKey(current.id)]??acknowledged[current.id]} onDraftChange={document=>saveDraft(current.id,document)} onSend={(text,document)=>send(current.id,text,document)} onAccessLost={revoke} archived={archived}/>}
   {picker&&!loading&&!creating&&!sessions.length&&<p className="agent-sessions-empty">No agent sessions yet.</p>}
   {!picker&&!loading&&!current&&<p role="alert" className="agent-sessions-empty">This session is unavailable.</p>}
  </div>;

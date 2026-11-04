@@ -61,9 +61,18 @@ vi.mock('@tanstack/react-virtual', () => ({ useVirtualizer: (options: any) => {
   getVirtualItems: () => Array.from({ length: options.count }, (_, index) => ({ index, key: options.getItemKey(index), start: index * 100 + 44 })),
   measureElement: () => {}, scrollToEnd: () => {}, scrollToIndex: () => {},
 }; } }));
-const mocks = vi.hoisted(() => ({ sockets: [] as any[], sessionId: 'session-a', refetch: vi.fn(), upload: vi.fn(), sendFailures: 0, pendingSend: undefined as undefined | Promise<void>, timelineRenders: 0 }));
+const mocks = vi.hoisted(() => ({ sockets: [] as any[], sessionId: 'session-a', refetch: vi.fn(), upload: vi.fn(), sendFailures: 0, pendingSend: undefined as undefined | Promise<void>, timelineRenders: 0, badgeOverride: false, setBadge: undefined as undefined | ((count:number)=>void) }));
 const latestChatSocket = () => mocks.sockets.at(-1);
 vi.mock('./assets.js', () => ({ uploadAsset: mocks.upload }));
+vi.mock('./Notifications.js', async original => {
+  const actual = await original<typeof import('./Notifications.js')>();
+  const { useState } = await import('react');
+  return { ...actual, useNotificationDelivery: (...args: Parameters<typeof actual.useNotificationDelivery>) => {
+    const delivered = actual.useNotificationDelivery(...args);
+    const [count, setCount] = useState(0); mocks.setBadge = setCount;
+    return mocks.badgeOverride ? count : delivered;
+  } };
+});
 vi.mock('./auth-client.js', () => ({ authClient: { useSession: () => ({ data: { user: { id: 'user', name: 'Kai' }, session: { id: mocks.sessionId } }, isPending: false, error: null, refetch: mocks.refetch }), signOut: vi.fn() } }));
 vi.mock('socket.io-client', () => ({ io: () => {
   const handlers = new Map<string, (...args: any[]) => void>();
@@ -76,7 +85,7 @@ vi.mock('socket.io-client', () => ({ io: () => {
   };
   mocks.sockets.push(client); return client;
 } }));
-afterEach(() => { cleanup(); vi.unstubAllGlobals(); mocks.sockets.length = 0; mocks.upload.mockReset(); mocks.sendFailures = 0; mocks.pendingSend = undefined; });
+afterEach(() => { localStorage.removeItem('space:composer-drafts:user'); cleanup(); localStorage.clear(); vi.unstubAllGlobals(); mocks.sockets.length = 0; mocks.upload.mockReset(); mocks.sendFailures = 0; mocks.pendingSend = undefined; mocks.badgeOverride = false; mocks.setBadge = undefined; });
 beforeAll(() => {
   Object.defineProperties(Range.prototype, {
     getBoundingClientRect: { configurable: true, value: () => new DOMRect() },
@@ -111,7 +120,7 @@ it('browses channel files outside loaded history, opens their source and keeps d
   const draft = await screen.findByRole('textbox', { name: 'Message first' });
   await userEvent.type(draft, 'Keep this draft');
   expect(vi.mocked(fetch).mock.calls.some(([path]) => String(path).includes('/first/assets?'))).toBe(false);
-  const filesButton = screen.getByRole('button', { name: 'Files', exact: true });
+  const filesButton = within(document.querySelector('main.chat-channel')!).getByRole('button', { name: 'Files', exact: true });
   await userEvent.click(filesButton);
   const files = await screen.findByRole('region', { name: 'Files in #first' });
   await within(files).findByText('older-report.pdf');
@@ -180,13 +189,13 @@ it.each([false, true])('revalidates channel access when an older file source is 
   }));
   render(<Chat />);
   await screen.findByText('Cached channel message');
-  await userEvent.click(screen.getByRole('button', { name: 'Files', exact: true }));
+  await userEvent.click(within(document.querySelector('main.chat-channel')!).getByRole('button', { name: 'Files', exact: true }));
   await userEvent.click(await screen.findByRole('button', { name: 'View message for old.pdf' }));
   await waitFor(() => expect(vi.mocked(fetch).mock.calls.filter(([path]) => String(path).includes('/first/assets?'))).toHaveLength(2));
   if (revoked) {
     await waitFor(() => expect(screen.queryByText('Cached channel message')).toBeNull());
     expect(screen.queryByRole('dialog', { name: 'Original message in #first' })).toBeNull();
-    expect(screen.getByRole('button', { name: 'Files', exact: true })).toHaveProperty('disabled', true);
+    expect(within(document.querySelector('main.chat-channel')!).getByRole('button', { name: 'Files', exact: true })).toHaveProperty('disabled', true);
   } else {
     expect(screen.getByText('Cached channel message')).toBeTruthy();
     expect(screen.getByRole('dialog', { name: 'Original message in #first' })).toBeTruthy();
@@ -586,7 +595,7 @@ it('keeps uploads with their channel and thread drafts across navigation, retrie
   await screen.findByRole('textbox', { name: 'Message second' });
   await userEvent.click(screen.getByRole('button', { name: 'first', exact: true }));
   await screen.findByRole('textbox', { name: 'Message first' });
-  await userEvent.click(screen.getByRole('button', { name: 'Send now' }));
+  await userEvent.click(within(screen.getByRole('textbox', { name: 'Message first' }).closest('.chat-compose') as HTMLElement).getByRole('button', { name: 'Send now' }));
   const reportAttempts = latestChatSocket().requests.filter((r: any) => r.name === 'message.send' && !r.data.thread_id);
   expect(reportAttempts[0]).toBe(firstReportAttempt);
   expect(reportAttempts).toHaveLength(2);
@@ -664,6 +673,27 @@ it.each([false,true].flatMap(attached => [{edited:true,text:'Original draft'},{e
   }
 });
 
+it('creates an additional workspace from the rail and selects the returned workspace', async () => {
+  vi.stubGlobal('fetch', vi.fn(async (path: string, options?: RequestInit) => ({ ok: true, json: async () => {
+    if (path === '/v1/workspaces' && options?.method === 'POST') return { id: 'created', name: 'New team', role: 'owner' };
+    if (path.startsWith('/v1/workspaces?')) return { items: [{ id: 'original', name: 'Team' }], next_cursor: null };
+    if (path.includes('/channels?')) return { items: [], next_cursor: null };
+    if (path.includes('/history')) return { events: [], cursor: '0', has_more: false };
+    return {};
+  } })));
+  render(<Chat />);
+  await userEvent.click(await screen.findByRole('button', { name: 'Switch workspaces… (Team)' }));
+  await userEvent.click(screen.getByRole('menuitem', { name: 'Add a workspace' }));
+  await userEvent.click(await screen.findByRole('button', { name: 'Create a new workspace' }));
+  await userEvent.type(screen.getByRole('textbox', { name: 'Workspace name' }), 'New team');
+  await userEvent.click(screen.getByRole('button', { name: 'Create workspace', exact: true }));
+  await screen.findByRole('button', { name: 'Switch workspaces… (New team)' });
+  expect(vi.mocked(fetch).mock.calls.some(([path, options]) => path === '/v1/workspaces' && options?.method === 'POST' && options.body === JSON.stringify({ name: 'New team' }))).toBe(true);
+  await userEvent.click(screen.getByRole('button', { name: 'Switch workspaces… (New team)' }));
+  await userEvent.click(screen.getByRole('menuitem', { name: 'Team', exact: true }));
+  await screen.findByRole('button', { name: 'Switch workspaces… (Team)' });
+});
+
 it('creates a workspace directly from onboarding and opens the returned workspace', async () => {
   vi.stubGlobal('fetch', vi.fn(async (path: string, options?: RequestInit) => ({ ok: true, json: async () => {
     if (path === '/v1/workspaces' && options?.method === 'POST') return { id: 'created', name: 'Space studio', role: 'owner' };
@@ -688,14 +718,17 @@ it.each([false,true])('keeps the channel mounted behind the thread transition an
   mockPaginatedChat(()=>messagePage([paginatedMessage('Source message','1')]));
   const view=render(<Chat />);await screen.findByText('Source message');
   const channel=view.container.querySelector('#chat-messages')!;
-  await userEvent.click(screen.getByRole('button',{name:'Reply to Kai'}));
-  await screen.findByRole('region',{name:'Thread',exact:true});
+  const trigger=screen.getByRole('button',{name:'Reply to Kai'});
+  await userEvent.click(trigger);
+  const panel=await screen.findByRole('region',{name:'Thread',exact:true});
+  expect(document.activeElement).toBe(panel);
   expect(channel.isConnected).toBe(true);
   expect(channel.getAttribute('aria-hidden')).toBe(compact?'true':null);
   expect(channel.hasAttribute('inert')).toBe(compact);
   await userEvent.click(screen.getByRole('button',{name:'Close thread'}));
   expect(channel.getAttribute('aria-hidden')).toBeNull();
   expect(channel.hasAttribute('inert')).toBe(false);
+  expect(document.activeElement).toBe(trigger);
 });
 it('reveals the initialized thread composer with its history without replacing the editor',async()=>{
   const root=paginatedMessage('Delayed thread parent','1');
@@ -1132,7 +1165,7 @@ it.each([false,true])('reveals an acknowledged send from older history even befo
   await waitFor(()=>expect(editor.textContent?.trim()).toBe(''));
 });
 
-it('opens a persistent agent session from a saved thread reference and keeps it reachable after returning',async()=>{
+it('opens a persistent agent session from its channel link without duplicating the link inside the thread',async()=>{
  const root={...paginatedMessage('Session request','1'),agent_sessions:[{id:'session-one',title:'Summarize this discussion',agent_name:'Codex'}]};
  const reference={...paginatedMessage('Summarize this discussion','2'),agent_session_id:'session-one',author:{kind:'agent' as const,id:'agent',name:'Codex'}};
  mockPaginatedChat(path=>path.includes('/threads/')?messagePage([root,reference]):messagePage([root]));
@@ -1145,20 +1178,40 @@ it('opens a persistent agent session from a saved thread reference and keeps it 
   return initialFetch(...args);
  });
  render(<Chat/>);await screen.findByText(root.text);
+ const channelLink=screen.getByRole('button',{name:`Agent session: ${reference.text}`});
  await userEvent.click(screen.getByRole('button',{name:'Reply to Kai'}));
  const thread=await screen.findByRole('region',{name:'Thread',exact:true});
- const link=await within(thread).findByRole('button',{name:`Agent session: ${reference.text}`});
- expect(link.closest('article')?.textContent).toContain(root.text);
+ expect(within(thread).queryByRole('button',{name:`Agent session: ${reference.text}`})).toBeNull();
  expect(within(thread).getAllByRole('article')).toHaveLength(1);
  expect(thread.querySelector('.chat-history-edge--newer')).toBeNull();
  expect(thread.querySelector('.chat-history-edge--older')).toBeNull();
- await userEvent.click(await within(screen.getByRole('region',{name:'Thread',exact:true})).findByRole('button',{name:`Agent session: ${reference.text}`}));
- await screen.findByRole('region',{name:'Agent session',exact:true});
+ await userEvent.click(channelLink);
+ const sessionPanel=await screen.findByRole('region',{name:'Agent session',exact:true});
+ expect(document.activeElement).toBe(sessionPanel);
  await screen.findByRole('textbox',{name:'Message agent session'});
  expect(screen.queryByRole('button',{name:'New agent session'})).toBeNull();
  expect(screen.queryByRole('navigation',{name:'Sessions in this thread'})).toBeNull();
  await userEvent.click(screen.getByRole('button',{name:'Back to thread'}));
- expect(await within(screen.getByRole('region',{name:'Thread',exact:true})).findByRole('button',{name:`Agent session: ${reference.text}`})).toBeTruthy();
+ const returned=await screen.findByRole('region',{name:'Thread',exact:true});
+ expect(document.activeElement).toBe(returned);
+ expect(within(returned).queryByRole('button',{name:`Agent session: ${reference.text}`})).toBeNull();
+ await userEvent.click(within(returned).getByRole('button',{name:'Close thread'}));
+ await userEvent.click(await screen.findByRole('button',{name:`Agent session: ${reference.text}`}));
+ const editor=await screen.findByRole('textbox',{name:'Message agent session'});
+ await userEvent.type(editor,'Retain this session draft');
+ await userEvent.click(screen.getByRole('button',{name:'Session details',exact:true}));
+ await screen.findByRole('region',{name:'Session details',exact:true});
+ await userEvent.click(screen.getByRole('button',{name:'Close agent session'}));
+ expect(document.activeElement).toBe(channelLink);
+ expect(sessionPanel.hasAttribute('inert')).toBe(true);
+ await waitFor(()=>expect(sessionPanel.hidden).toBe(true));
+ await userEvent.click(channelLink);
+ expect(document.activeElement).toBe(sessionPanel);
+ await userEvent.click(screen.getByRole('button',{name:'Close session details',exact:true}));
+ const reopened=await screen.findByRole('textbox',{name:'Message agent session'});
+ expect(reopened).toBe(editor);
+ expect(reopened.textContent).toContain('Retain this session draft');
+ expect(document.activeElement).toBe(screen.getByRole('button',{name:'Session details',exact:true}));
 });
 it('keeps earlier thread history reachable when the current page contains only hidden session reference records',async()=>{
  const root={...paginatedMessage('Parent outside the current page','1'),agent_sessions:[{id:'session',title:'Research',agent_name:'Codex'}]};
@@ -1169,7 +1222,7 @@ it('keeps earlier thread history reachable when the current page contains only h
  const thread=await screen.findByRole('region',{name:'Thread',exact:true});
  await userEvent.click(await within(thread).findByRole('button',{name:'Load older history'}));
  expect(await within(thread).findByText(root.text)).toBeTruthy();
- expect(await within(thread).findByRole('button',{name:'Agent session: Research'})).toBeTruthy();
+ expect(within(thread).queryByRole('button',{name:'Agent session: Research'})).toBeNull();
 });
 
 it('publishes local typing and displays other people separately in the channel and thread',async()=>{
@@ -1194,6 +1247,45 @@ it('publishes local typing and displays other people separately in the channel a
  expect(screen.queryByText('Ari')).toBeNull();expect(screen.queryByText('Sam')).toBeNull();
 });
 
+it.each(['channel', 'workspace'] as const)('opens self DMs inside Home and preserves sidebar, drafts and navigation context: revoke=%s', async revokeScope => {
+  const person = { id: 'user', name: 'Kai', image: '/kai.png', presence: 'active' };
+  const dm = { id: 'self', workspace_id: 'workspace', kind: 'direct', name: 'Kai (you)', private: true, joined: true, participants: [person], hidden: false, topic: '', description: '', archived_at: null };
+  let revoked = false;
+  vi.stubGlobal('fetch', vi.fn(async (path: string) => path === '/v1/channels/self' && revoked ? { ok: false, status: 404, json: async () => ({ error: 'not_found' }) } : { ok: true, status: 200, json: async () => {
+    if (path.startsWith('/v1/workspaces?')) return { items: [{ id: 'workspace', name: 'Team' }], next_cursor: null };
+    if (path.includes('/direct-messages?')) return { items: [dm], next_cursor: null };
+    if (path === '/v1/channels/self') return dm;
+    if (path.includes('/channels?')) return { items: [{ id: 'first', name: 'general', joined: true, workspace_id: 'workspace' }], next_cursor: null };
+    if (isMessageHistory(path)) return messagePage();
+    if (path.includes('/history')) return { events: [], cursor: '0', has_more: false };
+    return [];
+  } }));
+  render(<Chat />);
+  await screen.findByRole('textbox', { name: 'Message general' });
+  const self = await screen.findByRole('button', { name: 'Kai (you)', exact: true });
+  expect(self.querySelector('img')?.getAttribute('src')).toBe('/kai.png');
+  await userEvent.click(self);
+  const composer = await screen.findByRole('textbox', { name: 'Message Kai (you)' });
+  expect(composer.getAttribute('data-placeholder')).toBe('Jot something down');
+  expect(screen.getByRole('searchbox', { name: 'Find a conversation' })).toBeTruthy();
+  expect(screen.getByRole('link', { name: 'Home' }).getAttribute('aria-current')).toBe('page');
+  expect(screen.queryByRole('searchbox', { name: 'Find a DM' })).toBeNull();
+  await userEvent.type(composer, 'Keep this draft');
+  await userEvent.click(screen.getByRole('button', { name: 'general', exact: true }));
+  await screen.findByRole('textbox', { name: 'Message general' });
+  await userEvent.click(screen.getByRole('button', { name: 'Back in history' }));
+  expect((await screen.findByRole('textbox', { name: 'Message Kai (you)' })).textContent).toContain('Keep this draft');
+  expect(screen.getByRole('link', { name: 'Home' }).getAttribute('aria-current')).toBe('page');
+  await userEvent.click(screen.getByRole('button', { name: 'DMs', exact: true }));
+  await screen.findByRole('searchbox', { name: 'Find a DM' });
+  await userEvent.click(screen.getByRole('link', { name: 'Home' }));
+  await screen.findByRole('textbox', { name: 'Message Kai (you)' });
+  revoked = true;
+  await act(async () => { latestChatSocket().receive('updates.revoked', { scope: revokeScope, id: revokeScope === 'channel' ? 'self' : 'workspace', error: 'forbidden' }); });
+  await waitFor(() => expect(screen.queryByRole('textbox', { name: 'Message Kai (you)' })).toBeNull());
+  expect(localStorage.getItem('space:composer-drafts:user') ?? '').not.toContain('Keep this draft');
+});
+
 it('opens DMs from the rail and selects a recipient into the shared message room', async () => {
   const person = { id: 'alex', name: 'Alex', image: null, title: 'Designer', presence: 'active' };
   const dm = { id: 'direct', workspace_id: 'workspace', kind: 'direct', name: 'Alex', private: true, joined: true, participants: [person], hidden: false, last_message: null, topic: '', description: '', archived_at: null };
@@ -1215,9 +1307,20 @@ it('opens DMs from the rail and selects a recipient into the shared message room
   render(<Chat />);
   await screen.findByRole('textbox', { name: 'Message general' });
   await userEvent.click(screen.getByRole('button', { name: 'DMs', exact: true }));
-  await userEvent.click(screen.getAllByRole('button', { name: 'New message', exact: true })[0]!);
+  await userEvent.click((await screen.findAllByRole('button', { name: 'New message', exact: true }))[0]!);
+  expect(screen.queryByRole('dialog')).toBeNull();
+  const pending = await screen.findByRole('textbox', { name: 'Message new conversation' });
+  await userEvent.type(pending, 'Draft before choosing Alex');
   await userEvent.click(await screen.findByRole('button', { name: /Alex Designer/ }));
-  await screen.findByRole('textbox', { name: 'Message Alex' });
+  const directComposer = await screen.findByRole('textbox', { name: 'Message Alex' });
+  expect(directComposer.textContent).toContain('Draft before choosing Alex');
+  expect(screen.queryByRole('button', { name: /recording unavailable/ })).toBeNull();
+  await userEvent.click(screen.getByRole('button', { name: 'More conversation actions' }));
+  await userEvent.click(screen.getByRole('menuitem', { name: 'Conversation details', exact: true }));
+  const details = await screen.findByRole('dialog', { name: 'Alex' });
+  expect(within(details).getByText('Only the participants in this conversation can read and send messages.')).toBeTruthy();
+  await userEvent.click(within(details).getByRole('button', { name: 'Close dialog', exact: true }));
+  await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Alex' })).toBeNull());
   expect(screen.queryByRole('button', { name: 'View channel members' })).toBeNull();
   expect(screen.queryByRole('button', { name: 'Memory', exact: true })).toBeNull();
   expect(screen.getByRole('button', { name: 'Close direct message' })).toBeTruthy();
@@ -1245,4 +1348,94 @@ it('opens Activity from the rail and routes its notification to the source messa
   await userEvent.click(await screen.findByRole('button',{name:/Open notification from Alex/}));
   await screen.findByRole('dialog',{name:'Original message in #first'});
   expect(await screen.findByRole('textbox',{name:'Message first'})).toBeTruthy();
+});
+
+it('opens search from a Home shortcut after the conversation destination is restored', async () => {
+  mockPaginatedChat(() => messagePage([paginatedMessage('Search destination', '1')]));
+  render(<Chat />);
+  await screen.findByText('Search destination');
+  await userEvent.click(screen.getByRole('button', {name:'Threads',exact:true}));
+  await screen.findByRole('heading',{name:'Threads',exact:true});
+  await userEvent.click(screen.getByRole('button',{name:'Search Team ⌘ K',exact:true}));
+  expect(await screen.findByRole('combobox',{name:'Search messages'})).toBeTruthy();
+});
+
+it('does not return focus to the old reply trigger when switching from a thread to Files', async () => {
+  mockPaginatedChat(() => messagePage([paginatedMessage('Source for Files', '1')]));
+  render(<Chat />);
+  await screen.findByText('Source for Files');
+  const trigger = screen.getByRole('button', { name: 'Reply to Kai' });
+  await userEvent.click(trigger);
+  await screen.findByRole('region', { name: 'Thread', exact: true });
+  const restored = vi.fn();
+  trigger.addEventListener('focus', restored);
+  const files = within(document.querySelector('main.chat-channel')!).getByRole('button', { name: 'Files', exact: true });
+  await userEvent.click(files);
+  await screen.findByRole('searchbox', { name: 'Search filenames' });
+  expect(restored).not.toHaveBeenCalled();
+  expect(document.activeElement).toBe(screen.getByRole('searchbox', { name: 'Search filenames' }));
+});
+
+function mockDestinationNavigation() {
+  const root = {...paginatedMessage('Destination parent','1'),agent_sessions:[{id:'nav-session',title:'Navigation session',agent_name:'Codex'}]};
+  mockPaginatedChat(() => messagePage([root]));
+  const original=vi.mocked(fetch).getMockImplementation()!;
+  const person={id:'user',name:'Kai',image:null,title:'',presence:'active'};
+  const direct={id:'nav-dm',workspace_id:'workspace',kind:'direct',name:'Kai (you)',joined:true,participants:[person],hidden:false,last_message:null,topic:'',description:'',archived_at:null};
+  const session={id:'nav-session',title:'Navigation session',workspace_id:'workspace',origin_thread_id:'thread',installation_id:'agent',managed:true,state:'active',owner_id:'user',created_by:'user',agent_name:'Codex',turn_count:0};
+  vi.mocked(fetch).mockImplementation(async(...args)=>{
+    const path=String(args[0]);
+    const data=path==='/v1/agent-sessions/nav-session'?{session,turns:[],next_cursor:null}:path==='/v1/channels/nav-dm'?direct:path.includes('/direct-messages?')?{items:[direct],next_cursor:null}:path.includes('/notifications?')?{items:[],unread_count:0,next_cursor:null,latest_id:'0'}:undefined;
+    return data===undefined?original(...args):new Response(JSON.stringify(data),{status:200});
+  });
+}
+it('restores the open agent session and its unsent draft after leaving Home for Activity',async()=>{
+  mockDestinationNavigation();render(<Chat/>);await screen.findByText('Destination parent');
+  await userEvent.click(screen.getByRole('button',{name:'Agent session: Navigation session'}));
+  await userEvent.type(await screen.findByRole('textbox',{name:'Message agent session'}),'Keep this session draft');
+  await userEvent.click(screen.getByRole('button',{name:'Activity',exact:true}));
+  await screen.findByRole('heading',{name:'Activity',exact:true});
+  await userEvent.click(screen.getByRole('link',{name:'Home',exact:true}));
+  expect((await screen.findByRole('textbox',{name:'Message agent session'})).textContent).toContain('Keep this session draft');
+});
+it('restores the selected DM after visiting another rail destination',async()=>{
+  mockDestinationNavigation();render(<Chat/>);await screen.findByText('Destination parent');
+  await userEvent.click(screen.getByRole('button',{name:'DMs',exact:true}));
+  await userEvent.click(await screen.findByRole('button',{name:'Open DM with Kai (you)'}));
+  await screen.findByRole('textbox',{name:'Message Kai (you)'});
+  await userEvent.click(screen.getByRole('link',{name:'Home',exact:true}));
+  await screen.findByText('Destination parent');
+  await userEvent.click(screen.getByRole('button',{name:'DMs',exact:true}));
+  await screen.findByRole('textbox',{name:'Message Kai (you)'});
+});
+it('restores Activity filters after visiting Home',async()=>{
+  mockDestinationNavigation();render(<Chat/>);await screen.findByText('Destination parent');
+  await userEvent.click(screen.getByRole('button',{name:'Activity',exact:true}));
+  await userEvent.click(await screen.findByRole('tab',{name:'Mentions',exact:true}));
+  await userEvent.click(screen.getByRole('checkbox',{name:'Unreads'}));
+  await userEvent.click(screen.getByRole('link',{name:'Home',exact:true}));
+  await screen.findByText('Destination parent');
+  await userEvent.click(screen.getByRole('button',{name:'Activity',exact:true}));
+  expect((await screen.findByRole('tab',{name:'Mentions',exact:true})).getAttribute('aria-selected')).toBe('true');
+  expect((screen.getByRole('checkbox',{name:'Unreads'}) as HTMLInputElement).checked).toBe(true);
+});
+it('updates the Activity badge without rendering the current message history',async()=>{
+  mocks.badgeOverride=true;mockDestinationNavigation();render(<Chat/>);await screen.findByText('Destination parent');
+  await act(async()=>{});
+  const before=mocks.timelineRenders;
+  await act(async()=>{mocks.setBadge?.(3);});
+  await screen.findByRole('button',{name:'Activity (3 unread)',exact:true});
+  console.log('RENDER_BADGE',JSON.stringify({before,after:mocks.timelineRenders}));
+  expect(mocks.timelineRenders).toBe(before);
+});
+
+it('updates incoming messages without replacing existing rows or the composer',async()=>{
+ mockDestinationNavigation();render(<Chat/>);await screen.findByText('Destination parent');
+ const existing=screen.getByText('Destination parent').closest('article'),editor=await screen.findByRole('textbox',{name:'Message first'});
+ await act(async()=>{});const before=mocks.timelineRenders;
+ const incoming=paginatedMessage('Incoming render check','2');
+ await act(async()=>{latestChatSocket().receive('chat.events',{channel_id:'first',cursor:'2',events:[{type:'message.created',channel_id:'first',thread_id:incoming.thread_id,sequence:'2',occurred_at:incoming.created_at,payload:incoming}]},vi.fn());});
+ await screen.findByText('Incoming render check');
+ expect(screen.getByText('Destination parent').closest('article')).toBe(existing);expect(screen.getByRole('textbox',{name:'Message first'})).toBe(editor);
+ console.log('RENDER_INCOMING',JSON.stringify({historyPasses:mocks.timelineRenders-before,existingRowReused:true,composerReused:true}));
 });

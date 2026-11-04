@@ -103,13 +103,23 @@ test('migration baselines historical messages without losing future unread messa
       for (const file of migrationFiles.slice(0, migrationFiles.indexOf('027_channel_reads.sql'))) await tx.query(await readFile(new URL(`../../adapters/postgres/migrations/${file}`, import.meta.url), 'utf8'));
       await tx.query('COMMIT');
     } finally { tx.release(); }
-    const a = await bootstrap(legacy), chat = new ChatStore(legacy);
-    // Historical fixtures use the historical schema; current stores include later columns.
+    // Seed only historical columns: current ORM metadata includes later workspace fields.
+    const a = { workspace_id: randomUUID(), channel_id: randomUUID(), thread_id: randomUUID(), owner_id: randomUUID(), collaborator_id: randomUUID() };
+    await legacy.query('INSERT INTO users(id,display_name) VALUES($1,$2),($3,$4)', [a.owner_id,'Migration owner',a.collaborator_id,'Migration reader']);
+    await legacy.query("INSERT INTO workspaces(id,name) VALUES($1,'Historical')", [a.workspace_id]);
+    await legacy.query("INSERT INTO workspace_members(workspace_id,user_id,role) VALUES($1,$2,'owner'),($1,$3,'member')", [a.workspace_id,a.owner_id,a.collaborator_id]);
+    await legacy.query("INSERT INTO channels(id,workspace_id,name,private,created_by) VALUES($1,$2,'general',false,$3)", [a.channel_id,a.workspace_id,a.owner_id]);
+    await legacy.query('INSERT INTO channel_members(workspace_id,channel_id,user_id) VALUES($1,$2,$3),($1,$2,$4)', [a.workspace_id,a.channel_id,a.owner_id,a.collaborator_id]);
+    await legacy.query('INSERT INTO threads(id,workspace_id,channel_id) VALUES($1,$2,$3)', [a.thread_id,a.workspace_id,a.channel_id]);
     await legacy.query(`INSERT INTO messages(id,workspace_id,channel_id,thread_id,author_type,user_id,client_message_id,request_hash,text)
       VALUES($1,$2,$3,$4,'human',$5,$6,'legacy','Historical')`, [randomUUID(),a.workspace_id,a.channel_id,a.thread_id,a.owner_id,randomUUID()]);
     await legacy.query(await readFile(new URL('../../adapters/postgres/migrations/027_channel_reads.sql', import.meta.url), 'utf8'));
-    assert.equal((await chat.unread.summary(a.collaborator_id, a.workspace_id)).channels[0]!.unread_count, 0);
+    const baseline = (await legacy.query('SELECT cr.last_read_sequence,ch.event_sequence FROM channel_reads cr JOIN channels ch ON ch.id=cr.channel_id WHERE cr.channel_id=$1 AND cr.user_id=$2', [a.channel_id,a.collaborator_id])).rows[0];
+    assert.ok(baseline);
+    assert.equal(baseline.last_read_sequence, baseline.event_sequence);
     for (const file of migrationFiles.slice(migrationFiles.indexOf('027_channel_reads.sql') + 1)) await legacy.query(await readFile(new URL(`../../adapters/postgres/migrations/${file}`, import.meta.url), 'utf8'));
+    const chat = new ChatStore(legacy);
+    assert.equal((await chat.unread.summary(a.collaborator_id, a.workspace_id)).channels[0]!.unread_count, 0);
     const next = await chat.send(a.owner_id, a.channel_id, { client_message_id: randomUUID(), text: 'After migration' });
     await chat.react(a.collaborator_id, a.channel_id, next.id, { emoji: '👍', active: true });
     assert.equal((await chat.unread.summary(a.collaborator_id, a.workspace_id)).channels[0]!.unread_count, 1, 'reactions must not count as new messages');

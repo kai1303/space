@@ -99,7 +99,7 @@ flowchart LR
   M --> E[Durable events update inbox and unread state]
 ```
 
-Space uses a recipient dialog followed by the full conversation room. Slack's inline compose/history preview, group DMs, external invitations, mute/star controls, canvases, huddles, scheduling, and history transfer are outside this increment. Opening a DM reveals it to the initiating user; the recipient sees it when a message arrives. Closing hides only that user's inbox entry. Reopening returns the same ID and history. New incoming messages restore visibility. Self-DMs have one participant and do not create unread counts for one's own messages.
+Space now uses an inline To field and the shared rich composer beside its DM inbox. Selecting a recipient opens the authorized canonical conversation and carries over unsent text. Existing destination drafts are retained above the new text. Group DMs, external invitations, mute controls, canvases, huddles, scheduling, and history transfer remain separate capabilities. Opening a DM reveals it to the initiating user; the recipient sees it when a message arrives. Closing hides only that user's inbox entry. Reopening returns the same ID and history. New incoming messages restore visibility. Self-DMs have one participant and do not create unread counts for one's own messages.
 
 Migration `039_direct_messages.sql` adds a canonical workspace/participant pair, immutable membership constraints and per-user inbox state. `DirectMessageStore` provides bounded people search, participant-only summaries, open/resume and visibility. Inbox cursors capture timestamp plus ID at the page boundary, preserving microseconds so later activity cannot move the anchor. The API reuses existing message/thread/search/file/read endpoints after participant authorization. Workspace role and agent grants do not grant implicit DM access. Deactivation revokes workspace access while retaining canonical history for reactivation.
 
@@ -118,3 +118,9 @@ The migration was exercised in disposable schemas. It has not been applied to th
 - Focused independent review found two issues—mention routing and moving pagination anchors—both fixed and covered by regressions.
 
 These are local source and synthetic-environment checks, not a production deployment or full-repository test-suite result.
+
+## DM layout refinement, 2026-11-04
+
+The inbox uses Space's plum sidebar tokens, a compact title/Unreads switch/new-message row, participant avatars with image fallback and presence, and selected-row contrast. New message keeps the inbox available on desktop and uses the existing list/conversation back navigation on narrow screens. The To field receives initial focus; cancelling restores focus to the inbox New message control and retains the draft. Text edited while open/resume is pending is included in the handoff.
+
+Empty DMs show the participant introduction near the composer. Conversation search, details, files and close use existing capabilities, with details/files/close also available from the conversation menu. Unsupported recording and shortcut controls are hidden in DM composers and their threads. No new DM transport, polling, permissions or database migration is introduced by this UI refinement.

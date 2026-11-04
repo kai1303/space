@@ -24,7 +24,7 @@
 .agent-session-details-header h3{margin:0;font-size:14px}
 .agent-session-details .sp-tabs{flex:none;padding:0 12px;gap:2px}
 .agent-session-details .sp-tabs>button{flex:1;padding:10px 6px;font-size:12px;white-space:nowrap}
-.chat-conversation:has(.chat-agent-sessions:not([hidden]) .agent-session-details)>.chat-channel{display:none}
+.chat-conversation:has(.chat-agent-sessions:not([inert]) .agent-session-details)>.chat-channel{display:none}
 .chat-agent-sessions:has(.agent-session-details){flex:1}
 @container(max-width:600px){.agent-session-details{position:absolute;inset:0 0 0 auto;width:min(360px,100%)}.agent-session-body:has(.agent-session-details)>.agent-session-conversation{visibility:hidden}}
 

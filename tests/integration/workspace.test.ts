@@ -208,3 +208,29 @@ test('installation creation cannot escape a concurrent workspace member removal'
     await removePool.end();
   }
 });
+
+test('admin directory filters, paginates and protects inactive members and email addresses', async () => {
+  const a = await fixture(), b = await fixture();
+  await pool.query('UPDATE users SET display_name=$1,email=$2 WHERE id=$3', ['Ada Unique', 'ada-directory@example.test', a.collaborator_id]);
+  const result = await api(a.token, 'GET', `${a.path}/directory?q=Ada&role=member&status=active&limit=1`);
+  assert.equal(result.items.length, 1); assert.equal(result.items[0].email, 'ada-directory@example.test');
+  assert.equal(result.role, 'owner');
+  const peer = await api(a.collaborator_token, 'GET', `${a.path}/directory`);
+  assert.ok(peer.items.every((item: Record<string,unknown>) => !('email' in item)));
+  await api(a.collaborator_token, 'GET', `${a.path}/directory?status=deactivated`, undefined, 403);
+  await api(b.token, 'GET', `${a.path}/directory`, undefined, 404);
+  await api(a.token, 'GET', `${a.path}/directory?limit=101`, undefined, 400);
+  await api(a.token, 'DELETE', `${a.path}/members/${a.collaborator_id}`, undefined, 204);
+  assert.equal((await api(a.token,'GET',`${a.path}/directory?status=deactivated`)).items[0].user_id,a.collaborator_id);
+  await api(a.token, 'POST', `${a.path}/members`, {email:'ADA-DIRECTORY@example.test',role:'member'}, 201);
+  assert.equal((await api(a.collaborator_token,'GET',a.path)).role,'member');
+});
+
+test('directory cursors cover all matching members without duplicates and escape search wildcards',async()=>{
+ const a=await fixture();
+ const first=await api(a.token,'GET',`${a.path}/directory?limit=1`);
+ const second=await api(a.token,'GET',`${a.path}/directory?limit=1&after=${first.next_cursor}`);
+ assert.equal(first.items.length,1);assert.equal(second.items.length,1);assert.notEqual(first.items[0].user_id,second.items[0].user_id);assert.equal(second.next_cursor,null);
+ assert.equal((await api(a.token,'GET',`${a.path}/directory?q=%25`)).items.length,0);
+ await api(a.collaborator_token,'POST',`${a.path}/members`,{email:'missing@example.test',role:'member'},403);
+});

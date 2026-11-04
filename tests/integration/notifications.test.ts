@@ -116,7 +116,7 @@ test('historical migration preserves safe mention activity and participation wit
  try{
   await admin.query(`CREATE SCHEMA ${historical}`);
   await old.query('CREATE TABLE schema_migrations(version integer PRIMARY KEY,applied_at timestamptz NOT NULL DEFAULT now())');
-  for(const [index,file] of migrationFiles.slice(0,-1).entries()){
+  for(const [index,file] of migrationFiles.slice(0,migrationFiles.indexOf('040_notifications.sql')).entries()){
    await old.query(await readFile(new URL(`../../adapters/postgres/migrations/${file}`,import.meta.url),'utf8'));await old.query('INSERT INTO schema_migrations(version) VALUES($1)',[index+1]);
   }
   const a=await bootstrap(old),id=randomUUID();

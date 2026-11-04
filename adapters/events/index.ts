@@ -39,7 +39,7 @@ export class EventBus {
     const manager = await this.connection!.jetstreamManager();
     const config = {
       name,
-      subjects: chat ? [`${prefix}.chat.>`] : [...['task', 'navigator', 'connection', 'delivery', 'asset'].map(kind => `${prefix}.${kind}.>`), `${prefix}.schedule.>`],
+      subjects: chat ? [`${prefix}.chat.>`] : [...['task', 'navigator', 'connection', 'delivery', 'asset', 'todo', 'invitation', 'retention'].map(kind => `${prefix}.${kind}.>`), `${prefix}.schedule.>`],
       retention: chat ? RetentionPolicy.Limits : RetentionPolicy.Workqueue,
       max_age: chat ? nanos(24 * 60 * 60 * 1000) : 0,
       storage: StorageType.File,

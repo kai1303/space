@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { Menu, Popover } from './primitives.js';
 
 afterEach(cleanup);
@@ -31,4 +31,24 @@ it('can reopen during exit, dismiss with Escape, and close on outside click', as
   fireEvent.click(trigger);
   fireEvent.pointerDown(document.body);
   expect(trigger.getAttribute('aria-expanded')).toBe('false');
+});
+
+it('repositions a floating menu when its content grows near the viewport edge', async () => {
+  let resize: ResizeObserverCallback | undefined, height = 100;
+  const viewportHeight = window.innerHeight;
+  vi.stubGlobal('ResizeObserver', class { constructor(callback: ResizeObserverCallback) { resize = callback; } observe() {} disconnect() {} });
+  const rect = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function () {
+    return { left: 100, right: 200, top: 250, bottom: 280, width: 100, height: this.getAttribute('role') === 'menu' ? height : 30, x:100,y:250,toJSON(){} };
+  });
+  Object.defineProperty(window,'innerHeight',{configurable:true,value:400});
+  try {
+    render(<Menu label="Growing menu" floating items={[{label:'Item',onSelect:()=>{}}]} />);
+    fireEvent.click(screen.getByRole('button',{name:'Growing menu'}));
+    const panel=screen.getByRole('menu');
+    expect(panel.style.top).toBe('286px');
+    expect(resize).toBeTypeOf('function');
+    height=300;
+    act(()=>resize!([],{} as ResizeObserver));
+    expect(panel.style.top).toBe('8px');
+  } finally { rect.mockRestore(); vi.unstubAllGlobals(); Object.defineProperty(window,'innerHeight',{configurable:true,value:viewportHeight}); }
 });

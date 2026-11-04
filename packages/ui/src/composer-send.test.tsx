@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeAll, expect, it, vi } from 'vitest';
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { RichComposer } from './rich-composer.js';
 
@@ -110,4 +110,43 @@ it('keeps the highlighted mention in sync with pointer and keyboard selection',a
  expect(send).not.toHaveBeenCalled();
  expect(editor.textContent).toContain('@Helper');
  expect(screen.queryByRole('listbox',{name:'Mention suggestions'})).toBeNull();
+});
+
+it('can hide unavailable actions while preserving editing controls', async () => {
+  render(<RichComposer channel="Alex" showUnavailableActions={false} onSend={() => {}} />);
+  await screen.findByRole('textbox', { name: 'Message Alex' });
+  expect(screen.getByRole('button', { name: 'Bold', exact: true })).toBeTruthy();
+  expect(screen.queryByRole('button', { name: /recording unavailable/ })).toBeNull();
+  expect(screen.queryByRole('button', { name: /Run shortcut/ })).toBeNull();
+});
+
+it('updates conversation labels without replacing the editor or losing its current draft', async () => {
+  const initial = { ops: [{ insert: 'Initial draft\n' }] };
+  const view = render(<RichComposer channel="Before" placeholder="Message Before" defaultValue={initial} onSend={() => {}} />);
+  const before = await screen.findByRole('textbox', { name: 'Message Before' });
+  await userEvent.type(before, ' More unsent text');
+  const typed = before.textContent;
+  view.rerender(<RichComposer channel="After" placeholder="Message After" defaultValue={{ ops: [{ insert: typed! }] }} onSend={() => {}} />);
+  const after = await screen.findByRole('textbox', { name: 'Message After' });
+  expect(after).toBe(before);
+  expect(after.textContent).toBe(typed);
+  expect(after.getAttribute('data-placeholder')).toBe('Message After');
+  expect(document.activeElement).toBe(after);
+});
+it('keeps an in-flight send pending while the conversation label changes', async () => {
+  let finish!: () => void;
+  const pending = new Promise<void>(resolve => { finish = resolve; });
+  const send = vi.fn(() => pending);
+  const view = render(<RichComposer channel="Before" onSend={send} />);
+  const editor = await screen.findByRole('textbox', { name: 'Message Before' });
+  await userEvent.type(editor, 'Only send once');
+  fireEvent.keyDown(editor, { key: 'Enter' });
+  view.rerender(<RichComposer channel="After" onSend={send} />);
+  const after = await screen.findByRole('textbox', { name: 'Message After' });
+  expect(after).toBe(editor);
+  expect(after.getAttribute('contenteditable')).toBe('false');
+  fireEvent.keyDown(after, { key: 'Enter' });
+  expect(send).toHaveBeenCalledOnce();
+  await act(async () => { finish(); await pending; });
+  await waitFor(() => expect(after.textContent?.trim()).toBe(''));
 });

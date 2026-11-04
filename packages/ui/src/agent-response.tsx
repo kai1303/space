@@ -1,23 +1,24 @@
 import { isValidElement, type ReactNode } from 'react';
-import Markdown from 'react-markdown';
+import Markdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { AgentResponse as Response, AgentText, AgentTool } from '@space/contracts';
 import { CodeBlock } from './code-block.js';
 import { ToolExecution } from './work-items.js';
 import { safeLink } from './rich-text.js';
 
+const markdownComponents: Components = {
+  a: ({ href, children }) => href ? <a href={href} target="_blank" rel="noopener noreferrer">{children}</a> : <span>{children}</span>,
+  img: ({ alt }) => <span>{alt}</span>,
+  pre: ({ children }) => {
+    if (!isValidElement<{ className?: string; children?: ReactNode }>(children)) return <pre>{children}</pre>;
+    const language = children.props.className?.match(/language-([\w+-]+)/)?.[1] ?? 'text';
+    return <CodeBlock code={String(children.props.children ?? '').replace(/\n$/, '')} language={language} />;
+  },
+  table: ({ children }) => <div className="sp-agent-table-scroll" tabIndex={0} role="region" aria-label="Response table"><table>{children}</table></div>,
+};
+
 export function AgentMarkdown({ text }: { text: string }) {
-  return <div className="sp-agent-markdown"><Markdown remarkPlugins={[remarkGfm]} skipHtml urlTransform={url => safeLink(url) ?? ''}
-    components={{
-      a: ({ href, children }) => href ? <a href={href} target="_blank" rel="noopener noreferrer">{children}</a> : <span>{children}</span>,
-      img: ({ alt }) => <span>{alt}</span>,
-      pre: ({ children }) => {
-        if (!isValidElement<{ className?: string; children?: ReactNode }>(children)) return <pre>{children}</pre>;
-        const language = children.props.className?.match(/language-([\w+-]+)/)?.[1] ?? 'text';
-        return <CodeBlock code={String(children.props.children ?? '').replace(/\n$/, '')} language={language} />;
-      },
-      table: ({ children }) => <div className="sp-agent-table-scroll" tabIndex={0} role="region" aria-label="Response table"><table>{children}</table></div>,
-    }}>{text}</Markdown></div>;
+  return <div className="sp-agent-markdown"><Markdown remarkPlugins={[remarkGfm]} skipHtml urlTransform={url => safeLink(url) ?? ''} components={markdownComponents}>{text}</Markdown></div>;
 }
 
 export function AgentResponse({ response, streaming = false, fallback }: { response: Response; streaming?: boolean; fallback?: string }) {

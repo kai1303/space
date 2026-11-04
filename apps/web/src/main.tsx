@@ -14,7 +14,7 @@ import { motionTransition } from "@space/ui";
 createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     <MotionConfig reducedMotion="user" transition={motionTransition(false)}>
-      {location.pathname === "/chat" || (location.pathname === "/" && (!location.hash || location.hash === "#chat-messages")) ? <Chat /> : location.pathname === "/workspace" ? <Workspace /> : <App />}
+      {location.pathname.startsWith("/w/") || location.pathname === "/chat" || (location.pathname === "/" && (!location.hash || location.hash === "#chat-messages")) ? <Chat /> : location.pathname === "/workspace" ? <Workspace /> : <App />}
     </MotionConfig>
   </React.StrictMode>,
 );

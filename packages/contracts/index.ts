@@ -62,3 +62,10 @@ export * from './mentions.js';
 export * from './typing.js';
 
 export * from './notifications.js';
+
+export * from './workspace-hub.js';
+export * from './todo-sync.js';
+
+export * from './workspace-settings.js';
+
+export * from './workspace-invitations.js';

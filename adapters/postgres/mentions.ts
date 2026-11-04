@@ -1,3 +1,4 @@
+import { visibleWorkspacePeer } from './workspace-access.js';
 import { sessionTransaction } from './session-concurrency.js';
 import type { Pool } from 'pg';
 import { sql } from 'drizzle-orm';
@@ -15,11 +16,12 @@ export class MentionStore {
     if (!channel || !await hasChannelAccess(c, actor, channel.workspace_id, id)) throw missing();
     return channel;
   }
-  private async options(c: DbSession, channel: Channel, query: string, target?: MentionReference): Promise<MentionOption[]> {
+  private async options(c: DbSession, actor: string, channel: Channel, query: string, target?: MentionReference): Promise<MentionOption[]> {
     const people = await rows<MentionOption>(c, sql`SELECT 'user' AS kind,u.id,u.display_name AS label,u.title AS detail,u.image,
       EXISTS(SELECT 1 FROM channel_members cm WHERE cm.channel_id=${channel.id} AND cm.user_id=u.id) AS joined
       FROM users u JOIN workspace_members wm ON wm.user_id=u.id AND wm.workspace_id=${channel.workspace_id} AND wm.active
       WHERE (${target?.id ?? null}::uuid IS NULL OR u.id=${target?.kind === 'user' ? target.id : null}::uuid)
+      AND ${visibleWorkspacePeer(channel.workspace_id,actor,sql`u.id`)}
       AND (${channel.kind === 'direct'}=false OR EXISTS(SELECT 1 FROM channel_members cm WHERE cm.channel_id=${channel.id} AND cm.user_id=u.id))
       AND (${target?.kind === 'agent'}=false) AND position(lower(${query}) IN lower(u.display_name||' '||u.full_name))>0
       ORDER BY lower(u.display_name),u.id LIMIT 30`);
@@ -65,7 +67,7 @@ export class MentionStore {
     if(query===null)throw new AppError(400,'invalid_query');
     return this.db.transaction(async c=>{
       const channel=await this.channel(c,actor,channelId);
-      const options=(await this.options(c,channel,query)).filter(item=>item.kind!=='user'||!channel.private||item.joined);
+      const options=(await this.options(c,actor,channel,query)).filter(item=>item.kind!=='user'||!channel.private||item.joined);
       const [scope]=await rows<{general_channel_id:string|null;allowed:boolean;member_count:number}>(c,sql`SELECT s.general_channel_id,(coalesce(s.broadcast_permission,'all')='all' OR wm.role IN ('owner','admin')) AS allowed,
         (SELECT count(*)::int FROM channel_members cm JOIN workspace_members m ON m.workspace_id=cm.workspace_id AND m.user_id=cm.user_id AND m.active WHERE cm.channel_id=${channelId}) AS member_count
         FROM workspace_members wm LEFT JOIN workspace_mention_settings s ON s.workspace_id=wm.workspace_id WHERE wm.user_id=${actor} AND wm.workspace_id=${channel.workspace_id} AND wm.active`);
@@ -77,7 +79,7 @@ export class MentionStore {
     if(kind!=='user'&&kind!=='agent')throw missing();
     return this.db.transaction(async c=>{
       const channel=await this.channel(c,actor,channelId);
-      const [option]=await this.options(c,channel,'',{kind,id:uuid(id),label:'lookup'});
+      const [option]=await this.options(c,actor,channel,'',{kind,id:uuid(id),label:'lookup'});
       if(!option)throw missing();
       if(kind==='user'){
         const [profile]=await rows<{full_name:string;title:string;presence:string;status:unknown}>(c,sql`SELECT full_name,title,presence,CASE WHEN (status->>'expires_at') IS NULL OR (status->>'expires_at')::timestamptz>now() THEN status ELSE NULL END AS status FROM users WHERE id=${id}`);
@@ -100,7 +102,7 @@ export class MentionStore {
         if(!inThread&&scope.members>=6&&!confirmed)throw new AppError(409,'broadcast_confirmation_required');
         canonical.set(`${ref.kind}:${ref.id}`,ref);
       }else{
-        const [option]=await this.options(c,channel,'',ref);
+        const [option]=await this.options(c,actor,channel,'',ref);
         if(!option)throw missing();
         canonical.set(`${ref.kind}:${ref.id}`,{kind:option.kind,id:option.id,label:option.label});
       }

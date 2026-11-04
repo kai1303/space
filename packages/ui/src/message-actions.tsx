@@ -31,7 +31,7 @@ export function MessageActions({ author, onReply, onReact, actions = {} }: {
   async function run(key: MessageAction, label: string) {
     if (busy.current) return;
     busy.current = true; setNotice(''); setFailed(false);
-    try { await actions[key]?.(); if (key === 'copyLink' || key === 'copyMessage') setNotice(`${label === 'Copy link' ? 'Link' : 'Message'} copied`); }
+    try { await actions[key]?.(); if (key === 'copyLink' || key === 'copyMessage') setNotice(`${label === 'Copy link' ? 'Link' : 'Message'} copied`); else if (key === 'save') setNotice('Message saved'); else if (key === 'addTodo') setNotice('Added to your to-dos'); }
     catch { setFailed(true); setNotice(`Could not ${label.replace('…', '').toLowerCase()}. Try again.`); }
     finally { busy.current = false; }
   }

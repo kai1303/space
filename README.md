@@ -7,7 +7,8 @@
 <h1>Space: A shared workplace for people and AI agents</h1>
 
 <p>Bring team conversations, files, and shared knowledge into one workspace.<br />
-Run it locally, keep channel memory in Markdown, and collaborate with local Codex or Kiro agents.</p>
+Use Space in your browser or its macOS desktop app, keep channel memory in Markdown,<br />
+and collaborate with local Codex or Kiro agents.</p>
 
 <p align="center">
   <a href="https://github.com/kai1303/space/actions/workflows/ci.yaml?query=branch%3Amain"><img src="https://img.shields.io/github/actions/workflow/status/kai1303/space/ci.yaml?branch=main&amp;style=for-the-badge&amp;label=CI" alt="CI checks status" /></a>
@@ -23,7 +24,9 @@ Run it locally, keep channel memory in Markdown, and collaborate with local Code
 
 <p align="center">
   <strong>
+    <a href="#demo">Demo</a> ·
     <a href="#quick-start">Quick start</a> ·
+    <a href="#macos-app">macOS app</a> ·
     <a href="#how-space-works">How it works</a> ·
     <a href="#development">Docs</a> ·
     <a href="#security">Security</a> ·
@@ -42,14 +45,17 @@ Run it locally, keep channel memory in Markdown, and collaborate with local Code
 > The task flow also supports a mock connector and an optional AG-UI backend.
 
 <p align="center">
-  <img src="assets/brand/verification/portal-main-page.png" alt="Space local development screenshot showing channel navigation, a conversation, rich messages, threaded replies, and the composer" width="1064" />
+  <img src="docs/images/space-desktop-chat.jpg" alt="Space on macOS: the Orbit Studio sample workspace with channel conversations, a shared checklist, and a thread open alongside the chat" width="1064" />
 </p>
-<p align="center"><sub>Local development capture with sample conversation content. The core chat experience requires no model API key.</sub></p>
+<p align="center"><sub>Current desktop UI, captured November 4, 2026 with fictional teammates and sample project content. Core chat requires no model API key.</sub></p>
+<p align="center"><a href="docs/media/space-desktop-demo.mp4"><strong>Watch the 40-second walkthrough →</strong></a></p>
 
 ## Table of contents
 
+- [Demo](#demo)
 - [Why Space?](#why-space)
 - [Quick start](#quick-start)
+- [macOS app](#macos-app)
 - [How Space works](#how-space-works)
 - [Connect a local agent](#connect-a-local-agent)
 - [Architecture](#architecture)
@@ -61,6 +67,37 @@ Run it locally, keep channel memory in Markdown, and collaborate with local Code
 - [Telemetry and privacy](#telemetry-and-privacy)
 - [Contributing](#contributing)
 - [License](#license)
+
+---
+
+## Demo
+
+Send a message, keep the discussion in a thread, preview a shared checklist, and
+find it again in the workspace file library. This silent recording uses the real
+local app and backend in a separate demo account. All names and conversation
+content are sample data; no agent-provider run is shown.
+
+[Watch or download the MP4](docs/media/space-desktop-demo.mp4) · approximately 40 seconds · 1440 × 918
+
+<details>
+<summary>Play the animated preview</summary>
+
+![Space demo: channel message, thread reply, file preview, and file library](docs/media/space-desktop-demo.gif)
+
+</details>
+
+<details>
+<summary>View the file library</summary>
+
+<p align="center">
+  <img src="docs/images/space-desktop-files.jpg" alt="Space file library showing a shared launch checklist, search, ownership filters, file types, and sort controls" width="1064" />
+</p>
+
+</details>
+
+The video captures the desktop app's content area; the screenshots also include
+its macOS window frame. These are local development captures, not production
+reliability evidence.
 
 ---
 
@@ -78,6 +115,8 @@ people and independently operated agents in the same workplace.
   linked to a thread, then follow up in its own panel with streamed text and tools.
 - **Your own infrastructure.** PostgreSQL stores chat history, SeaweedFS stores
   files, and channel memory lives on your filesystem.
+- **A desktop home on macOS.** Run the existing UI in an Electron window with a
+  persistent session, native menus, and authenticated file downloads.
 - **Explicit access.** Workspace roles, channel membership, and scoped agent
   grants define access boundaries.
 
@@ -161,10 +200,46 @@ The [/workspace](http://127.0.0.1:5173/workspace) route is a synthetic design pr
 <summary>Preview the sign-in screen</summary>
 
 <p align="center">
-  <img src="assets/brand/verification/portal-sign-in.png" alt="Space sign-in screen with email and password fields and a create-account link" width="560" />
+  <img src="docs/images/space-sign-in.jpg" alt="Current Space macOS sign-in screen with email and password fields and a create-account link" width="800" />
 </p>
 
 </details>
+
+---
+
+## macOS app
+
+With the web frontend and backend running, launch the desktop client from the
+repository root:
+
+```sh
+pnpm desktop
+```
+
+It opens `http://127.0.0.1:5173/chat` by default. To connect to your own hosted
+deployment:
+
+```sh
+SPACE_DESKTOP_URL=https://your-space.example/chat pnpm desktop
+```
+
+Build an application and installers on a Mac:
+
+```sh
+pnpm desktop:package   # Space.app
+pnpm desktop:make      # DMG and ZIP
+```
+
+On Apple Silicon, the installer is written to
+`apps/desktop/out/make/Space-arm64.dmg`. The app loads your configured web
+deployment; it does not start the server or local agent connector. Sessions
+persist across restarts, external links open in your browser, and file downloads
+use the signed-in desktop session.
+
+These are **unsigned, unnotarized development builds**. There is no published
+installer or automatic updater configured. See the [desktop guide](apps/desktop/README.md)
+for configuration and packaging, and the [verification record](docs/superpowers/plans/2026-11-04-macos-desktop-verification.md)
+for tested workflows and remaining checks.
 
 ---
 
@@ -190,7 +265,7 @@ The [/workspace](http://127.0.0.1:5173/workspace) route is a synthetic design pr
 6. **Work with an agent.** Pair local Codex or Kiro from **Members** and explicitly
    enable it for a channel through the [channel-grant API](apps/connector/README.md#enable-a-channel).
    Select its mention in a channel or thread to start a managed session. Open the
-   session link below the message to follow up in its own panel. One thread can
+   session link in the channel to follow up in its own panel. One thread can
    have multiple independent sessions; ordinary thread replies do not send agent
    follow-ups. The owner's requests autoapprove; other people's requests require
    the agent owner's approval.
@@ -271,6 +346,7 @@ Space is a TypeScript monorepo using pnpm workspaces and Turborepo.
 | Area | Technology and responsibility | Source |
 | --- | --- | --- |
 | Web app | React, Vite, Socket.IO client | [`apps/web`](apps/web) |
+| macOS app | Electron shell, persistent sessions, native menus, DMG/ZIP packaging | [`apps/desktop`](apps/desktop) |
 | Shared UI | Components, rich-text composer, design tokens | [`packages/ui`](packages/ui) |
 | API | Fastify, Better Auth, Socket.IO | [`apps/server`](apps/server) |
 | Persistence | PostgreSQL, Drizzle, versioned SQL migrations | [`adapters/postgres`](adapters/postgres) |
@@ -313,6 +389,8 @@ enables scoped file reads and edits. Channel/thread typing indicators are also i
 **Direct messages:** Same-workspace one-to-one and self conversations support recipient search, open/resume, threads, reactions, files, unread state, and per-user hide/reopen. See [Slack flow research and implementation](docs/architecture/slack-direct-messages-research.md). Migration 039 is required.
 
 **Notifications:** Activity collects human DMs, mentions, followed-thread replies and reactions with read controls, realtime updates, global preferences and opt-in browser alerts while Space is open. See [Slack notification flow research and implementation](docs/architecture/slack-notifications-research.md). Migration 040 is required; email/mobile push and agent-output notifications are not included.
+
+**Navigation:** Slack-style rail and Home shortcuts open Threads, Drafts & sent, Saved, Files, To-dos, Directories and agent views, with 33 captured navigation SVG icons. Migration 041 adds personal saves, conversation stars and to-dos. See [sidebar research and capability boundaries](docs/architecture/slack-sidebar-research.md).
 
 **Still ahead:** a channel-enablement UI for paired agents, native shell execution
 and interactive tool approvals, group direct messages, broader presence,

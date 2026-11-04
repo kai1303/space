@@ -11,10 +11,10 @@ export const users = pgTable('users', { id: id(), display_name: text().notNull()
   phone: text().notNull().default(''), time_zone: text().notNull().default('UTC'),
   presence: text().$type<'active' | 'away'>().notNull().default('active'), status: jsonb().$type<import('@space/contracts').UserStatus>(),
 });
-export const workspaces = pgTable('workspaces', { id: id(), name: text().notNull().default('Workspace'), created_at: time() });
+export const workspaces = pgTable('workspaces', { id: id(), name: text().notNull().default('Workspace'), primary_owner_id: uuid(), created_at: time() });
 export const workspaceMembers = pgTable('workspace_members', {
   workspace_id: uuid().notNull(), user_id: uuid().notNull(), role: text().$type<MemberRole>().notNull().default('member'),
-  active: boolean().notNull().default(true), joined_at: time(),
+  active: boolean().notNull().default(true), guest_type: text().$type<'none'|'single'|'multi'>().notNull().default('none'), guest_channel_id: uuid(), joined_at: time(),
 });
 export const workspaceEvents = pgTable('workspace_events', {
   id: id(), workspace_id: uuid().notNull(), actor_id: uuid().notNull(), type: text().notNull(),

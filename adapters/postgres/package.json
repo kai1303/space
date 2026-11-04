@@ -78,6 +78,26 @@
     "./agent-sessions": {
       "types": "./dist/agent-sessions.d.ts",
       "default": "./dist/agent-sessions.js"
+    },
+    "./workspace-hub": {
+      "types": "./dist/workspace-hub.d.ts",
+      "default": "./dist/workspace-hub.js"
+    },
+    "./workspace-settings": {
+      "types": "./dist/workspace-settings.d.ts",
+      "default": "./dist/workspace-settings.js"
+    },
+    "./workspace-invitations": {
+      "types": "./dist/workspace-invitations.d.ts",
+      "default": "./dist/workspace-invitations.js"
+    },
+    "./workspace-retention": {
+      "types": "./dist/workspace-retention.d.ts",
+      "default": "./dist/workspace-retention.js"
+    },
+    "./todo-sync": {
+      "types": "./dist/todo-sync.d.ts",
+      "default": "./dist/todo-sync.js"
     }
   },
   "dependencies": {

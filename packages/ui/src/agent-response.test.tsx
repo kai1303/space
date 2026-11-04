@@ -2,7 +2,7 @@ import { afterEach, expect, it } from 'vitest';
 import { cleanup, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { AgentResponse as Response } from '@space/contracts';
-import { AgentResponse } from './agent-response.js';
+import { AgentMarkdown, AgentResponse } from './agent-response.js';
 
 afterEach(cleanup);
 
@@ -73,4 +73,19 @@ it('groups only adjacent tools and keeps their expansion when another tool is ad
  rerender(<AgentResponse response={{...first,tools:[...tools,{id:'second',name:'Second read',arguments:'{}',status:'running'}],items:[...first.items!,{type:'tool',id:'second'}]}} streaming/>);
  expect(screen.getByRole('button',{name:'Collapse timeline'})).toBeTruthy();expect(screen.getByText('Second read · Running')).toBeTruthy();
  expect(screen.getByText('Before.').compareDocumentPosition(screen.getByText('First read · Completed'))&Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+});
+
+it('keeps completed code blocks, links and tables mounted when more text streams in', () => {
+  const prefix = '```ts\nconst answer = 42;\n```\n\n[Documentation](https://example.com)\n\n| Name | Value |\n| --- | --- |\n| Answer | 42 |\n\n';
+  const view = render(<AgentMarkdown text={prefix + 'First'} />);
+  const code = view.container.querySelector('.sp-code-block')!;
+  const link = screen.getByRole('link', { name: 'Documentation' });
+  const table = screen.getByRole('table');
+  const copy = screen.getByRole('button', { name: 'Copy', exact: true });
+  copy.focus();
+  view.rerender(<AgentMarkdown text={prefix + 'First second third'} />);
+  expect(view.container.querySelector('.sp-code-block')).toBe(code);
+  expect(screen.getByRole('link', { name: 'Documentation' })).toBe(link);
+  expect(screen.getByRole('table')).toBe(table);
+  expect(document.activeElement).toBe(copy);
 });

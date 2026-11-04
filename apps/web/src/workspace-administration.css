@@ -1,0 +1,22 @@
+.sp-dialog:has(> .workspace-settings){width:min(760px,calc(100vw - 32px));max-width:760px}
+.sp-dialog:has(> .workspace-admin){width:min(1100px,calc(100vw - 32px));max-width:1100px}
+.workspace-admin{display:grid;gap:20px;color:var(--sp-text);font:14px/1.5 var(--sp-font-sans);min-width:0}
+.workspace-admin-toolbar{display:flex;justify-content:flex-end;gap:10px;flex-wrap:wrap}
+.workspace-admin-filters{display:flex;align-items:end;gap:12px;padding:16px;background:var(--sp-surface-hover);border-block:1px solid var(--sp-border);flex-wrap:wrap}
+.workspace-admin-filters label,.workspace-admin-action label{display:grid;gap:5px;font-size:12px;font-weight:700}
+.workspace-admin input,.workspace-admin select,.workspace-admin-action input,.workspace-admin-action select{font:14px var(--sp-font-sans);background:var(--sp-surface);color:var(--sp-text);border:1px solid var(--sp-border-strong);border-radius:5px;padding:9px 10px;min-height:38px;min-width:0}
+.workspace-admin-filters .workspace-admin-search{display:flex;flex-direction:row;align-items:center;gap:8px;flex:1;min-width:200px;background:var(--sp-surface);border:1px solid var(--sp-border-strong);border-radius:5px;padding:0 10px}
+.workspace-admin-search input{border:0;background:transparent;width:100%;outline-offset:-2px;padding-inline:0}
+.workspace-admin-table{overflow:auto;min-width:0;max-height:50vh}
+.workspace-admin table{width:100%;border-collapse:collapse;text-align:left;white-space:nowrap}
+.workspace-admin th{font-size:12px;color:var(--sp-text-secondary);font-weight:700;background:var(--sp-surface);position:sticky;top:0;z-index:1}
+.workspace-admin td,.workspace-admin th{padding:12px;border-bottom:1px solid var(--sp-border)}
+.workspace-admin td:first-child,.workspace-admin th:first-child{padding-left:0}
+.workspace-admin-person{display:flex;align-items:center;gap:10px}.workspace-admin-person span{min-width:0}.workspace-admin-person strong{display:block;max-width:260px;overflow:hidden;text-overflow:ellipsis}.workspace-admin-person small{display:block;color:var(--sp-text-secondary);font-size:11px}
+.workspace-admin td .sp-menu>summary{border:0;background:transparent;padding:4px}
+.workspace-admin-footer{display:flex;align-items:center;justify-content:space-between;gap:12px;color:var(--sp-text-secondary);font-size:12px}.workspace-admin-footer>div{display:flex;gap:8px}
+.workspace-admin-empty{text-align:center;padding:35px 16px;color:var(--sp-text-secondary)}.workspace-admin-empty strong{color:var(--sp-text)}
+.workspace-admin-feedback{display:flex;align-items:center;justify-content:space-between;gap:12px}.workspace-admin-action{display:grid;gap:16px;font:14px/1.6 var(--sp-font-sans)}.workspace-admin-action p{margin:0}.workspace-admin-action-buttons{display:flex;gap:8px;justify-content:flex-end;margin-top:8px}
+.workspace-admin-sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)}
+.workspace-settings{font:14px/1.6 var(--sp-font-sans);color:var(--sp-text)}.workspace-settings .sp-tabs{margin-bottom:8px}.workspace-settings-row{padding:24px 0;border-bottom:1px solid var(--sp-border)}.workspace-settings-row:last-child{border:0}.workspace-settings-row>header{display:flex;align-items:start;justify-content:space-between;gap:20px}.workspace-settings h3{font-size:16px;margin:0 0 5px}.workspace-settings p{margin:0;color:var(--sp-text-secondary)}.workspace-settings form{display:grid;gap:12px;margin-top:16px}.workspace-settings label{display:grid;gap:6px;font-weight:700}.workspace-settings input{padding:10px;border:1px solid var(--sp-border-strong);border-radius:5px;background:var(--sp-surface);color:var(--sp-text);font:inherit}.workspace-settings form>div{display:flex;gap:8px}.workspace-settings dl{display:grid;grid-template-columns:auto 1fr;gap:12px;margin:0}.workspace-settings dd{margin:0;color:var(--sp-text-secondary)}
+@media(max-width:600px){.workspace-admin-filters{padding:12px}.workspace-admin-filters label{flex:1}.workspace-admin-filters .workspace-admin-search{flex-basis:100%}.workspace-admin-toolbar>.sp-button{flex:1}.workspace-settings dl{grid-template-columns:1fr;gap:4px}.workspace-settings dd{margin-bottom:12px}}

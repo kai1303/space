@@ -1,3 +1,5 @@
+import { requireFullWorkspaceMember } from './workspace-access.js';
+import { requireWorkspacePolicy } from './workspace-settings.js';
 import { NotificationStore } from './notifications.js';
 import { DirectMessageStore } from './direct-messages.js';
 import { sessionTransaction } from './session-concurrency.js';
@@ -23,7 +25,7 @@ export class ChatStore {
       const member = c.select({ user_id: s.channelMembers.user_id }).from(s.channelMembers)
         .where(and(eq(s.channelMembers.channel_id, s.channels.id), eq(s.channelMembers.user_id, actor)));
       const rows = await c.select({ channel: s.channels, joined: sql<boolean>`exists (${member})` })
-        .from(s.channels).where(and(eq(s.channels.workspace_id, workspace), eq(s.channels.kind, 'channel'), or(eq(s.channels.private, false), exists(member)), after ? gt(s.channels.id, after) : undefined))
+        .from(s.channels).where(and(eq(s.channels.workspace_id, workspace), eq(s.channels.kind, 'channel'), or(and(eq(s.channels.private, false),sql`EXISTS(SELECT 1 FROM workspace_members wm WHERE wm.workspace_id=${workspace} AND wm.user_id=${actor} AND wm.guest_type='none')`), exists(member)), after ? gt(s.channels.id, after) : undefined))
         .orderBy(s.channels.id).limit(limit + 1);
       return page(rows.map(row => channelDto(row.channel, row.joined)), limit, row => row.id);
     });
@@ -33,6 +35,8 @@ export class ChatStore {
     return this.db.transaction(async c => {
       await lockWorkspace(c, workspace);
       await requireWorkspaceAccess(c, actor, workspace);
+      await requireFullWorkspaceMember(c, actor, workspace);
+      await requireWorkspacePolicy(c, actor, workspace, 'create_channel');
       const [channel] = await c.insert(s.channels).values({ id: randomUUID(), workspace_id: workspace, created_by: actor, ...request }).returning();
       await c.insert(s.channelMembers).values({ workspace_id: workspace, channel_id: channel!.id, user_id: actor });
       return channelDto(channel!, true);
@@ -77,7 +81,7 @@ export class ChatStore {
       .innerJoin(s.workspaceMembers, and(eq(s.workspaceMembers.workspace_id, s.channelMembers.workspace_id), eq(s.workspaceMembers.user_id, s.channelMembers.user_id)))
       .where(and(eq(s.channelMembers.channel_id, channel.id), eq(s.workspaceMembers.active, true)));
     return { ...channelDto(channel, true), creator_name: creator?.name ?? null, member_count: count!.total,
-      can_manage: channel.created_by === actor || membership?.role === 'owner' || membership?.role === 'admin' };
+      can_manage: membership?.guest_type === 'none' && (channel.created_by === actor || membership?.role === 'owner' || membership?.role === 'admin') };
   }
   async updateChannel(actor: string, id: string, input: unknown): Promise<ChannelDetails> {
     const { archived, ...metadata } = parseChannelUpdate(input);
@@ -111,7 +115,10 @@ export class ChatStore {
       const channel = await this.lockedChannel(c, id);
       await requireWorkspaceAccess(c, actor, channel.workspace_id);
       if (channel.kind === 'direct') { await this.authorize(c, actor, id); throw new AppError(403, 'direct_message_immutable'); }
-      if (channel.private && !await hasChannelAccess(c, actor, channel.workspace_id, id)) throw notFound();
+      if (!await hasChannelAccess(c, actor, channel.workspace_id, id)) {
+        if (channel.private) throw notFound();
+        await requireFullWorkspaceMember(c,actor,channel.workspace_id);
+      }
       await c.insert(s.channelMembers).values({ workspace_id: channel.workspace_id, channel_id: id, user_id: actor }).onConflictDoNothing();
       return { joined: true };
     });
@@ -121,7 +128,7 @@ export class ChatStore {
     if (channel.kind === 'direct') throw new AppError(403, 'direct_message_immutable');
     const [membership] = await c.select().from(s.workspaceMembers)
       .where(and(eq(s.workspaceMembers.workspace_id, channel.workspace_id), eq(s.workspaceMembers.user_id, actor)));
-    if (channel.created_by !== actor && membership?.role === 'member') throw new AppError(403, 'channel_management_forbidden');
+    if (membership?.guest_type !== 'none' || (channel.created_by !== actor && membership?.role === 'member')) throw new AppError(403, 'channel_management_forbidden');
   }
   async addMember(actor: string, id: string, input: unknown) {
     const user = uuid(record(input, ['user_id']).user_id);
@@ -130,6 +137,12 @@ export class ChatStore {
       await this.manager(c, actor, channel);
       if (channel.archived_at) throw new AppError(409, 'channel_archived');
       await requireWorkspaceAccess(c, user, channel.workspace_id);
+      const [target] = await c.select().from(s.workspaceMembers).where(and(eq(s.workspaceMembers.workspace_id,channel.workspace_id),eq(s.workspaceMembers.user_id,user)));
+      if(target!.guest_type !== 'none') {
+        const [manager] = await c.select().from(s.workspaceMembers).where(and(eq(s.workspaceMembers.workspace_id,channel.workspace_id),eq(s.workspaceMembers.user_id,actor)));
+        if(manager?.role==='member') throw new AppError(403,'member_management_forbidden');
+        if(target!.guest_type==='single' && target!.guest_channel_id && target!.guest_channel_id!==id) throw new AppError(409,'guest_channel_limit');
+      }
       await c.insert(s.channelMembers).values({ workspace_id: channel.workspace_id, channel_id: id, user_id: user }).onConflictDoNothing();
       return { user_id: user, channel_id: id };
     });

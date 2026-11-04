@@ -285,3 +285,55 @@ it('shows agent activity above the shared composer, reuses the tool timeline and
  running=false;await act(async()=>{await mocks.refresh?.();});await waitFor(()=>expect(indicator.textContent).toBe(''));
  expect(screen.getByRole('textbox',{name:'Message agent session'})).toBe(editor);
 });
+
+it('acknowledges a pending accepted send after the session page unmounts without restoring its draft',async()=>{
+ setup();const original=vi.mocked(fetch).getMockImplementation()!;
+ let finish!:(task:unknown)=>void;const pending=new Promise(resolve=>{finish=resolve;});
+ vi.mocked(fetch).mockImplementation(async(...args)=>String(args[0]).endsWith('/messages')?{ok:true,json:async()=>pending} as Response:original(...args));
+ const drafts:Record<string,any>={},attempt:any={};
+ const props={thread:'thread',channel:'channel',viewerId:'user',initialSessionId:'one',onAccessLost:()=>{},drafts,attempt:()=>attempt};
+ const view=render(<AgentSessions {...props}/>);
+ await userEvent.type(await screen.findByRole('textbox',{name:'Message agent session'}),'Accepted while away');
+ await userEvent.click(screen.getByRole('button',{name:'Send now'}));
+ expect(attempt.current).toBeTruthy();view.unmount();
+ await act(async()=>{finish({...turn('Accepted while away').task,status:'queued'});await pending;});
+ expect(drafts['session:channel:one']).toEqual({ops:[]});expect(attempt.current).toBeUndefined();
+ render(<AgentSessions {...props}/>);
+ expect((await screen.findByRole('textbox',{name:'Message agent session'})).textContent?.trim()).toBe('');
+});
+it('retains a failed send identity and draft across session page remounts',async()=>{
+ setup();const original=vi.mocked(fetch).getMockImplementation()!;let failing=true;const keys:string[]=[];
+ vi.mocked(fetch).mockImplementation(async(...args)=>{
+  if(String(args[0]).endsWith('/messages')){keys.push(String((args[1]?.headers as Record<string,string>)['idempotency-key']));if(failing)throw new Error('offline');}
+  return original(...args);
+ });
+ const drafts:Record<string,any>={},attempt:any={};
+ const props={thread:'thread',channel:'channel',viewerId:'user',initialSessionId:'one',onAccessLost:()=>{},drafts,attempt:()=>attempt};
+ const view=render(<AgentSessions {...props}/>);
+ await userEvent.type(await screen.findByRole('textbox',{name:'Message agent session'}),'Retry after navigation');
+ await userEvent.click(screen.getByRole('button',{name:'Send now'}));await screen.findByRole('alert');view.unmount();failing=false;
+ render(<AgentSessions {...props}/>);
+ expect((await screen.findByRole('textbox',{name:'Message agent session'})).textContent).toContain('Retry after navigation');
+ await userEvent.click(screen.getByRole('button',{name:'Send now'}));await waitFor(()=>expect(keys).toHaveLength(2));
+ expect(keys[1]).toBe(keys[0]);
+});
+
+it('clears a remounted composer when its previous pending send is accepted',async()=>{
+ setup();const original=vi.mocked(fetch).getMockImplementation()!;
+ let finish!:(task:unknown)=>void;const pending=new Promise(resolve=>{finish=resolve;});
+ vi.mocked(fetch).mockImplementation(async(...args)=>String(args[0]).endsWith('/messages')?{ok:true,json:async()=>pending} as Response:original(...args));
+ const drafts:Record<string,any>={},attempt:any={};
+ function Harness({visible}:{visible:boolean}) {
+  const [acknowledged,setAcknowledged]=useState<Record<string,any>>({});
+  return visible?<AgentSessions thread="thread" channel="channel" viewerId="user" initialSessionId="one" onAccessLost={()=>{}} drafts={drafts} attempt={()=>attempt} acknowledged={acknowledged} onAccepted={(key,document)=>setAcknowledged(old=>({...old,[key]:document}))}/>:null;
+ }
+ const view=render(<Harness visible/>);
+ await userEvent.type(await screen.findByRole('textbox',{name:'Message agent session'}),'Accepted after return');
+ await userEvent.click(screen.getByRole('button',{name:'Send now'}));
+ view.rerender(<Harness visible={false}/>);view.rerender(<Harness visible/>);
+ const editor=await screen.findByRole('textbox',{name:'Message agent session'});
+ expect(editor.textContent).toContain('Accepted after return');
+ await act(async()=>{finish({...turn('Accepted after return').task,status:'queued'});await pending;});
+ await waitFor(()=>expect(editor.textContent?.trim()).toBe(''));
+ expect(attempt.current).toBeUndefined();
+});

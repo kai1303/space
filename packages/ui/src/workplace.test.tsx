@@ -288,3 +288,13 @@ it('distinguishes people and agent mention tokens without relying on color alone
  expect(container.querySelector('[data-mention-kind="user"]')).not.toBeNull();
  expect(screen.getByRole('button',{name:'Agent mention: @Helper'}).getAttribute('data-mention-kind')).toBe('agent');
 });
+
+it('exposes all Home shortcuts and marks the selected shortcut', async () => {
+  const threads = vi.fn(), huddles = vi.fn(), drafts = vi.fn(), saved = vi.fn(), directories = vi.fn();
+  render(<WorkspaceSidebar workspace="Team" channels={[]} selectedId="" width={240} onWidthChange={() => {}} onSelect={() => {}} onThreads={threads} onHuddles={huddles} onDrafts={drafts} onSaved={saved} onDirectories={directories} selectedShortcut="saved"/>);
+  for (const [name, handler] of [['Threads',threads],['Huddles',huddles],['Drafts & sent',drafts],['Saved',saved],['Directories',directories]] as const) {
+    await userEvent.click(screen.getByRole('button',{name,exact:true}));
+    expect(handler).toHaveBeenCalledOnce();
+  }
+  expect(screen.getByRole('button',{name:'Saved',exact:true}).getAttribute('aria-current')).toBe('page');
+});

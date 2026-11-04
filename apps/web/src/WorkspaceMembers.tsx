@@ -7,10 +7,10 @@ import { listAll, request } from './chat-client.js';
 import './members.css';
 const errorText = (error: unknown) => error instanceof Error ? error.message.replaceAll('_', ' ') : 'Unable to update members';
 const statusText = { online: 'Online', offline: 'Offline', auth_required: 'Sign-in required', error: 'Connection needs attention' };
-export function WorkspaceMembers(props: { workspace: string; viewer: string; open: boolean; onClose: () => void }) {
+export function WorkspaceMembers(props: { agent?: string; workspace: string; viewer: string; open: boolean; onClose: () => void }) {
   return props.open ? <MemberDialog key={props.workspace} {...props} /> : null;
 }
-function MemberDialog({ workspace, viewer, onClose }: { workspace: string; viewer: string; onClose: () => void }) {
+function MemberDialog({ agent, workspace, viewer, onClose }: { agent?:string; workspace: string; viewer: string; onClose: () => void }) {
   const [connector, setConnector] = useState('codex.local'), [connectors, setConnectors] = useState<PairedConnector[]>([]);
   const [members, setMembers] = useState<WorkspaceParticipant[]>([]), [loaded, setLoaded] = useState(false);
   const [pairing, setPairing] = useState<AgentPairing>(), [pairStatus, setPairStatus] = useState<AgentPairingStatus>();
@@ -95,9 +95,9 @@ function MemberDialog({ workspace, viewer, onClose }: { workspace: string; viewe
   const name = descriptor?.name ?? 'agent';
   const pairingActive = Boolean(pairing && !expired && pairStatus?.status !== 'claimed');
   const command = `pnpm connector${pairingProvider === 'kiro' ? ' --provider kiro' : ''} --url ${window.location.origin} --connect`;
-  return <Dialog open title="Workspace members" description="People and agents, together in your workspace." onClose={close}>
+  return <Dialog open title={agent?"Agent connection":"Workspace members"} description={agent?"Connection status for this workspace agent.":"People and agents, together in your workspace."} onClose={close}>
     <div className="space-members">
-      <div className="space-members-heading"><span><Users size={19} /> Members</span><label className="space-provider-select">Agent provider<select value={connector} disabled={busy || pairingActive} onChange={e => setConnector(e.target.value)}>{connectors.map(entry => <option key={entry.id} value={entry.id}>{entry.name}</option>)}</select></label><Button size="sm" onClick={() => void createPairing()} loading={busy} disabled={pairingActive || !selected}><Robot size={17} /> Connect Local {selected?.name ?? 'agent'}</Button></div>
+      {!agent&&<div className="space-members-heading"><span><Users size={19} /> Members</span><label className="space-provider-select">Agent provider<select value={connector} disabled={busy || pairingActive} onChange={e => setConnector(e.target.value)}>{connectors.map(entry => <option key={entry.id} value={entry.id}>{entry.name}</option>)}</select></label><Button size="sm" onClick={() => void createPairing()} loading={busy} disabled={pairingActive || !selected}><Robot size={17} /> Connect Local {selected?.name ?? 'agent'}</Button></div>}
       {error && <div role="alert" className="space-members-error">{error}<Button size="sm" variant="ghost" onClick={() => { setError(''); void refresh().catch(e => setError(errorText(e))); }}>Retry</Button></div>}
       <Reveal open={Boolean(pairing)} immediateExit>{pairing && <section className="space-pairing" aria-label={`Connect Local ${name}`}>
         {pairStatus?.status === 'claimed' ? <><strong>{name} paired with this workspace</strong><p role="status">{connected?.status === 'online' ? `Your local ${name} is connected and signed in.` : pairingProvider === 'codex' ? 'Complete Continue with ChatGPT in the local connector. Its status will update here.' : `Sign in to ${name} in its connector. Its status will update here.`}</p><Button size="sm" onClick={() => { pending.current = undefined; status.current = undefined; setPairing(undefined); setPairStatus(undefined); }}>Done</Button></> : expired ? <><strong>This pairing code has expired or was cancelled.</strong><Button size="sm" loading={busy} onClick={() => void createPairing()}>Generate new code</Button></> : <>
@@ -108,7 +108,7 @@ function MemberDialog({ workspace, viewer, onClose }: { workspace: string; viewe
         </>}
       </section>}</Reveal>
       {!loaded && !error && <p role="status">Loading members…</p>}
-      <ul className="space-member-list">{members.map(member => <li key={`${member.kind}:${member.id}`}>
+      <ul className="space-member-list">{members.filter(member=>!agent||member.id===agent).map(member => <li key={`${member.kind}:${member.id}`}>
         <Avatar name={member.name} initials={member.kind === 'agent' ? member.name.slice(0, 2).toUpperCase() : member.name.slice(0, 2).toUpperCase()} size="sm" tone={member.kind === 'agent' ? 'purple' : 'blue'} />
         <div className="space-member-details"><div><strong>{member.name}</strong>{member.kind === 'agent' && <Badge>Agent</Badge>}</div><small>{member.kind === 'agent' ? statusText[member.status ?? 'offline'] : member.id === viewer ? 'You' : 'Member'}{member.kind === 'agent' && member.owner_id === viewer ? ' · Owned by you' : ''}</small></div>
         {member.kind === 'agent' && member.owner_id === viewer && <Button size="sm" variant="ghost" aria-label={`Disconnect ${member.name}`} disabled={busy} onClick={() => void revoke(member.id)}>Disconnect</Button>}

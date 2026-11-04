@@ -361,6 +361,36 @@
 .sp-menu-content .sp-menu-danger {
   color: var(--sp-danger);
 }
+.sp-multiselect { --sp-multiselect-accent: #1264a3; }
+.sp-multiselect-trigger {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  min-height: 28px; padding: 3px 9px; border: 1px solid transparent; border-radius: 4px;
+  background: var(--sp-multiselect-accent); color: #fff; font: inherit; font-size: 13px;
+  line-height: 20px; font-weight: 700; cursor: pointer; white-space: nowrap;
+}
+.sp-multiselect-trigger:hover { filter: brightness(1.08); }
+.sp-multiselect-trigger:focus-visible { outline: 2px solid var(--sp-info); outline-offset: 2px; }
+.sp-multiselect-panel {
+  --sp-multiselect-accent: #1264a3;
+  width: 280px; max-width: calc(100vw - 16px); max-height: calc(100dvh - 16px); overflow-y: auto;
+  box-sizing: border-box; padding: 12px 0; border-radius: 4px;
+  background: var(--sp-surface-raised); color: var(--sp-text); font: 15px/22px var(--sp-font-sans);
+  box-shadow: 0 0 0 1px var(--sp-border), 0 4px 12px rgb(0 0 0 / 12%);
+}
+.sp-multiselect-panel button {
+  display: grid; grid-template-columns: 16px 20px minmax(0,1fr); align-items: center; gap: 4px;
+  width: 100%; min-height: 32px; padding: 0 24px 0 4px; border: 0; border-radius: 0;
+  color: inherit; background: transparent; font: inherit; text-align: left; cursor: pointer;
+}
+.sp-multiselect-check,.sp-multiselect-icon { display: flex; align-items: center; justify-content: center; }
+.sp-multiselect-icon svg { width: 20px; height: 20px; }
+.sp-multiselect-panel button[aria-checked=true] { color: var(--sp-multiselect-accent); }
+.sp-multiselect-panel button:hover,.sp-multiselect-panel button:focus-visible { background: var(--sp-multiselect-accent); color: #fff; outline: none; }
+.sp-multiselect-panel hr { margin: 8px 0; border: 0; border-top: 1px solid var(--sp-border); }
+.sp-multiselect-panel .sp-multiselect-reset { display: block; padding-left: 28px; }
+[data-theme="dark"] .sp-multiselect,[data-theme="dark"] .sp-multiselect-panel { --sp-multiselect-accent: #1d9bd1; }
+[data-theme="dark"] .sp-multiselect-trigger { color: #1a1d21; }
+[data-theme="dark"] .sp-multiselect-panel { background: #212428; box-shadow: 0 0 0 1px rgb(232 232 232 / 13%), 0 4px 12px rgb(0 0 0 / 12%); }
 .sp-dialog {
   width: min(440px, calc(100% - 40px));
   box-sizing: border-box;
@@ -433,9 +463,17 @@
 }
 .sp-unread {
   margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  min-width: 20px;
+  height: 20px;
+  flex-shrink: 0;
   padding: 0 6px;
-  border-radius: 9px;
+  border-radius: 999px;
   font-size: 11px;
+  line-height: 20px;
   background: var(--sp-accent);
   color: var(--sp-on-accent);
 }

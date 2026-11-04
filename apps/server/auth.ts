@@ -15,7 +15,7 @@ export interface Authentication {
   baseURL: string;
   origins: ReadonlySet<string>;
 }
-export function createAuthentication(pool: Parameters<typeof database>[0], options: { secret: string; baseURL: string; trustedOrigins?: string[] }): Authentication {
+export function createAuthentication(pool: Parameters<typeof database>[0], options: { secret: string; baseURL: string; trustedOrigins?: string[]; sendVerificationEmail?: (email:string,url:string)=>Promise<void> }): Authentication {
   if (options.secret.length < 32) throw new Error('BETTER_AUTH_SECRET must contain at least 32 characters');
   const base = new URL(options.baseURL);
   if (!['http:', 'https:'].includes(base.protocol) || base.username || base.password) throw new Error('Invalid BETTER_AUTH_URL');
@@ -31,11 +31,15 @@ export function createAuthentication(pool: Parameters<typeof database>[0], optio
     database: drizzleAdapter(database(pool), { provider: 'pg', transaction: true,
       schema: { user: users, session: authSessions, account: authAccounts, verification: authVerifications, rateLimit: authRateLimits } }),
     emailAndPassword: { enabled: true, minPasswordLength: 12, maxPasswordLength: 128 },
+    emailVerification: { sendOnSignUp: false, sendVerificationEmail: async ({user,url}) => {
+      if(!options.sendVerificationEmail) throw new APIError('SERVICE_UNAVAILABLE',{message:'Email delivery is not configured. Contact your workspace administrator.'});
+      await options.sendVerificationEmail(user.email,url);
+    } },
     user: { fields: { name: 'display_name', emailVerified: 'email_verified', createdAt: 'created_at', updatedAt: 'updated_at' } },
     session: { expiresIn: 60 * 60 * 24 * 7, disableSessionRefresh: true, cookieCache: { enabled: false } },
     advanced: { database: { generateId: () => randomUUID() }, useSecureCookies: base.protocol === 'https:', ipAddress: { ipAddressHeaders: ['x-space-client-ip'] } },
     rateLimit: { enabled: true, storage: 'database', window: 60, max: 100,
-      customRules: { '/sign-in/email': { window: 60, max: 10 }, '/sign-up/email': { window: 60, max: 5 } } },
+      customRules: { '/sign-in/email': { window: 60, max: 10 }, '/sign-up/email': { window: 60, max: 5 }, '/send-verification-email': {window:60,max:3} } },
     databaseHooks: { user: {
       create: { before: async user => ({ data: { ...user, name: validateName(user.name) } }) },
       update: { before: async user => ({ data: { ...user, ...(user.name === undefined ? {} : { name: validateName(user.name) }) } }) },

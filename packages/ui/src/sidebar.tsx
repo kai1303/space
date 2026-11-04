@@ -1,3 +1,4 @@
+import { NavigationIcon } from "./navigation-icons.js";
 import { useState, type ReactNode } from "react";
 import { motion, useReducedMotion } from "motion/react";
 import { motionTransition } from "./motion.js";
@@ -13,6 +14,8 @@ import {
   PencilSimple,
   Headset,
   SquaresFour,
+  BookmarkSimple,
+  AddressBook,
 } from "@phosphor-icons/react";
 import { Avatar, ChannelItem, IconButton } from "./primitives.js";
 export type SidebarChannel = {
@@ -22,6 +25,7 @@ export type SidebarChannel = {
   unread?: number;
   private?: boolean;
   initials?: string;
+  image?: string | null;
   online?: boolean;
 };
 type SidebarState = { query: string; expanded: Record<string, boolean> };
@@ -36,7 +40,11 @@ export function WorkspaceSidebar({
   onWidthChange,
   onNewMessage,
   onThreads,
+  onHuddles,
   onDrafts,
+  onSaved,
+  onDirectories,
+  selectedShortcut,
   workspaceControl,
   footer,
   onCreateChannel,
@@ -52,7 +60,11 @@ export function WorkspaceSidebar({
   onWidthChange: (width: number) => void;
   onNewMessage?: () => void;
   onThreads?: () => void;
+  onHuddles?: () => void;
   onDrafts?: () => void;
+  onSaved?: () => void;
+  onDirectories?: () => void;
+  selectedShortcut?: string;
   workspaceControl?: ReactNode;
   footer?: ReactNode;
   onCreateChannel?: () => void;
@@ -81,12 +93,12 @@ export function WorkspaceSidebar({
         {workspaceControl ?? <strong>{workspace}</strong>}
         {onNewMessage && (
           <IconButton label="New message" className="sp-sidebar-compose" size="sm" onClick={onNewMessage}>
-            <PencilSimple size={20} />
+            <NavigationIcon name="compose"/>
           </IconButton>
         )}
       </div>
       <div className="sp-sidebar-filter">
-        <MagnifyingGlass size={15} />
+        <NavigationIcon name="search" size={15}/>
         <input
           type="search"
           aria-label="Find a conversation"
@@ -95,21 +107,16 @@ export function WorkspaceSidebar({
           onChange={(e) => setQuery(e.target.value)}
         />
       </div>
-      {(onThreads || onDrafts) && (
-        <div className="sp-sidebar-utilities">
-          {onThreads && (
-            <button type="button" onClick={onThreads}>
-              <ChatCircle size={17} />
-              Threads
-            </button>
-          )}
-          {onDrafts && (
-            <button type="button" onClick={onDrafts}>
-              <PencilSimple size={17} />
-              Drafts & sent
-            </button>
-          )}
-        </div>
+      {(onThreads || onDrafts || onHuddles || onSaved || onDirectories) && (
+        <nav className="sp-sidebar-utilities" aria-label="Home shortcuts">
+          {([
+            ['threads', 'Threads', 'threads', onThreads],
+            ['huddles', 'Huddles', 'huddles', onHuddles],
+            ['drafts', 'Drafts & sent', 'drafts', onDrafts],
+            ['saved', 'Saved', 'saved', onSaved],
+            ['directories', 'Directories', 'directories', onDirectories],
+          ] as const).map(([key, label, icon, select]) => select && <button key={key} type="button" aria-current={selectedShortcut === key ? 'page' : undefined} onClick={select}><NavigationIcon name={icon} size={17}/>{label}</button>)}
+        </nav>
       )}
       <nav
         aria-label="Workspace conversations"
@@ -169,10 +176,10 @@ export function WorkspaceSidebar({
                 <span className="sp-sidebar-section-symbol" aria-hidden="true">
                   <motion.span className="sp-sidebar-section-kind"
                     variants={{ rest: { opacity: 1, scale: 1 }, active: { opacity: 0, scale: reduced ? 1 : 0.8 } }}
-                    transition={transition}>{section === "starred" ? <Star size={16} /> : section === "channels" ? <Hash size={16} /> : section === "direct" ? <Headset size={16} /> : <SquaresFour size={16} />}</motion.span>
+                    transition={transition}>{section === "starred" ? <NavigationIcon name="star" size={16}/> : section === "channels" ? <NavigationIcon name="channels" size={16}/> : section === "direct" ? <NavigationIcon name="dms" size={16}/> : <NavigationIcon name="apps" size={16}/>}</motion.span>
                   <motion.span className="sp-sidebar-section-caret"
                     variants={{ rest: { opacity: 0, scale: reduced ? 1 : 0.8, rotate: isOpen ? 90 : 0 }, active: { opacity: 1, scale: 1, rotate: isOpen ? 90 : 0 } }}
-                    transition={transition}><CaretRight size={14} /></motion.span>
+                    transition={transition}><NavigationIcon name="section-chevron" size={14}/></motion.span>
                 </span>
                 <span>
                   {
@@ -195,22 +202,20 @@ export function WorkspaceSidebar({
                     onClick={() => onSelect(c.id)}
                     icon={
                       c.section === "direct" ? (
-                        <span
-                          className={`sp-sidebar-presence ${c.online ? "is-online" : ""}`}
-                        />
+                        <span className="sp-sidebar-avatar" aria-hidden="true"><Avatar name={c.name} initials={c.initials ?? c.name.slice(0, 2).toUpperCase()} image={c.image} size="sm" presence={c.online ? 'online' : 'offline'}/></span>
                       ) : c.section === "apps" ? (
-                        <Sparkle size={16} />
+                        <NavigationIcon name="agents" size={16}/>
                       ) : c.section === "starred" ? (
-                        <Star size={16} />
+                        <NavigationIcon name="star" size={16}/>
                       ) : c.private ? (
                         <Lock size={15} />
                       ) : (
-                        <Hash size={17} />
+                        <NavigationIcon name="channel" size={17}/>
                       )
                     }
                   />
                 ))}
-                {section === "channels" && onCreateChannel && <button className="sp-sidebar-section-toggle sp-sidebar-create" type="button" onClick={onCreateChannel}><span aria-hidden="true">＋</span> Add channel</button>}
+                {section === "channels" && onCreateChannel && <button className="sp-sidebar-section-toggle sp-sidebar-create" type="button" onClick={onCreateChannel}><NavigationIcon name="plus" size={17}/> Add channel</button>}
               </Reveal>
             </section>
           );

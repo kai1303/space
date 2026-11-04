@@ -21,3 +21,12 @@ test('workspace names are strict and cannot include organization ancestry', () =
     assert.throws(() => parseWorkspaceInput(input), { status: 400 });
   }
 });
+
+test('directory filters and adding an existing account by email are strict and bounded', async () => {
+  const {parseDirectoryQuery,parseWorkspaceMemberInput}=await import('@space/contracts');
+  assert.equal(parseWorkspaceMemberInput({email:' ADA@example.test ',role:'member'}).role,'member');
+  assert.deepEqual(parseWorkspaceMemberInput({email:' ADA@example.test ',role:'member'}),{email:'ada@example.test',role:'member'});
+  for(const input of [{email:'bad',role:'member'},{email:'ada@example.test',user_id:randomUUID(),role:'member'},{email:'ada@example.test',role:'superadmin'}])assert.throws(()=>parseWorkspaceMemberInput(input),{status:400});
+  for(const input of [{q:'x'.repeat(101)},{status:'deleted'},{role:'superadmin'},{limit:'101'},{after:'bad'},{sort:'anything'}])assert.throws(()=>parseDirectoryQuery(input),{status:400});
+  assert.deepEqual(parseDirectoryQuery({}),{limit:50,q:'',role:undefined,status:'active',sort:'id',guest:'all'});
+});

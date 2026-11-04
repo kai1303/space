@@ -14,6 +14,8 @@ export {
   ChannelItem,
 } from "./primitives.js";
 export type { ButtonProps, Tone, TabItem } from "./primitives.js";
+export { MultiSelectMenu } from "./multiselect-menu.js";
+export type { MultiSelectOption } from "./multiselect-menu.js";
 export { Message, Composer } from "./conversation.js";
 export type { Reaction } from "./conversation.js";
 export { MessageActions } from "./message-actions.js";
@@ -45,3 +47,6 @@ export { EmojiPicker } from "./emoji-picker.js";
 export { replaceEmojiShortcodes } from "./emoji.js";
 
 export type { FindMentions } from "./use-mentions.js";
+
+export { NavigationIcon } from "./navigation-icons.js";
+export type { NavigationIconName, NavigationIconProps } from "./navigation-icons.js";

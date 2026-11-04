@@ -1,10 +1,12 @@
-import { useEffect, useRef, useState } from 'react';
+import {useDestinationPresence} from './DestinationTransition.js';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { NotificationActivity, NotificationItem, NotificationSettings } from '@space/contracts';
 import { Avatar, Button, Dialog, IconButton } from '@space/ui';
 import { Bell, BellSlash, Check, Checks, GearSix } from '@phosphor-icons/react';
 import { request } from './chat-client.js';
 import { subscribeUpdates } from './live-updates.js';
 import { acquireRealtime } from './socket-session.js';
+import type {ActivityView, Snapshot} from './destination-state.js';
 import './notifications.css';
 
 const failure = (error: unknown) => error instanceof Error ? error.message.replaceAll('_', ' ') : 'Unable to load notifications';
@@ -39,22 +41,31 @@ function useActivity(workspace: string, kind = '', unread = false, before = '') 
   return { ...(state.key === key ? state : { page: empty, loaded: false, error: '' }), refresh: () => refresh.current() };
 }
 
-export function Notifications({ workspace, onOpen }: { workspace: string; onOpen: (item: NotificationItem) => void }) {
-  const [kind, setKind] = useState(''), [unread, setUnread] = useState(false), [before, setBefore] = useState('');
+export function Notifications({ workspace, onOpen, viewState }: { viewState?: Snapshot<ActivityView>; workspace: string; onOpen: (item: NotificationItem) => void }) {
+  const present=useDestinationPresence();
+  const localView=useRef<ActivityView>({kind:'',unread:false,before:'',scroll:0}), view=viewState??localView;
+  const pageRef=useRef<HTMLElement>(null);
+  const [kind, setKind] = useState(view.current.kind), [unread, setUnread] = useState(view.current.unread), [before, setBefore] = useState(view.current.before);
+  useLayoutEffect(()=>{view.current={...view.current,kind,unread,before};},[view,kind,unread,before]);
   const [preferences, setPreferences] = useState(false), [busy, setBusy] = useState(false), [error, setError] = useState('');
   const { page, loaded, error: readError, refresh } = useActivity(workspace, kind, unread, before);
+  useLayoutEffect(()=>{if(loaded&&pageRef.current)pageRef.current.scrollTop=view.current.scroll;},[loaded,view]);
   const active = useRef(true);
   useEffect(() => { active.current = true; return () => { active.current = false; }; }, []);
   async function change(work: () => Promise<unknown>, done?: () => void) {
     if (busy) return; setBusy(true); setError('');
-    try { await work(); if (active.current) { done?.(); await refresh(); } }
+    try { await work(); if (active.current && present.current) { done?.(); await refresh(); } }
     catch (reason) { if (active.current) setError(failure(reason)); }
     finally { if (active.current) setBusy(false); }
   }
   const mark = (item: NotificationItem, read: boolean, open = false) => change(() => request(`/workspaces/${workspace}/notifications/${item.id}`, { read }, undefined, 'PATCH'), open ? () => onOpen(item) : undefined);
-  return <main id="chat-messages" tabIndex={-1} className="notification-activity">
+  return <main ref={pageRef} onScroll={event=>{view.current.scroll=event.currentTarget.scrollTop;}} id="chat-messages" tabIndex={-1} className="notification-activity">
     <header className="notification-heading"><div><h1>Activity</h1><p>Catch up on the conversations that need you.</p></div><IconButton label="Notification settings" onClick={() => setPreferences(true)}><GearSix size={22}/></IconButton></header>
-    <div role="tablist" aria-label="Activity types" className="notification-tabs">{tabs.map(([value, label]) => <button key={value} role="tab" aria-selected={kind === value} onClick={() => { setKind(value); setBefore(''); }}>{label}</button>)}</div>
+    <div role="tablist" aria-label="Activity types" className="notification-tabs">{tabs.map(([value, label],index) => <button key={value} role="tab" tabIndex={kind===value?0:-1} aria-selected={kind === value} onClick={() => { setKind(value); setBefore(''); view.current.scroll=0; }} onKeyDown={event=>{
+      const next=event.key==='Home'?0:event.key==='End'?tabs.length-1:event.key==='ArrowRight'?(index+1)%tabs.length:event.key==='ArrowLeft'?(index+tabs.length-1)%tabs.length:-1;
+      if(next<0)return;event.preventDefault();setKind(tabs[next]![0]);setBefore('');view.current.scroll=0;
+      event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>('[role=tab]')[next]?.focus();
+    }}>{label}</button>)}</div>
     <div className="notification-toolbar"><label><input type="checkbox" checked={unread} onChange={event => { setUnread(event.target.checked); setBefore(''); }}/>Unreads</label><span>{page.unread_count} unread</span><Button size="sm" disabled={busy || !page.unread_count || !loaded} onClick={() => void change(() => request(`/workspaces/${workspace}/notifications/read`, { through: page.latest_id }))}><Checks size={17}/>Mark all as read</Button></div>
     {(readError || error) && <p role="alert" className="notification-error">{readError || error}<Button size="sm" onClick={() => void refresh()}>Retry</Button></p>}
     {!loaded ? <p role="status" className="notification-empty">Loading activity…</p> : !page.items.length && !readError ? <div className="notification-empty"><Bell size={38}/><h2>You’re all caught up</h2><p>{unread ? 'No unread notifications in this view.' : 'New messages, mentions, replies, and reactions will appear here.'}</p></div> : <ul className="notification-list">{page.items.map(item => <li key={item.id} className={item.read_at ? '' : 'is-unread'}>

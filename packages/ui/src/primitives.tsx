@@ -14,6 +14,7 @@ import { AnimatePresence, motion, useAnimate, useIsPresent, useReducedMotion } f
 import { motionTransition, surfaceMotion } from "./motion.js";
 
 export type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
+  ref?: React.Ref<HTMLButtonElement>;
   variant?: "primary" | "secondary" | "ghost" | "danger";
   size?: "sm" | "md" | "lg";
   loading?: boolean;
@@ -85,12 +86,14 @@ export function Badge({
 export function Avatar({
   name,
   initials,
+  image,
   size = "md",
   tone = "purple",
   presence,
 }: {
   name: string;
   initials: string;
+  image?: string | null;
   size?: "sm" | "md" | "lg";
   tone?: "purple" | "blue" | "green" | "orange";
   presence?: "online" | "away" | "offline";
@@ -102,6 +105,7 @@ export function Avatar({
       aria-label={`${name}${presence ? `, ${presence}` : ""}`}
     >
       <span aria-hidden="true">{initials}</span>
+      {image && <img key={image} src={image} alt="" aria-hidden="true" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover", borderRadius: "inherit" }} onError={event => { event.currentTarget.hidden = true; }} />}
       {presence && <span className={`sp-presence sp-presence--${presence}`} />}
     </span>
   );
@@ -306,9 +310,12 @@ export function Popover({ label, trigger, children, className = "", panelClassNa
       });
     };
     place();
+    const observer = typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(place);
+    if (panel.current) observer?.observe(panel.current);
+    if (ref.current) observer?.observe(ref.current);
     window.addEventListener("resize", place);
     window.addEventListener("scroll", place, true);
-    return () => { window.removeEventListener("resize", place); window.removeEventListener("scroll", place, true); };
+    return () => { observer?.disconnect(); window.removeEventListener("resize", place); window.removeEventListener("scroll", place, true); };
   }, [open, floating, align]);
   function navigate(event: React.KeyboardEvent) {
     if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); close(true); return; }
@@ -348,7 +355,8 @@ function PopoverPanel({ panelRef, ...props }: React.ComponentProps<typeof motion
   return <motion.div {...props} ref={panelRef} inert={!present} aria-hidden={!present || undefined} />;
 }
 
-export function SidePanel({ children, className, role, hidden, "aria-label": label }: {
+export function SidePanel({ children, className, role, hidden, ref, "aria-label": label }: {
+  ref?: React.Ref<HTMLElement>;
   children: ReactNode;
   className: string;
   role?: "region" | "dialog";
@@ -357,7 +365,19 @@ export function SidePanel({ children, className, role, hidden, "aria-label": lab
 }) {
   const reduced = useReducedMotion();
   const present = useIsPresent();
-  return <motion.aside role={role} hidden={hidden} className={className} aria-label={label} aria-hidden={!present || undefined} inert={!present} {...surfaceMotion(reduced, "right")}>{children}</motion.aside>;
+  const [collapsed, setCollapsed] = useState(!!hidden);
+  const hiddenRef = useRef(hidden);
+  hiddenRef.current = hidden;
+  useLayoutEffect(() => { if (!hidden) setCollapsed(false); }, [hidden]);
+  const visibilityMotion = surfaceMotion(reduced, "right");
+  return <motion.aside
+    ref={ref} tabIndex={-1} role={role} className={className} aria-label={label}
+    hidden={hidden && collapsed} aria-hidden={hidden || !present || undefined} inert={hidden || !present}
+    {...visibilityMotion}
+    initial={hidden ? false : visibilityMotion.initial}
+    animate={hidden ? visibilityMotion.exit : visibilityMotion.animate}
+    onAnimationComplete={() => { if (hiddenRef.current) setCollapsed(true); }}
+  >{children}</motion.aside>;
 }
 
 export function Dialog({

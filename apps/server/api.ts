@@ -1,3 +1,14 @@
+import { WorkspaceSettingsStore } from '@space/postgres/workspace-settings';
+import { WorkspaceInvitationStore } from '@space/postgres/workspace-invitations';
+import { WorkspaceRetentionStore } from '@space/postgres/workspace-retention';
+import { registerWorkspaceSettingsRoutes } from './workspace-settings.js';
+import { registerWorkspaceInvitationRoutes } from './workspace-invitations.js';
+import { registerWorkspaceRetention } from './workspace-retention.js';
+import { registerInvitationEmailDelivery, type InvitationEmailConfig, type createInvitationMailer } from './invitation-email.js';
+import { WorkspaceHubStore } from '@space/postgres/workspace-hub';
+import { registerWorkspaceHubRoutes } from './workspace-hub.js';
+import { TodoSyncStore } from '@space/postgres/todo-sync';
+import { TODO_SYNC_PATH, registerTodoSyncRoutes } from './todo-sync.js';
 import { registerEventDeadlines } from './event-deadlines.js';
 import { AgentSessionStore } from '@space/postgres/agent-sessions';
 import { registerAgentSessionRoutes } from './agent-sessions.js';
@@ -26,7 +37,7 @@ declare module 'fastify' {
   interface FastifyRequest { actorId: string }
 }
 
-export function createApi(store: PostgresStore, options: { pairedConnectors?: import('@space/contracts').PairedConnector[]; logger?: boolean; realtime?: RealtimeOptions; auth?: Authentication; allowDevelopmentTokens?: boolean; trustedProxies?: string[]; storage?: AssetStorage; memory?: MemoryOptions } = {}) {
+export function createApi(store: PostgresStore, options: { invitationEmail?: {config:InvitationEmailConfig;mailer:ReturnType<typeof createInvitationMailer>}; pairedConnectors?: import('@space/contracts').PairedConnector[]; logger?: boolean; realtime?: RealtimeOptions; auth?: Authentication; allowDevelopmentTokens?: boolean; trustedProxies?: string[]; storage?: AssetStorage; memory?: MemoryOptions } = {}) {
   if (options.allowDevelopmentTokens && process.env.NODE_ENV === 'production') throw new Error('Development tokens are forbidden in production');
   const authenticate = async (headers: IncomingHttpHeaders, socketToken?: unknown) => {
     const actor = await options.auth?.actor(headers);
@@ -36,7 +47,7 @@ export function createApi(store: PostgresStore, options: { pairedConnectors?: im
     throw new AppError(401, 'unauthorized');
   };
   const app = Fastify({
-    logger: options.logger ?? false,
+    logger: options.logger ? {serializers:{req:(request:{method?:string;url?:string})=>({method:request.method,url:request.url?.replace(/(\/invitations\/)[^/?]+/,'$1[redacted]').replace(/([?&]invite=)[^&]+/,'$1[redacted]')})}} : false,
     trustProxy: options.trustedProxies ?? false,
     logController: new LogController({ disableRequestLogging: true }),
     bodyLimit: 32768,
@@ -51,6 +62,8 @@ export function createApi(store: PostgresStore, options: { pairedConnectors?: im
     reply.header('x-content-type-options', 'nosniff');
     if (request.routeOptions.url === '/healthz' && request.method === 'GET') return;
     if (request.routeOptions.url === MEMORY_MCP_PATH) return;
+    // This route authenticates a source-scoped token itself; it never grants actor access.
+    if (request.routeOptions.url === TODO_SYNC_PATH) return;
     if (options.auth && request.routeOptions.url === '/v1/auth/*') return;
     if (request.method === 'POST' && request.routeOptions.url === '/v1/agent-pairings/claim') return;
     request.actorId = await authenticate(request.headers);
@@ -63,7 +76,9 @@ export function createApi(store: PostgresStore, options: { pairedConnectors?: im
   });
   app.setErrorHandler((error, request, reply) => {
     if (error instanceof AppError) return reply.code(error.status).send({ error: error.code });
-    const failure = error as { code?: string; statusCode?: number };
+    const failure = error as { code?: string; statusCode?: number; message?: string; cause?: {code?:string;message?:string} };
+    const databaseFailure = failure.cause ?? failure;
+    if(databaseFailure.code === '23514' && databaseFailure.message?.includes('guest_channel_limit')) return reply.code(409).send({error:'guest_channel_limit'});
     if (failure.code === 'FST_ERR_CTP_BODY_TOO_LARGE') return reply.code(413).send({ error: 'body_too_large' });
     if (failure.code === 'FST_ERR_CTP_INVALID_MEDIA_TYPE') return reply.code(415).send({ error: 'json_required' });
     if (failure.code === 'FST_ERR_CTP_INVALID_JSON_BODY' || failure.code === 'FST_ERR_CTP_EMPTY_JSON_BODY') return reply.code(400).send({ error: 'invalid_json' });
@@ -75,6 +90,11 @@ export function createApi(store: PostgresStore, options: { pairedConnectors?: im
   app.setNotFoundHandler((_request, reply) => reply.code(404).send({ error: 'not_found' }));
   if (options.auth) registerAuthRoutes(app, options.auth);
   registerWorkspaceRoutes(app, new WorkspaceStore(store.pool));
+  registerWorkspaceSettingsRoutes(app, new WorkspaceSettingsStore(store.pool));
+  const invitations = new WorkspaceInvitationStore(store.pool, {emailEncryptionKey:options.invitationEmail?.config.encryptionKey});
+  registerWorkspaceInvitationRoutes(app, invitations);
+  registerWorkspaceHubRoutes(app, new WorkspaceHubStore(store.pool));
+  registerTodoSyncRoutes(app, new TodoSyncStore(store.pool));
   registerAgentSessionRoutes(app, new AgentSessionStore(store.pool));
 
   app.get('/healthz', async () => {
@@ -122,5 +142,7 @@ export function createApi(store: PostgresStore, options: { pairedConnectors?: im
   const { io, onOutbox, getEvents } = registerRealtime(app, authenticate, chat, { ...options.realtime, ...(options.auth ? { allowedOrigins: [...options.auth.origins], strictOrigins: true } : {}) });
   registerAgentConnections(app, io, connections, store, onOutbox, getEvents);
   registerEventDeadlines(app, getEvents, store, assets, options.storage);
+  registerWorkspaceRetention(app,getEvents,new WorkspaceRetentionStore(store.pool),options.storage);
+  if(options.invitationEmail) registerInvitationEmailDelivery(app,getEvents,invitations,options.invitationEmail.mailer);
   return app;
 }

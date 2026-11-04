@@ -15,6 +15,28 @@ export function registerEventDeadlines(app: FastifyInstance, getEvents: () => Pr
   const stops: (() => Promise<void>)[] = [];
   app.addHook('onReady', async () => {
     const bus = await getEvents();
+    stops.push(await bus.subscribe('todo.reminder_due.*', {durable:'todo-reminders',queue:'todo-reminders',maxPending:16}, async message => {
+      if (!await due(message)) return;
+      const {todo_id,remind_at,reminder_version} = message.event.data;
+      const id = uuid(todo_id);
+      if (typeof remind_at !== 'string' || !Number.isFinite(Date.parse(remind_at)) || !Number.isSafeInteger(reminder_version) || Number(reminder_version)<1) {
+        await message.ack(); return;
+      }
+      const eligible = `t.id=$1 AND t.remind_at=$2::timestamptz AND t.reminder_version=$3
+        AND t.reminder_fired_at IS NULL AND NOT t.completed AND NOT t.archived AND NOT t.deleted
+        AND EXISTS(SELECT 1 FROM workspace_members wm WHERE wm.workspace_id=t.workspace_id AND wm.user_id=t.user_id AND wm.active)
+        AND (t.message_id IS NULL OR EXISTS(SELECT 1 FROM messages m JOIN channel_members cm
+          ON cm.workspace_id=m.workspace_id AND cm.channel_id=m.channel_id AND cm.user_id=t.user_id
+          WHERE m.workspace_id=t.workspace_id AND m.channel_id=t.channel_id AND m.id=t.message_id AND m.agent_session_id IS NULL))`;
+      // The row change and its realtime outbox notification commit together; duplicate deliveries become no-ops.
+      const row = (await tasks.pool.query<{remaining:number}>(`WITH fired AS (
+        UPDATE hub_todos t SET reminder_fired_at=clock_timestamp(),updated_at=greatest(clock_timestamp(),t.updated_at+interval '1 microsecond') WHERE ${eligible} AND t.remind_at<=now() RETURNING id
+      ) SELECT CASE WHEN EXISTS(SELECT 1 FROM fired) THEN 0 ELSE coalesce((
+        SELECT greatest(0,extract(epoch FROM (t.remind_at-now()))*1000)::float FROM hub_todos t WHERE ${eligible}
+      ),0) END AS remaining`, [id,remind_at,reminder_version])).rows[0]!;
+      if (row.remaining>0) await message.retry(row.remaining);
+      else await message.ack();
+    }));
     stops.push(await bus.subscribe('connection.deadline.*', {durable:'connection-deadlines',queue:'connection-deadlines',maxPending:16}, async message => {
       if (!await due(message)) return;
       const {installation_id,connection_id,last_seen_at} = message.event.data;

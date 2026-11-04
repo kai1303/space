@@ -54,6 +54,9 @@ export function RichComposer({
   maxLength = 10000,
   attachmentsEnabled = true,
   sendDisabledReason,
+  showUnavailableActions = true,
+  submitLabel,
+  autoFocus = false,
 }: {
   channel: string;
   placeholder?: string;
@@ -76,12 +79,17 @@ export function RichComposer({
   maxLength?: number;
   attachmentsEnabled?: boolean;
   sendDisabledReason?: string;
+  showUnavailableActions?: boolean;
+  submitLabel?: string;
+  autoFocus?: boolean;
 }) {
   const mount = useRef<HTMLDivElement>(null);
   const editor = useRef<Quill | null>(null);
   const callbacks = useRef({ onDraftChange, onAttachmentsChange, onSend });
   callbacks.current = { onDraftChange, onAttachmentsChange, onSend };
   const initial = useRef(defaultValue);
+  const labels = useRef({ channel, placeholder });
+  labels.current = { channel, placeholder };
   const selection = useRef({ index: 0, length: 0 });
   const pending = useRef(false);
   const fileInput = useRef<HTMLInputElement>(null);
@@ -158,6 +166,12 @@ export function RichComposer({
     else root.removeAttribute('aria-activedescendant');
   }, [completion, emojiIndex, suggestionsId, ready]);
   const [editorVersion, setEditorVersion] = useState(0);
+  useEffect(() => {
+    const root = editor.current?.root;
+    if (!root) return;
+    root.setAttribute('aria-label', `Message ${channel}`);
+    root.setAttribute('data-placeholder', placeholder ?? `Message #${channel}`);
+  }, [channel, placeholder, editorVersion]);
   const mentionsUI = useMentions(editor, ready, channel, findMentions, editorVersion);
   const mentionKeys = useRef(mentionsUI.key); mentionKeys.current = mentionsUI.key;
   const [broadcastWarning, setBroadcastWarning] = useState(false);
@@ -220,7 +234,7 @@ export function RichComposer({
         mount.current.append(node);
         registerMention(Editor);
         const q = new Editor(node, {
-          placeholder: placeholder ?? `Message #${channel}`,
+          placeholder: labels.current.placeholder ?? `Message #${labels.current.channel}`,
           formats: plainText ? ["mention"] : [
             "mention",
             "bold",
@@ -240,7 +254,7 @@ export function RichComposer({
         pending.current = false;
         setSending(false);
         q.root.setAttribute("role", "textbox");
-        q.root.setAttribute("aria-label", `Message ${channel}`);
+        q.root.setAttribute("aria-label", `Message ${labels.current.channel}`);
         q.root.setAttribute("aria-multiline", "true");
         if (initial.current)
           q.setContents(
@@ -286,11 +300,13 @@ export function RichComposer({
         q.on("selection-change", select);
         q.root.addEventListener("keydown", key, true);
         setReady(true);
+        if (autoFocus) q.focus();
         setEditorVersion(version => version + 1);
         cleanup = () => {
           q.off("text-change", change);
           q.off("selection-change", select);
           q.root.removeEventListener("keydown", key, true);
+          initial.current = normalizeDocument(q.getContents(), Infinity);
           q.disable();
           node.remove();
           if (editor.current === q) editor.current = null;
@@ -304,7 +320,7 @@ export function RichComposer({
       disposed = true;
       cleanup();
     };
-  }, [channel, plainText, placeholder]);
+  }, [plainText]);
   function restore() {
     const q = editor.current;
     if (!q) return;
@@ -489,7 +505,7 @@ export function RichComposer({
               ]);
             }}
           />
-          {!plainText && <IconButton
+          {!plainText && (attachmentsEnabled || showUnavailableActions) && <IconButton
             label={attachmentsEnabled ? "Attach files" : "File uploads unavailable"}
             size="sm"
             className="sp-attach-trigger"
@@ -528,7 +544,7 @@ export function RichComposer({
               </>}
             </Popover>
           )}
-          {!plainText && <><span className="sp-composer-divider" />
+          {!plainText && showUnavailableActions && <><span className="sp-composer-divider" />
           <IconButton
             label="Video recording unavailable in this preview"
             className="sp-unavailable-action"
@@ -550,14 +566,14 @@ export function RichComposer({
           </IconButton></>}
           <div className="sp-rich-send-group">
           <IconButton
-            label="Send now"
+            label={submitLabel ?? "Send now"}
             size="sm"
             className="sp-send-rich"
             disabled={!ready || sending || !!sendDisabledReason || filesPending || (!text.trim() && !files.length)}
             data-send-disabled={sending && ready && !filesPending && Boolean(text.trim() || files.length) || undefined}
             onClick={() => void send()}
           >
-            <PaperPlaneRight size={19} weight="fill" />
+            {submitLabel ?? <PaperPlaneRight size={19} weight="fill" />}
           </IconButton>
           </div>
         </div>

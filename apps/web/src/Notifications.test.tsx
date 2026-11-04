@@ -63,3 +63,15 @@ it('ignores a stale thread subscription read after follow succeeds',async()=>{
  await act(async()=>{read=mock.refresh!();await Promise.resolve();});await userEvent.click(screen.getByRole('button',{name:'Follow thread'}));
  await screen.findByRole('button',{name:'Following thread'});await act(async()=>{release({following:false});await read!;});expect(screen.getByRole('button',{name:'Following thread'})).toBeTruthy();
 });
+
+it('uses arrow Home and End keys with a single Activity tab stop',async()=>{
+ fake(()=>({items:[],unread_count:0,next_cursor:null,latest_id:'0'}));
+ render(<Notifications workspace="workspace" onOpen={()=>{}}/>);
+ const all=await screen.findByRole('tab',{name:'All',exact:true});
+ all.focus();await userEvent.keyboard('{ArrowRight}');
+ const dms=screen.getByRole('tab',{name:'DMs',exact:true});
+ expect(document.activeElement).toBe(dms);expect(dms.getAttribute('aria-selected')).toBe('true');
+ expect(screen.getAllByRole('tab').filter(tab=>tab.tabIndex===0)).toHaveLength(1);
+ await userEvent.keyboard('{End}');expect(document.activeElement).toBe(screen.getByRole('tab',{name:'Reactions',exact:true}));
+ await userEvent.keyboard('{Home}');expect(document.activeElement).toBe(all);
+});
