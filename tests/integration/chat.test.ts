@@ -397,10 +397,19 @@ test('concurrent message snapshots and replay cover every insert without losing 
   const a = await bootstrap(pool), chat = new ChatStore(pool);
   await pool.query('UPDATE channels SET event_sequence=$1 WHERE id=$2', ['9007199254740992', a.channel_id]);
   const requests = Array.from({ length: 20 }, (_, i) => ({ client_message_id: randomUUID(), text: `Racing ${i}` }));
-  const [snapshot, saved] = await Promise.all([
+  const [snapshot, outcomes] = await Promise.all([
     chat.messageHistory(a.owner_id, a.channel_id),
-    Promise.all(requests.map(input => chat.send(a.owner_id, a.channel_id, input))),
+    Promise.allSettled(requests.map(input => chat.send(a.owner_id, a.channel_id, input))),
   ]);
+  const saved = [];
+  for (const [index, outcome] of outcomes.entries()) {
+    if (outcome.status === 'fulfilled') saved.push(outcome.value);
+    else {
+      // Bounded serializable retries may reject a burst; retry the same client identity after it settles.
+      assert.equal(outcome.reason.code, 'session_conflict');
+      saved.push(await chat.send(a.owner_id, a.channel_id, requests[index]));
+    }
+  }
   const replay = await chat.events(a.owner_id, a.channel_id, snapshot.event_cursor);
   const covered = new Set([...snapshot.messages.map(m => m.id), ...replay.flatMap(e => e.type === 'message.created' ? [e.payload.id] : [])]);
   assert.equal(covered.size, 20);

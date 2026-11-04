@@ -46,16 +46,42 @@ test('a channel change does no authentication or revision reads for an unrelated
 });
 
 test('credential invalidation targets its actor, including sockets without subscriptions',async()=>{
-  const a=await bootstrap(pool),b=await bootstrap(pool),one=await connect(a.owner_token),two=await connect(b.owner_token);
-  await settled();
-  const original=store.authenticate.bind(store);const seen:string[]=[];
-  store.authenticate=async token=>{seen.push(token);return original(token);};
+  // Deliver only this mutation's SQL-generated hint, excluding delayed bootstrap hints.
+  class RoutingBus extends EventBus {
+    changed!:Parameters<EventBus['subscribe']>[2];
+    override async start() {}
+    override async close() {}
+    override async subscribe(filter:string,_options:Parameters<EventBus['subscribe']>[1],handler:Parameters<EventBus['subscribe']>[2]) {
+      if(filter==='chat.changed.*')this.changed=handler;
+      return async()=>{};
+    }
+  }
+  const bus=new RoutingBus('nats://unused',schema),isolatedStore=new PostgresStore(pool);
+  const temporary=createApi(isolatedStore,{allowDevelopmentTokens:true,realtime:{events:bus}});
+  const base=await temporary.listen({host:'127.0.0.1',port:0});
+  const a=await bootstrap(pool),b=await bootstrap(pool),one=await connect(a.owner_token,base),two=await connect(b.owner_token,base);
+  const original=isolatedStore.authenticate.bind(isolatedStore);const seen:string[]=[];
+  isolatedStore.authenticate=async token=>{seen.push(token);return original(token);};
   try{
-    await pool.query('DELETE FROM human_credentials WHERE user_id=$1',[a.owner_id]);
-    await settled();
+    const client=await pool.connect();
+    let hint;
+    try{
+      await client.query('BEGIN');
+      await client.query('DELETE FROM event_outbox');
+      await client.query('DELETE FROM human_credentials WHERE user_id=$1',[a.owner_id]);
+      hint=(await client.query("SELECT id,kind,aggregate_id,payload FROM event_outbox WHERE kind='chat.changed' AND payload->>'actor_id'=$1",[a.owner_id])).rows[0];
+      await client.query('COMMIT');
+    }catch(error){await client.query('ROLLBACK');throw error;}finally{client.release();}
+    assert.ok(hint);
+    const disconnected=new Promise<void>((resolve,reject)=>{
+      const timer=setTimeout(()=>reject(new Error('timed out waiting for revocation')),5000);
+      one.once('disconnect',()=>{clearTimeout(timer);resolve();});
+    });
+    await bus.changed({event:{id:hint.id,schema,kind:hint.kind,aggregate_id:hint.aggregate_id,data:hint.payload},ack:()=>{},retry:()=>{assert.fail('routing must not retry');}});
+    await disconnected;
     assert.equal(one.connected,false);assert.equal(two.connected,true);
     assert.ok(!seen.includes(b.owner_token),'revocation must not reauthenticate unrelated actors');
-  }finally{store.authenticate=original;one.disconnect();two.disconnect();}
+  }finally{isolatedStore.authenticate=original;one.disconnect();two.disconnect();await temporary.close();}
 });
 
 test('targeted WAL hints retain resource scope and actor routing metadata',async()=>{
