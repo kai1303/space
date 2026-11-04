@@ -4,7 +4,7 @@
 .workspace-admin-toolbar{display:flex;justify-content:flex-end;gap:10px;flex-wrap:wrap}
 .workspace-admin-filters{display:flex;align-items:end;gap:12px;padding:16px;background:var(--sp-surface-hover);border-block:1px solid var(--sp-border);flex-wrap:wrap}
 .workspace-admin-filters label,.workspace-admin-action label{display:grid;gap:5px;font-size:12px;font-weight:700}
-.workspace-admin input,.workspace-admin select,.workspace-admin-action input,.workspace-admin-action select{font:14px var(--sp-font-sans);background:var(--sp-surface);color:var(--sp-text);border:1px solid var(--sp-border-strong);border-radius:5px;padding:9px 10px;min-height:38px;min-width:0}
+.workspace-admin input,.workspace-admin-action input{font:14px var(--sp-font-sans);background:var(--sp-surface);color:var(--sp-text);border:1px solid var(--sp-border-strong);border-radius:5px;padding:9px 10px;min-height:38px;min-width:0}
 .workspace-admin-filters .workspace-admin-search{display:flex;flex-direction:row;align-items:center;gap:8px;flex:1;min-width:200px;background:var(--sp-surface);border:1px solid var(--sp-border-strong);border-radius:5px;padding:0 10px}
 .workspace-admin-search input{border:0;background:transparent;width:100%;outline-offset:-2px;padding-inline:0}
 .workspace-admin-table{overflow:auto;min-width:0;max-height:50vh}

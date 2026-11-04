@@ -1,3 +1,4 @@
+import { SidekickStore } from './sidekick.js';
 import { createHash } from 'node:crypto';
 import type { Pool } from 'pg';
 import { and, eq, sql } from 'drizzle-orm';
@@ -13,8 +14,8 @@ const summaryColumns = sql`a.id,a.workspace_id,a.installation_id,a.origin_thread
   (SELECT count(*)::integer FROM tasks WHERE session_id=a.id) AS turn_count`;
 
 export class AgentSessionStore {
-  readonly db; readonly tasks;
-  constructor(readonly pool: Pool) { this.db = database(pool); this.tasks = new PostgresStore(pool); }
+  readonly db; readonly tasks; readonly sidekicks;
+  constructor(readonly pool: Pool) { this.db = database(pool); this.tasks = new PostgresStore(pool); this.sidekicks = new SidekickStore(this.db); }
   private async visible(c: DbSession, actor: string, id: string) {
     const [session] = await c.select().from(s.agentSessions).where(eq(s.agentSessions.id, uuid(id)));
     if (!session || !await hasThreadAccess(c, actor, session.origin_thread_id)) throw notFound();
@@ -43,7 +44,8 @@ export class AgentSessionStore {
       const [definition] = ref ? await c.select().from(s.agentDefinitions).where(eq(s.agentDefinitions.id, ref.definition_id)) : [];
       if (!definition?.capabilities.persistent_sessions) throw new AppError(409, 'session_connector_unsupported');
       const grants = await c.select().from(s.agentGrants).where(and(eq(s.agentGrants.installation_id, input.installation_id), eq(s.agentGrants.channel_id, thread.channel_id)));
-      const skills = definition.capabilities.skills.filter(skill => grants.some(grant => grant.skill === skill));
+      const [connection] = await c.select({revoked_at:s.agentConnections.revoked_at}).from(s.agentConnections).where(eq(s.agentConnections.installation_id,input.installation_id));
+      const skills = definition.capabilities.skills.filter(skill => connection ? !connection.revoked_at : grants.some(grant => grant.skill === skill));
       const skill = input.skill ?? (skills.length === 1 ? skills[0] : undefined);
       if (!skill) throw new AppError(400, 'session_skill_required');
       const installation = await this.tasks.eligible(c, { thread_id: threadId, workspace_id: thread.workspace_id, installation_id: input.installation_id, requester_id: actor, skill }, true);
@@ -69,7 +71,7 @@ export class AgentSessionStore {
       const turns: AgentSessionTurn[] = rows.reverse().map(row => ({ task: row.task, created_at: new Date(row.task.created_at).toISOString(), requester_name: row.requester_name,
         ...(row.response_payload?.response ? { response: parseAgentResponse(row.response_payload.response) } : {}),
         detail: String(row.payload?.text ?? row.payload?.result ?? row.payload?.error ?? row.payload?.code ?? '') }));
-      return { ...(session.managed ? { outputs: session.outputs } : {}), session: await this.summary(c, id), turns, next_cursor: result.rows.length > 20 ? turns[0]!.task.id : null };
+      return { ...(session.handoff_context ? {context:session.handoff_context} : {}), ...(session.managed ? { outputs: session.outputs } : {}), session: await this.summary(c, id), turns, next_cursor: result.rows.length > 20 ? turns[0]!.task.id : null };
     }, { isolationLevel: 'repeatable read', accessMode: 'read only' });
   }
   async send(actor: string, id: string, raw: unknown, key: string): Promise<Task> {

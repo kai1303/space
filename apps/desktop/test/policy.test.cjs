@@ -35,3 +35,11 @@ test('only the configured origin can navigate inside Space', () => {
     assert.equal(navigationAction(value, origin), 'deny');
   }
 });
+
+test('media permissions are confined to the configured origin and audio/video capture', () => {
+  const { mediaPermissionAllowed } = require('../src/policy.cjs');
+  const base='https://space.example.com/chat';
+  assert.equal(mediaPermissionAllowed('media', 'https://space.example.com', base, ['audio','video']), true);
+  for(const [permission,origin,types] of [['media','https://evil.test',['audio']],['display-capture','https://space.example.com',['video']],['media','https://space.example.com',['display']],['media','null',['audio']]])
+    assert.equal(mediaPermissionAllowed(permission,origin,base,types),false);
+});

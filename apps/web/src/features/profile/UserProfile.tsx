@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { AnimatePresence } from 'motion/react';
-import { Avatar, Button, Dialog, IconButton, Popover, SidePanel, TextField } from '@space/ui/primitives';
+import { Select, Avatar, Button, Dialog, IconButton, Popover, SidePanel, TextField } from '@space/ui/primitives';
 import { EmojiPicker } from '@space/ui/emoji';
 import { Clock, EnvelopeSimple, Phone, Plus, Smiley, X } from '@phosphor-icons/react';
 import { visibleStatus, type ProfileUpdate, type UserProfile, type UserStatus } from '@space/contracts';
@@ -154,7 +154,7 @@ function ProfileEditor({ profile, busy, error, save, onClose }: { profile: UserP
         </div></div>
         <TextField label="Name pronunciation" maxLength={200} placeholder="e.g. Kai (pronounced ‘k-eye’)" value={draft.name_pronunciation} onChange={e => setDraft({ ...draft, name_pronunciation: e.target.value })} />
         <TextField label="Phone" type="tel" maxLength={50} value={draft.phone} onChange={e => setDraft({ ...draft, phone: e.target.value })} />
-        <label className="space-profile-select">Time zone<select value={draft.time_zone} onChange={e => setDraft({ ...draft, time_zone: e.target.value })}>{zones.map(zone => <option key={zone}>{zone}</option>)}</select><small>Your local time is shown on your profile.</small></label>
+        <label className="space-profile-select">Time zone<Select searchable aria-label="Time zone" value={draft.time_zone} onChange={e => setDraft({ ...draft, time_zone: e.target.value })}>{zones.map(zone => <option key={zone}>{zone}</option>)}</Select><small>Your local time is shown on your profile.</small></label>
       </fieldset>
       {(error || photoError) && <p role="alert" className="space-profile-error">{photoError || error}</p>}
       <footer><Button disabled={busy} onClick={() => setOpen(false)}>Cancel</Button><Button type="submit" variant="primary" loading={busy} disabled={reading || !draft.display_name.trim()}>Save Changes</Button></footer>
@@ -186,10 +186,10 @@ function StatusEditor({ profile, busy, error, save, onClose }: { profile: UserPr
     <form className="space-status-editor" onSubmit={submit}>
       <fieldset disabled={busy}>
         <div className="space-status-input"><EmojiPicker label="Choose status emoji" className="space-status-emoji" trigger={<span>{emoji || <Smiley size={24} />}</span>} onSelect={setEmoji} />{emoji && <IconButton label="Remove status emoji" onClick={() => setEmoji('')}><X size={16} /></IconButton>}<input aria-label="Status" placeholder="What’s your status?" maxLength={100} value={text} onChange={e => setText(e.target.value)} />{(text || emoji) && <IconButton label="Clear all" onClick={() => { setText(''); setEmoji(''); }}><X size={18} /></IconButton>}</div>
-        {!text && !emoji ? <div className="space-status-presets"><strong>Suggestions</strong>{presets.map(preset => <button key={preset.text} type="button" onClick={() => { setText(preset.text); setEmoji(preset.emoji); setDuration(preset.duration); }}><span>{preset.emoji}</span><span>{preset.text}</span><small>— {preset.hint}</small></button>)}</div> : <label className="space-profile-select">Duration<select value={duration} onChange={e => setDuration(e.target.value)}>
+        {!text && !emoji ? <div className="space-status-presets"><strong>Suggestions</strong>{presets.map(preset => <button key={preset.text} type="button" onClick={() => { setText(preset.text); setEmoji(preset.emoji); setDuration(preset.duration); }}><span>{preset.emoji}</span><span>{preset.text}</span><small>— {preset.hint}</small></button>)}</div> : <label className="space-profile-select">Duration<Select aria-label="Duration" value={duration} onChange={e => setDuration(e.target.value)}>
           {initialExpiration && <option value="existing">Keep current expiration</option>}
           <option value="never">Don’t clear</option><option value="30">30 minutes</option><option value="60">1 hour</option><option value="240">4 hours</option><option value="today">Today</option><option value="custom">Choose a date and time…</option>
-        </select></label>}
+        </Select></label>}
         {duration === 'custom' && <TextField label="Clear status at" type="datetime-local" required value={date} hint="Uses your browser’s local time zone." onChange={e => setDate(e.target.value)} />}
       </fieldset>
       {(error || localError) && <p role="alert" className="space-profile-error">{localError || error}</p>}

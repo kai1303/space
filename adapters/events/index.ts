@@ -49,7 +49,7 @@ export class EventBus {
     const config = {
       name,
       num_replicas: replicas,
-      subjects: search ? [`${prefix}.search.>`] : chat ? [`${prefix}.chat.>`] : [...['task', 'navigator', 'connection', 'delivery', 'asset', 'todo', 'invitation', 'retention'].map(kind => `${prefix}.${kind}.>`), `${prefix}.schedule.>`],
+      subjects: search ? [`${prefix}.search.>`] : chat ? [`${prefix}.chat.>`] : [...['task', 'navigator', 'connection', 'delivery', 'asset', 'todo', 'invitation', 'retention', 'call'].map(kind => `${prefix}.${kind}.>`), `${prefix}.schedule.>`],
       retention: search ? RetentionPolicy.Interest : chat ? RetentionPolicy.Limits : RetentionPolicy.Workqueue,
       max_age: chat ? nanos(24 * 60 * 60 * 1000) : 0,
       storage: StorageType.File,
@@ -151,6 +151,22 @@ export class EventBus {
     };
     this.subscriptions.add(stop);
     return stop;
+  }
+  // Core NATS messages are intentionally ephemeral: SDP/ICE never enter JetStream or PostgreSQL.
+  publishTransient(topic: string, value: unknown): void {
+    if (!this.isConnected || this.schema === '*' || !/^[a-z0-9.-]+$/i.test(topic)) throw new Error('transient transport unavailable');
+    const data = new TextEncoder().encode(JSON.stringify(value));
+    if (data.length > 49152) throw new Error('transient payload too large');
+    this.connection!.publish(`${this.stream}.transient.${topic}`, data);
+  }
+  async subscribeTransient(topic: string, handler: (value: unknown) => void): Promise<() => void> {
+    if (!this.isConnected || this.schema === '*' || !/^[a-z0-9.*-]+$/i.test(topic)) throw new Error('transient transport unavailable');
+    const sub = this.connection!.subscribe(`${this.stream}.transient.${topic}`, {callback: (error, message) => {
+      if (error || message.data.length > 49152) return;
+      try { handler(JSON.parse(message.string())); } catch { /* Invalid ephemeral signals are discarded. */ }
+    }});
+    await this.connection!.flush();
+    return () => sub.unsubscribe();
   }
   onReconnect(fn: () => void): () => void { this.reconnect.add(fn); return () => { this.reconnect.delete(fn); }; }
   async close(): Promise<void> { this.connected = false; for (const stop of [...this.subscriptions]) await stop(); await this.connection?.close(); this.connection = undefined; this.client = undefined; }

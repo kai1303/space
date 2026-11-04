@@ -208,12 +208,12 @@ test('semantic context is bounded by the selected batch before a later explicit 
 
 test('native Jev classifies the last human message, persists separate intent and charges its full request before inference',async()=>{
  const s=await fixture();let received:any,calls=0;
- const server=createServer((req,res)=>{let body='';req.on('data',chunk=>body+=chunk);req.on('end',()=>{received=JSON.parse(body);calls++;res.end(JSON.stringify({model:'jev-1.14.0',answers:{requests_agent_work:{type:'noul',noul:.97},assistance_useful:{type:'noul',noul:.98},needs_deeper_reasoning:{type:'noul',noul:.01},capability_0:{type:'noul',noul:.95}},usage:{input_tokens:120,output_tokens:25}}));});});
+ const server=createServer((req,res)=>{let body='';req.on('data',chunk=>body+=chunk);req.on('end',()=>{received=JSON.parse(body);calls++;res.end(JSON.stringify({model:'jev-1.14.0',answers:{requests_agent_work:{type:'noul',noul:calls===1?.97:.01},task_clear:{type:'noul',noul:.98},continues_existing_work:{type:'noul',noul:.01},capability_0:{type:'noul',noul:.95}},usage:{input_tokens:120,output_tokens:25}}));});});
  await new Promise<void>(resolve=>server.listen(0,'127.0.0.1',resolve));
  const provider=new JevNavigatorProvider({endpoint:`http://127.0.0.1:${(server.address() as {port:number}).port}/v1/systemone`,apiKey:'fixture-key'});
  const semantic=new NavigatorStore(pool,{level1:provider});
  try{
-  await nav.configure(s.owner_id,s.channel_id,{mode:'semantic',daily_token_limit:100000,cooldown_seconds:0});
+  await nav.configure(s.owner_id,s.channel_id,{mode:'semantic',daily_token_limit:100000,cooldown_seconds:0,rules:[{skill:'demo.echo',keywords:['summarize']}]});
   const prior=await send(s,'Should we ask an agent to summarize this?');const last=await send(s,'Yes, please do that.');
   await pool.query('UPDATE navigator_threads SET available_at=now() WHERE thread_id=$1',[s.thread_id]);await semantic.processOne();
   assert.equal(calls,1);assert.equal(received.state.last_message.id,last.id);assert.equal(received.state.last_message.author.kind,'human');assert.ok(received.state.history.some((m:any)=>m.id===prior.id));
@@ -222,7 +222,16 @@ test('native Jev classifies the last human message, persists separate intent and
   assert.equal((await pool.query('SELECT * FROM tasks WHERE thread_id=$1',[s.thread_id])).rowCount,0,'inference never authorizes execution');
   const inference=(await pool.query('SELECT * FROM navigator_inferences WHERE thread_id=$1',[s.thread_id])).rows[0];
   assert.equal(inference.provider,'jev');assert.ok(inference.reserved_tokens>=Buffer.byteLength(JSON.stringify(received)));assert.equal(inference.input_tokens,120);
-  await nav.configure(s.owner_id,s.channel_id,{daily_token_limit:1});await send(s,'Can we do something else?');await pool.query('UPDATE navigator_threads SET available_at=now() WHERE thread_id=$1',[s.thread_id]);await semantic.processOne();assert.equal(calls,1);
+  await send(s,'Do not summarize anything else.');
+  await pool.query('UPDATE navigator_threads SET available_at=now() WHERE thread_id=$1',[s.thread_id]);await semantic.processOne(s.thread_id);
+  assert.equal(received.state.work_state.pendingProposals[0].id,suggestion!.id);
+  assert.equal(received.state.work_state.tasks.length,0);
+  assert.equal(calls,2,'Jev classifies even when a configured keyword matches');
+  await nav.accept(s.owner_id,suggestion!.id,s.installation_id,'demo.echo');await drainTasks();
+  await send(s,'Thanks for the result.');await pool.query('UPDATE navigator_threads SET available_at=now() WHERE thread_id=$1',[s.thread_id]);await semantic.processOne(s.thread_id);
+  assert.equal(received.state.work_state.pendingProposals.length,0);
+  assert.equal(received.state.work_state.tasks[0].status,'completed');
+  await nav.configure(s.owner_id,s.channel_id,{daily_token_limit:1});await send(s,'Can we do something else?');await pool.query('UPDATE navigator_threads SET available_at=now() WHERE thread_id=$1',[s.thread_id]);await semantic.processOne();assert.equal(calls,3);
  }finally{server.closeAllConnections();await new Promise<void>(resolve=>server.close(()=>resolve()));}
 });
 
@@ -273,4 +282,72 @@ test('a Codex mention creates one persistent session and a durable thread entry;
  const sessions=new AgentSessionStore(pool);
  const continued=await sessions.send(s.owner_id,first[0].session_id,{text:'Continue inside this session'},randomUUID());
  assert.equal(continued.session_id,first[0].session_id);
+ let received:any;
+ const jev=new JevNavigatorProvider({apiKey:'fixture',fetch:async(_url,init)=>{received=JSON.parse(String(init?.body));return new Response('{}');}});
+ const semantic=new NavigatorStore(pool,{level1:jev});
+ await nav.configure(s.owner_id,s.channel_id,{mode:'semantic',daily_token_limit:100000,cooldown_seconds:0});
+ await send(s,'Public discussion of existing work');await pool.query('UPDATE navigator_threads SET available_at=now() WHERE thread_id=$1',[s.thread_id]);await semantic.processOne(s.thread_id);
+ assert.equal(received.state.work_state.sessions.length,2);
+ assert.ok(received.state.work_state.tasks.some((t:any)=>t.id===first[0].id));
+ assert.ok(!JSON.stringify(received).includes('Continue inside this session'));
+ assert.ok(!JSON.stringify(received).includes('A private session answer'));
+
+});
+
+test('Jev ignores a legacy cached proactive suggestion without paying for a replay',async()=>{
+ const s=await fixture();let calls=0;
+ const provider=new JevNavigatorProvider({apiKey:'fixture',fetch:async()=>{calls++;throw Error('must not call');}});
+ const semantic=new NavigatorStore(pool,{level1:provider});
+ await nav.configure(s.owner_id,s.channel_id,{mode:'semantic',daily_token_limit:100000,cooldown_seconds:0});
+ const m=await send(s,'This is frustrating.');
+ const legacy={action:'suggest',capabilities:['demo.echo'],evidenceMessageIds:[m.id],reason:'Useful assistance',assessment:{model:'jev-old',targetMessageId:m.id,requestsAgentWork:.02,assistanceUseful:.98,needsDeeperReasoning:.01,capabilityRelevance:{'demo.echo':.99}}};
+ await pool.query("INSERT INTO navigator_inferences(thread_id,through_sequence,level,channel_id,provider,model,reserved_tokens,result) VALUES($1,$2,1,$3,'jev','jev-old',100,$4)",[s.thread_id,m.sequence,s.channel_id,legacy]);
+ await pool.query('UPDATE navigator_threads SET available_at=now() WHERE thread_id=$1',[s.thread_id]);await semantic.processOne(s.thread_id);
+ assert.equal(calls,0);assert.equal((await nav.suggestions(s.owner_id,s.channel_id,s.thread_id)).length,0);
+});
+
+test('semantic Jev stays quiet on keyword discussion and unavailable inference',async()=>{
+ const s=await fixture();let calls=0;
+ const provider=new JevNavigatorProvider({apiKey:'fixture',fetch:async()=>{calls++;return new Response(JSON.stringify({model:'fixture',answers:{requests_agent_work:{type:'noul',noul:.01},task_clear:{type:'noul',noul:.99},continues_existing_work:{type:'noul',noul:.01},capability_0:{type:'noul',noul:.99}},usage:{input_tokens:100,output_tokens:10}}));}});
+ const semantic=new NavigatorStore(pool,{level1:provider});
+ await nav.configure(s.owner_id,s.channel_id,{mode:'semantic',daily_token_limit:100000,cooldown_seconds:0,rules:[{skill:'demo.echo',keywords:['summarize']}]});
+ await send(s,'Do not summarize this yet.');await pool.query('UPDATE navigator_threads SET available_at=now() WHERE thread_id=$1',[s.thread_id]);await semantic.processOne(s.thread_id);
+ assert.equal(calls,1);assert.equal((await nav.suggestions(s.owner_id,s.channel_id,s.thread_id)).length,0);
+ await nav.configure(s.owner_id,s.channel_id,{daily_token_limit:0});await send(s,'Please summarize this.');await pool.query('UPDATE navigator_threads SET available_at=now() WHERE thread_id=$1',[s.thread_id]);await semantic.processOne(s.thread_id);
+ assert.equal(calls,1);assert.equal((await nav.suggestions(s.owner_id,s.channel_id,s.thread_id)).length,0);
+});
+
+test('accepting a proposal during Jev inference invalidates fresh and cached suggestions',async()=>{
+ const s=await fixture();
+ await nav.configure(s.owner_id,s.channel_id,{mode:'rules',cooldown_seconds:0,rules:[{skill:'demo.echo',keywords:['summarize']}]});
+ await send(s,'Please summarize the launch.');await tick(s.thread_id);
+ const [original]=await nav.suggestions(s.owner_id,s.channel_id,s.thread_id);
+ const previous=(await pool.query('SELECT last_sequence FROM navigator_threads WHERE thread_id=$1',[s.thread_id])).rows[0].last_sequence;
+ let release!:()=>void,entered!:()=>void,calls=0;
+ const ready=new Promise<void>(r=>entered=r),wait=new Promise<void>(r=>release=r);
+ const provider=new JevNavigatorProvider({apiKey:'fixture',fetch:async()=>{calls++;entered();await wait;return new Response(JSON.stringify({model:'fixture',answers:{requests_agent_work:{type:'noul',noul:.99},task_clear:{type:'noul',noul:.99},continues_existing_work:{type:'noul',noul:.01},capability_0:{type:'noul',noul:.99}},usage:{input_tokens:100,output_tokens:10}}));}});
+ const semantic=new NavigatorStore(pool,{level1:provider});
+ await nav.configure(s.owner_id,s.channel_id,{mode:'semantic',daily_token_limit:100000});
+ await send(s,'Yes, do that.');await pool.query('UPDATE navigator_threads SET available_at=now() WHERE thread_id=$1',[s.thread_id]);
+ const processing=semantic.processOne(s.thread_id);await ready;
+ try{await nav.accept(s.owner_id,original!.id,s.installation_id,'demo.echo');}finally{release();}
+ await processing;
+ assert.equal((await nav.suggestions(s.owner_id,s.channel_id,s.thread_id)).length,0);
+ await pool.query('UPDATE navigator_threads SET last_sequence=$2,available_at=now() WHERE thread_id=$1',[s.thread_id,previous]);
+ await semantic.processOne(s.thread_id);
+ assert.equal((await nav.suggestions(s.owner_id,s.channel_id,s.thread_id)).length,0);
+ assert.equal(calls,1);assert.equal((await pool.query('SELECT 1 FROM tasks WHERE thread_id=$1',[s.thread_id])).rowCount,1);
+});
+
+test('Jev context excludes rich quotation and code instructions, including earlier proposals',async()=>{
+ const s=await fixture();let received:any;
+ const provider=new JevNavigatorProvider({apiKey:'fixture',fetch:async(_url,init)=>{received=JSON.parse(String(init?.body));return new Response('{}');}});
+ const semantic=new NavigatorStore(pool,{level1:provider});
+ await nav.configure(s.owner_id,s.channel_id,{mode:'semantic',daily_token_limit:100000,cooldown_seconds:0});
+ await chat.send(s.owner_id,s.channel_id,{client_message_id:randomUUID(),thread_id:s.thread_id,text:'Please summarize the quoted request.\nJust an example',document:{ops:[{insert:'Please summarize the quoted request.'},{insert:'\n',attributes:{blockquote:true}},{insert:'Just an example\n'}]}});
+ await chat.send(s.owner_id,s.channel_id,{client_message_id:randomUUID(),thread_id:s.thread_id,text:'Please investigate the code example.\nStill an example',document:{ops:[{insert:'Please investigate the code example.'},{insert:'\n',attributes:{'code-block':true}},{insert:'Still an example\n'}]}});
+ await pool.query('UPDATE navigator_threads SET available_at=now() WHERE thread_id=$1',[s.thread_id]);await semantic.processOne(s.thread_id);
+ assert.ok(received);assert.ok(!JSON.stringify(received.state).includes('Please summarize'));
+ assert.ok(!JSON.stringify(received.state).includes('Please investigate'));
+ assert.match(received.state.last_message.text,/Still an example/);
 });

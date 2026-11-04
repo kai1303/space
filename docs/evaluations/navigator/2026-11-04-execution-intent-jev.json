@@ -1,0 +1,1280 @@
+{
+  "corpus": "navigator-execution-intent-v2",
+  "generatedAt": "2026-11-04T12:34:14.267Z",
+  "schemaVersion": 1,
+  "mode": "level1",
+  "provider": {
+    "name": "jev",
+    "model": "jev-latest"
+  },
+  "prices": {
+    "inputUsdPerMillion": 0.042,
+    "outputUsdPerMillion": 0
+  },
+  "summary": {
+    "total": 36,
+    "completed": 36,
+    "errors": 0,
+    "skipped": 0,
+    "coverage": 1,
+    "correct": 32,
+    "accuracy": 0.8888888888888888,
+    "negativeCases": 21,
+    "falsePositives": 0,
+    "falsePositiveRate": 0,
+    "positiveCases": 15,
+    "missedIntents": 3,
+    "missedIntentRate": 0.2,
+    "capabilityCases": 13,
+    "capabilityMatches": 10,
+    "capabilityAccuracy": 0.7692307692307693,
+    "escalations": 0,
+    "calls": 36,
+    "reservedTokens": 162703,
+    "inputTokens": 41008,
+    "outputTokens": 3544,
+    "latencyP50Ms": 263.1474999999991,
+    "latencyP95Ms": 385.32600000000025,
+    "estimatedUsd": 0.001722336
+  },
+  "results": [
+    {
+      "id": "summary-request",
+      "category": "explicit-request",
+      "expected": {
+        "actions": [
+          "suggest"
+        ],
+        "capabilities": [
+          "writing.summarize"
+        ]
+      },
+      "status": "completed",
+      "latencyMs": 801.996083,
+      "decision": {
+        "action": "suggest",
+        "capabilities": [
+          "writing.summarize"
+        ],
+        "evidenceMessageIds": [
+          "latest"
+        ],
+        "reason": "The latest message requests or confirms clear new work. Choose an available capability to execute it.",
+        "assessment": {
+          "model": "jev-1.14.0",
+          "targetMessageId": "latest",
+          "requestsAgentWork": 0.96,
+          "capabilityRelevance": {
+            "writing.summarize": 0.96,
+            "engineering.investigate": 0.02
+          },
+          "version": "execution-intent-v1",
+          "taskClear": 0.93,
+          "continuesExistingWork": 0.09
+        }
+      },
+      "correct": true
+    },
+    {
+      "id": "debug-request",
+      "category": "explicit-request",
+      "expected": {
+        "actions": [
+          "suggest"
+        ],
+        "capabilities": [
+          "engineering.investigate"
+        ]
+      },
+      "status": "completed",
+      "latencyMs": 257.53837499999986,
+      "decision": {
+        "action": "suggest",
+        "capabilities": [
+          "engineering.investigate"
+        ],
+        "evidenceMessageIds": [
+          "latest"
+        ],
+        "reason": "The latest message requests or confirms clear new work. Choose an available capability to execute it.",
+        "assessment": {
+          "model": "jev-1.14.0",
+          "targetMessageId": "latest",
+          "requestsAgentWork": 0.98,
+          "capabilityRelevance": {
+            "writing.summarize": 0.03,
+            "engineering.investigate": 0.99
+          },
+          "version": "execution-intent-v1",
+          "taskClear": 0.92,
+          "continuesExistingWork": 0.05
+        }
+      },
+      "correct": true
+    },
+    {
+      "id": "paraphrased-summary",
+      "category": "implicit-need",
+      "expected": {
+        "actions": [
+          "suggest"
+        ],
+        "capabilities": [
+          "writing.summarize"
+        ]
+      },
+      "status": "completed",
+      "latencyMs": 283.77762499999994,
+      "decision": {
+        "action": "suggest",
+        "capabilities": [
+          "writing.summarize"
+        ],
+        "evidenceMessageIds": [
+          "latest"
+        ],
+        "reason": "The latest message requests or confirms clear new work. Choose an available capability to execute it.",
+        "assessment": {
+          "model": "jev-1.14.0",
+          "targetMessageId": "latest",
+          "requestsAgentWork": 0.97,
+          "capabilityRelevance": {
+            "writing.summarize": 0.88,
+            "engineering.investigate": 0.02
+          },
+          "version": "execution-intent-v1",
+          "taskClear": 0.71,
+          "continuesExistingWork": 0.12
+        }
+      },
+      "correct": true
+    },
+    {
+      "id": "useful-debugging",
+      "category": "implicit-need",
+      "expected": {
+        "actions": [
+          "ignore"
+        ],
+        "capabilities": []
+      },
+      "status": "completed",
+      "latencyMs": 385.32600000000025,
+      "decision": {
+        "action": "ignore",
+        "capabilities": [],
+        "evidenceMessageIds": [
+          "latest"
+        ],
+        "reason": "No clear new execution request in the latest message.",
+        "assessment": {
+          "model": "jev-1.14.0",
+          "targetMessageId": "latest",
+          "requestsAgentWork": 0.18,
+          "capabilityRelevance": {
+            "writing.summarize": 0.04,
+            "engineering.investigate": 0.97
+          },
+          "version": "execution-intent-v1",
+          "taskClear": 0.74,
+          "continuesExistingWork": 0.14
+        }
+      },
+      "correct": true
+    },
+    {
+      "id": "confirmation",
+      "category": "context",
+      "expected": {
+        "actions": [
+          "suggest"
+        ],
+        "capabilities": [
+          "writing.summarize"
+        ]
+      },
+      "status": "completed",
+      "latencyMs": 274.490542,
+      "decision": {
+        "action": "suggest",
+        "capabilities": [
+          "writing.summarize"
+        ],
+        "evidenceMessageIds": [
+          "latest"
+        ],
+        "reason": "The latest message requests or confirms clear new work. Choose an available capability to execute it.",
+        "assessment": {
+          "model": "jev-1.14.0",
+          "targetMessageId": "latest",
+          "requestsAgentWork": 0.97,
+          "capabilityRelevance": {
+            "writing.summarize": 0.97,
+            "engineering.investigate": 0.02
+          },
+          "version": "execution-intent-v1",
+          "taskClear": 0.95,
+          "continuesExistingWork": 0.08
+        }
+      },
+      "correct": true
+    },
+    {
+      "id": "acknowledgment",
+      "category": "context",
+      "expected": {
+        "actions": [
+          "ignore"
+        ],
+        "capabilities": []
+      },
+      "status": "completed",
+      "latencyMs": 251.86124999999993,
+      "decision": {
+        "action": "ignore",
+        "capabilities": [],
+        "evidenceMessageIds": [
+          "latest"
+        ],
+        "reason": "No clear new execution request in the latest message.",
+        "assessment": {
+          "model": "jev-1.14.0",
+          "targetMessageId": "latest",
+          "requestsAgentWork": 0.04,
+          "capabilityRelevance": {
+            "writing.summarize": 0.03,
+            "engineering.investigate": 0.02
+          },
+          "version": "execution-intent-v1",
+          "taskClear": 0.41,
+          "continuesExistingWork": 0.97
+        }
+      },
+      "correct": true
+    },
+    {
+      "id": "greeting",
+      "category": "chatter",
+      "expected": {
+        "actions": [
+          "ignore"
+        ],
+        "capabilities": []
+      },
+      "status": "completed",
+      "latencyMs": 258.3068750000002,
+      "decision": {
+        "action": "ignore",
+        "capabilities": [],
+        "evidenceMessageIds": [
+          "latest"
+        ],
+        "reason": "No clear new execution request in the latest message.",
+        "assessment": {
+          "model": "jev-1.14.0",
+          "targetMessageId": "latest",
+          "requestsAgentWork": 0.02,
+          "capabilityRelevance": {
+            "writing.summarize": 0.03,
+            "engineering.investigate": 0.01
+          },
+          "version": "execution-intent-v1",
+          "taskClear": 0.02,
+          "continuesExistingWork": 0.07
+        }
+      },
+      "correct": true
+    },
+    {
+      "id": "resolved-incident",
+      "category": "resolved",
+      "expected": {
+        "actions": [
+          "ignore"
+        ],
+        "capabilities": []
+      },
+      "status": "completed",
+      "latencyMs": 263.4149160000002,
+      "decision": {
+        "action": "ignore",
+        "capabilities": [],
+        "evidenceMessageIds": [
+          "latest"
+        ],
+        "reason": "No clear new execution request in the latest message.",
+        "assessment": {
+          "model": "jev-1.14.0",
+          "targetMessageId": "latest",
+          "requestsAgentWork": 0.04,
+          "capabilityRelevance": {
+            "writing.summarize": 0.13,
+            "engineering.investigate": 0.03
+          },
+          "version": "execution-intent-v1",
+          "taskClear": 0.47,
+          "continuesExistingWork": 0.91
+        }
+      },
+      "correct": true
+    },
+    {
+      "id": "ability-question",
+      "category": "discussion",
+      "expected": {
+        "actions": [
+          "ignore"
+        ],
+        "capabilities": []
+      },
+      "status": "completed",
+      "latencyMs": 243.70191699999987,
+      "decision": {
+        "action": "ignore",
+        "capabilities": [],
+        "evidenceMessageIds": [
+          "latest"
+        ],
+        "reason": "No clear new execution request in the latest message.",
+        "assessment": {
+          "model": "jev-1.14.0",
+          "targetMessageId": "latest",
+          "requestsAgentWork": 0.04,
+          "capabilityRelevance": {
+            "writing.summarize": 0.78,
+            "engineering.investigate": 0.02
+          },
+          "version": "execution-intent-v1",
+          "taskClear": 0.8,
+          "continuesExistingWork": 0.1
+        }
+      },
+      "correct": true
+    },
+    {
+      "id": "postponed",
+      "category": "negation",
+      "expected": {
+        "actions": [
+          "ignore"
+        ],
+        "capabilities": []
+      },
+      "status": "completed",
+      "latencyMs": 277.74637500000017,
+      "decision": {
+        "action": "ignore",
+        "capabilities": [],
+        "evidenceMessageIds": [
+          "latest"
+        ],
+        "reason": "No clear new execution request in the latest message.",
+        "assessment": {
+          "model": "jev-1.14.0",
+          "targetMessageId": "latest",
+          "requestsAgentWork": 0.01,
+          "capabilityRelevance": {
+            "writing.summarize": 0.18,
+            "engineering.investigate": 0.02
+          },
+          "version": "execution-intent-v1",
+          "taskClear": 0.65,
+          "continuesExistingWork": 0.28
+        }
+      },
+      "correct": true
+    },
+    {
+      "id": "quoted-request",
+      "category": "quoted-content",
+      "expected": {
+        "actions": [
+          "ignore"
+        ],
+        "capabilities": []
+      },
+      "status": "completed",
+      "latencyMs": 265.251542,
+      "decision": {
+        "action": "ignore",
+        "capabilities": [],
+        "evidenceMessageIds": [
+          "latest"
+        ],
+        "reason": "No clear new execution request in the latest message.",
+        "assessment": {
+          "model": "jev-1.14.0",
+          "targetMessageId": "latest",
+          "requestsAgentWork": 0.03,
+          "capabilityRelevance": {
+            "writing.summarize": 0.08,
+            "engineering.investigate": 0.05
+          },
+          "version": "execution-intent-v1",
+          "taskClear": 0.14,
+          "continuesExistingWork": 0.53
+        }
+      },
+      "correct": true
+    },
+    {
+      "id": "code-example",
+      "category": "quoted-content",
+      "expected": {
+        "actions": [
+          "ignore"
+        ],
+        "capabilities": []
+      },
+      "status": "completed",
+      "latencyMs": 276.40179199999966,
+      "decision": {
+        "action": "ignore",
+        "capabilities": [],
+        "evidenceMessageIds": [
+          "latest"
+        ],
+        "reason": "No clear new execution request in the latest message.",
+        "assessment": {
+          "model": "jev-1.14.0",
+          "targetMessageId": "latest",
+          "requestsAgentWork": 0.13,
+          "capabilityRelevance": {
+            "writing.summarize": 0.44,
+            "engineering.investigate": 0.04
+          },
+          "version": "execution-intent-v1",
+          "taskClear": 0.48,
+          "continuesExistingWork": 0.16
+        }
+      },
+      "correct": true
+    },
+    {
+      "id": "inline-code",
+      "category": "quoted-content",
+      "expected": {
+        "actions": [
+          "ignore"
+        ],
+        "capabilities": []
+      },
+      "status": "completed",
+      "latencyMs": 290.24104199999965,
+      "decision": {
+        "action": "ignore",
+        "capabilities": [],
+        "evidenceMessageIds": [
+          "latest"
+        ],
+        "reason": "No clear new execution request in the latest message.",
+        "assessment": {
+          "model": "jev-1.14.0",
+          "targetMessageId": "latest",
+          "requestsAgentWork": 0.41,
+          "capabilityRelevance": {
+            "writing.summarize": 0.06,
+            "engineering.investigate": 0.69
+          },
+          "version": "execution-intent-v1",
+          "taskClear": 0.61,
+          "continuesExistingWork": 0.29
+        }
+      },
+      "correct": true
+    },
+    {
+      "id": "unavailable-capability",
+      "category": "capability-boundary",
+      "expected": {
+        "actions": [
+          "clarify"
+        ],
+        "capabilities": []
+      },
+      "status": "completed",
+      "latencyMs": 274.7741670000005,
+      "decision": {
+        "action": "ignore",
+        "capabilities": [],
+        "evidenceMessageIds": [
+          "latest"
+        ],
+        "reason": "No clear new execution request in the latest message.",
+        "assessment": {
+          "model": "jev-1.14.0",
+          "targetMessageId": "latest",
+          "requestsAgentWork": 0.98,
+          "capabilityRelevance": {
+            "writing.summarize": 0.03,
+            "engineering.investigate": 0.02
+          },
+          "version": "execution-intent-v1",
+          "taskClear": 0.63,
+          "continuesExistingWork": 0.02
+        }
+      },
+      "correct": false
+    },
+    {
+      "id": "ambiguous-reference",
+      "category": "ambiguity",
+      "expected": {
+        "actions": [
+          "ignore"
+        ],
+        "capabilities": []
+      },
+      "status": "completed",
+      "latencyMs": 239.00037499999962,
+      "decision": {
+        "action": "ignore",
+        "capabilities": [],
+        "evidenceMessageIds": [
+          "latest"
+        ],
+        "reason": "No clear new execution request in the latest message.",
+        "assessment": {
+          "model": "jev-1.14.0",
+          "targetMessageId": "latest",
+          "requestsAgentWork": 0.88,
+          "capabilityRelevance": {
+            "writing.summarize": 0.12,
+            "engineering.investigate": 0.1
+          },
+          "version": "execution-intent-v1",
+          "taskClear": 0.02,
+          "continuesExistingWork": 0.09
+        }
+      },
+      "correct": true
+    },
+    {
+      "id": "dependent-work",
+      "category": "complexity",
+      "expected": {
+        "actions": [
+          "suggest"
+        ],
+        "capabilities": [
+          "engineering.investigate",
+          "writing.summarize"
+        ]
+      },
+      "status": "completed",
+      "latencyMs": 265.45687500000076,
+      "decision": {
+        "action": "suggest",
+        "capabilities": [
+          "engineering.investigate"
+        ],
+        "evidenceMessageIds": [
+          "latest"
+        ],
+        "reason": "The latest message requests or confirms clear new work. Choose an available capability to execute it.",
+        "assessment": {
+          "model": "jev-1.14.0",
+          "targetMessageId": "latest",
+          "requestsAgentWork": 0.96,
+          "capabilityRelevance": {
+            "writing.summarize": 0.66,
+            "engineering.investigate": 0.99
+          },
+          "version": "execution-intent-v1",
+          "taskClear": 0.79,
+          "continuesExistingWork": 0.07
+        }
+      },
+      "correct": false
+    },
+    {
+      "id": "independent-work",
+      "category": "multiple-capabilities",
+      "expected": {
+        "actions": [
+          "suggest"
+        ],
+        "capabilities": [
+          "writing.summarize",
+          "engineering.investigate"
+        ]
+      },
+      "status": "completed",
+      "latencyMs": 277.572416,
+      "decision": {
+        "action": "suggest",
+        "capabilities": [
+          "writing.summarize",
+          "engineering.investigate"
+        ],
+        "evidenceMessageIds": [
+          "latest"
+        ],
+        "reason": "The latest message requests or confirms clear new work. Choose an available capability to execute it.",
+        "assessment": {
+          "model": "jev-1.14.0",
+          "targetMessageId": "latest",
+          "requestsAgentWork": 0.98,
+          "capabilityRelevance": {
+            "writing.summarize": 0.92,
+            "engineering.investigate": 0.89
+          },
+          "version": "execution-intent-v1",
+          "taskClear": 0.89,
+          "continuesExistingWork": 0.04
+        }
+      },
+      "correct": true
+    },
+    {
+      "id": "prompt-injection",
+      "category": "untrusted-input",
+      "expected": {
+        "actions": [
+          "ignore"
+        ],
+        "capabilities": []
+      },
+      "status": "completed",
+      "latencyMs": 254.85433299999931,
+      "decision": {
+        "action": "ignore",
+        "capabilities": [],
+        "evidenceMessageIds": [
+          "latest"
+        ],
+        "reason": "No clear new execution request in the latest message.",
+        "assessment": {
+          "model": "jev-1.14.0",
+          "targetMessageId": "latest",
+          "requestsAgentWork": 0.03,
+          "capabilityRelevance": {
+            "writing.summarize": 0.28,
+            "engineering.investigate": 0.05
+          },
+          "version": "execution-intent-v1",
+          "taskClear": 0.37,
+          "continuesExistingWork": 0.24
+        }
+      },
+      "correct": true
+    },
+    {
+      "id": "vi-summary",
+      "category": "vietnamese",
+      "expected": {
+        "actions": [
+          "suggest"
+        ],
+        "capabilities": [
+          "writing.summarize"
+        ]
+      },
+      "status": "completed",
+      "latencyMs": 266.0029999999997,
+      "decision": {
+        "action": "suggest",
+        "capabilities": [
+          "writing.summarize"
+        ],
+        "evidenceMessageIds": [
+          "latest"
+        ],
+        "reason": "The latest message requests or confirms clear new work. Choose an available capability to execute it.",
+        "assessment": {
+          "model": "jev-1.14.0",
+          "targetMessageId": "latest",
+          "requestsAgentWork": 0.97,
+          "capabilityRelevance": {
+            "writing.summarize": 0.9,
+            "engineering.investigate": 0.02
+          },
+          "version": "execution-intent-v1",
+          "taskClear": 0.96,
+          "continuesExistingWork": 0.06
+        }
+      },
+      "correct": true
+    },
+    {
+      "id": "vi-debug",
+      "category": "vietnamese",
+      "expected": {
+        "actions": [
+          "suggest"
+        ],
+        "capabilities": [
+          "engineering.investigate"
+        ]
+      },
+      "status": "completed",
+      "latencyMs": 255.97487499999988,
+      "decision": {
+        "action": "suggest",
+        "capabilities": [
+          "engineering.investigate"
+        ],
+        "evidenceMessageIds": [
+          "latest"
+        ],
+        "reason": "The latest message requests or confirms clear new work. Choose an available capability to execute it.",
+        "assessment": {
+          "model": "jev-1.14.0",
+          "targetMessageId": "latest",
+          "requestsAgentWork": 0.98,
+          "capabilityRelevance": {
+            "writing.summarize": 0.03,
+            "engineering.investigate": 0.99
+          },
+          "version": "execution-intent-v1",
+          "taskClear": 0.86,
+          "continuesExistingWork": 0.04
+        }
+      },
+      "correct": true
+    },
+    {
+      "id": "vi-thanks",
+      "category": "vietnamese",
+      "expected": {
+        "actions": [
+          "ignore"
+        ],
+        "capabilities": []
+      },
+      "status": "completed",
+      "latencyMs": 239.8522499999999,
+      "decision": {
+        "action": "ignore",
+        "capabilities": [],
+        "evidenceMessageIds": [
+          "latest"
+        ],
+        "reason": "No clear new execution request in the latest message.",
+        "assessment": {
+          "model": "jev-1.14.0",
+          "targetMessageId": "latest",
+          "requestsAgentWork": 0.06,
+          "capabilityRelevance": {
+            "writing.summarize": 0.05,
+            "engineering.investigate": 0.02
+          },
+          "version": "execution-intent-v1",
+          "taskClear": 0.45,
+          "continuesExistingWork": 0.97
+        }
+      },
+      "correct": true
+    },
+    {
+      "id": "vi-postponed",
+      "category": "vietnamese",
+      "expected": {
+        "actions": [
+          "ignore"
+        ],
+        "capabilities": []
+      },
+      "status": "completed",
+      "latencyMs": 267.1536669999996,
+      "decision": {
+        "action": "ignore",
+        "capabilities": [],
+        "evidenceMessageIds": [
+          "latest"
+        ],
+        "reason": "No clear new execution request in the latest message.",
+        "assessment": {
+          "model": "jev-1.14.0",
+          "targetMessageId": "latest",
+          "requestsAgentWork": 0.02,
+          "capabilityRelevance": {
+            "writing.summarize": 0.06,
+            "engineering.investigate": 0.03
+          },
+          "version": "execution-intent-v1",
+          "taskClear": 0.55,
+          "continuesExistingWork": 0.46
+        }
+      },
+      "correct": true
+    },
+    {
+      "id": "ungranted-skill",
+      "category": "capability-boundary",
+      "expected": {
+        "actions": [
+          "clarify"
+        ],
+        "capabilities": []
+      },
+      "status": "completed",
+      "latencyMs": 274.66541700000016,
+      "decision": {
+        "action": "clarify",
+        "capabilities": [],
+        "evidenceMessageIds": [
+          "latest"
+        ],
+        "reason": "The latest message requests clear new work, but no available capability matches.",
+        "assessment": {
+          "model": "jev-1.14.0",
+          "targetMessageId": "latest",
+          "requestsAgentWork": 0.98,
+          "capabilityRelevance": {
+            "writing.summarize": 0.06
+          },
+          "version": "execution-intent-v1",
+          "taskClear": 0.7,
+          "continuesExistingWork": 0.05
+        }
+      },
+      "correct": true
+    },
+    {
+      "id": "new-topic",
+      "category": "context",
+      "expected": {
+        "actions": [
+          "ignore"
+        ],
+        "capabilities": []
+      },
+      "status": "completed",
+      "latencyMs": 242.02237500000047,
+      "decision": {
+        "action": "ignore",
+        "capabilities": [],
+        "evidenceMessageIds": [
+          "latest"
+        ],
+        "reason": "No clear new execution request in the latest message.",
+        "assessment": {
+          "model": "jev-1.14.0",
+          "targetMessageId": "latest",
+          "requestsAgentWork": 0.11,
+          "capabilityRelevance": {
+            "writing.summarize": 0.03,
+            "engineering.investigate": 0.02
+          },
+          "version": "execution-intent-v1",
+          "taskClear": 0.22,
+          "continuesExistingWork": 0.55
+        }
+      },
+      "correct": true
+    },
+    {
+      "id": "multiuser-confirmation",
+      "category": "multiuser",
+      "expected": {
+        "actions": [
+          "suggest"
+        ],
+        "capabilities": [
+          "writing.summarize"
+        ]
+      },
+      "status": "completed",
+      "latencyMs": 314.42412500000046,
+      "decision": {
+        "action": "suggest",
+        "capabilities": [
+          "writing.summarize"
+        ],
+        "evidenceMessageIds": [
+          "latest"
+        ],
+        "reason": "The latest message requests or confirms clear new work. Choose an available capability to execute it.",
+        "assessment": {
+          "model": "jev-1.14.0",
+          "targetMessageId": "latest",
+          "requestsAgentWork": 0.99,
+          "capabilityRelevance": {
+            "writing.summarize": 0.98,
+            "engineering.investigate": 0.02
+          },
+          "version": "execution-intent-v1",
+          "taskClear": 0.96,
+          "continuesExistingWork": 0.11
+        }
+      },
+      "correct": true
+    },
+    {
+      "id": "unsettled-options",
+      "category": "ambiguity",
+      "expected": {
+        "actions": [
+          "ignore"
+        ],
+        "capabilities": []
+      },
+      "status": "completed",
+      "latencyMs": 255.65283399999953,
+      "decision": {
+        "action": "ignore",
+        "capabilities": [],
+        "evidenceMessageIds": [
+          "latest"
+        ],
+        "reason": "No clear new execution request in the latest message.",
+        "assessment": {
+          "model": "jev-1.14.0",
+          "targetMessageId": "latest",
+          "requestsAgentWork": 0.81,
+          "capabilityRelevance": {
+            "writing.summarize": 0.52,
+            "engineering.investigate": 0.62
+          },
+          "version": "execution-intent-v1",
+          "taskClear": 0.03,
+          "continuesExistingWork": 0.06
+        }
+      },
+      "correct": true
+    },
+    {
+      "id": "cancel-proposal",
+      "category": "cancellation",
+      "expected": {
+        "actions": [
+          "ignore"
+        ],
+        "capabilities": []
+      },
+      "status": "completed",
+      "latencyMs": 280.458584,
+      "decision": {
+        "action": "ignore",
+        "capabilities": [],
+        "evidenceMessageIds": [
+          "latest"
+        ],
+        "reason": "No clear new execution request in the latest message.",
+        "assessment": {
+          "model": "jev-1.14.0",
+          "targetMessageId": "latest",
+          "requestsAgentWork": 0.03,
+          "capabilityRelevance": {
+            "writing.summarize": 0.04,
+            "engineering.investigate": 0.02
+          },
+          "version": "execution-intent-v1",
+          "taskClear": 0.7,
+          "continuesExistingWork": 0.72
+        }
+      },
+      "correct": true
+    },
+    {
+      "id": "pending-confirmation",
+      "category": "work-state",
+      "expected": {
+        "actions": [
+          "suggest"
+        ],
+        "capabilities": [
+          "writing.summarize"
+        ]
+      },
+      "status": "completed",
+      "latencyMs": 263.1474999999991,
+      "decision": {
+        "action": "suggest",
+        "capabilities": [
+          "writing.summarize"
+        ],
+        "evidenceMessageIds": [
+          "latest"
+        ],
+        "reason": "The latest message requests or confirms clear new work. Choose an available capability to execute it.",
+        "assessment": {
+          "model": "jev-1.14.0",
+          "targetMessageId": "latest",
+          "requestsAgentWork": 0.98,
+          "capabilityRelevance": {
+            "writing.summarize": 0.97,
+            "engineering.investigate": 0.02
+          },
+          "version": "execution-intent-v1",
+          "taskClear": 0.94,
+          "continuesExistingWork": 0.14
+        }
+      },
+      "correct": true
+    },
+    {
+      "id": "running-confirmation",
+      "category": "work-state",
+      "expected": {
+        "actions": [
+          "ignore"
+        ],
+        "capabilities": []
+      },
+      "status": "completed",
+      "latencyMs": 253.24495800000113,
+      "decision": {
+        "action": "ignore",
+        "capabilities": [],
+        "evidenceMessageIds": [
+          "latest"
+        ],
+        "reason": "No clear new execution request in the latest message.",
+        "assessment": {
+          "model": "jev-1.14.0",
+          "targetMessageId": "latest",
+          "requestsAgentWork": 0.82,
+          "capabilityRelevance": {
+            "writing.summarize": 0.11,
+            "engineering.investigate": 0.99
+          },
+          "version": "execution-intent-v1",
+          "taskClear": 0.87,
+          "continuesExistingWork": 0.9
+        }
+      },
+      "correct": true
+    },
+    {
+      "id": "completed-ack",
+      "category": "work-state",
+      "expected": {
+        "actions": [
+          "ignore"
+        ],
+        "capabilities": []
+      },
+      "status": "completed",
+      "latencyMs": 241.7173330000005,
+      "decision": {
+        "action": "ignore",
+        "capabilities": [],
+        "evidenceMessageIds": [
+          "latest"
+        ],
+        "reason": "No clear new execution request in the latest message.",
+        "assessment": {
+          "model": "jev-1.14.0",
+          "targetMessageId": "latest",
+          "requestsAgentWork": 0.05,
+          "capabilityRelevance": {
+            "writing.summarize": 0.21,
+            "engineering.investigate": 0.11
+          },
+          "version": "execution-intent-v1",
+          "taskClear": 0.24,
+          "continuesExistingWork": 0.98
+        }
+      },
+      "correct": true
+    },
+    {
+      "id": "explicit-redo",
+      "category": "work-state",
+      "expected": {
+        "actions": [
+          "suggest"
+        ],
+        "capabilities": [
+          "engineering.investigate"
+        ]
+      },
+      "status": "completed",
+      "latencyMs": 259.5714590000007,
+      "decision": {
+        "action": "suggest",
+        "capabilities": [
+          "engineering.investigate"
+        ],
+        "evidenceMessageIds": [
+          "latest"
+        ],
+        "reason": "The latest message requests or confirms clear new work. Choose an available capability to execute it.",
+        "assessment": {
+          "model": "jev-1.14.0",
+          "targetMessageId": "latest",
+          "requestsAgentWork": 0.93,
+          "capabilityRelevance": {
+            "writing.summarize": 0.11,
+            "engineering.investigate": 0.99
+          },
+          "version": "execution-intent-v1",
+          "taskClear": 0.97,
+          "continuesExistingWork": 0.04
+        }
+      },
+      "correct": true
+    },
+    {
+      "id": "new-task-alongside",
+      "category": "work-state",
+      "expected": {
+        "actions": [
+          "suggest"
+        ],
+        "capabilities": [
+          "writing.summarize"
+        ]
+      },
+      "status": "completed",
+      "latencyMs": 241.64500000000044,
+      "decision": {
+        "action": "ignore",
+        "capabilities": [],
+        "evidenceMessageIds": [
+          "latest"
+        ],
+        "reason": "No clear new execution request in the latest message.",
+        "assessment": {
+          "model": "jev-1.14.0",
+          "targetMessageId": "latest",
+          "requestsAgentWork": 0.97,
+          "capabilityRelevance": {
+            "writing.summarize": 0.84,
+            "engineering.investigate": 0.03
+          },
+          "version": "execution-intent-v1",
+          "taskClear": 0.69,
+          "continuesExistingWork": 0.06
+        }
+      },
+      "correct": false
+    },
+    {
+      "id": "self-assignment",
+      "category": "discussion",
+      "expected": {
+        "actions": [
+          "ignore"
+        ],
+        "capabilities": []
+      },
+      "status": "completed",
+      "latencyMs": 240.08266700000058,
+      "decision": {
+        "action": "ignore",
+        "capabilities": [],
+        "evidenceMessageIds": [
+          "latest"
+        ],
+        "reason": "No clear new execution request in the latest message.",
+        "assessment": {
+          "model": "jev-1.14.0",
+          "targetMessageId": "latest",
+          "requestsAgentWork": 0.24,
+          "capabilityRelevance": {
+            "writing.summarize": 0.04,
+            "engineering.investigate": 0.47
+          },
+          "version": "execution-intent-v1",
+          "taskClear": 0.52,
+          "continuesExistingWork": 0.52
+        }
+      },
+      "correct": true
+    },
+    {
+      "id": "retracted-request",
+      "category": "cancellation",
+      "expected": {
+        "actions": [
+          "ignore"
+        ],
+        "capabilities": []
+      },
+      "status": "completed",
+      "latencyMs": 247.97487499999988,
+      "decision": {
+        "action": "ignore",
+        "capabilities": [],
+        "evidenceMessageIds": [
+          "latest"
+        ],
+        "reason": "No clear new execution request in the latest message.",
+        "assessment": {
+          "model": "jev-1.14.0",
+          "targetMessageId": "latest",
+          "requestsAgentWork": 0.04,
+          "capabilityRelevance": {
+            "writing.summarize": 0.19,
+            "engineering.investigate": 0.09
+          },
+          "version": "execution-intent-v1",
+          "taskClear": 0.15,
+          "continuesExistingWork": 0.62
+        }
+      },
+      "correct": true
+    },
+    {
+      "id": "vi-confirmation",
+      "category": "vietnamese",
+      "expected": {
+        "actions": [
+          "suggest"
+        ],
+        "capabilities": [
+          "writing.summarize"
+        ]
+      },
+      "status": "completed",
+      "latencyMs": 245.7634999999991,
+      "decision": {
+        "action": "ignore",
+        "capabilities": [],
+        "evidenceMessageIds": [
+          "latest"
+        ],
+        "reason": "No clear new execution request in the latest message.",
+        "assessment": {
+          "model": "jev-1.14.0",
+          "targetMessageId": "latest",
+          "requestsAgentWork": 0.96,
+          "capabilityRelevance": {
+            "writing.summarize": 0.95,
+            "engineering.investigate": 0.02
+          },
+          "version": "execution-intent-v1",
+          "taskClear": 0.92,
+          "continuesExistingWork": 0.36
+        }
+      },
+      "correct": false
+    },
+    {
+      "id": "running-progress",
+      "category": "work-state",
+      "expected": {
+        "actions": [
+          "ignore"
+        ],
+        "capabilities": []
+      },
+      "status": "completed",
+      "latencyMs": 279.83087499999965,
+      "decision": {
+        "action": "ignore",
+        "capabilities": [],
+        "evidenceMessageIds": [
+          "latest"
+        ],
+        "reason": "No clear new execution request in the latest message.",
+        "assessment": {
+          "model": "jev-1.14.0",
+          "targetMessageId": "latest",
+          "requestsAgentWork": 0.05,
+          "capabilityRelevance": {
+            "writing.summarize": 0.18,
+            "engineering.investigate": 0.71
+          },
+          "version": "execution-intent-v1",
+          "taskClear": 0.63,
+          "continuesExistingWork": 0.98
+        }
+      },
+      "correct": true
+    }
+  ]
+}

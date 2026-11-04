@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
-import { Badge, Button, Dialog } from '@space/ui/primitives';
+import { Select, Badge, Button, Dialog } from '@space/ui/primitives';
 import { Reveal } from '@space/ui/motion';
 import { MAX_MEMORY_CHARS, MAX_MEMORY_IMPORT_BYTES, type ChannelMemory as MemoryState, type MemoryDocument, type MemoryMatch } from '@space/contracts';
 import { request } from '../../shared/api/request.js';
@@ -90,10 +90,10 @@ function MemoryDialog({ channel, name, message, onClose }: Props) {
         <div className="channel-memory-heading"><Badge tone={data.enabled ? 'success' : 'neutral'}>{data.enabled ? 'Memory on' : 'Memory off'}</Badge><span>{data.providers.find(item => item.id === data.provider)?.name ?? data.provider}</span></div>
         {!data.enabled && <div className="channel-memory-empty"><strong>Memory is off for this channel.</strong><p>Enable it to keep shared notes, documents, and selected conversations. Messages are saved only when a member chooses to add them.</p>{!data.can_manage && <p>Ask the channel creator or a workspace administrator to enable memory.</p>}</div>}
         {data.can_manage && <div className="channel-memory-settings">
-          <label>Memory provider<select value={provider} disabled={busy || dirty} onChange={event => setProvider(event.target.value)}>
+          <label>Memory provider<Select aria-label="Memory provider" value={provider} disabled={busy || dirty} onChange={event => setProvider(event.target.value)}>
             {!data.providers.some(item => item.id === data.provider) && <option value={data.provider}>{data.provider} (unavailable)</option>}
             {data.providers.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
-          </select></label>
+          </Select></label>
           <div className="channel-memory-actions">
             {!data.enabled ? <Button variant="primary" loading={busy} onClick={() => void configure(true)}>Enable memory</Button>
               : <><Button disabled={busy || dirty} onClick={() => void configure(false)}>Disable memory</Button>{provider !== data.provider && <Button variant="primary" disabled={busy || dirty} onClick={() => void configure(true)}>Use selected provider</Button>}</>}

@@ -7,10 +7,10 @@ import {ArrowLeft,ChatCircle,X} from '@phosphor-icons/react';
 import {AgentMessageBody} from '../agents/AgentMessageBody.js';
 import {AssetAttachments} from '../files/AssetAttachments.js';
 
-export function ConversationHeader({title,channel,icon=<ChatCircle size={20}/>,status,actions,onBack,onClose}: {
- title:string;channel?:string;icon?:ReactNode;status?:string;actions?:ReactNode;onBack?:()=>void;onClose?:()=>void;
+export function ConversationHeader({title,channel,icon=<ChatCircle size={20}/>,status,actions,onBack,onClose,backLabel='Back to thread'}: {
+ title:string;channel?:string;icon?:ReactNode;status?:string;actions?:ReactNode;onBack?:()=>void;onClose?:()=>void;backLabel?:string;
 }) {
- return <header className="chat-channel-header"><div className="chat-thread-title">{icon}<h2>{title}</h2>{channel&&<span>#{channel}</span>}{status&&<span role="status" className="chat-thread-status">{status}</span>}</div><div className="chat-header-actions">{onBack&&<IconButton label="Back to thread" onClick={onBack}><ArrowLeft size={20}/></IconButton>}{actions}{onClose&&<IconButton label={`Close ${title.toLowerCase()}`} onClick={onClose}><X size={20}/></IconButton>}</div></header>;
+ return <header className="chat-channel-header"><div className="chat-thread-title">{icon}<h2>{title}</h2>{channel&&<span>#{channel}</span>}{status&&<span role="status" className="chat-thread-status">{status}</span>}</div><div className="chat-header-actions">{onBack&&<IconButton label={backLabel} onClick={onBack}><ArrowLeft size={20}/></IconButton>}{actions}{onClose&&<IconButton label={`Close ${title.toLowerCase()}`} onClick={onClose}><X size={20}/></IconButton>}</div></header>;
 }
 export function ConversationComposer({typingIndicator,...props}:ComponentProps<typeof RichComposer>&{typingIndicator?:ReactNode}) {
  return <div className="chat-compose">{typingIndicator}<RichComposer {...props}/></div>;

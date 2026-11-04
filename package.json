@@ -22,6 +22,7 @@
     "test:ui": "pnpm --filter @space/ui --filter @space/web test",
     "server": "turbo run start --filter=@space/server",
     "worker": "turbo run start --filter=@space/worker",
+    "navigator:eval": "cd tests && node --env-file-if-exists=../.env --import tsx evaluation/navigator-cli.ts",
     "migrate": "turbo run migrate --filter=@space/tools",
     "bootstrap": "turbo run bootstrap --filter=@space/tools",
     "demo": "turbo run demo --filter=@space/tools",

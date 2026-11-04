@@ -1,8 +1,8 @@
 # Local Codex connection
 
 Local Codex enrollment shows an owned agent alongside human workspace members.
-After the owner explicitly enables it for a channel, the connector can claim
-approved `codex.run` tasks and return streamed responses. Pairing grants no channel
+The connector inherits its owner’s conversation access and can claim
+approved `codex.run` tasks and return streamed responses. Creating an unclaimed pairing code grants no channel
 access. Optional project file tools require an explicit local `--project` folder;
 default launches remain chat-only. Native shell execution is disabled.
 
@@ -15,12 +15,7 @@ the local machine needs Node 24+ and the Codex CLI on PATH. Enter the code at th
 terminal prompt, then open the connector's Continue with ChatGPT URL yourself.
 Keep the connector running. Subsequent `pnpm connector` starts reuse the saved pairing.
 
-Channel enablement currently requires the [authenticated channel-grant API](../../apps/connector/README.md#enable-a-channel);
-the former Ask an agent control is no longer mounted in threads. After enablement,
-select the agent's mention to start a linked managed session, then use its own
-composer for follow-ups. The owner's requests autoapprove; other users' requests
-require the installation owner's approval. See [local providers](local-agent-providers.md)
-for Kiro, project selection, activity and tool boundaries.
+Connected agents need no separate channel enablement. See [conversation permissions](../../apps/connector/README.md#conversation-permissions); access follows current owner membership.
 
 The connector's [guide](../../apps/connector/README.md) documents local credential
 storage, login/logout, lock recovery and the OSS versus hosted-service boundary.
@@ -79,13 +74,13 @@ sequenceDiagram
 | `GET /v1/workspaces/:id/participants` | Paginated human and agent directory |
 | `POST /v1/agents/connections/:id/revoke` | Owner disconnects installation |
 | `/agents`, `agent.heartbeat` | Authenticated readiness updates |
-| `GET /v1/channels/:id/local-codex` | Owner's paired agents and channel enablement |
-| `POST /v1/agents/connections/:id/channels/:channelId` | Owner enables or disables the channel grant |
+| `GET /v1/channels/:id/local-codex` | Owner's paired agents and effective conversation access |
+| `POST /v1/agents/connections/:id/channels/:channelId` | Legacy grant control; connected agents inherit owner access |
 | `/agents`, `agent.task.claim/event/renew/finish/fail` | Scoped task delivery and persisted event acknowledgements |
 
 Local task claims exclude every other installation, and ordinary workers exclude
 `codex.local`. Each installation has a durable broker consumer; a ready socket accepts only its offered delivery ID. A conditional write creates one attempt with a renewable 30-second execution deadline during a maximum two-minute model turn. Attempt tokens fence results; expired deadlines never authorize another owner. Event acceptance rechecks installation, task,
-channel access, grant, socket generation, and live lease. Disconnects and expired
+current owner/requester access, effective skill permission, socket generation, and live lease. Disconnects and expired
 leases fail visibly; uncertain claims are never automatically invoked again.
 Legacy tasks use ephemeral tool-free turns. Managed [agent sessions](agent-sessions.md) retain a private, scoped Codex home and resume the same conversation across turns and connector restarts. Both modes deny unsupported tool or approval requests.
 
@@ -111,7 +106,7 @@ verification must be recorded separately from these synthetic checks.
 
 ## Capability-based integrations
 
-The generic channel integration API is `GET /v1/channels/:channelId/agents`; legacy local-provider listings remain compatibility aliases. Owned installations advertise supported and granted skills plus `persistent_sessions`. Grant each skill explicitly. The historical omitted-skill request is accepted only when an installation supports one skill. Session creation accepts `skill`, requires a matching channel grant and persistent-session capability, and defaults only when one granted skill is unambiguous.
+The generic channel integration API is `GET /v1/channels/:channelId/agents`; legacy local-provider listings remain compatibility aliases. Owned installations advertise supported and effective skills plus `persistent_sessions`. Connected agents expose `inherits_owner_access: true` and inherit all their supported skills wherever the owner has access; unpaired installations retain explicit grants. Session creation accepts `skill`, requires current owner/requester access and persistent-session capability, and defaults only when one eligible skill is unambiguous.
 
 Operators may supply a trusted `pairedConnectors` registry to `createApi`. Each descriptor has `id`, `definition_id`, `name`, `capabilities` (skills, controls, optional `persistent_sessions`) and an optional built-in local `provider`. Existing Codex and Kiro descriptors are the default registry. `GET /v1/agents/connectors` returns the available descriptors. Pairing creation accepts the selected `connector_id`; it persists the trusted descriptor. Claiming a pairing cannot assert its own capabilities. Definition IDs are immutable: changing a descriptor’s definition name or capabilities requires a new definition ID; a conflicting claim fails instead of altering other installations. Adding a descriptor does not implement the external runtime: that connector must speak the existing authenticated socket task/event protocol and honor its advertised capabilities.
 

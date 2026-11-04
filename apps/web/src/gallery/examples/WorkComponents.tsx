@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { AgentApproval, Alert, TicketCard, ToolExecution, type ApprovalDecision, type ApprovalStatus, type TicketStatus, type ToolTimelinePoint } from '@space/ui/agents';
-import { Badge, Button, Dialog, Switch } from '@space/ui/primitives';
+import { Badge, Button, Dialog, Switch, Tabs } from '@space/ui/primitives';
 import { CodeBlock } from '@space/ui/rich-text';
 import { Message } from '@space/ui/conversation';
 import { SectionHeading } from "./Foundations.js";
@@ -69,34 +69,17 @@ export function WorkComponents() {
             priority="high" assignee="Jamie Chen"
             description="Investigate delayed channel notifications and make delivery more reliable."
             onOpen={() => setTicketOpen(true)} />
-          <div className="work-example-controls" role="group" aria-label="Ticket status examples">
-            {(["open", "in_progress", "done"] as const).map((status) => (
-              <Button key={status} size="sm" aria-pressed={ticketStatus === status} onClick={() => setTicketStatus(status)}>
-                {{ open: "Open", in_progress: "In progress", done: "Done" }[status]}
-              </Button>
-            ))}
-          </div>
+          <Tabs className="work-example-tabs" label="Ticket status examples" value={ticketStatus} onChange={value=>{setTicketStatus(value as typeof ticketStatus);}} items={[{"id": "open", "label": "Open"}, {"id": "in_progress", "label": "In progress"}, {"id": "done", "label": "Done"}]}/>
         </Sample>
         <Sample id="alerts" title="Alert" detail="Clear feedback, with a next step" count="09">
-          <div className="work-example-controls" role="group" aria-label="Alert examples">
-            {(["info", "success", "warning", "danger"] as const).map((tone) => (
-              <Button key={tone} size="sm" aria-pressed={alertTone === tone} onClick={() => { setAlertTone(tone); setAlertVisible(true); }}>
-                {{ info: "Info", success: "Success", warning: "Warning", danger: "Error" }[tone]}
-              </Button>
-            ))}
-          </div>
+          <Tabs className="work-example-tabs" label="Alert examples" value={alertTone} onChange={value=>{setAlertTone(value as typeof alertTone); setAlertVisible(true);}} items={[{"id": "info", "label": "Info"}, {"id": "success", "label": "Success"}, {"id": "warning", "label": "Warning"}, {"id": "danger", "label": "Error"}]}/>
           {alertVisible ? <Alert title={currentAlert.title} tone={alertTone} onDismiss={() => setAlertVisible(false)}>
             {currentAlert.body}
           </Alert> : <div className="work-example-empty"><span>Alert dismissed.</span><Button size="sm" onClick={() => setAlertVisible(true)}>Show alert</Button></div>}
         </Sample>
         <Sample id="code-block" title="Code block" detail="Language, line numbers, and syntax colors from Slackbot" count="10">
           <CodeBlock language={codeLanguage} code={codeExamples[codeLanguage]} />
-          <div className="work-example-controls" role="group" aria-label="Code language examples">
-            {(["python", "typescript", "json"] as const).map((language) => <Button key={language} size="sm"
-              aria-pressed={codeLanguage === language} onClick={() => setCodeLanguage(language)}>
-              {{ python: "Python", typescript: "TypeScript", json: "JSON" }[language]}
-            </Button>)}
-          </div>
+          <Tabs className="work-example-tabs" label="Code language examples" value={codeLanguage} onChange={value=>{setCodeLanguage(value as typeof codeLanguage);}} items={[{"id": "python", "label": "Python"}, {"id": "typescript", "label": "TypeScript"}, {"id": "json", "label": "JSON"}]}/>
           <span className="ds-muted">Copy preserves the original text. Long lines scroll horizontally.</span>
         </Sample>
         <Sample id="tool-execution" title="Agent communication" detail="Slackbot’s condensed tool timeline" count="11">
@@ -105,12 +88,7 @@ export function WorkComponents() {
               summary={toolMode === "multiple" && !executionRunning ? 'Searched messages and files for “notification”' : undefined} />
             {!executionRunning && <p>I found two related issues about notification delivery.</p>}
           </Message>
-          <div className="work-example-controls" role="group" aria-label="Tool timeline examples">
-            {(["multiple", "single", "steps"] as const).map((mode) => <Button key={mode} size="sm"
-              aria-pressed={toolMode === mode} onClick={() => setToolMode(mode)}>
-              {{ multiple: "Two tools", single: "One tool", steps: "With steps" }[mode]}
-            </Button>)}
-          </div>
+          <Tabs className="work-example-tabs" label="Tool timeline examples" value={toolMode} onChange={value=>{setToolMode(value as typeof toolMode);}} items={[{"id": "multiple", "label": "Two tools"}, {"id": "single", "label": "One tool"}, {"id": "steps", "label": "With steps"}]}/>
           <Switch label="Show tools running" checked={executionRunning} onChange={setExecutionRunning} />
           <span className="ds-muted">Expandable for multiple tools or substeps. Input and output cards are not part of this observed timeline.</span>
         </Sample>

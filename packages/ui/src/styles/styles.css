@@ -568,20 +568,56 @@
   cursor: default;
 }
 .sp-thread-link {
-  border: 0;
+  border: 1px solid transparent;
+  border-radius: 6px;
   background: transparent;
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 8px 0 0;
+  width: 100%;
+  max-width: 600px;
+  min-width: 0;
+  min-height: 34px;
+  box-sizing: border-box;
+  margin: 4px 0 0 -5px;
+  padding: 4px;
+  text-align: left;
+  white-space: nowrap;
   font: 700 12px var(--sp-font-sans);
   cursor: pointer;
 }
+.sp-thread-link:hover,
+.sp-thread-link:focus-visible {
+  background: var(--sp-surface);
+  border-color: var(--sp-border);
+}
+.sp-thread-link:focus-visible {
+  outline: 2px solid var(--sp-info);
+  outline-offset: 2px;
+}
+.sp-thread-link > svg { flex-shrink: 0; }
 .sp-thread-link span {
   color: var(--sp-text-tertiary);
   font-size: 11px;
   font-weight: 400;
   margin-left: 3px;
+}
+.sp-thread-link-hint,
+.sp-thread-link-arrow {
+  opacity: 0;
+  transition: opacity 200ms;
+}
+.sp-thread-link-hint {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sp-thread-link-arrow {
+  margin-left: auto;
+  color: var(--sp-text-secondary);
+}
+.sp-thread-link:is(:hover, :focus-visible) :is(.sp-thread-link-hint, .sp-thread-link-arrow) {
+  opacity: 1;
 }
 .sp-message-actions {
   position: absolute;
@@ -694,6 +730,8 @@
   }
 }
 @media (prefers-reduced-motion: reduce) {
+  .sp-thread-link-hint,
+  .sp-thread-link-arrow { transition: none; }
   .sp-spinner {
     animation: none;
     border-style: dotted;
@@ -775,3 +813,25 @@
 .sp-mention-suggestions footer kbd{font:inherit}
 .sp-mention-suggestions p{padding:var(--sp-space-2) var(--sp-space-3);margin:0;font-size:13px}
 .sp-mention-confirm{display:flex;gap:8px;justify-content:flex-end;margin-top:20px}
+
+/* Shared single-select controls and their bounded, dialog-safe popup. */
+.sp-select { display: inline-flex; flex-direction: column; min-width: 0; max-width: 100%; vertical-align: middle; }
+.sp-select .sp-select-trigger { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; min-width: 0; min-height: 36px; padding: 7px 10px; border: 1px solid var(--sp-border-strong); border-radius: var(--sp-radius-sm); background: var(--sp-surface); color: var(--sp-text); font: 400 14px/1.4 var(--sp-font-sans); text-align: left; cursor: pointer; box-sizing: border-box; }
+.sp-select-trigger > span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.sp-select-trigger > svg { flex: none; }
+.sp-select .sp-select-trigger:hover:not(:disabled) { background: var(--sp-surface-hover); }
+.sp-select .sp-select-trigger:focus-visible { outline: 2px solid var(--sp-accent); outline-offset: 2px; }
+.sp-select .sp-select-trigger:disabled { opacity: .5; cursor: not-allowed; }
+.sp-select-panel { z-index: 110; display: flex; flex-direction: column; box-sizing: border-box; padding: 5px; border: 1px solid var(--sp-border); border-radius: 8px; background: var(--sp-surface); color: var(--sp-text); box-shadow: 0 8px 24px #0003; font: 400 14px/1.4 var(--sp-font-sans); overflow: hidden; }
+.sp-select-options { overflow-y: auto; overscroll-behavior: contain; min-height: 0; }
+.sp-select-panel [role=option] { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; border: 0; border-radius: 4px; padding: 8px 10px; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; white-space: normal; }
+.sp-select-panel [role=option] > span:first-child { overflow-wrap: anywhere; }
+.sp-select-panel [role=option] > span:last-child { flex: none; width: 16px; }
+.sp-select-panel [role=option][data-active=true] { background: var(--sp-accent-soft); color: var(--sp-text); }
+.sp-select-panel [role=option]:disabled { opacity: .45; cursor: not-allowed; }
+.sp-select-panel .sp-select-search { display: flex; align-items: center; gap: 8px; flex: none; padding: 5px 8px 10px; border-bottom: 1px solid var(--sp-border); margin-bottom: 4px; }
+.sp-select-panel .sp-select-search input { width: 100%; min-width: 0; padding: 4px 0; border: 0; border-radius: 0; background: transparent; color: inherit; outline: none; box-shadow: none; font: inherit; }
+.sp-select-empty { padding: 12px; color: var(--sp-text-secondary); }
+label > .sp-select { width: 100%; }
+
+.sp-select-error { margin-top: 4px; color: var(--sp-danger); font: 400 12px/1.4 var(--sp-font-sans); }

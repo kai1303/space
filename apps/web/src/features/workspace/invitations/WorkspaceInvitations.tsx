@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Button, Dialog, Badge } from '@space/ui/primitives';
+import { Tabs, Select, Button, Dialog, Badge } from '@space/ui/primitives';
 import type { InvitationList, InvitationResult, WorkspaceInvitation, ChannelSummary, InvitationGuestType } from '@space/contracts';
 import { request } from '../../../shared/api/request.js';
 import { subscribeUpdates } from '../../../shared/realtime/live-updates.js';
@@ -42,8 +42,8 @@ function InvitationManager({workspace,onClose}:Props){
   <section className="workspace-invitations">
    <div className="invitation-toolbar"><Button variant="primary" disabled={busy||!data} onClick={()=>void openForm('email')}>Invite by email</Button><Button disabled={busy||!data} onClick={()=>void openForm('link')}>Create invite link</Button></div>
    {data&&!data.email_available&&<p className="invitation-note">Email delivery is not configured. You can create and share invitation links. Email invitations still require a verified account with the matching email address.</p>}
-   <div role="tablist" aria-label="Invitation views">{([['pending','Pending'],['accepted','Accepted'],['links','Invite links']] as const).map(([value,label])=><button type="button" role="tab" aria-selected={tab===value} key={value} onClick={()=>{setTab(value);setCursor(undefined);setHistory([]);}}>{label}</button>)}</div>
-   {tab==='pending'&&<label className="invitation-status-filter">Status<select value={status} onChange={e=>{setStatus(e.target.value);setCursor(undefined);setHistory([]);}}><option value="pending">Pending</option><option value="expired">Expired</option><option value="revoked">Revoked</option></select></label>}
+   <Tabs label="Invitation views" value={tab} onChange={value=>{setTab(value as typeof tab);setCursor(undefined);setHistory([]);}} items={[{id:'pending',label:'Pending'},{id:'accepted',label:'Accepted'},{id:'links',label:'Invite links'}]}/>
+   {tab==='pending'&&<label className="invitation-status-filter">Status<Select aria-label="Status" value={status} onChange={e=>{setStatus(e.target.value);setCursor(undefined);setHistory([]);}}><option value="pending">Pending</option><option value="expired">Expired</option><option value="revoked">Revoked</option></Select></label>}
    {error&&<p role="alert">{error} <Button size="sm" onClick={()=>void refresh()}>Retry</Button></p>}{notice&&<p role="status">{notice}</p>}
    {lastLink&&<label className="invitation-saved-link">Save this invitation link<input readOnly aria-label="New invitation link" value={`${window.location.origin}/chat?invite=${lastLink.token}`} onFocus={e=>e.target.select()}/><Button size="sm" onClick={()=>void copy(lastLink.token)}>Copy saved link</Button></label>}
    {loading&&<p role="status">Loading invitations…</p>}
@@ -52,9 +52,9 @@ function InvitationManager({workspace,onClose}:Props){
  </Dialog>
  {form&&<Dialog open title={kind==='email'?'Invite by email':'Create invite link'} onClose={()=>setForm(false)} onBeforeClose={()=>!mutation.current}><form className="invitation-form" onSubmit={e=>{e.preventDefault();void create();}}>
   {kind==='email'?<label>Email address<input type="email" required maxLength={254} value={email} onChange={e=>setEmail(e.target.value)} autoFocus/></label>:<p>Anyone with this link can join after signing in. The link expires and stops working when its use limit is reached. Save the link now; it cannot be recovered after closing this window.</p>}
-  <label>Account type<select value={guest!=='none'?guest:role} onChange={e=>{const v=e.target.value;setGuest(v==='single'||v==='multi'?v:'none');setRole(v==='admin'?'admin':'member');setSelected([]);}}><option value="member">Member</option>{data?.role==='owner'&&<option value="admin">Admin</option>}{manager&&<><option value="single">Single-channel guest</option><option value="multi">Multi-channel guest</option></>}</select></label>
+  <label>Account type<Select aria-label="Account type" value={guest!=='none'?guest:role} onChange={e=>{const v=e.target.value;setGuest(v==='single'||v==='multi'?v:'none');setRole(v==='admin'?'admin':'member');setSelected([]);}}><option value="member">Member</option>{data?.role==='owner'&&<option value="admin">Admin</option>}{manager&&<><option value="single">Single-channel guest</option><option value="multi">Multi-channel guest</option></>}</Select></label>
   <fieldset><legend>{guest==='none'?'Add to channels (optional)':'Guest channels (required)'}</legend><div className="invitation-channel-list">{channels.map(channel=><label key={channel.id}><input type="checkbox" checked={selected.includes(channel.id)} onChange={e=>setSelected(old=>e.target.checked?(guest==='single'?[channel.id]:[...old,channel.id]):old.filter(id=>id!==channel.id))}/>{channel.private?'Private: ':'# '}{channel.name}</label>)}</div>{channels.length===100&&<small>Showing the first 100 channels.</small>}</fieldset>
-  <label>Expires in<select value={days} onChange={e=>setDays(Number(e.target.value))}>{[1,7,14,30].map(day=><option key={day} value={day}>{day} {day===1?'day':'days'}</option>)}</select></label>
+  <label>Expires in<Select aria-label="Expires in" value={days} onChange={e=>setDays(Number(e.target.value))}>{[1,7,14,30].map(day=><option key={day} value={day}>{day} {day===1?'day':'days'}</option>)}</Select></label>
   {kind==='link'&&<label>Maximum uses<input type="number" min={1} max={1000} required value={limit} onChange={e=>setLimit(Number(e.target.value))}/></label>}
   {error&&<p role="alert">{error}</p>}<div className="invitation-actions"><Button disabled={busy} onClick={()=>setForm(false)}>Cancel</Button><Button type="submit" variant="primary" loading={busy} disabled={guest!=='none'&&!selected.length}>Create invitation</Button></div>
  </form></Dialog>}

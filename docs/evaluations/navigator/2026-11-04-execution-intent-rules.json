@@ -1,0 +1,817 @@
+{
+  "corpus": "navigator-execution-intent-v2",
+  "generatedAt": "2026-11-04T12:32:17.966Z",
+  "schemaVersion": 1,
+  "mode": "rules",
+  "provider": null,
+  "prices": {
+    "inputUsdPerMillion": null,
+    "outputUsdPerMillion": null
+  },
+  "summary": {
+    "total": 36,
+    "completed": 36,
+    "errors": 0,
+    "skipped": 0,
+    "coverage": 1,
+    "correct": 25,
+    "accuracy": 0.6944444444444444,
+    "negativeCases": 21,
+    "falsePositives": 6,
+    "falsePositiveRate": 0.2857142857142857,
+    "positiveCases": 15,
+    "missedIntents": 5,
+    "missedIntentRate": 0.3333333333333333,
+    "capabilityCases": 13,
+    "capabilityMatches": 10,
+    "capabilityAccuracy": 0.7692307692307693,
+    "escalations": 0,
+    "calls": 0,
+    "reservedTokens": 0,
+    "inputTokens": 0,
+    "outputTokens": 0,
+    "latencyP50Ms": null,
+    "latencyP95Ms": null,
+    "estimatedUsd": 0
+  },
+  "results": [
+    {
+      "id": "summary-request",
+      "category": "explicit-request",
+      "expected": {
+        "actions": [
+          "suggest"
+        ],
+        "capabilities": [
+          "writing.summarize"
+        ]
+      },
+      "status": "completed",
+      "latencyMs": 0,
+      "decision": {
+        "action": "suggest",
+        "capabilities": [
+          "writing.summarize"
+        ],
+        "evidenceMessageIds": [
+          "latest"
+        ],
+        "reason": "Configured keywords match available capabilities."
+      },
+      "correct": true
+    },
+    {
+      "id": "debug-request",
+      "category": "explicit-request",
+      "expected": {
+        "actions": [
+          "suggest"
+        ],
+        "capabilities": [
+          "engineering.investigate"
+        ]
+      },
+      "status": "completed",
+      "latencyMs": 0,
+      "decision": {
+        "action": "suggest",
+        "capabilities": [
+          "engineering.investigate"
+        ],
+        "evidenceMessageIds": [
+          "latest"
+        ],
+        "reason": "Configured keywords match available capabilities."
+      },
+      "correct": true
+    },
+    {
+      "id": "paraphrased-summary",
+      "category": "implicit-need",
+      "expected": {
+        "actions": [
+          "suggest"
+        ],
+        "capabilities": [
+          "writing.summarize"
+        ]
+      },
+      "status": "completed",
+      "latencyMs": 0,
+      "decision": {
+        "action": "ignore",
+        "capabilities": [],
+        "evidenceMessageIds": [],
+        "reason": "No configured rule matched."
+      },
+      "correct": false
+    },
+    {
+      "id": "useful-debugging",
+      "category": "implicit-need",
+      "expected": {
+        "actions": [
+          "ignore"
+        ],
+        "capabilities": []
+      },
+      "status": "completed",
+      "latencyMs": 0,
+      "decision": {
+        "action": "ignore",
+        "capabilities": [],
+        "evidenceMessageIds": [],
+        "reason": "No configured rule matched."
+      },
+      "correct": true
+    },
+    {
+      "id": "confirmation",
+      "category": "context",
+      "expected": {
+        "actions": [
+          "suggest"
+        ],
+        "capabilities": [
+          "writing.summarize"
+        ]
+      },
+      "status": "completed",
+      "latencyMs": 0,
+      "decision": {
+        "action": "ignore",
+        "capabilities": [],
+        "evidenceMessageIds": [],
+        "reason": "No configured rule matched."
+      },
+      "correct": false
+    },
+    {
+      "id": "acknowledgment",
+      "category": "context",
+      "expected": {
+        "actions": [
+          "ignore"
+        ],
+        "capabilities": []
+      },
+      "status": "completed",
+      "latencyMs": 0,
+      "decision": {
+        "action": "ignore",
+        "capabilities": [],
+        "evidenceMessageIds": [],
+        "reason": "No configured rule matched."
+      },
+      "correct": true
+    },
+    {
+      "id": "greeting",
+      "category": "chatter",
+      "expected": {
+        "actions": [
+          "ignore"
+        ],
+        "capabilities": []
+      },
+      "status": "completed",
+      "latencyMs": 0,
+      "decision": {
+        "action": "ignore",
+        "capabilities": [],
+        "evidenceMessageIds": [],
+        "reason": "No configured rule matched."
+      },
+      "correct": true
+    },
+    {
+      "id": "resolved-incident",
+      "category": "resolved",
+      "expected": {
+        "actions": [
+          "ignore"
+        ],
+        "capabilities": []
+      },
+      "status": "completed",
+      "latencyMs": 0,
+      "decision": {
+        "action": "suggest",
+        "capabilities": [
+          "engineering.investigate"
+        ],
+        "evidenceMessageIds": [
+          "latest"
+        ],
+        "reason": "Configured keywords match available capabilities."
+      },
+      "correct": false
+    },
+    {
+      "id": "ability-question",
+      "category": "discussion",
+      "expected": {
+        "actions": [
+          "ignore"
+        ],
+        "capabilities": []
+      },
+      "status": "completed",
+      "latencyMs": 0,
+      "decision": {
+        "action": "suggest",
+        "capabilities": [
+          "writing.summarize"
+        ],
+        "evidenceMessageIds": [
+          "latest"
+        ],
+        "reason": "Configured keywords match available capabilities."
+      },
+      "correct": false
+    },
+    {
+      "id": "postponed",
+      "category": "negation",
+      "expected": {
+        "actions": [
+          "ignore"
+        ],
+        "capabilities": []
+      },
+      "status": "completed",
+      "latencyMs": 0,
+      "decision": {
+        "action": "suggest",
+        "capabilities": [
+          "writing.summarize"
+        ],
+        "evidenceMessageIds": [
+          "latest"
+        ],
+        "reason": "Configured keywords match available capabilities."
+      },
+      "correct": false
+    },
+    {
+      "id": "quoted-request",
+      "category": "quoted-content",
+      "expected": {
+        "actions": [
+          "ignore"
+        ],
+        "capabilities": []
+      },
+      "status": "completed",
+      "latencyMs": 0,
+      "decision": {
+        "action": "ignore",
+        "capabilities": [],
+        "evidenceMessageIds": [],
+        "reason": "No configured rule matched."
+      },
+      "correct": true
+    },
+    {
+      "id": "code-example",
+      "category": "quoted-content",
+      "expected": {
+        "actions": [
+          "ignore"
+        ],
+        "capabilities": []
+      },
+      "status": "completed",
+      "latencyMs": 0,
+      "decision": {
+        "action": "ignore",
+        "capabilities": [],
+        "evidenceMessageIds": [],
+        "reason": "No configured rule matched."
+      },
+      "correct": true
+    },
+    {
+      "id": "inline-code",
+      "category": "quoted-content",
+      "expected": {
+        "actions": [
+          "ignore"
+        ],
+        "capabilities": []
+      },
+      "status": "completed",
+      "latencyMs": 0,
+      "decision": {
+        "action": "ignore",
+        "capabilities": [],
+        "evidenceMessageIds": [],
+        "reason": "No configured rule matched."
+      },
+      "correct": true
+    },
+    {
+      "id": "unavailable-capability",
+      "category": "capability-boundary",
+      "expected": {
+        "actions": [
+          "clarify"
+        ],
+        "capabilities": []
+      },
+      "status": "completed",
+      "latencyMs": 0,
+      "decision": {
+        "action": "ignore",
+        "capabilities": [],
+        "evidenceMessageIds": [],
+        "reason": "No configured rule matched."
+      },
+      "correct": false
+    },
+    {
+      "id": "ambiguous-reference",
+      "category": "ambiguity",
+      "expected": {
+        "actions": [
+          "ignore"
+        ],
+        "capabilities": []
+      },
+      "status": "completed",
+      "latencyMs": 0,
+      "decision": {
+        "action": "ignore",
+        "capabilities": [],
+        "evidenceMessageIds": [],
+        "reason": "No configured rule matched."
+      },
+      "correct": true
+    },
+    {
+      "id": "dependent-work",
+      "category": "complexity",
+      "expected": {
+        "actions": [
+          "suggest"
+        ],
+        "capabilities": [
+          "engineering.investigate",
+          "writing.summarize"
+        ]
+      },
+      "status": "completed",
+      "latencyMs": 0,
+      "decision": {
+        "action": "suggest",
+        "capabilities": [
+          "writing.summarize",
+          "engineering.investigate"
+        ],
+        "evidenceMessageIds": [
+          "latest"
+        ],
+        "reason": "Configured keywords match available capabilities."
+      },
+      "correct": true
+    },
+    {
+      "id": "independent-work",
+      "category": "multiple-capabilities",
+      "expected": {
+        "actions": [
+          "suggest"
+        ],
+        "capabilities": [
+          "writing.summarize",
+          "engineering.investigate"
+        ]
+      },
+      "status": "completed",
+      "latencyMs": 0,
+      "decision": {
+        "action": "suggest",
+        "capabilities": [
+          "writing.summarize",
+          "engineering.investigate"
+        ],
+        "evidenceMessageIds": [
+          "latest"
+        ],
+        "reason": "Configured keywords match available capabilities."
+      },
+      "correct": true
+    },
+    {
+      "id": "prompt-injection",
+      "category": "untrusted-input",
+      "expected": {
+        "actions": [
+          "ignore"
+        ],
+        "capabilities": []
+      },
+      "status": "completed",
+      "latencyMs": 0,
+      "decision": {
+        "action": "suggest",
+        "capabilities": [
+          "engineering.investigate"
+        ],
+        "evidenceMessageIds": [
+          "latest"
+        ],
+        "reason": "Configured keywords match available capabilities."
+      },
+      "correct": false
+    },
+    {
+      "id": "vi-summary",
+      "category": "vietnamese",
+      "expected": {
+        "actions": [
+          "suggest"
+        ],
+        "capabilities": [
+          "writing.summarize"
+        ]
+      },
+      "status": "completed",
+      "latencyMs": 0,
+      "decision": {
+        "action": "suggest",
+        "capabilities": [
+          "writing.summarize"
+        ],
+        "evidenceMessageIds": [
+          "latest"
+        ],
+        "reason": "Configured keywords match available capabilities."
+      },
+      "correct": true
+    },
+    {
+      "id": "vi-debug",
+      "category": "vietnamese",
+      "expected": {
+        "actions": [
+          "suggest"
+        ],
+        "capabilities": [
+          "engineering.investigate"
+        ]
+      },
+      "status": "completed",
+      "latencyMs": 0,
+      "decision": {
+        "action": "suggest",
+        "capabilities": [
+          "engineering.investigate"
+        ],
+        "evidenceMessageIds": [
+          "latest"
+        ],
+        "reason": "Configured keywords match available capabilities."
+      },
+      "correct": true
+    },
+    {
+      "id": "vi-thanks",
+      "category": "vietnamese",
+      "expected": {
+        "actions": [
+          "ignore"
+        ],
+        "capabilities": []
+      },
+      "status": "completed",
+      "latencyMs": 0,
+      "decision": {
+        "action": "ignore",
+        "capabilities": [],
+        "evidenceMessageIds": [],
+        "reason": "No configured rule matched."
+      },
+      "correct": true
+    },
+    {
+      "id": "vi-postponed",
+      "category": "vietnamese",
+      "expected": {
+        "actions": [
+          "ignore"
+        ],
+        "capabilities": []
+      },
+      "status": "completed",
+      "latencyMs": 0,
+      "decision": {
+        "action": "suggest",
+        "capabilities": [
+          "writing.summarize"
+        ],
+        "evidenceMessageIds": [
+          "latest"
+        ],
+        "reason": "Configured keywords match available capabilities."
+      },
+      "correct": false
+    },
+    {
+      "id": "ungranted-skill",
+      "category": "capability-boundary",
+      "expected": {
+        "actions": [
+          "clarify"
+        ],
+        "capabilities": []
+      },
+      "status": "completed",
+      "latencyMs": 0,
+      "decision": {
+        "action": "ignore",
+        "capabilities": [],
+        "evidenceMessageIds": [],
+        "reason": "No configured rule matched."
+      },
+      "correct": false
+    },
+    {
+      "id": "new-topic",
+      "category": "context",
+      "expected": {
+        "actions": [
+          "ignore"
+        ],
+        "capabilities": []
+      },
+      "status": "completed",
+      "latencyMs": 0,
+      "decision": {
+        "action": "ignore",
+        "capabilities": [],
+        "evidenceMessageIds": [],
+        "reason": "No configured rule matched."
+      },
+      "correct": true
+    },
+    {
+      "id": "multiuser-confirmation",
+      "category": "multiuser",
+      "expected": {
+        "actions": [
+          "suggest"
+        ],
+        "capabilities": [
+          "writing.summarize"
+        ]
+      },
+      "status": "completed",
+      "latencyMs": 0,
+      "decision": {
+        "action": "suggest",
+        "capabilities": [
+          "writing.summarize"
+        ],
+        "evidenceMessageIds": [
+          "latest"
+        ],
+        "reason": "Configured keywords match available capabilities."
+      },
+      "correct": true
+    },
+    {
+      "id": "unsettled-options",
+      "category": "ambiguity",
+      "expected": {
+        "actions": [
+          "ignore"
+        ],
+        "capabilities": []
+      },
+      "status": "completed",
+      "latencyMs": 0,
+      "decision": {
+        "action": "ignore",
+        "capabilities": [],
+        "evidenceMessageIds": [],
+        "reason": "No configured rule matched."
+      },
+      "correct": true
+    },
+    {
+      "id": "cancel-proposal",
+      "category": "cancellation",
+      "expected": {
+        "actions": [
+          "ignore"
+        ],
+        "capabilities": []
+      },
+      "status": "completed",
+      "latencyMs": 0,
+      "decision": {
+        "action": "ignore",
+        "capabilities": [],
+        "evidenceMessageIds": [],
+        "reason": "No configured rule matched."
+      },
+      "correct": true
+    },
+    {
+      "id": "pending-confirmation",
+      "category": "work-state",
+      "expected": {
+        "actions": [
+          "suggest"
+        ],
+        "capabilities": [
+          "writing.summarize"
+        ]
+      },
+      "status": "completed",
+      "latencyMs": 0,
+      "decision": {
+        "action": "suggest",
+        "capabilities": [
+          "writing.summarize"
+        ],
+        "evidenceMessageIds": [
+          "latest"
+        ],
+        "reason": "Configured keywords match available capabilities."
+      },
+      "correct": true
+    },
+    {
+      "id": "running-confirmation",
+      "category": "work-state",
+      "expected": {
+        "actions": [
+          "ignore"
+        ],
+        "capabilities": []
+      },
+      "status": "completed",
+      "latencyMs": 0,
+      "decision": {
+        "action": "ignore",
+        "capabilities": [],
+        "evidenceMessageIds": [],
+        "reason": "No configured rule matched."
+      },
+      "correct": true
+    },
+    {
+      "id": "completed-ack",
+      "category": "work-state",
+      "expected": {
+        "actions": [
+          "ignore"
+        ],
+        "capabilities": []
+      },
+      "status": "completed",
+      "latencyMs": 0,
+      "decision": {
+        "action": "ignore",
+        "capabilities": [],
+        "evidenceMessageIds": [],
+        "reason": "No configured rule matched."
+      },
+      "correct": true
+    },
+    {
+      "id": "explicit-redo",
+      "category": "work-state",
+      "expected": {
+        "actions": [
+          "suggest"
+        ],
+        "capabilities": [
+          "engineering.investigate"
+        ]
+      },
+      "status": "completed",
+      "latencyMs": 0,
+      "decision": {
+        "action": "suggest",
+        "capabilities": [
+          "engineering.investigate"
+        ],
+        "evidenceMessageIds": [
+          "latest"
+        ],
+        "reason": "Configured keywords match available capabilities."
+      },
+      "correct": true
+    },
+    {
+      "id": "new-task-alongside",
+      "category": "work-state",
+      "expected": {
+        "actions": [
+          "suggest"
+        ],
+        "capabilities": [
+          "writing.summarize"
+        ]
+      },
+      "status": "completed",
+      "latencyMs": 0,
+      "decision": {
+        "action": "suggest",
+        "capabilities": [
+          "writing.summarize"
+        ],
+        "evidenceMessageIds": [
+          "latest"
+        ],
+        "reason": "Configured keywords match available capabilities."
+      },
+      "correct": true
+    },
+    {
+      "id": "self-assignment",
+      "category": "discussion",
+      "expected": {
+        "actions": [
+          "ignore"
+        ],
+        "capabilities": []
+      },
+      "status": "completed",
+      "latencyMs": 0,
+      "decision": {
+        "action": "suggest",
+        "capabilities": [
+          "engineering.investigate"
+        ],
+        "evidenceMessageIds": [
+          "latest"
+        ],
+        "reason": "Configured keywords match available capabilities."
+      },
+      "correct": false
+    },
+    {
+      "id": "retracted-request",
+      "category": "cancellation",
+      "expected": {
+        "actions": [
+          "ignore"
+        ],
+        "capabilities": []
+      },
+      "status": "completed",
+      "latencyMs": 0,
+      "decision": {
+        "action": "ignore",
+        "capabilities": [],
+        "evidenceMessageIds": [],
+        "reason": "No configured rule matched."
+      },
+      "correct": true
+    },
+    {
+      "id": "vi-confirmation",
+      "category": "vietnamese",
+      "expected": {
+        "actions": [
+          "suggest"
+        ],
+        "capabilities": [
+          "writing.summarize"
+        ]
+      },
+      "status": "completed",
+      "latencyMs": 0,
+      "decision": {
+        "action": "ignore",
+        "capabilities": [],
+        "evidenceMessageIds": [],
+        "reason": "No configured rule matched."
+      },
+      "correct": false
+    },
+    {
+      "id": "running-progress",
+      "category": "work-state",
+      "expected": {
+        "actions": [
+          "ignore"
+        ],
+        "capabilities": []
+      },
+      "status": "completed",
+      "latencyMs": 0,
+      "decision": {
+        "action": "ignore",
+        "capabilities": [],
+        "evidenceMessageIds": [],
+        "reason": "No configured rule matched."
+      },
+      "correct": true
+    }
+  ]
+}

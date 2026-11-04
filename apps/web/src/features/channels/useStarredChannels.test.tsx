@@ -3,7 +3,13 @@ import { act, cleanup, renderHook, waitFor } from '@testing-library/react';
 import { useStarredChannels } from './useStarredChannels.js';
 const mocks=vi.hoisted(()=>({request:vi.fn()}));
 vi.mock('../../shared/api/request.js',()=>({request:mocks.request}));
-vi.mock('../../shared/realtime/live-updates.js',()=>({subscribeUpdates:(_scope:string,_id:string,read:()=>unknown)=>{void read();return()=>{};}}));
+vi.mock('../../shared/realtime/live-updates.js',()=>{
+  const readers=new Map<string,Set<()=>unknown>>();
+  return {
+    subscribeUpdates:(_scope:string,id:string,read:()=>unknown)=>{const group=readers.get(id)??new Set();readers.set(id,group);group.add(read);void read();return()=>{group.delete(read);};},
+    invalidateUpdates:async(_scope:string,id:string)=>{await Promise.all([...readers.get(id)??[]].map(read=>read()));},
+  };
+});
 afterEach(()=>{cleanup();mocks.request.mockReset();});
 it('starts a fresh starred page when switching workspaces after pagination',async()=>{
   mocks.request.mockImplementation(async(path:string)=>({items:[],next_cursor:path.includes('after=')?null:'old-cursor'}));
@@ -23,4 +29,26 @@ it('uses exact selected-conversation state so a star beyond the sidebar page can
   await act(async()=>result.current.toggle('far-channel'));
   expect(mocks.request).toHaveBeenCalledWith('/workspaces/one/hub/starred/far-channel',{active:false});
   expect(result.current.active).toBe(false);
+});
+it.each([true,false])('updates sibling views before confirmation and rolls back a failed save: success=%s',async success=>{
+  let backend=false,finish!:(value?:unknown)=>void,fail!:(error:Error)=>void;
+  const saved=new Promise((resolve,reject)=>{finish=resolve;fail=reject;});
+  const conversation={id:'channel',name:'general',kind:'channel',private:false};
+  mocks.request.mockImplementation(async(path:string,body?:{active:boolean})=>{
+    if(body){await saved;backend=body.active;return {active:backend};}
+    return path.endsWith('/channel')?{active:backend}:{items:backend?[conversation]:[],next_cursor:null};
+  });
+  const {result}=renderHook(()=>({header:useStarredChannels('one','channel'),sidebar:useStarredChannels('one'),otherUser:useStarredChannels('one',undefined,'other-user')}));
+  await waitFor(()=>expect(mocks.request).toHaveBeenCalledTimes(3));
+  let write!:Promise<unknown>;
+  act(()=>{write=result.current.header.toggle('channel',conversation).catch(error=>error);});
+  try {
+    expect(result.current.header.active).toBe(true);
+    expect(result.current.sidebar.ids).toEqual(['channel']);
+    expect(result.current.otherUser.ids).toEqual([]);
+  } finally {
+    await act(async()=>{if(success)finish();else fail(new Error('save_failed'));await write;});
+  }
+  expect(result.current.header.active).toBe(success);
+  expect(result.current.sidebar.ids).toEqual(success?['channel']:[]);
 });

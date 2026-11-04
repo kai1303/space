@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import { subscribeUpdates } from './live-updates.js';
+import { invalidateUpdates, subscribeUpdates } from './live-updates.js';
 const stops = new Set<() => void>();
 function watch(...args: Parameters<typeof subscribeUpdates>) { const stop=subscribeUpdates(...args); stops.add(stop); return stop; }
 const clients = vi.hoisted(() => [] as any[]);
@@ -17,6 +17,21 @@ vi.mock('socket.io-client', () => ({ io: () => {
   clients.push(client); return client;
 } }));
 afterEach(() => { for (const stop of stops) stop(); stops.clear(); clients.length = 0; vi.useRealTimers(); });
+it('refreshes only active listeners in the changed scope after a local write', async () => {
+  const a = vi.fn(), b = vi.fn(), other = vi.fn(), channel = vi.fn();
+  const stop = watch('workspace', 'team', a);
+  watch('workspace', 'team', b);
+  watch('workspace', 'other', other);
+  watch('channel', 'team', channel);
+  await vi.waitFor(() => expect(channel).toHaveBeenCalledTimes(2));
+  a.mockClear(); b.mockClear(); other.mockClear(); channel.mockClear();
+  await invalidateUpdates('workspace', 'team');
+  expect(a).toHaveBeenCalledOnce(); expect(b).toHaveBeenCalledOnce();
+  expect(other).not.toHaveBeenCalled(); expect(channel).not.toHaveBeenCalled();
+  stop(); a.mockClear(); b.mockClear();
+  await invalidateUpdates('workspace', 'team');
+  expect(a).not.toHaveBeenCalled(); expect(b).toHaveBeenCalledOnce();
+});
 it('shares one connection per authorized scope and closes it after the last listener', async () => {
   const a = vi.fn(), b = vi.fn();
   const stopA = watch('workspace', 'a', a), stopB = watch('workspace', 'a', b);
@@ -44,6 +59,21 @@ it('queues one refresh when changes arrive during an in-flight read', async () =
   release();
   await vi.waitFor(() => expect(read).toHaveBeenCalledTimes(4));
   stop();
+});
+it('waits for the queued read before completing local invalidation', async () => {
+  const read = vi.fn();
+  watch('workspace', 'team', read);
+  await vi.waitFor(() => expect(read).toHaveBeenCalledTimes(2));
+  let release!: () => void;
+  read.mockImplementationOnce(() => new Promise<void>(resolve => { release = resolve; }));
+  clients[0].receive('updates.changed', { scope: 'workspace', id: 'team' });
+  const complete = vi.fn();
+  const invalidation = invalidateUpdates('workspace', 'team').then(complete);
+  await Promise.resolve();
+  expect(complete).not.toHaveBeenCalled();
+  release(); await invalidation;
+  expect(read).toHaveBeenCalledTimes(4);
+  expect(complete).toHaveBeenCalledOnce();
 });
 it('refreshes on reconnect and revocation without a recurring API timer', async () => {
   const refresh = vi.fn();

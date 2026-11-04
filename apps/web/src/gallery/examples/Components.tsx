@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useAnimate, useReducedMotion } from "motion/react";
-import { Avatar, Badge, Button, Dialog, IconButton, Menu, Skeleton, Switch, Tabs, TextField } from '@space/ui/primitives';
+import { Avatar, Badge, Button, Dialog, IconButton, Menu, Skeleton, Select, Switch, Tabs, TextField } from '@space/ui/primitives';
 import { Message, type Reaction } from '@space/ui/conversation';
 import { RichComposer } from '@space/ui/composer';
 import { RichContent, documentText, type RichDocument } from '@space/ui/rich-text';
@@ -22,6 +22,8 @@ import { SectionHeading } from "./Foundations.js";
 export function Components({ notify }: { notify: (text: string) => void }) {
   const [notifications, setNotifications] = useState(true);
   const [suggestions, setSuggestions] = useState(false);
+  const [sort, setSort] = useState("newest");
+  const [zone, setZone] = useState("Asia/Saigon");
   const [tab, setTab] = useState("messages");
   const [tabPanel, animateTabPanel] = useAnimate<HTMLDivElement>();
   const reduced = useReducedMotion();
@@ -104,6 +106,16 @@ export function Components({ notify }: { notify: (text: string) => void }) {
             placeholder="e.g. design-system"
             hint="Keep it short, specific, and easy to find."
           />
+          <label className="sp-field">Sort files
+            <Select aria-label="Sort files" value={sort} onChange={event => setSort(event.target.value)}>
+              <option value="newest">Newest shared</option><option value="oldest">Oldest shared</option>
+            </Select>
+          </label>
+          <label className="sp-field">Time zone
+            <Select searchable aria-label="Time zone" value={zone} onChange={event => setZone(event.target.value)}>
+              {Intl.supportedValuesOf('timeZone').map(zone => <option key={zone}>{zone}</option>)}
+            </Select>
+          </label>
           <div className="sample-switches">
             <Switch
               label="Desktop notifications"

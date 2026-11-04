@@ -27,3 +27,9 @@ function isAssetDownload(value, configuredUrl) {
 }
 
 module.exports = { spaceUrl, navigationAction, isAssetDownload };
+
+function mediaPermissionAllowed(permission, origin, configuredUrl, mediaTypes = []) {
+  return permission === 'media' && navigationAction(origin, configuredUrl) === 'internal'
+    && Array.isArray(mediaTypes) && mediaTypes.every(type => ['audio', 'video'].includes(type));
+}
+module.exports.mediaPermissionAllowed = mediaPermissionAllowed;

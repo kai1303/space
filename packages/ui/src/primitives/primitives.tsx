@@ -184,11 +184,13 @@ export type TabItem = {
   panelId?: string;
 };
 export function Tabs({
+  className = "",
   items,
   value,
   onChange,
   label,
 }: {
+  className?: string;
   items: TabItem[];
   value: string;
   onChange: (id: string) => void;
@@ -198,7 +200,7 @@ export function Tabs({
   const indicatorId = useId();
   const reduced = useReducedMotion();
   return (
-    <div className="sp-tabs" role="tablist" aria-label={label}>
+    <div className={`sp-tabs ${className}`.trim()} role="tablist" aria-label={label}>
       {items.map((item, index) => (
         <button
           key={item.id}
@@ -352,7 +354,7 @@ export function Popover({ label, trigger, children, className = "", panelClassNa
 }
 function PopoverPanel({ panelRef, ...props }: React.ComponentProps<typeof motion.div> & { panelRef: React.Ref<HTMLDivElement> }) {
   const present = useIsPresent();
-  return <motion.div {...props} ref={panelRef} inert={!present} aria-hidden={!present || undefined} />;
+  return <motion.div {...props} data-sp-popover-panel ref={panelRef} inert={!present} aria-hidden={!present || undefined} />;
 }
 
 export function SidePanel({ children, className, role, hidden, ref, "aria-label": label }: {

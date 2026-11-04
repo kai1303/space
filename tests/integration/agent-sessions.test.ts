@@ -167,13 +167,13 @@ test('history pages recent twenty turns chronologically with only their latest s
 test('revocation fences managed sends, approval and delivery; removed members lose session reads', async () => {
   const a = await fixture(), one = await session(a);
   const task = await api(a.collaborator_token, 'POST', `/agent-sessions/${one.id}/messages`, { text: 'Pending' }, 201);
-  await pool.query('DELETE FROM agent_grants WHERE installation_id=$1', [a.installation_id]);
+  await pool.query('UPDATE agent_connections SET revoked_at=now() WHERE installation_id=$1', [a.installation_id]);
   await api(a.owner_token, 'POST', `/tasks/${task.id}/approve`, {}, 403);
   await api(a.owner_token, 'POST', `/agent-sessions/${one.id}/messages`, { text: 'Revoked' }, 403);
-  await pool.query("INSERT INTO agent_grants(workspace_id,installation_id,channel_id,skill) VALUES($1,$2,$3,'codex.run')", [a.workspace_id, a.installation_id, a.channel_id]);
+  await pool.query('UPDATE agent_connections SET revoked_at=NULL WHERE installation_id=$1', [a.installation_id]);
   await api(a.owner_token, 'POST', `/tasks/${task.id}/approve`, {});
   const delivery = (await store.claimDelivery(a.installation_id))!;
-  await pool.query('DELETE FROM agent_grants WHERE installation_id=$1', [a.installation_id]);
+  await pool.query('UPDATE agent_connections SET revoked_at=now() WHERE installation_id=$1', [a.installation_id]);
   await assert.rejects(store.prepareDelivery(delivery), { code: 'installation_not_authorized' });
   await pool.query('DELETE FROM channel_members WHERE channel_id=$1 AND user_id=$2', [a.channel_id, a.collaborator_id]);
   await api(a.collaborator_token, 'GET', `/agent-sessions/${one.id}`, undefined, 404);
@@ -307,7 +307,7 @@ test('end returns deliberate cancellation for a current event while revocation r
   await api(a.owner_token, 'POST', `/agent-sessions/${other.id}/messages`, { text: 'Stop then revoke' }, 201);
   await claimReady();
   await api(a.owner_token, 'POST', `/agent-sessions/${other.id}/stop`, {});
-  await api(a.owner_token, 'POST', `/agents/connections/${a.installation_id}/channels/${a.channel_id}`, { enabled: false });
+  await pool.query('DELETE FROM channel_members WHERE channel_id=$1 AND user_id=$2',[a.channel_id,a.owner_id]);
   assert.equal((await command('agent.task.renew')).error, 'installation_not_authorized');
 });
 

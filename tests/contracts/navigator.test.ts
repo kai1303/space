@@ -75,3 +75,11 @@ test('catalogs up to 100 candidates permit bounded selections and deterministic 
   const messages = Array.from({ length: 40 }, (_, index) => ({ id: `message-${index}`, text: 'research' }));
   assert.equal(rulesDecision({ ...large, messages }).evidenceMessageIds.length, 32);
 });
+
+test('versioned intent assessments are strict while historical assessments remain readable', () => {
+ const base={model:'jev',targetMessageId:'message-1',requestsAgentWork:.98,capabilityRelevance:{code:.9}};
+ const current={...base,version:'execution-intent-v1',workStateHash:'a'.repeat(64),taskClear:.99,continuesExistingWork:.01};
+ const legacy={...base,assistanceUseful:.99,needsDeeperReasoning:.01};
+ for(const assessment of [current,legacy])assert.deepEqual(parseNavigationDecision({...decision,assessment},context).assessment,assessment);
+ for(const assessment of [{...current,workStateHash:undefined},{...current,workStateHash:'bad'},{...current,taskClear:undefined},{...current,continuesExistingWork:2},{...current,version:'future'},{...current,assistanceUseful:.99},{...legacy,taskClear:.99}])assert.throws(()=>parseNavigationDecision({...decision,assessment},context));
+});

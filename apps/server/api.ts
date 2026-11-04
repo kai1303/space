@@ -1,3 +1,5 @@
+import { CallStore } from '@space/postgres/calling';
+import { registerCalling } from './calling.js';
 import { SearchStore } from '@space/postgres/search';
 import { registerSearch } from './search.js';
 import type { TypesenseOptions } from './typesense.js';
@@ -149,6 +151,7 @@ export function createApi(store: PostgresStore, options: { search?: TypesenseOpt
       return reply.code(realtime.ready ? 200 : 503).send({status:realtime.ready ? 'ready' : 'unavailable', realtime});
     } catch { return reply.code(503).send({status:'unavailable'}); }
   });
+  registerCalling(app, io, new CallStore(store.pool), authenticate, getEvents, work, onOutbox);
   registerAgentConnections(app, io, connections, store, onOutbox, getEvents, work);
   registerSearch(app, new SearchStore(store.pool), getEvents, options.search);
   registerEventDeadlines(app, getEvents, store, assets, options.storage);

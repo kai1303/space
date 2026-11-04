@@ -33,13 +33,11 @@ describe("NavigationIcon", () => {
     expect(markup).toContain('class="search-icon"');
   });
 
-  it("uses separate clip references for selected bot instances", () => {
-    const markup = renderToStaticMarkup(<><NavigationIcon name="spacebot" active /><NavigationIcon name="spacebot" active /></>);
-    const ids = Array.from(markup.matchAll(/clipPath id="([^"]+)"/g), match => match[1]);
-    expect(ids).toHaveLength(2);
-    expect(ids[0]).not.toBe(ids[1]);
-    for (const id of ids) expect(markup).toContain(`clip-path="url(#${id})"`);
-    expect(markup).toContain('fill="#E01E59"');
-    expect(markup).toContain('fill="#36C4F0"');
+  it("uses isolated Grokbots masks and purple clay gradients for both bot states", () => {
+    const markup = renderToStaticMarkup(<><NavigationIcon name="spacebot" active /><NavigationIcon name="spacebot" /></>);
+    const ids = Array.from(markup.matchAll(/<mask id="([^"]+)"/g), match => match[1]);
+    expect(ids).toHaveLength(2);expect(ids[0]).not.toBe(ids[1]);
+    for(const id of ids)expect(markup).toContain(`mask="url(#${id})"`);
+    expect(markup).toContain('stop-color="#8b5cf6"');expect(markup).not.toContain('#E01E59');
   });
 });

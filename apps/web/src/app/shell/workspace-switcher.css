@@ -1,6 +1,6 @@
-.chat-workspace-switcher-anchor{width:36px;height:36px;margin-bottom:16px}
+.chat-workspace-switcher-anchor{width:36px;height:36px;margin-bottom:8px}
 .chat-workspace-switcher-anchor .chat-workspace-switcher{margin:0}
-.chat-workspace-switcher-anchor .chat-workspace-mark{font:800 15px/1 var(--sp-font-sans);color:var(--sp-text);background:var(--sp-surface-hover)}
+.chat-workspace-switcher-anchor .chat-workspace-mark{font:800 15px/1 var(--sp-font-sans);color:var(--sp-surface-hover);background:var(--sp-text)}
 .sp-menu-content.chat-workspace-switcher-content{width:360px;max-width:calc(100vw - 8px);left:4px!important;margin-top:4px;padding:4px 0;border:0;border-radius:12px;background:var(--workspace-switcher-background,var(--sp-surface-raised));box-shadow:0 0 0 1px var(--workspace-switcher-outline,var(--sp-border)),0 18px 48px #0000001a}
 :root[data-theme=dark] .sp-menu-content.chat-workspace-switcher-content{--workspace-switcher-background:#212428;--workspace-switcher-outline:#e8e8e821}
 .sp-menu-content.chat-workspace-switcher-content button,.workspace-find-results button{width:100%;min-width:0;display:flex;align-items:center;gap:12px;text-align:left;padding:8px 16px;color:var(--sp-text);background:none;border:0;border-radius:0;font:15px/22px var(--sp-font-sans);cursor:pointer}

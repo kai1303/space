@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { Task } from '@space/contracts';
 import { AgentTaskCard, AgentTaskWorkspace, AgentWorkspaceView, type TaskOutputs } from './AgentTaskWorkspace.js';
@@ -42,7 +42,8 @@ it('opens directly into three output tabs without Logs or a duplicate task summa
   expect(screen.queryByText(task.result!)).toBeNull();
   expect(screen.getByRole('tab', { name: 'Preview' }).getAttribute('aria-selected')).toBe('true');
   expect(screen.queryByRole('tab', { name: 'Logs' })).toBeNull();
-  expect(screen.getAllByRole('tab')).toHaveLength(3);
+  expect(within(screen.getByRole('tablist', { name: 'Task results' })).getAllByRole('tab')).toHaveLength(3);
+  expect(within(screen.getByRole('tablist', { name: 'Preview size' })).getAllByRole('tab')).toHaveLength(2);
 });
 
 it('opens Preview when no app or output is attached', () => {

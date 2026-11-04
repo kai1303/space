@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { motion, useReducedMotion } from "motion/react";
-import { ChatCircle } from "@phosphor-icons/react";
+import { CaretRight, ChatCircle } from "@phosphor-icons/react";
 import { motionTransition } from "../motion/motion.js";
 import { Avatar, Badge } from "../primitives/primitives.js";
 import { MessageActions, type MessageActionHandlers } from "./message-actions.js";
@@ -69,9 +69,10 @@ export function Message({
           </div>
         )}
         {replyCount > 0 && onReply && (
-          <button type="button" className="sp-thread-link" onClick={onReply}>
-            <ChatCircle size={14} />
-            {replyCount} {replyCount === 1 ? "reply" : "replies"}<span>View thread</span>
+          <button type="button" className="sp-thread-link" aria-label={`${replyCount} ${replyCount === 1 ? "reply" : "replies"} View thread`} onClick={onReply}>
+            <ChatCircle size={14} aria-hidden="true" />
+            {replyCount} {replyCount === 1 ? "reply" : "replies"}<span className="sp-thread-link-hint" aria-hidden="true">View thread</span>
+            <CaretRight className="sp-thread-link-arrow" size={18} aria-hidden="true" />
           </button>
         )}
         {footer}

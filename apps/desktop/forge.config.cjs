@@ -7,6 +7,10 @@ module.exports = {
     appBundleId: 'io.github.kai1303.space',
     appCategoryType: 'public.app-category.productivity',
     asar: true,
+    extendInfo: {
+      NSCameraUsageDescription: 'Space uses your camera when you enable video in a direct message call.',
+      NSMicrophoneUsageDescription: 'Space uses your microphone for direct message calls.',
+    },
     // Package only the runtime, never tests, dependencies, or local tooling.
     ignore: [/^\/(?!src(?:\/|$)|package\.json$|desktop\.config\.json$)/],
   },

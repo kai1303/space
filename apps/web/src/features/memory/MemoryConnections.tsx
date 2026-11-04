@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Button } from '@space/ui/primitives';
+import { Select, Button } from '@space/ui/primitives';
 import { Reveal } from '@space/ui/motion';
 import type { MemoryConnection, AgentMemoryPermission, AgentMemoryAccess } from '@space/contracts';
 import { request } from '../../shared/api/request.js';
@@ -42,7 +42,7 @@ export function MemoryConnections({ channel, enabled }: { channel: string; enabl
     {notice && <p role="status">{notice}</p>}
     {agents.length > 0 && <section aria-label="Installed agent memory permissions"><strong>Installed agents</strong>
       <p>Choose which agents may receive shared knowledge with their tasks. Agents also need permission to work in this channel. Removing access blocks future retrieval; it cannot erase context already delivered to an agent.</p>
-      {agents.map(agent => <label key={agent.id}>Memory access for {agent.name}<select value={agent.access} disabled={busy} onChange={event => {
+      {agents.map(agent => <label key={agent.id}>Memory access for {agent.name}<Select aria-label={`Memory access for ${agent.name}`} value={agent.access} disabled={busy} onChange={event => {
         const next = event.target.value as AgentMemoryAccess;
         void run(async () => {
           await request(`/channels/${channel}/memory/agents/${agent.id}`, { access: next });
@@ -50,18 +50,18 @@ export function MemoryConnections({ channel, enabled }: { channel: string; enabl
             if (installation === agent.id) { setAccess('read'); setIssued(undefined); }
           }
         });
-      }}><option value="none">No memory access</option><option value="read" disabled={!enabled}>Read memory</option><option value="contribute" disabled={!enabled}>Read and contribute knowledge</option></select></label>)}
+      }}><option value="none">No memory access</option><option value="read" disabled={!enabled}>Read memory</option><option value="contribute" disabled={!enabled}>Read and contribute knowledge</option></Select></label>)}
     </section>}
     {!loaded && !error && <p role="status">Loading MCP connections…</p>}
     {enabled && <form onSubmit={event => { event.preventDefault(); void run(async () => {
       const created = await request<{ connection: MemoryConnection; token: string }>(path, { name, access, ...(installation ? { installation_id: installation } : {}) });
       if (active.current) { setItems(previous => [...previous, created.connection]); if (currentEnabled.current) setIssued(created); setName(''); setCopied(false); }
-    }); }}><label>Bind key to installation<select value={installation} disabled={busy} onChange={event => {
+    }); }}><label>Bind key to installation<Select aria-label="Bind key to installation" value={installation} disabled={busy} onChange={event => {
       const id = event.target.value; setInstallation(id); setAccess('read'); setIssued(undefined);
       const agent = agents.find(item => item.id === id); if (agent) setName(agent.name);
-    }}><option value="">External agent or Navigator</option>{agents.filter(agent => agent.access !== 'none').map(agent => <option key={agent.id} value={agent.id}>{agent.name}</option>)}</select></label>
+    }}><option value="">External agent or Navigator</option>{agents.filter(agent => agent.access !== 'none').map(agent => <option key={agent.id} value={agent.id}>{agent.name}</option>)}</Select></label>
     <label>Agent or Navigator name<input required maxLength={100} value={name} disabled={busy} placeholder="e.g. Navigator" onChange={event => setName(event.target.value)} /></label>
-      <label>MCP access<select value={access} disabled={busy} onChange={event => setAccess(event.target.value as MemoryConnection['access'])}><option value="read">Read memory and channel conversations</option>{(!installation || selectedAgent?.access === 'contribute') && <option value="contribute">Read and add source-backed knowledge</option>}{!installation && <option value="write">Read conversations, read and write memory</option>}</select></label>
+      <label>MCP access<Select aria-label="MCP access" value={access} disabled={busy} onChange={event => setAccess(event.target.value as MemoryConnection['access'])}><option value="read">Read memory and channel conversations</option>{(!installation || selectedAgent?.access === 'contribute') && <option value="contribute">Read and add source-backed knowledge</option>}{!installation && <option value="write">Read conversations, read and write memory</option>}</Select></label>
       <Button type="submit" disabled={!name.trim() || (!!installation && (!selectedAgent || selectedAgent.access === 'none'))} loading={busy}>Create MCP key</Button>
     </form>}
     {!enabled && <small>Memory is disabled. Existing keys cannot use tools; you can still revoke them below.</small>}

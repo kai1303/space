@@ -1,0 +1,56 @@
+{
+  "generatedAt": "2026-11-04T12:11:04.582Z",
+  "mode": "live Jev through WAL/JetStream and real worker in disposable schema",
+  "elapsedMs": 1477.9427499999993,
+  "providerCalls": 1,
+  "taskCount": 0,
+  "decision": {
+    "action": "suggest",
+    "reason": "The latest message requests agent work. These capabilities may help.",
+    "assessment": {
+      "model": "jev-1.14.0",
+      "targetMessageId": "8015e710-cc60-41fb-b3d2-d327d81c9947",
+      "assistanceUseful": 0.71,
+      "requestsAgentWork": 0.99,
+      "capabilityRelevance": {
+        "demo.echo": 0.96
+      },
+      "needsDeeperReasoning": 0.04
+    },
+    "capabilities": [
+      "demo.echo"
+    ],
+    "evidenceMessageIds": [
+      "8015e710-cc60-41fb-b3d2-d327d81c9947"
+    ]
+  },
+  "inference": {
+    "provider": "jev",
+    "model": "jev-latest",
+    "reserved_tokens": 2855,
+    "input_tokens": 964,
+    "output_tokens": 83,
+    "latency_ms": 371,
+    "error": null,
+    "result": {
+      "action": "suggest",
+      "reason": "The latest message requests agent work. These capabilities may help.",
+      "assessment": {
+        "model": "jev-1.14.0",
+        "targetMessageId": "8015e710-cc60-41fb-b3d2-d327d81c9947",
+        "assistanceUseful": 0.71,
+        "requestsAgentWork": 0.99,
+        "capabilityRelevance": {
+          "demo.echo": 0.96
+        },
+        "needsDeeperReasoning": 0.04
+      },
+      "capabilities": [
+        "demo.echo"
+      ],
+      "evidenceMessageIds": [
+        "8015e710-cc60-41fb-b3d2-d327d81c9947"
+      ]
+    }
+  }
+}

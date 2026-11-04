@@ -3,21 +3,27 @@ import { socketCommand } from './socket-command.js';
 
 type Scope = 'workspace' | 'channel' | 'thread' | 'task';
 type Update = { scope: Scope; id: string; error?: string };
-type Listener = { refresh: () => unknown; onRevoked?: (code: string) => void; active: boolean; running: boolean; pending: boolean };
+type Listener = { refresh: () => unknown; onRevoked?: (code: string) => void; active: boolean; running: boolean; pending: boolean; completion?: Promise<void> };
 type Subscription = { listeners: Set<Listener>; close: () => void };
 const subscriptions = new Map<string, Subscription>();
 const denied = (code: string) => ['unauthorized', 'not_found', 'forbidden', 'subscription_limit', 'invalid_scope', 'invalid_id'].includes(code);
 
 async function refresh(listener: Listener) {
   listener.pending = true;
-  if (listener.running) return;
+  if (listener.running) return listener.completion;
   listener.running = true;
+  let complete!: () => void;
+  listener.completion = new Promise<void>(resolve => { complete = resolve; });
   try {
     while (listener.active && listener.pending) {
       listener.pending = false;
       try { await listener.refresh(); } catch { /* Views expose read failures; reconnect or focus retries. */ }
     }
-  } finally { listener.running = false; }
+  } finally { listener.running = false; complete(); listener.completion = undefined; }
+}
+
+export async function invalidateUpdates(scope: Scope, id: string): Promise<void> {
+  await Promise.all([...subscriptions.get(`${scope}:${id}`)?.listeners ?? []].map(refresh));
 }
 
 export function subscribeUpdates(scope: Scope, id: string, read: () => unknown, onRevoked?: (code: string) => void): () => void {

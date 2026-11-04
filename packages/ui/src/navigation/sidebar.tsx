@@ -1,6 +1,6 @@
 import { NavigationIcon } from "./navigation-icons.js";
-import { useState, type ReactNode } from "react";
-import { motion, useReducedMotion } from "motion/react";
+import { useId, useState, type ReactNode } from "react";
+import { LayoutGroup, motion, useReducedMotion } from "motion/react";
 import { motionTransition } from "../motion/motion.js";
 import { Reveal } from "../motion/reveal.js";
 import {
@@ -73,6 +73,8 @@ export function WorkspaceSidebar({
 }) {
   const reduced = useReducedMotion();
   const transition = motionTransition(reduced);
+  const layoutScope = useId();
+  const moveTransition = { duration: reduced ? 0 : .22, ease: [.2, .8, .2, 1] as const };
   const [states, setStates] = useState(() => new Map<string, SidebarState>());
   const { query, expanded } = states.get(workspaceId) ?? initialSidebarState;
   function setQuery(query: string) {
@@ -118,7 +120,7 @@ export function WorkspaceSidebar({
           ] as const).map(([key, label, icon, select]) => select && <button key={key} type="button" aria-current={selectedShortcut === key ? 'page' : undefined} onClick={select}><NavigationIcon name={icon} size={17}/>{label}</button>)}
         </nav>
       )}
-      <nav
+      <LayoutGroup id={layoutScope}><nav
         aria-label="Workspace conversations"
         onKeyDown={(event) => {
           if (
@@ -154,9 +156,11 @@ export function WorkspaceSidebar({
           if (!items.length && (!showEmptySections || query)) return null;
           const isOpen = Boolean(query) || Boolean(expanded[section]);
           return (
-            <section
+            <motion.section
               key={section}
               className="sp-sidebar-section"
+              layout={reduced ? false : "position"}
+              transition={{ layout: moveTransition }}
             >
               <motion.button
                 type="button"
@@ -192,10 +196,13 @@ export function WorkspaceSidebar({
                   }
                 </span>
               </motion.button>
-              <Reveal open={isOpen}>
+              <Reveal open={isOpen} clip={false}>
                 {items.map((c) => (
+                  <motion.div key={c.id} initial={false}
+                    layout={reduced ? false : "position"}
+                    layoutId={reduced ? undefined : `conversation:${workspaceId}:${c.id}`}
+                    transition={{ layout: moveTransition }}>
                   <ChannelItem
-                    key={c.id}
                     name={c.name}
                     selected={c.id === selectedId}
                     unread={c.unread}
@@ -214,10 +221,11 @@ export function WorkspaceSidebar({
                       )
                     }
                   />
+                  </motion.div>
                 ))}
                 {section === "channels" && onCreateChannel && <button className="sp-sidebar-section-toggle sp-sidebar-create" type="button" onClick={onCreateChannel}><NavigationIcon name="plus" size={17}/> Add channel</button>}
               </Reveal>
-            </section>
+            </motion.section>
           );
         })}
         {!loading && !channels.some((c) =>
@@ -227,7 +235,7 @@ export function WorkspaceSidebar({
             No conversations found.
           </p>
         )}
-      </nav>
+      </nav></LayoutGroup>
       {onCreateChannel && !showEmptySections && !channels.some(c => c.section === "channels") && <button className="sp-sidebar-section-toggle sp-sidebar-create" type="button" onClick={onCreateChannel}>＋ Add channel</button>}
       {footer ?? <div className="sp-sidebar-profile">
         <Avatar

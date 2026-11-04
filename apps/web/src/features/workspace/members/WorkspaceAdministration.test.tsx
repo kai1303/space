@@ -18,7 +18,7 @@ it('confirms role changes before submitting and refreshes the member table', asy
  await screen.findByText('Anna');
  await userEvent.click(screen.getByRole('button', {name: 'Actions for Anna'}));
  await userEvent.click(screen.getByRole('menuitem', {name: 'Change account type'}));
- await userEvent.selectOptions(screen.getByRole('combobox',{name:'Account type',exact:true}), 'admin');
+ await userEvent.click(screen.getByRole('combobox',{name:'Account type',exact:true})); await userEvent.click(await screen.findByRole('option', { name: 'Workspace Admin', exact: true }));
  expect(api.request.mock.calls.some(call => call[3] === 'PATCH')).toBe(false);
  await userEvent.click(screen.getByRole('button', {name: 'Save account type'}));
  await waitFor(() => expect(api.request).toHaveBeenCalledWith('/workspaces/workspace/members/anna', {role:'admin'}, undefined, 'PATCH'));
@@ -75,7 +75,7 @@ it('only the primary owner can transfer ownership and requires confirmation',asy
 });
 it('applies sorting and guest filters through the directory API',async()=>{
  mock();render(<WorkspaceAdministration {...props}/>);await screen.findByText('Anna');
- await userEvent.selectOptions(screen.getByRole('combobox',{name:'Sort members'}),'joined');
- await userEvent.selectOptions(screen.getByRole('combobox',{name:'Filter guest access'}),'single');
+ await userEvent.click(screen.getByRole('combobox',{name:'Sort members'})); await userEvent.click(await screen.findByRole('option', { name: 'Date joined', exact: true }));
+ await userEvent.click(screen.getByRole('combobox',{name:'Filter guest access'})); await userEvent.click(await screen.findByRole('option', { name: 'Single-channel guests', exact: true }));
  await waitFor(()=>expect(api.request.mock.calls.some(call=>call[0].includes('sort=joined')&&call[0].includes('guest=single'))).toBe(true));
 });

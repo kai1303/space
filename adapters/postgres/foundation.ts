@@ -1,9 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import type { Pool } from 'pg';
-import { and, eq, exists, getTableColumns, or } from 'drizzle-orm';
+import { and, eq, exists, getTableColumns, or, sql } from 'drizzle-orm';
 import { AppError, parseDefinitionInput, parseInstallationInput, parseGrantInput, uuid, type AgentDefinition, type AgentInstallation, type AgentGrant } from '@space/contracts';
 import { database, type DbSession } from './database.js';
-import { agentDefinitions as d, agentInstallations as i, agentGrants as g, channelMembers as m, channels, foundationEvents } from './schema.js';
+import { agentDefinitions as d, agentInstallations as i, agentGrants as g, channelMembers as m, channels, foundationEvents, agentConnections } from './schema.js';
 import { requireWorkspaceAccess, hasChannelAccess, lockWorkspace } from './access.js';
 const installationColumns = { ...getTableColumns(i), capabilities: d.capabilities };
 export class FoundationStore {
@@ -35,7 +35,7 @@ export class FoundationStore {
         .innerJoin(m, and(eq(m.workspace_id, g.workspace_id), eq(m.channel_id, g.channel_id)))
         .where(and(eq(g.installation_id, i.id), eq(m.user_id, actor)));
       return c.select(installationColumns).from(i).innerJoin(d, eq(d.id, i.definition_id))
-        .where(and(eq(i.workspace_id, workspace), or(eq(i.owner_id, actor), exists(shared)))).orderBy(i.id).limit(200);
+        .where(and(eq(i.workspace_id, workspace), or(eq(i.owner_id, actor), exists(shared), sql`EXISTS(SELECT 1 FROM agent_connections ac JOIN workspace_members wm ON wm.workspace_id=${i.workspace_id} AND wm.user_id=${i.owner_id} AND wm.active WHERE ac.installation_id=${i.id} AND ac.revoked_at IS NULL AND EXISTS(SELECT 1 FROM channel_members owner_channel JOIN channel_members viewer_channel ON viewer_channel.workspace_id=owner_channel.workspace_id AND viewer_channel.channel_id=owner_channel.channel_id WHERE owner_channel.workspace_id=${i.workspace_id} AND owner_channel.user_id=${i.owner_id} AND viewer_channel.user_id=${actor}))`))).orderBy(i.id).limit(200);
     });
   }
   private async owned(c: DbSession, actor: string, id: string): Promise<AgentInstallation> {
@@ -60,6 +60,7 @@ export class FoundationStore {
     const request = parseGrantInput(input);
     return this.db.transaction(async c => {
       const installation = await this.owned(c, actor, id);
+      if ((await c.select({id:agentConnections.installation_id}).from(agentConnections).where(eq(agentConnections.installation_id,id))).length) throw new AppError(409, 'agent_inherits_owner_access');
       if (!await hasChannelAccess(c, actor, installation.workspace_id, request.channel_id)) throw new AppError(404, 'not_found');
       const [channel] = await c.select({ kind: channels.kind }).from(channels).where(eq(channels.id, request.channel_id));
       if (channel?.kind === 'direct') throw new AppError(403, 'direct_message_agents_forbidden');
@@ -74,6 +75,7 @@ export class FoundationStore {
     const request = parseGrantInput(input);
     await this.db.transaction(async c => {
       const installation = await this.owned(c, actor, id);
+      if ((await c.select({id:agentConnections.installation_id}).from(agentConnections).where(eq(agentConnections.installation_id,id))).length) throw new AppError(409, 'agent_inherits_owner_access');
       // Removing authority remains possible after the owner leaves a channel.
       const result = await c.delete(g).where(and(eq(g.workspace_id, installation.workspace_id), eq(g.installation_id, id), eq(g.channel_id, request.channel_id), eq(g.skill, request.skill))).returning();
       if (result.length) await this.audit(c, actor, installation, 'grant.revoked', request);

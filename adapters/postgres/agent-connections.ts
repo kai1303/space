@@ -119,13 +119,14 @@ export class AgentConnectionStore {
   async channelAgents(actor: string, channelId: string) {
     const [channel] = await this.db.select().from(s.channels).where(eq(s.channels.id, uuid(channelId)));
     if (!channel || !await hasChannelAccess(this.db, actor, channel.workspace_id, channel.id)) throw new AppError(404, 'not_found');
-    if (channel.kind === 'direct') return [];
+    if (channel.archived_at) return [];
     const rows = (await this.db.execute<ChannelAgent & Record<string, unknown>>(sql`
       SELECT i.id,coalesce(ac.name,d.name) AS name,i.connector_id,d.capabilities->'skills' AS skills,
-        coalesce((SELECT jsonb_agg(g.skill ORDER BY g.skill) FROM agent_grants g WHERE g.installation_id=i.id AND g.channel_id=${channel.id} AND d.capabilities->'skills' ? g.skill),'[]'::jsonb) AS granted_skills,
+        ac.installation_id IS NOT NULL AS inherits_owner_access,
+        CASE WHEN ac.installation_id IS NOT NULL THEN d.capabilities->'skills' ELSE coalesce((SELECT jsonb_agg(g.skill ORDER BY g.skill) FROM agent_grants g WHERE g.installation_id=i.id AND g.channel_id=${channel.id} AND d.capabilities->'skills' ? g.skill),'[]'::jsonb) END AS granted_skills,
         coalesce((d.capabilities->>'persistent_sessions')::boolean,false) AS persistent_sessions
       FROM agent_installations i JOIN agent_definitions d ON d.id=i.definition_id LEFT JOIN agent_connections ac ON ac.installation_id=i.id
-      WHERE i.workspace_id=${channel.workspace_id} AND i.owner_id=${actor} AND i.enabled AND ac.revoked_at IS NULL ORDER BY i.id LIMIT 100`)).rows;
+      WHERE i.workspace_id=${channel.workspace_id} AND i.owner_id=${actor} AND i.enabled AND ac.revoked_at IS NULL AND (${channel.kind !== 'direct'} OR ac.installation_id IS NOT NULL) ORDER BY i.id LIMIT 100`)).rows;
     return rows.map(row => ({ ...row, enabled_in_channel: row.granted_skills.length > 0, ...(this.connectors.find(entry => entry.id === row.connector_id)?.provider ? { provider: this.connectors.find(entry => entry.id === row.connector_id)!.provider } : {}) }));
   }
   async setChannelEnabled(actor: string, id: string, channelId: string, enabled: boolean, selectedSkill?: string) {
@@ -138,12 +139,17 @@ export class AgentConnectionStore {
       if (ref.owner_id !== actor) throw new AppError(403, 'installation_not_owned');
       const [channel] = await c.select().from(s.channels).where(and(eq(s.channels.id, uuid(channelId)), eq(s.channels.workspace_id, ref.workspace_id)));
       if (!channel || !await hasChannelAccess(c, actor, ref.workspace_id, channel.id)) throw new AppError(404, 'not_found');
-      if (channel.kind === 'direct') throw new AppError(403, 'direct_message_agents_forbidden');
       if (enabled && channel.archived_at) throw new AppError(409, 'channel_archived');
       const [connection] = await c.select().from(s.agentConnections).where(eq(s.agentConnections.installation_id, id));
       if (!ref.enabled || connection?.revoked_at) throw new AppError(409, 'agent_unavailable');
       const [definition] = await c.select().from(s.agentDefinitions).where(eq(s.agentDefinitions.id, ref.definition_id));
       const supported = definition!.capabilities.skills;
+      if (connection) {
+        if (selectedSkill !== undefined && !supported.includes(selectedSkill)) throw new AppError(400, 'skill_not_supported');
+        if (!enabled) throw new AppError(409, 'agent_inherits_owner_access');
+        return { enabled_in_channel: supported.length > 0, granted_skills: [...supported].sort(), inherits_owner_access: true };
+      }
+      if (channel.kind === 'direct') throw new AppError(403, 'direct_message_agents_forbidden');
       if (selectedSkill === undefined && supported.length !== 1) throw new AppError(400, 'skill_required');
       if (selectedSkill !== undefined && !supported.includes(selectedSkill)) throw new AppError(400, 'skill_not_supported');
       for (const skill of selectedSkill === undefined ? supported : [selectedSkill]) {

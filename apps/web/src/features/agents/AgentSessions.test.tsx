@@ -247,8 +247,9 @@ it('selects persistent sessions by capability and includes the selected skill',a
  fetch.mockImplementation(async(path,init)=>path==='/v1/channels/channel/navigator'?{ok:true,json:async()=>({candidates:[{installation_id:'research',name:'Research',skill:'research.review',persistent_sessions:true},{installation_id:'codex-without-sessions',name:'No sessions',skill:'codex.run',persistent_sessions:false}]})}:path==='/v1/channels/channel/agents'?{ok:true,json:async()=>[]}:original(path,init));
  render(<SessionViews/>);
  await userEvent.click(await screen.findByRole('button',{name:'New agent session'}));
- await userEvent.selectOptions(screen.getByLabelText('Agent'),'research|research.review');
- expect(screen.queryByRole('option',{name:'No sessions'})).toBeNull();
+ await userEvent.click(screen.getByLabelText('Agent'));
+ expect(screen.queryByRole('option',{name:/No sessions/})).toBeNull();
+ await userEvent.click(await screen.findByRole('option', { name: 'Research · research.review', exact: true }));
  await userEvent.type(screen.getByLabelText('Session name'),'Review');
  await userEvent.click(screen.getByRole('button',{name:'Start session',exact:true}));
  await waitFor(()=>expect(fetch.mock.calls.some(([path,init])=>path==='/v1/threads/thread/agent-sessions'&&init?.method==='POST'&&JSON.parse(String(init.body)).skill==='research.review')).toBe(true));
@@ -267,7 +268,7 @@ it('enables only the selected skill when starting a multi-skill session agent',a
  await userEvent.click(await screen.findByRole('button',{name:'Enable Research · research.review in this channel'}));
  const grant=fetch.mock.calls.find(([path])=>path==='/v1/agents/connections/research/channels/channel');
  expect(JSON.parse(String(grant?.[1]?.body))).toEqual({enabled:true,skill:'research.review'});
- expect(await screen.findByRole('option',{name:'Research · research.review'})).toBeTruthy();
+ await userEvent.click(screen.getByRole('combobox', { name: 'Agent' })); expect(await screen.findByRole('option',{name:'Research · research.review'})).toBeTruthy();
  expect(screen.getByRole('button',{name:'Enable Research · research.run in this channel'})).toBeTruthy();
 });
 
