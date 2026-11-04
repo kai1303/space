@@ -20,7 +20,9 @@ import '@fontsource/lato/400.css';
 import '@fontsource/lato/700.css';
 import '@fontsource/lato/900.css';
 import '@space/ui/styles.css';
-import { Button, Composer, Message, Badge } from '@space/ui';
+import { Button, Badge } from '@space/ui/primitives';
+import { Composer } from '@space/ui/composer';
+import { Message } from '@space/ui/conversation';
 
 <Button variant="primary" onClick={createChannel}>Create channel</Button>
 <Badge tone="warning" dot>Needs approval</Badge>
@@ -29,6 +31,8 @@ import { Button, Composer, Message, Badge } from '@space/ui';
 </Message>
 <Composer channel="general" onSend={sendMessage} />
 ```
+
+Source components and colocated tests are grouped by responsibility under `packages/ui/src/`; CSS and tokens live in `packages/ui/src/styles/`. The root `@space/ui` export remains compatible, while area and leaf subpaths provide focused entry points. See [frontend structure](architecture/frontend.md) for application ownership and migration details.
 
 Consumers load their chosen font. The gallery bundles Lato locally through `@fontsource/lato`; components fall back to system sans-serif. UI CSS does not reset the consuming app's entire document. Components carry `sp-` class names and use `--sp-` tokens. `@space/ui/tokens.css` is available independently. `data-theme="light"` or `data-theme="dark"` on an ancestor sets semantic colors. Use the tokens directly in application CSS:
 

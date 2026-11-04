@@ -1,12 +1,12 @@
 import { copyFileSync, readFileSync, writeFileSync } from "node:fs";
 for (const file of ["tokens.css", "styles.css", "workplace.css", "work-items.css"])
-  copyFileSync(`src/${file}`, `dist/${file}`);
+  copyFileSync(`src/styles/${file}`, `dist/${file}`);
 
 const shared = {},
   light = {},
   dark = {};
 for (const [, selector, body] of readFileSync(
-  "src/tokens.css",
+  "src/styles/tokens.css",
   "utf8",
 ).matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
   const target = selector.includes('[data-theme="dark"]')

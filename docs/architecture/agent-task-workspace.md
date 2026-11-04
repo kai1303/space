@@ -18,4 +18,4 @@ The workspace opens directly into Preview, with Files and Changes alongside it. 
 
 Open `/design-system#agent-workspace` to try a clearly labeled local example. It includes a small interactive app preview, downloadable example files, a patch, task-state controls, and a stopped-preview state. No task is submitted and no sandbox is created.
 
-Implementation: `apps/web/src/AgentTaskWorkspace.tsx`, `AgentWorkspaceExample.tsx`, and `agent-task-workspace.css`. Interaction and integration checks are in `AgentTaskWorkspace.test.tsx` and `Chat.test.tsx`.
+Implementation: `apps/web/src/features/agents/AgentTaskWorkspace.tsx` and its colocated stylesheet. The gallery example is `apps/web/src/gallery/examples/AgentWorkspaceExample.tsx`. Interaction checks are colocated with the feature; application integration checks are in `apps/web/src/app/Chat.test.tsx`.

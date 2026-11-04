@@ -11,6 +11,15 @@ These rules guide all new work. Existing violations are migration work, not prec
 
 See [architecture principles and current gaps](docs/architecture/principles.md).
 
+## Frontend structure
+
+- Keep application composition and navigation in `apps/web/src/app`, product behavior in `features`, infrastructure in `shared`, and demonstrations in `gallery`.
+- Colocate feature tests and styles. Production features must not import from `app` or `gallery`; `shared` must not import application features.
+- Keep reusable presentation in `packages/ui`. Consume it through declared `@space/ui/*` exports rather than cross-package relative paths.
+- Preserve the signed-in realtime session owner and feature cleanup when extracting components or hooks.
+
+See [frontend ownership and development](docs/architecture/frontend.md).
+
 ## CodeGraph
 
 Use the configured CodeGraph MCP for structural questions: definitions, signatures, callers/callees, impact and focused code context. For architecture questions, start with `codegraph_context`, then one `codegraph_explore` if needed. Answer directly without delegating exploration or rechecking indexed structure with grep. Use native search for literal strings/comments or details inside an already opened file.

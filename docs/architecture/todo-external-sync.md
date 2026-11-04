@@ -78,7 +78,7 @@ Imports use the existing durable resource event and reminder triggers, so change
 - Store: `adapters/postgres/todo-sync.ts`.
 - Routes: `apps/server/todo-sync.ts`.
 - Integration coverage: `tests/integration/todo-sync.test.ts` (idempotency, ordering, overlapping writers, scope, credential lifecycle, validation and receipt pagination).
-- UI coverage: `apps/web/src/WorkspaceTodos.test.tsx` (source label/link plus existing Todo behavior).
+- UI coverage: `apps/web/src/features/todos/WorkspaceTodos.test.tsx` (source label/link plus existing Todo behavior).
 
 This exposes a generic integration interface. No external provider has been connected or granted credentials by this change. A provider adapter must map IDs, payloads, and monotonic revisions and deliver its events to this endpoint.
 

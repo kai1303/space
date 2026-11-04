@@ -433,6 +433,7 @@ More guides:
 - [Native Jev setup](docs/architecture/jev-navigator.md)
 - [Chat storage and partitioning](docs/architecture/chat-partitioning.md)
 - [Foundation contracts and grants](docs/architecture/foundation.md)
+- [Frontend structure](docs/architecture/frontend.md)
 - [Design system](docs/design-system.md)
 - [Module roadmap](docs/architecture/module-roadmap.md)
 - [Architecture decisions](docs/adr/0001-core-boundaries.md)

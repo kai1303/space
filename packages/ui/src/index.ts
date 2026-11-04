@@ -12,41 +12,42 @@ export {
   Dialog,
   Skeleton,
   ChannelItem,
-} from "./primitives.js";
-export type { ButtonProps, Tone, TabItem } from "./primitives.js";
-export { MultiSelectMenu } from "./multiselect-menu.js";
-export type { MultiSelectOption } from "./multiselect-menu.js";
-export { Message, Composer } from "./conversation.js";
-export type { Reaction } from "./conversation.js";
-export { MessageActions } from "./message-actions.js";
-export type { MessageAction, MessageActionHandlers } from "./message-actions.js";
-export { WorkspaceSidebar } from "./sidebar.js";
-export type { SidebarChannel } from "./sidebar.js";
-export { WorkspaceSearch } from "./search-dialog.js";
-export { parseSearch, searchMessages } from "./search.js";
-export type { SearchMessage, SearchQuery } from "./search.js";
+} from "./primitives/primitives.js";
+export type { ButtonProps, Tone, TabItem } from "./primitives/primitives.js";
+export { MultiSelectMenu } from "./primitives/multiselect-menu.js";
+export type { MultiSelectOption } from "./primitives/multiselect-menu.js";
+export { Message } from "./conversation/conversation.js";
+export { Composer } from "./composer/composer.js";
+export type { Reaction } from "./conversation/conversation.js";
+export { MessageActions } from "./conversation/message-actions.js";
+export type { MessageAction, MessageActionHandlers } from "./conversation/message-actions.js";
+export { WorkspaceSidebar } from "./navigation/sidebar.js";
+export type { SidebarChannel } from "./navigation/sidebar.js";
+export { WorkspaceSearch } from "./navigation/search-dialog.js";
+export { parseSearch, searchMessages } from "./navigation/search.js";
+export type { SearchMessage, SearchQuery } from "./navigation/search.js";
 export {
   RichContent,
   normalizeDocument,
   safeLink,
   documentText,
-} from "./rich-text.js";
-export type { RichDocument, RichAttributes, Attachment } from "./rich-text.js";
-export { RichComposer } from "./rich-composer.js";
-export { Reveal } from "./reveal.js";
-export { motionTransition, surfaceMotion, useSidebarMotion } from "./motion.js";
-export { useMessageArrivals } from "./message-arrivals.js";
-export { TicketCard, Alert, ToolExecution } from "./work-items.js";
-export type { TicketStatus, TicketPriority, ToolTimelinePoint, ToolTimelineStep } from "./work-items.js";
-export { CodeBlock } from "./code-block.js";
-export { AgentApproval } from "./agent-approval.js";
-export { AgentResponse, AgentMarkdown } from "./agent-response.js";
-export type { ApprovalDecision, ApprovalStatus } from "./agent-approval.js";
+} from "./rich-text/rich-text.js";
+export type { RichDocument, RichAttributes, Attachment } from "./rich-text/rich-text.js";
+export { RichComposer } from "./composer/rich-composer.js";
+export { Reveal } from "./motion/reveal.js";
+export { motionTransition, surfaceMotion, useSidebarMotion } from "./motion/motion.js";
+export { useMessageArrivals } from "./conversation/message-arrivals.js";
+export { TicketCard, Alert, ToolExecution } from "./agents/work-items.js";
+export type { TicketStatus, TicketPriority, ToolTimelinePoint, ToolTimelineStep } from "./agents/work-items.js";
+export { CodeBlock } from "./rich-text/code-block.js";
+export { AgentApproval } from "./agents/agent-approval.js";
+export { AgentResponse, AgentMarkdown } from "./agents/agent-response.js";
+export type { ApprovalDecision, ApprovalStatus } from "./agents/agent-approval.js";
 
-export { EmojiPicker } from "./emoji-picker.js";
-export { replaceEmojiShortcodes } from "./emoji.js";
+export { EmojiPicker } from "./emoji/emoji-picker.js";
+export { replaceEmojiShortcodes } from "./emoji/emoji.js";
 
-export type { FindMentions } from "./use-mentions.js";
+export type { FindMentions } from "./composer/use-mentions.js";
 
-export { NavigationIcon } from "./navigation-icons.js";
-export type { NavigationIconName, NavigationIconProps } from "./navigation-icons.js";
+export { NavigationIcon } from "./navigation/navigation-icons.js";
+export type { NavigationIconName, NavigationIconProps } from "./navigation/navigation-icons.js";

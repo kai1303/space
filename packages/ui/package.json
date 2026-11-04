@@ -16,7 +16,119 @@
     },
     "./styles.css": "./dist/styles.css",
     "./tokens.css": "./dist/tokens.css",
-    "./tokens.json": "./dist/tokens.json"
+    "./tokens.json": "./dist/tokens.json",
+    "./primitives": {
+      "types": "./dist/primitives/index.d.ts",
+      "import": "./dist/primitives/index.js"
+    },
+    "./navigation": {
+      "types": "./dist/navigation/index.d.ts",
+      "import": "./dist/navigation/index.js"
+    },
+    "./conversation": {
+      "types": "./dist/conversation/index.d.ts",
+      "import": "./dist/conversation/index.js"
+    },
+    "./composer": {
+      "types": "./dist/composer/index.d.ts",
+      "import": "./dist/composer/index.js"
+    },
+    "./rich-text": {
+      "types": "./dist/rich-text/index.d.ts",
+      "import": "./dist/rich-text/index.js"
+    },
+    "./agents": {
+      "types": "./dist/agents/index.d.ts",
+      "import": "./dist/agents/index.js"
+    },
+    "./emoji": {
+      "types": "./dist/emoji/index.d.ts",
+      "import": "./dist/emoji/index.js"
+    },
+    "./motion": {
+      "types": "./dist/motion/index.d.ts",
+      "import": "./dist/motion/index.js"
+    },
+    "./primitives/primitives": {
+      "types": "./dist/primitives/primitives.d.ts",
+      "import": "./dist/primitives/primitives.js"
+    },
+    "./primitives/multiselect-menu": {
+      "types": "./dist/primitives/multiselect-menu.d.ts",
+      "import": "./dist/primitives/multiselect-menu.js"
+    },
+    "./navigation/sidebar": {
+      "types": "./dist/navigation/sidebar.d.ts",
+      "import": "./dist/navigation/sidebar.js"
+    },
+    "./navigation/navigation-icons": {
+      "types": "./dist/navigation/navigation-icons.d.ts",
+      "import": "./dist/navigation/navigation-icons.js"
+    },
+    "./navigation/search": {
+      "types": "./dist/navigation/search.d.ts",
+      "import": "./dist/navigation/search.js"
+    },
+    "./navigation/search-dialog": {
+      "types": "./dist/navigation/search-dialog.d.ts",
+      "import": "./dist/navigation/search-dialog.js"
+    },
+    "./conversation/conversation": {
+      "types": "./dist/conversation/conversation.d.ts",
+      "import": "./dist/conversation/conversation.js"
+    },
+    "./conversation/message-actions": {
+      "types": "./dist/conversation/message-actions.d.ts",
+      "import": "./dist/conversation/message-actions.js"
+    },
+    "./conversation/message-arrivals": {
+      "types": "./dist/conversation/message-arrivals.d.ts",
+      "import": "./dist/conversation/message-arrivals.js"
+    },
+    "./composer/rich-composer": {
+      "types": "./dist/composer/rich-composer.d.ts",
+      "import": "./dist/composer/rich-composer.js"
+    },
+    "./rich-text/rich-text": {
+      "types": "./dist/rich-text/rich-text.d.ts",
+      "import": "./dist/rich-text/rich-text.js"
+    },
+    "./rich-text/code-block": {
+      "types": "./dist/rich-text/code-block.d.ts",
+      "import": "./dist/rich-text/code-block.js"
+    },
+    "./agents/agent-approval": {
+      "types": "./dist/agents/agent-approval.d.ts",
+      "import": "./dist/agents/agent-approval.js"
+    },
+    "./agents/agent-response": {
+      "types": "./dist/agents/agent-response.d.ts",
+      "import": "./dist/agents/agent-response.js"
+    },
+    "./agents/work-items": {
+      "types": "./dist/agents/work-items.d.ts",
+      "import": "./dist/agents/work-items.js"
+    },
+    "./emoji/emoji": {
+      "types": "./dist/emoji/emoji.d.ts",
+      "import": "./dist/emoji/emoji.js"
+    },
+    "./emoji/emoji-picker": {
+      "types": "./dist/emoji/emoji-picker.d.ts",
+      "import": "./dist/emoji/emoji-picker.js"
+    },
+    "./motion/motion": {
+      "types": "./dist/motion/motion.d.ts",
+      "import": "./dist/motion/motion.js"
+    },
+    "./motion/reveal": {
+      "types": "./dist/motion/reveal.d.ts",
+      "import": "./dist/motion/reveal.js"
+    },
+    "./composer/composer": {
+      "types": "./dist/composer/composer.d.ts",
+      "import": "./dist/composer/composer.js"
+    }
   },
   "scripts": {
     "build": "tsc -p tsconfig.json && node copy-styles.mjs",
