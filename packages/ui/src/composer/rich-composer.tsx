@@ -40,6 +40,7 @@ import {
 export function RichComposer({
   channel,
   placeholder,
+  loadReplySuggestion,
   defaultValue,
   acknowledgedDocument,
   defaultAttachments = [],
@@ -61,6 +62,7 @@ export function RichComposer({
 }: {
   channel: string;
   placeholder?: string;
+  loadReplySuggestion?: (signal: AbortSignal) => Promise<string | null>;
   defaultValue?: RichDocument;
   acknowledgedDocument?: RichDocument;
   defaultAttachments?: Attachment[];
@@ -127,6 +129,24 @@ export function RichComposer({
   const filesPending = files.some(file => file.status === "uploading" || file.status === "error");
   const filesRef = useRef(files);
   filesRef.current = files;
+  const [focused, setFocused] = useState(false);
+  const [reply, setReply] = useState<{ source: typeof loadReplySuggestion; text: string }>();
+  const eligible = !!loadReplySuggestion && focused && text === "\n" && !files.length && !sending && !sendDisabledReason;
+  const visibleReply = eligible && reply?.source === loadReplySuggestion ? reply?.text : undefined;
+  const replyRef = useRef(visibleReply);
+  replyRef.current = visibleReply;
+  useEffect(() => {
+    setReply(undefined);
+    if (!eligible || !loadReplySuggestion) return;
+    const controller = new AbortController();
+    const timer = setTimeout(async () => {
+      try {
+        const value = await loadReplySuggestion(controller.signal);
+        if (!controller.signal.aborted && value) setReply({ source: loadReplySuggestion, text: value });
+      } catch { /* Suggestions are optional; the editor stays usable. */ }
+    }, 500);
+    return () => { clearTimeout(timer); controller.abort(); };
+  }, [eligible, loadReplySuggestion]);
   const [linkOpen, setLinkOpen] = useState(false);
   const returnToSelection = useRef(false);
   useEffect(() => {
@@ -172,8 +192,8 @@ export function RichComposer({
     const root = editor.current?.root;
     if (!root) return;
     root.setAttribute('aria-label', `Message ${channel}`);
-    root.setAttribute('data-placeholder', placeholder ?? `Message #${channel}`);
-  }, [channel, placeholder, editorVersion]);
+    root.setAttribute('data-placeholder', visibleReply ? '' : placeholder ?? `Message #${channel}`);
+  }, [channel, placeholder, editorVersion, visibleReply]);
   const mentionsUI = useMentions(editor, ready, channel, findMentions, editorVersion);
   const mentionKeys = useRef(mentionsUI.key); mentionKeys.current = mentionsUI.key;
   const [broadcastWarning, setBroadcastWarning] = useState(false);
@@ -290,6 +310,20 @@ export function RichComposer({
             if (event.key === "Escape") { completionRef.current = null; setCompletion(null); }
             else if (event.key === "Enter" || event.key === "Tab") completeEmoji(emojiIndexRef.current);
             else { emojiIndexRef.current = (emojiIndexRef.current + (event.key === "ArrowDown" ? 1 : -1) + match.items.length) % match.items.length; setEmojiIndex(emojiIndexRef.current); }
+            return;
+          }
+          const replyText = replyRef.current;
+          if (replyText && q.getLength() === 1 && q.hasFocus() && !pending.current && !filesRef.current.length &&
+              !event.shiftKey && !event.altKey && !event.ctrlKey && !event.metaKey &&
+              (event.key === "Tab" || event.key === "Escape")) {
+            event.preventDefault();
+            event.stopImmediatePropagation();
+            replyRef.current = undefined;
+            setReply(undefined);
+            if (event.key === "Tab") {
+              q.insertText(0, replyText, "user");
+              q.setSelection(replyText.length, 0, "silent");
+            }
             return;
           }
           if (isDefaultComposerSendKey(event)) {
@@ -437,7 +471,14 @@ export function RichComposer({
             {formatButtons.slice(7)}
           </div>
         </Reveal>
-        <div className="sp-rich-editor" ref={mount} />
+        <div className="sp-rich-input" onFocus={event => {
+          if (event.target === editor.current?.root) setFocused(true);
+        }} onBlur={() => setFocused(false)}>
+          <div className="sp-rich-editor" ref={mount} />
+          {visibleReply && <div className="sp-reply-suggestion" role="status">
+            {visibleReply} <small>Tab to accept</small>
+          </div>}
+        </div>
         {!ready && !error && (
           <p className="sp-rich-loading" role="status">
             Loading editor…

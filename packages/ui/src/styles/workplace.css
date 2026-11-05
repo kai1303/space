@@ -194,6 +194,17 @@
 }
 .sp-rich-toolbar .sp-icon-button{width:28px;height:28px;min-height:28px;border-radius:4px}
 .sp-rich-format-separator { width: 1px; height: 18px; margin: 0 6px; background: var(--sp-border); flex-shrink: 0; }
+.sp-rich-input { display: grid; min-width: 0; }
+.sp-rich-input > * { grid-area: 1 / 1; min-width: 0; }
+.sp-reply-suggestion {
+  align-self: start;
+  padding: 8px 12px;
+  pointer-events: none;
+  color: var(--sp-editor-placeholder);
+  font: 15px/22px var(--sp-font-sans);
+  overflow-wrap: anywhere;
+}
+.sp-reply-suggestion small { white-space: nowrap; font-size: 12px; }
 .sp-rich-editor .ql-container {
   border: 0;
   font: inherit;

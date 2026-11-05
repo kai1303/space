@@ -1,8 +1,10 @@
+import { registerReplySuggestions } from './reply-suggestions.js';
 import type { FastifyInstance } from 'fastify';
 import { record, uuid } from '@space/contracts';
 import type { ChatStore } from '@space/postgres/chat';
 
 export function registerChatRoutes(app: FastifyInstance, chat: ChatStore) {
+  registerReplySuggestions(app, chat);
   app.get<{ Params: { workspaceId: string } }>('/v1/workspaces/:workspaceId/notifications', r => chat.notifications.activity(r.actorId, uuid(r.params.workspaceId), r.query));
   app.patch<{ Params: { workspaceId: string; id: string } }>('/v1/workspaces/:workspaceId/notifications/:id', r => chat.notifications.markRead(r.actorId, uuid(r.params.workspaceId), r.params.id, r.body));
   app.post<{ Params: { workspaceId: string } }>('/v1/workspaces/:workspaceId/notifications/read', r => chat.notifications.markAllRead(r.actorId, uuid(r.params.workspaceId), r.body));

@@ -130,6 +130,9 @@ export function ChannelRoom({ viewState, requestedThread, onCloseDirect, readSta
   const revokeAccess = useRef<(reason: unknown) => void>(() => {});
   const cursor = useRef('0'), accessVersion = useRef(0);
   const timeline = useRef<TimelineHandle | null>(null), stickToBottom = useRef(true);
+  const activeThread = useRef(thread);
+  activeThread.current = thread;
+  const [replyRevision, setReplyRevision] = useState('0');
   const threadLive = useRef<((messages: ChatMessage[], sent?: boolean) => void) | null>(null);
   const history = useMessageHistory(`/channels/${channel.id}/messages`, reason => {
     if (reason instanceof Error && ['unauthorized', 'not_found', 'forbidden'].includes(reason.message)) revokeAccess.current(reason);
@@ -171,6 +174,8 @@ export function ChannelRoom({ viewState, requestedThread, onCloseDirect, readSta
     connection.on('chat.events', (batch: { channel_id: string; events: ChatEvent[]; cursor: string }) => {
       if (active && initialized && !terminal && batch.channel_id === channel.id) {
         const incoming = batch.events.flatMap(event => (event.type === 'message.created' || event.type === 'message.updated') ? [{ ...event.payload, sequence: event.payload.sequence ?? event.sequence }] : []);
+        const latestReply = batch.events.filter(event => event.type === 'message.created' && event.thread_id === activeThread.current && !event.payload.agent_session_id).at(-1);
+        if (latestReply) setReplyRevision(latestReply.sequence);
         history.receive(incoming, stickToBottom.current); threadLive.current?.(incoming);
         if (incoming.some(message => message.author.id !== profile.id && message.document?.ops.some(op => op.attributes?.mention))) window.dispatchEvent(new Event('space:mentions-changed'));
         const attachment = incoming.filter(message => message.attachments?.length).at(-1);
@@ -284,7 +289,7 @@ export function ChannelRoom({ viewState, requestedThread, onCloseDirect, readSta
       {selectionBar}
       <ThreadHistory key={thread} thread={thread} channel={channel.id} live={threadLive} renderMessage={(m, arriving) => message(m, true, arriving)} activity={[...activity.values()].filter(event => event.thread_id === thread && !event.payload.data.session_managed)} profile={profile} onOpenWorkspace={openAgentSession} onAccessLost={reason => revokeAccess.current(reason)} footer={<>
       {!direct && <NavigatorSuggestions channel={channel.id} thread={thread} />}
-      {socket && !channel.archived_at && <ThreadComposer showUnavailableActions={!direct} viewerId={profile.id} key={`reply:${thread}`} onSent={saved => { history.receive([saved], stickToBottom.current); threadLive.current?.([saved], true); }} mentions={agentTags} uploads={uploads} socket={socket} channel={channel.id} thread={thread} draft={drafts[`thread:${channel.id}:${thread}`]} onDraftChange={document => onDraftChange(`thread:${channel.id}:${thread}`, document)} />}
+      {socket && !channel.archived_at && <ThreadComposer suggestionRevision={ready ? replyRevision : undefined} showUnavailableActions={!direct} viewerId={profile.id} key={`reply:${thread}`} onSent={saved => { history.receive([saved], stickToBottom.current); threadLive.current?.([saved], true); }} mentions={agentTags} uploads={uploads} socket={socket} channel={channel.id} thread={thread} draft={drafts[`thread:${channel.id}:${thread}`]} onDraftChange={document => onDraftChange(`thread:${channel.id}:${thread}`, document)} />}
       </>} />
     </SidePanel>}</AnimatePresence>}
     {status !== 'Disconnected' && sidekick && <SidePanel ref={sidekickPanel} role="region" className="chat-thread chat-agent-sessions" aria-label="My sidekick"><Sidekick drafts={drafts} onDraftChange={onDraftChange} attempt={uploads.attempt} acknowledged={uploads.acknowledged} onAccepted={(key,document)=>uploads.sent(key,document,[])} key={channel.workspace_id} workspace={channel.workspace_id} viewerId={profile.id} source={sidekick.source} onClose={()=>{setSidekick(undefined);requestAnimationFrame(()=>panelTrigger.current?.focus());}}/></SidePanel>}

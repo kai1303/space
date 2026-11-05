@@ -157,3 +157,41 @@ it('keeps an in-flight send pending while the conversation label changes', async
   await act(async () => { finish(); await pending; });
   await waitFor(() => expect(after.textContent?.trim()).toBe(''));
 });
+
+it('offers a reply only on focus and accepts it with Tab as an ordinary draft', async () => {
+  const load = vi.fn(async () => 'Could you share the link?');
+  const send = vi.fn(), draft = vi.fn();
+  render(<RichComposer channel="thread" loadReplySuggestion={load} onDraftChange={draft} onSend={send} />);
+  const editor = await screen.findByRole('textbox', { name: 'Message thread' });
+  expect(load).not.toHaveBeenCalled();
+  await userEvent.click(editor);
+  await screen.findByText('Tab to accept');
+  expect(editor.textContent?.trim()).toBe('');
+  expect(draft).not.toHaveBeenCalled();
+  expect((screen.getByRole('button', { name: 'Send now' }) as HTMLButtonElement).disabled).toBe(true);
+  await userEvent.keyboard('{Tab}');
+  expect(editor.textContent).toBe('Could you share the link?');
+  expect(draft).toHaveBeenCalled();
+  expect(send).not.toHaveBeenCalled();
+  await userEvent.keyboard(' Thanks!{Enter}');
+  expect(send).toHaveBeenCalledWith('Could you share the link? Thanks!', expect.anything(), []);
+});
+
+it('discards a late suggestion after a newer reply or typing', async () => {
+  let finishOld!: (value: string) => void, finishNew!: (value: string) => void;
+  const old = vi.fn(() => new Promise<string>(resolve => { finishOld = resolve; }));
+  const next = vi.fn(() => new Promise<string>(resolve => { finishNew = resolve; }));
+  const composer = (load: () => Promise<string>) => <RichComposer channel="thread" loadReplySuggestion={load} onSend={vi.fn()} />;
+  const view = render(composer(old));
+  const editor = await screen.findByRole('textbox', { name: 'Message thread' });
+  await userEvent.click(editor);
+  await waitFor(() => expect(old).toHaveBeenCalledOnce());
+  view.rerender(composer(next));
+  await waitFor(() => expect(next).toHaveBeenCalledOnce());
+  await act(async () => finishOld('Outdated'));
+  expect(screen.queryByText('Tab to accept')).toBeNull();
+  await userEvent.type(editor, 'My reply');
+  await act(async () => finishNew('Late'));
+  expect(screen.queryByText('Tab to accept')).toBeNull();
+  expect(editor.textContent).toBe('My reply');
+});

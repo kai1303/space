@@ -35,6 +35,10 @@
       "types": "./dist/navigator.d.ts",
       "default": "./dist/navigator.js"
     },
+    "./reply-suggestion": {
+      "types": "./dist/reply-suggestion.d.ts",
+      "default": "./dist/reply-suggestion.js"
+    },
     "./navigator-provider": {
       "types": "./dist/navigator-provider.d.ts",
       "default": "./dist/navigator-provider.js"

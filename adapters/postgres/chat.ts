@@ -240,11 +240,28 @@ export class ChatStore {
     if (!result.rows[0]) throw notFound();
     return result.rows[0].message;
   }
+  async requireThreadAccess(actor: string, thread: string, c: DbSession = this.db) {
+    if (!await hasThreadAccess(c, actor, thread)) throw notFound();
+  }
+  async replySuggestionContext(actor: string, thread: string) {
+    return this.db.transaction(async c => {
+      await this.requireThreadAccess(actor, thread, c);
+      const result = await c.execute<{ speaker: string; text: string }>(sql`
+        SELECT CASE WHEN m.user_id=${actor} THEN 'me'
+                    WHEN m.author_type='agent' THEN 'agent'
+                    ELSE concat('participant: ', left(u.display_name, 80)) END AS speaker, left(m.text, 1000) AS text
+        FROM threads t JOIN messages m ON m.workspace_id=t.workspace_id AND m.channel_id=t.channel_id AND m.thread_id=t.id
+        LEFT JOIN users u ON u.id=m.user_id
+        WHERE t.id=${thread} AND m.agent_session_id IS NULL
+        ORDER BY m.sequence DESC LIMIT 50`);
+      return result.rows.reverse();
+    }, { isolationLevel: 'repeatable read', accessMode: 'read only' });
+  }
   async threadMessages(actor: string, thread: string, query: unknown = {}): Promise<ChatMessage[]> {
     const v = record(query, ['before']);
     const before = v.before === undefined ? undefined : uuid(v.before);
     return this.db.transaction(async c => {
-      if (!await hasThreadAccess(c, actor, uuid(thread))) throw notFound();
+      await this.requireThreadAccess(actor, thread, c);
       const [ref] = await c.select({ channel_id: s.threads.channel_id }).from(s.threads).where(eq(s.threads.id, thread));
       const boundary = before ? (await c.select({ sequence: s.channelEvents.sequence }).from(s.channelEvents)
         .where(and(eq(s.channelEvents.channel_id, ref!.channel_id), eq(s.channelEvents.thread_id, thread), eq(s.channelEvents.type, 'message.created'), sql`${s.channelEvents.payload}->>'id'=${before}`)))[0] : undefined;
