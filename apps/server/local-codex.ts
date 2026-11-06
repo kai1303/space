@@ -52,7 +52,7 @@ export function registerLocalCodexTasks(socket: Socket, connections: AgentConnec
       receipt = offered; offered = undefined;
       active = await tasks.claimDelivery(identity.id, String(receipt.event.data.delivery_id)) ?? undefined;
       if (!active) { await settle(); return null; }
-      deadline = Date.now() + 180_000;
+      deadline = Date.now() + 31 * 60_000;
       if (active.attempts > 1) { await fail('local_execution_interrupted'); return null; }
       try {
         const prepared = await tasks.prepareDelivery(active, identity.connection_id);

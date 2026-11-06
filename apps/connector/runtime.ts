@@ -2,6 +2,8 @@ import { createHash, randomBytes } from 'node:crypto';
 import { io } from 'socket.io-client';
 import { parseInvocation, parseAgentEvent, parseLocalProvider, localProviders, type LocalProvider, type AgentEvent } from '@space/contracts';
 import { AgentSessionStopped, type InvokeAgent } from './agent-runtime.js';
+import {CODING_TURN_TIMEOUT_MS} from '@space/contracts';
+import {toolApprovalClient} from './tool-approvals.js';
 import { ConnectorStore, platformOrigin, type Connection } from './storage.js';
 
 export type AuthStatus = 'required' | 'ready' | 'error';
@@ -63,6 +65,7 @@ export function connectPlatform(connection: Connection, status: () => AuthStatus
     operations = operation.then(() => {}, () => {});
     return operation;
   };
+  const approvals=toolApprovalClient(socket,taskRpc);
   const accepted = async (name: string, payload: unknown = {}, shouldSend = () => true) => {
     if (await taskRpc(name, payload, shouldSend) !== true) throw new Error('Space rejected the task operation.');
   };
@@ -88,7 +91,7 @@ export function connectPlatform(connection: Connection, status: () => AuthStatus
       active = controller;
       if (closed || halted || !socket.connected) { controller.abort(); throw new Error('Space disconnected.'); }
       let renewing = false, lastSequence = 0;
-      deadline = setTimeout(() => controller.abort(), 120_000);
+      deadline = setTimeout(() => controller.abort(), CODING_TURN_TIMEOUT_MS);
       renewal = setInterval(() => {
         if (renewing || controller.signal.aborted || terminalSubmitted) return;
         renewing = true;
@@ -106,7 +109,7 @@ export function connectPlatform(connection: Connection, status: () => AuthStatus
         catch (error) { if (error instanceof AgentSessionStopped) controller.abort(error); throw error; }
         lastSequence = event.sequence;
         terminal = event.type === 'execution.completed' || event.type === 'execution.failed';
-      }, controller.signal);
+      }, controller.signal, approvals.controls(request));
       controller.signal.throwIfAborted();
       if (!terminal) throw new Error('Agent did not send a terminal event.');
       clearInterval(renewal);
@@ -158,13 +161,13 @@ export function connectPlatform(connection: Connection, status: () => AuthStatus
     void (async()=>{
       let deadline:NodeJS.Timeout|undefined,terminal=false,sequence=0;
       try{
-        deadline=setTimeout(()=>controller.abort(),120000);
+        deadline=setTimeout(()=>controller.abort(),CODING_TURN_TIMEOUT_MS);
         await invoke(request,async raw=>{
           controller.signal.throwIfAborted();const event=parseAgentEvent(raw);
           if(event.execution_id!==request.execution_id || event.sequence!==sequence+1 || terminal)throw new Error('Invalid turn event.');
           if(['execution.completed','execution.failed'].includes(event.type)){terminal=true;}
           try{await rpc('event',{event});}catch(error){if(error instanceof AgentSessionStopped)controller.abort(error);throw error;}sequence=event.sequence;
-        },controller.signal);
+        },controller.signal,approvals.controls(request));
         await rpc('finish');
       }catch(error){controller.abort(error);if(!(error instanceof AgentSessionStopped) && !(controller.signal.reason instanceof AgentSessionStopped))await rpc('fail').catch(()=>{});}
       finally{
@@ -173,7 +176,7 @@ export function connectPlatform(connection: Connection, status: () => AuthStatus
       }
     })();
   });
-  const close = () => { for(const item of direct.values())item.controller.abort(); closed = true; active?.abort(); clearInterval(heartbeat); clearTimeout(reconnect); socket.disconnect(); };
+  const close = () => { for(const item of direct.values())item.controller.abort(); closed = true; active?.abort(); approvals.close(); clearInterval(heartbeat); clearTimeout(reconnect); socket.disconnect(); };
   const rejected = () => { if (!closed) { close(); onUnauthorized(); } };
   const publish = () => {
     if (!socket.connected || closed) return;

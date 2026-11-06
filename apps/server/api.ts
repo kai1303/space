@@ -1,4 +1,6 @@
 import { HuddleStore } from '@space/postgres/huddles';
+import {ToolApprovalStore} from '@space/postgres/tool-approvals';
+import {registerToolApprovals} from './tool-approvals.js';
 import { registerHuddles, HUDDLE_WEBHOOK } from './huddles.js';
 import type { HuddleMedia } from './huddle-media.js';
 import {registerOutbound,type OutboundOptions} from './outbound.js';
@@ -165,6 +167,7 @@ export function createApi(store: PostgresStore, options: { huddles?: HuddleMedia
   registerCalling(app, io, new CallStore(store.pool), authenticate, getEvents, work, onOutbox);
   registerHuddles(app, new HuddleStore(store.pool), getEvents, options.huddles);
   registerAgentConnections(app, io, connections, store, onOutbox, getEvents, work);
+  registerToolApprovals(app,io,new ToolApprovalStore(store.pool),connections,work,onOutbox,invalidate);
   registerSearch(app, new SearchStore(store.pool), getEvents, options.search);
   registerEventDeadlines(app, getEvents, store, assets, options.storage);
   registerWorkspaceRetention(app,getEvents,new WorkspaceRetentionStore(store.pool),options.storage);

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 import { parseLocalProvider, type LocalProvider } from '@space/contracts';
 import { resolveProject } from './project-tools.js';
 import type { AgentRuntime } from './agent-runtime.js';
@@ -16,13 +16,14 @@ import { claimPairing, connectPlatform, startCodex, type AuthStatus } from './ru
 
 export function parseOptions(args: string[]) {
   const { values } = parseArgs({ args, strict: true, allowPositionals: false, options: {
-    provider: { type: 'string' }, project: { type: 'string' }, connect: { type: 'boolean', default: false }, url: { type: 'string' }, pair: { type: 'string' }, login: { type: 'boolean', default: false },
+    coding: { type: 'boolean', default: false }, provider: { type: 'string' }, project: { type: 'string' }, connect: { type: 'boolean', default: false }, url: { type: 'string' }, pair: { type: 'string' }, login: { type: 'boolean', default: false },
     logout: { type: 'boolean', default: false }, help: { type: 'boolean', default: false },
   } });
-  if (values.logout && (values.login || values.pair || values.url || values.connect || values.project)) throw new Error('Use --logout by itself.');
+  if (values.logout && (values.login || values.pair || values.url || values.connect || values.project || values.coding)) throw new Error('Use --logout by itself.');
   if (values.pair !== undefined && !/^[A-Za-z0-9_-]{32}$/.test(values.pair)) throw new Error('Use the 32-character pairing code from Space.');
+  if (values.coding && (!values.project || !isAbsolute(values.project))) throw new Error('--coding requires an absolute --project folder path.');
   const provider = values.provider === undefined ? undefined : parseLocalProvider(values.provider);
-  return { ...(provider ? { provider } : {}), ...(values.project ? { project: values.project } : {}), url: values.url ? platformOrigin(values.url) : undefined, pair: values.pair, login: values.login, logout: values.logout, help: values.help, connect: values.connect };
+  return { ...(values.coding ? { coding: true } : {}), ...(provider ? { provider } : {}), ...(values.project ? { project: values.project } : {}), url: values.url ? platformOrigin(values.url) : undefined, pair: values.pair, login: values.login, logout: values.logout, help: values.help, connect: values.connect };
 }
 
 export function connectorDirectory(provider: LocalProvider) {
@@ -37,7 +38,7 @@ export function credentialRenewalDelay(expiresAt: number, now = Date.now()) {
 export async function runConnector(args = process.argv.slice(2)) {
   const options = parseOptions(args);
   if (options.help) {
-    console.log('Space Connector\n\n  --provider <codex|kiro|claude>     Select the local agent (default: codex)\n  --url <origin> --pair <code>  Pair this computer with Space\n  --project <absolute-path>   Enable file tools within this project folder\n  --connect                   Prompt for a new pairing code\n  --login                     Sign in to the selected provider\n  --logout                    Sign out of the selected provider\n\nRun without arguments to reconnect. Pairing codes are prompted when omitted.\nKeep this terminal running. The selected provider CLI must be installed on PATH. Kiro requires ACP v3. Claude opens its native local login flow.');
+    console.log('Space Connector\n\n  --provider <codex|kiro|claude>     Select the local agent (default: codex)\n  --url <origin> --pair <code>  Pair this computer with Space\n  --project <absolute-path>   Enable file tools within this project folder\n  --coding                    Enable native coding tools with owner approvals (requires --project)\n  --connect                   Prompt for a new pairing code\n  --login                     Sign in to the selected provider\n  --logout                    Sign out of the selected provider\n\nRun without arguments to reconnect. Pairing codes are prompted when omitted.\nKeep this terminal running. The selected provider CLI must be installed on PATH. Kiro requires ACP v3. Claude opens its native local login flow.');
     return;
   }
   const project = await resolveProject(options.project);
@@ -68,7 +69,7 @@ export async function runConnector(args = process.argv.slice(2)) {
       } else console.log('No local ChatGPT tokens are saved.');
       return;
     }
-    if (project) console.log(`Project file tools enabled: ${project}`);
+    if (project) console.log(`${options.coding ? 'Coding tools with owner approvals' : 'Project file tools'} enabled: ${project}`);
     let paired = false;
     if (options.connect || options.pair || !state.connection) {
       const origin = options.url ?? state.pending?.origin ?? state.connection?.origin;
@@ -96,9 +97,9 @@ export async function runConnector(args = process.argv.slice(2)) {
       console.error('Space rejected this connector credential. Create a new pairing code and run with --pair.');
       process.exitCode = 1;
       stop();
-    }, async (request, emit, signal) => {
+    }, async (request, emit, signal, controls) => {
       if (status !== 'ready' || !runtime?.alive()) throw new Error('The agent is not ready.');
-      await runtime.invoke(request, emit, signal);
+      await runtime.invoke(request, emit, signal, controls);
     });
     async function activate(credentials: Credentials) {
       if (controller.signal.aborted) return;
@@ -109,7 +110,7 @@ export async function runConnector(args = process.argv.slice(2)) {
         status = 'error';
         platform?.publish();
         console.error('Codex app-server stopped. Restart the connector to retry.');
-      }, undefined, { directory: store.directory, connection: state.connection!, identity: credentials, project });
+      }, undefined, { directory: store.directory, connection: state.connection!, identity: credentials, project, coding: options.coding });
       if (controller.signal.aborted) { runtime.stop(); return; }
       status = runtime.alive() ? 'ready' : 'error';
       platform?.publish();
@@ -127,7 +128,7 @@ export async function runConnector(args = process.argv.slice(2)) {
           identity = await kiroIdentity(store.directory, controller.signal);
         }
         if (!controller.signal.aborted) {
-          runtime = await startKiro({ directory: store.directory, connection: state.connection, identity, project }, () => {
+          runtime = await startKiro({ directory: store.directory, connection: state.connection, identity, project, coding: options.coding }, () => {
             status = 'error'; platform?.publish(); console.error('Kiro stopped. Restart the connector to retry.');
           });
           if (controller.signal.aborted) runtime.stop();
@@ -145,7 +146,7 @@ export async function runConnector(args = process.argv.slice(2)) {
         }
         if (!controller.signal.aborted) {
           const { startClaude } = await import('./claude.js');
-          runtime = await startClaude(auth, { directory: store.directory, connection: state.connection, project }, () => {
+          runtime = await startClaude(auth, { directory: store.directory, connection: state.connection, project, coding: options.coding }, () => {
             status = 'error'; platform?.publish(); console.error('Claude stopped. Check your local sign-in and restart the connector.');
           });
           if (controller.signal.aborted) runtime.stop();

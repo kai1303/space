@@ -2,13 +2,23 @@ import { parseAgentResponse, type AgentActivity, type AgentText, type AgentTool,
 
 // Accumulated snapshots share the existing backpressure and durable event path.
 export class AgentProgress {
+  constructor(private readonly rolling = false) {}
   activity: AgentActivity = 'working';
   readonly tools = new Map<string, AgentTool>();
   private readonly items: AgentResponseItem[] = [];
+  private readonly changes = new Map<string, string>();
+  change(path: unknown, patch: unknown) {
+    if (typeof path !== 'string' || !path || path.length > 300 || path.includes('\0') || typeof patch !== 'string' || !patch || patch.includes('\0')) return;
+    if (!this.changes.has(path) && this.changes.size >= 20) this.changes.delete(this.changes.keys().next().value!);
+    this.changes.set(path, patch.length > 32000 ? `${patch.slice(0, 31970)}\n… [truncated]` : patch);
+  }
   message(id: string) {
     if (!id || id.length > 128 || id.includes('\0')) throw new Error('Invalid message identity.');
     if (this.items.some(item => item.type === 'message' && item.id === id)) return;
-    if (this.items.filter(item => item.type === 'message').length >= 30) throw new Error('Too many messages.');
+    if (this.items.filter(item => item.type === 'message').length >= 30) {
+      if (!this.rolling) throw new Error('Too many messages.');
+      this.items.splice(this.items.findIndex(item => item.type === 'message'), 1);
+    }
     this.items.push({ type: 'message', id });
   }
   setActivity(activity: AgentActivity) {
@@ -16,7 +26,13 @@ export class AgentProgress {
   }
   tool(id: unknown, name: unknown, args: unknown, status: AgentTool['status'], result?: unknown) {
     if (typeof id !== 'string' || !id || id.length > 128 || typeof name !== 'string' || !name || name.length > 200) throw new Error('Invalid tool identity.');
-    if (!this.tools.has(id) && this.tools.size >= 30) throw new Error('Too many tool calls.');
+    if (!this.tools.has(id) && this.tools.size >= 30) {
+      if (!this.rolling) throw new Error('Too many tool calls.');
+      const oldest = this.tools.keys().next().value!;
+      this.tools.delete(oldest);
+      const index = this.items.findIndex(item => item.type === 'tool' && item.id === oldest);
+      if (index >= 0) this.items.splice(index, 1);
+    }
     if (!this.tools.has(id)) this.items.push({ type: 'tool', id });
     const printable = (value: unknown, limit: number) => (typeof value === 'string' ? value : JSON.stringify(value) ?? '').replaceAll('\0', '').slice(0, limit);
     this.tools.set(id, { id, name, arguments: printable(args, 8000), status, ...(result === undefined ? {} : { result: printable(toolResult(result), 16000) }) });
@@ -27,8 +43,26 @@ export class AgentProgress {
     const messageIds = new Set(messages.map(message => message.id));
     const items = this.items.filter(item => item.type === 'tool' ? this.tools.has(item.id) : messageIds.has(item.id));
     const originals = [...this.tools.values()];
-    const snapshot = parseAgentResponse({ messages, tools: originals.map(tool => ({ ...tool, arguments: '', ...(tool.result === undefined ? {} : { result: '' }), ...(terminal && ['calling', 'running'].includes(tool.status) ? { status: 'interrupted' } : {}) })), components: [], items, ...(!terminal ? { activity: this.activity } : {}) });
+    const snapshot = parseAgentResponse({ messages, tools: originals.map(tool => ({ ...tool, arguments: '', ...(tool.result === undefined ? {} : { result: '' }), ...(terminal && ['calling', 'running'].includes(tool.status) ? { status: 'interrupted' } : {}) })), components: [], items, ...(this.changes.size ? { outputs: { files: [], changes: [...this.changes.keys()].map(path => ({ path, patch: '' })) } } : {}), ...(!terminal ? { activity: this.activity } : {}) });
     let remaining = 64000 - JSON.stringify(snapshot).length;
+    if (snapshot.outputs) {
+      let patchBudget = Math.min(32000, remaining);
+      for (let index = snapshot.outputs.changes.length - 1; index >= 0; index--) {
+        const entry = snapshot.outputs.changes[index]!, original = this.changes.get(entry.path)!;
+        let value = original;
+        if (JSON.stringify(value).length - 2 > patchBudget) {
+          let low = 0, high = original.length;
+          while (low < high) {
+            const middle = Math.ceil((low + high) / 2);
+            if (JSON.stringify(original.slice(0, middle) + '… [truncated]').length - 2 <= patchBudget) low = middle; else high = middle - 1;
+          }
+          value = patchBudget >= 13 ? original.slice(0, low) + '… [truncated]' : '';
+        }
+        entry.patch = value;
+        const size = JSON.stringify(value).length - 2;
+        remaining -= size; patchBudget -= size;
+      }
+    }
     // Keep recent tool details first; many file reads must not fail a valid turn.
     for (let index = originals.length - 1; index >= 0; index--) {
       for (const field of ['arguments', 'result'] as const) {

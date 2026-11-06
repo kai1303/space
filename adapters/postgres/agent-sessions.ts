@@ -6,6 +6,7 @@ import { AppError, parseAgentSessionInput, parseAgentSessionMessage, parseAgentR
 import { database, type DbSession } from './database.js';
 import { hasThreadAccess, requireWorkspaceAccess } from './access.js';
 import { sessionTransaction, SessionConflict } from './session-concurrency.js';
+import {sessionToolApprovals} from './tool-approvals.js';
 import { PostgresStore } from './store.js';
 import * as s from './schema.js';
 const notFound = () => new AppError(404, 'not_found');
@@ -101,7 +102,10 @@ export class AgentSessionStore {
       const turns: AgentSessionTurn[] = (after ? rows : rows.reverse()).map(row => ({ task: row.task, created_at: new Date(row.task.created_at).toISOString(), requester_name: row.requester_name,
         ...(row.response_payload?.response ? { response: parseAgentResponse(row.response_payload.response) } : {}),
         detail: String(row.payload?.text ?? row.payload?.result ?? row.payload?.error ?? row.payload?.code ?? '') }));
-      return { ...(session.handoff_context ? {context:session.handoff_context} : {}), ...(session.managed ? { outputs: session.outputs } : {}), session: await this.summary(c, id), turns, next_cursor: (after || result.rows.length > 20) && turns.length ? turns[0]!.task.id : null, has_newer: after ? result.rows.length > 20 : !!before };
+      const audience = await c.execute(sql`SELECT ch.name,ch.kind,ch.direct_user_low,ch.direct_user_high FROM threads th JOIN channels ch ON ch.id=th.channel_id WHERE th.id=${session.origin_thread_id}`);
+      const origin=audience.rows[0];
+      const audienceLabel=origin?.kind==='direct' ? origin.direct_user_low===origin.direct_user_high ? 'Private session: only you' : 'Participants in the source direct conversation' : `Members of #${origin?.name ?? 'the source channel'}`;
+      return { audience:audienceLabel, tool_approvals:await sessionToolApprovals(c,id), ...(session.handoff_context ? {context:session.handoff_context} : {}), ...(session.managed ? { outputs: session.outputs } : {}), session: await this.summary(c, id), turns, next_cursor: (after || result.rows.length > 20) && turns.length ? turns[0]!.task.id : null, has_newer: after ? result.rows.length > 20 : !!before };
     }, { isolationLevel: 'repeatable read', accessMode: 'read only' });
   }
   async send(actor: string, id: string, raw: unknown, key: string): Promise<Task> {

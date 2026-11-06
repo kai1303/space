@@ -10,7 +10,7 @@ export async function sessionRuntime(create: (onExit:()=>void) => Promise<AgentR
   return {
     alive: () => !closed && healthy(),
     stop() { closed = true; spare?.stop(); for (const item of sessions.values()) item.runtime.stop(); sessions.clear(); },
-    async invoke(request, emit, signal) {
+    async invoke(request, emit, signal, controls) {
       if (closed || signal.aborted) throw new Error('Agent unavailable.');
       const id = request.session_id;
       let item = sessions.get(id);
@@ -29,7 +29,7 @@ export async function sessionRuntime(create: (onExit:()=>void) => Promise<AgentR
         catch(error) { sessions.delete(id); throw error; }
       }
       item.active = true;
-      try { await item.runtime.invoke(request,emit,signal); }
+      try { await item.runtime.invoke(request,emit,signal,controls); }
       finally { item.active = false; }
     },
   };

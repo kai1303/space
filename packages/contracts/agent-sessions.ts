@@ -9,7 +9,7 @@ export interface WorkspaceAgentSession extends AgentSessionSummary { channel_id:
 export type AgentSessionReference = Pick<WorkspaceAgentSession, 'id' | 'agent_name' | 'origin_thread_id' | 'channel_id' | 'channel_archived'>;
 export interface StarredAgentSession { id: string; name: string; kind: 'agent_session'; private: boolean; session: AgentSessionReference }
 export interface AgentSessionTurn { task: Task; created_at: string; requester_name: string; response?: AgentResponse; detail: string }
-export interface AgentSessionDetail { context?: import('./sidekick.js').SidekickContext; outputs?: AgentSessionOutputs; session: AgentSessionSummary; turns: AgentSessionTurn[]; next_cursor: string | null; has_newer?: boolean }
+export interface AgentSessionDetail { audience?: string; tool_approvals?: import('./local-tools.js').LocalToolApproval[]; context?: import('./sidekick.js').SidekickContext; outputs?: AgentSessionOutputs; session: AgentSessionSummary; turns: AgentSessionTurn[]; next_cursor: string | null; has_newer?: boolean }
 export function parseAgentSessionInput(value: unknown) {
   const v = record(value, ['client_session_id', 'installation_id', 'title', 'skill']);
   return { skill: v.skill === undefined ? undefined : text(v.skill, 80), client_session_id: uuid(v.client_session_id), installation_id: uuid(v.installation_id), title: text(v.title, 160) };

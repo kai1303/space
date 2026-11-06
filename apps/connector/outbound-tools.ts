@@ -12,7 +12,7 @@ export async function turnScopedRuntime(create: (onExit: () => void, outbound?: 
   return {
     alive: () => !closed && (!runtime || runtime.alive()),
     stop() { closed = true; runtime?.stop(); runtime = undefined; },
-    async invoke(raw, emit, signal) {
+    async invoke(raw, emit, signal, controls) {
       const request = parseInvocation(raw);
       if (closed || busy || signal.aborted) throw new Error('Agent unavailable or busy.');
       busy = true;
@@ -20,7 +20,7 @@ export async function turnScopedRuntime(create: (onExit: () => void, outbound?: 
         if (request.outbound) { runtime?.stop(); runtime = undefined; }
         if (!runtime) runtime = await create(exited, request.outbound, signal);
         if (closed || signal.aborted) { runtime.stop(); runtime = undefined; throw new Error('Agent unavailable.'); }
-        await runtime.invoke(request, emit, signal);
+        await runtime.invoke(request, emit, signal, controls);
       } finally {
         if (request.outbound) { runtime?.stop(); runtime = undefined; }
         busy = false;

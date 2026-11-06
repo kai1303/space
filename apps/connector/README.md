@@ -48,7 +48,7 @@ Codex and Kiro can run concurrently in separate terminals. Codex keeps `~/.confi
 
 The adapter launches ACP v3, resolving the installed `kiro-cli-chat` companion when present so Kiro can run with its isolated HOME. It requires session loading and verifies that Kiro selected the generated `space-chat` profile before reporting readiness. Without `--project`, this profile disables tools, MCP, powers, resources and hooks. The client advertises no filesystem or terminal callbacks and rejects permission requests and unexpected tool events. Kiro’s own `fetch_cloud_config` status notifications are recognized as housekeeping, without authorizing model tools. Project access requires the local `--project` option described below. This is a tool restriction, not an OS filesystem jail. Session updates are bounded and coalesced while awaiting Space's acknowledgments. Stop waits for the outstanding setup request or prompt cancellation to settle before accepting another turn; uncertain transport failures require restarting the connector and do not replay inference.
 
-Kiro uses its own authentication and model defaults. Model selection, native shell tools, provider-specific commands and interactive tool approval remain unsupported. See Kiro's [ACP v3 client guide](https://kiro.dev/docs/cli/v3/acp-migration/) and [agent profile reference](https://kiro.dev/docs/custom-agents/configuration-reference/).
+Kiro uses its own authentication and model defaults. Native shell tools and interactive approval require coding mode below. Model selection and provider-specific commands are not exposed in Space. See Kiro's [ACP v3 client guide](https://kiro.dev/docs/cli/v3/acp-migration/) and [agent profile reference](https://kiro.dev/docs/custom-agents/configuration-reference/).
 
 ## Claude
 
@@ -82,6 +82,22 @@ A project changes the private session namespace. Start a new Space agent session
 
 Space shows Working, Thinking, Responding or Using tools above the shared session composer, based on provider events. States can repeat. Reasoning contents are not forwarded. Tool inputs/results use the existing expandable timeline; older details are shortened to keep accumulated snapshots within the response budget. Completed, stopped and failed turns clear their activity. Unexpected or unconfirmed in-flight failures close the runtime before another tool turn can start.
 
+## Coding from Space
+
+Opt in locally when starting any of the three providers:
+
+```sh
+pnpm connector --coding --project /absolute/path/to/project
+pnpm connector --provider claude --coding --project /absolute/path/to/project
+pnpm connector --provider kiro --coding --project /absolute/path/to/project
+```
+
+Start a new Space agent session after changing mode or project. Each coding turn asks the computer owner to approve the selected project in Space before native tools run. The card names the session audience: session visibility controls who sees discussion and outputs, separately from local project access. Provider requests for additional command, file or permission access appear as Allow once / Deny cards. Decisions are bound to the current execution and connection, and the card remains visible until the connector acknowledges it. Stop, disconnect or loss of access invalidates outstanding requests.
+
+Coding mode enables the provider's native tools for editing files, running tests and Git commands, with a thirty-minute turn deadline. Space shows bounded command activity and file changes using its existing timeline and Changes view. Codex uses its workspace-write sandbox and on-request approval policy; Claude enforces native-tool permission hooks; Kiro uses its ACP permission requests. These provider controls are not a uniform OS filesystem read-root jail. Select only a project you intend to expose to that agent, and review native requests for access beyond it. Credentials and native session history remain local.
+
+The provider CLIs must already be installed and signed in through their Space connector profiles. Git identity, repository access and any necessary local credential helper must be configured for the connector's execution environment. Space does not import desktop chats, copy Git credentials, or provide a folder picker in this release. A public session does not give its other participants authority to approve the computer owner's tools.
+
 ## Conversation permissions
 
 A connected agent inherits its owner's current access to conversations in its workspace. It can use its declared skills wherever the owner is a current member, including private channels and DMs the owner participates in. No separate channel enablement is needed. Losing membership, disabling the installation or revoking the connection prevents further authorized execution. Other users' requests still require the owner's approval.
@@ -98,7 +114,7 @@ Responses stream into Space. Named agent sessions retain their own Codex convers
 
 Legacy standalone tasks still start fresh ephemeral Codex threads and temporary working directories. Navigator tasks include up to 16 bounded messages from the originating thread; manually requested tasks send the entered goal. Default launches have tools disabled and use a connector-owned HOME/CODEX_HOME, separate from existing Codex desktop data. The installed runtime uses a read-only sandbox; this is not a separate OS filesystem read-root jail.
 
-Stopping or ending a managed session interrupts its exact Codex turn and waits for acknowledgment and completion before accepting another task; other sessions keep working. A turn is limited to two minutes. Disconnects, revoked access, expired leases and uncertain acknowledgements stop a run without automatically generating the same response again. A connector reporting an error must be restarted before requesting another task. Existing task-owner approval is separate from unsupported mid-turn tool approvals, which the connector rejects.
+Stopping or ending a managed session interrupts its exact Codex turn and waits for acknowledgment and completion before accepting another task; other sessions keep working. Chat turns are limited to two minutes; coding turns to thirty minutes. Disconnects, revoked access, expired leases and uncertain acknowledgements stop a run without automatically generating the same response again. A connector reporting an error must be restarted before requesting another task. Task-owner approval and coding tool approvals are separate. Outside coding mode, native permission escalation is rejected.
 
 If Space rejects the connector credential, create a fresh pairing code in Space and run with `--pair` again. Transient socket disconnects reconnect automatically with a delay capped at 30 seconds. ChatGPT sign-in requires user interaction; the connector never signs in autonomously.
 

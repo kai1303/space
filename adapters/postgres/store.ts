@@ -140,7 +140,7 @@ export class PostgresStore implements DeliveryStore {
       await c.insert(s.executions).values({ id: executionId, workspace_id: task.workspace_id, task_id: task.id, installation_id: task.installation_id, session_id: sessionId, status: 'queued' });
       const [result] = await c.update(s.tasks).set({ status: direct ? 'running' : 'queued', approved_by: actor, session_id: sessionId, active_execution_id: executionId, revision: sql`${s.tasks.revision}+1`, updated_at: now }).where(and(eq(s.tasks.id, id), eq(s.tasks.revision, task.revision))).returning();
       if (!result) throw new SessionConflict();
-      await c.insert(s.outbox).values({ id: randomUUID(), task_id: task.id, execution_id: executionId, ...(direct ? {direct:true,direct_connection:directConnection,state:'delivering' as const,attempts:1,lease_token:randomUUID(),lease_until:sql`now()+interval '180 seconds'`} : {}) });
+      await c.insert(s.outbox).values({ id: randomUUID(), task_id: task.id, execution_id: executionId, ...(direct ? {direct:true,direct_connection:directConnection,state:'delivering' as const,attempts:1,lease_token:randomUUID(),lease_until:sql`now()+interval '31 minutes'`} : {}) });
       // Direct attempts have a fixed deadline and are never renewed or reclaimed.
       if(direct) await c.execute(sql`SELECT pg_notify('space_direct_turn',${JSON.stringify({task_id:task.id})})`);
       await this.append(c, result!, 'task.approved', actor, { execution_id: executionId });

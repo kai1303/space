@@ -1,0 +1,5 @@
+.agent-tool-approvals { padding: 8px 20px; }
+.agent-tool-approval { padding: 12px; margin: 8px 0; border: 1px solid var(--sp-border, #ddd); border-radius: 8px; }
+.agent-tool-approval pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 240px; overflow: auto; font-size: 12px; margin: 8px 0; }
+.agent-tool-approval p { font-size: 12px; opacity: .8; }
+.agent-tool-approval-actions { display: flex; gap: 8px; }

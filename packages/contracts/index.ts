@@ -1,3 +1,4 @@
+export * from './local-tools.js';
 export * from './sidekick.js';
 export * from './calling.js';
 import type { RichDocument } from './rich-text.js';
