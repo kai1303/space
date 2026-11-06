@@ -26,7 +26,7 @@ export function MessageTimeline({ label, items, page, loading, latestVersion, lo
       const item = items[index - headerCount]!;
       return item.type === 'message.created' ? `message:${item.payload.id}` : `event:${item.sequence}`;
     },
-    estimateSize: () => 100, overscan: 6, paddingStart: page?.has_older ? 44 : footer ? 16 : 10, paddingEnd: page?.has_newer ? 44 : 0,
+    estimateSize: () => 100, overscan: 6, paddingStart: page?.has_older ? 44 : footer ? 16 : 10, paddingEnd: page?.has_newer ? 44 : 16,
     anchorTo: 'end', followOnAppend: !page?.has_newer && loading === null,
     scrollEndThreshold: 80,
     onChange: instance => { pinned.current = instance.isAtEnd(); },
