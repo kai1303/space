@@ -1,14 +1,55 @@
-import {createRef} from 'react';
+import {createRef,StrictMode} from 'react';
 import {cleanup,fireEvent,render,screen} from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import {afterEach,expect,it,vi} from 'vitest';
 import {MessageTimeline, type TimelineHandle} from './MessageTimeline.js';
 import type {ChatEvent,MessagePage} from '@space/contracts';
 
-const mocks=vi.hoisted(()=>({scrollToEnd:vi.fn(),scrollToIndex:vi.fn(),reduced:false}));
+const mocks=vi.hoisted(()=>({scrollToEnd:vi.fn(),scrollToIndex:vi.fn(),scrollToOffset:vi.fn(),reduced:false}));
 vi.mock('motion/react',async original=>({...await original<typeof import('motion/react')>(),useReducedMotion:()=>mocks.reduced}));
-vi.mock('@tanstack/react-virtual',()=>({useVirtualizer:(options:any)=>({getVirtualItems:()=>Array.from({length:options.count},(_,index)=>({index,key:options.getItemKey(index),start:index*100})),getTotalSize:()=>options.count*100,scrollToEnd:mocks.scrollToEnd,scrollToIndex:mocks.scrollToIndex,measureElement:()=>{}})}));
+vi.mock('@tanstack/react-virtual',()=>({useVirtualizer:(options:any)=>({getVirtualItems:()=>Array.from({length:options.count},(_,index)=>({index,key:options.getItemKey(index),start:index*100})),getTotalSize:()=>options.count*100,scrollToEnd:mocks.scrollToEnd,scrollToIndex:mocks.scrollToIndex,scrollToOffset:mocks.scrollToOffset,measureElement:()=>{}})}));
 afterEach(()=>{cleanup();vi.clearAllMocks();vi.unstubAllGlobals();mocks.reduced=false;});
+
+it('reissues the initial latest scroll after a StrictMode effect remount',()=>{
+ const pinned=createRef<boolean>();pinned.current=true;
+ render(<StrictMode><MessageTimeline label="Messages" items={[]} page={null} loading={null} latestVersion={1} load={()=>{}} pinned={pinned} render={()=>null}/></StrictMode>);
+ // The virtualizer cancels in-flight scrolling in its effect cleanup.
+ expect(mocks.scrollToEnd).toHaveBeenCalledTimes(2);
+});
+
+it('waits until a hidden conversation is visible before consuming its latest position',()=>{
+ const pinned=createRef<boolean>();pinned.current=true;
+ const timeline=(hidden:boolean)=><MessageTimeline label="Messages" items={[]} page={null} loading={null} latestVersion={1} hidden={hidden} load={()=>{}} pinned={pinned} render={()=>null}/>;
+ const view=render(timeline(true));
+ expect(mocks.scrollToEnd).not.toHaveBeenCalled();
+ view.rerender(timeline(false));
+ expect(mocks.scrollToEnd).toHaveBeenCalledTimes(1);
+ const scroller=screen.getByLabelText('Messages');
+ Object.defineProperties(scroller,{scrollHeight:{value:400},clientHeight:{value:100}});
+ fireEvent.scroll(scroller,{target:{scrollTop:50}});
+ view.rerender(timeline(false));
+ expect(mocks.scrollToEnd).toHaveBeenCalledTimes(1);
+ expect(scroller.scrollTop).toBe(50);
+});
+
+it('does not treat a hidden tab as a reader returning to the latest message',()=>{
+ const pinned=createRef<boolean>();pinned.current=true;
+ const timeline=(hidden:boolean)=><MessageTimeline label="Messages" items={[]} page={null} loading={null} latestVersion={1} hidden={hidden} load={()=>{}} pinned={pinned} render={()=>null}/>;
+ const view=render(timeline(false));
+ const scroller=screen.getByLabelText('Messages');
+ let height=100,total=400;
+ Object.defineProperties(scroller,{scrollHeight:{get:()=>total},clientHeight:{get:()=>height}});
+ fireEvent.scroll(scroller,{target:{scrollTop:50}});
+ view.rerender(timeline(true));
+ height=0;total=0;
+ fireEvent.scroll(scroller,{target:{scrollTop:0}});
+ expect(pinned.current).toBe(false);
+ height=100;total=400;
+ view.rerender(timeline(false));
+ expect(screen.getByRole('button',{name:'Jump to latest'})).toBeTruthy();
+ expect(mocks.scrollToEnd).toHaveBeenCalledTimes(1);
+ expect(mocks.scrollToOffset).toHaveBeenCalledWith(50);
+});
 
 it.each([true,false])('keeps resize anchored only for readers at the end: %s',atEnd=>{
  let resize!:()=>void;

@@ -23,6 +23,7 @@ if (!app.requestSingleInstanceLock()) {
   app.on('activate', () => { if (url) openWindow(); });
   app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
   app.whenReady().then(() => {
+    if (!app.isPackaged && app.dock) app.dock.setIcon(join(__dirname, '../assets/space-icon.png'));
     let config = require('../desktop.config.json');
     try {
       config = JSON.parse(readFileSync(join(app.getPath('userData'), 'desktop.json'), 'utf8'));

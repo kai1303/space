@@ -41,6 +41,8 @@ Apple Silicon output:
 
 The DMG uses macOS's built-in `hdiutil`; Forge creates the app and ZIP. To request an Intel build, use `pnpm --filter @space/desktop make --arch=x64`. Test it on Intel hardware before distributing it.
 
+The app icon uses the existing web artwork in `apps/web/public/brand/space-icon.svg`. `assets/space-icon.png` is its 1024px raster export (used by Electron windows and the development Dock icon); `assets/space-icon.icns` contains the macOS icon sizes for the packaged app. Regenerate both assets when the web artwork changes.
+
 Edit `desktop.config.json` before packaging to set the default deployment. A local configuration at `~/Library/Application Support/Space/desktop.json` overrides that default:
 
 ```json

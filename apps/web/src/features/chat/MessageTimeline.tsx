@@ -6,15 +6,18 @@ import type { ChatEvent, MessagePage } from '@space/contracts';
 import type { HistoryDirection } from './history-window.js';
 
 export type TimelineHandle = { reveal: (id: string) => void };
-export function MessageTimeline({ label, items, page, loading, latestVersion, load, pinned, handle, render, children, header, footer, busy, onAtEndChange, role, hidden, align = 'end' }: {
+export function MessageTimeline({ label, items, page, loading, latestVersion, load, pinned, handle, render, children, header, footer, busy, onAtEndChange, role, hidden }: {
   label: string; items: ChatEvent[]; page: Pick<MessagePage,'has_older'|'has_newer'> | null; loading: HistoryDirection | null;
   latestVersion: number; load: (direction: HistoryDirection) => unknown;
   pinned: RefObject<boolean>; handle?: RefObject<TimelineHandle | null>;
   render: (event: ChatEvent, index: number) => ReactNode; children?: ReactNode; header?: ReactNode; footer?: ReactNode; busy?: boolean;
-  onAtEndChange?: (atEnd: boolean) => void; role?: 'log'; hidden?: boolean; align?: 'start' | 'end';
+  onAtEndChange?: (atEnd: boolean) => void; role?: 'log'; hidden?: boolean;
 }) {
   const element = useRef<HTMLDivElement>(null), lastOffset = useRef(0);
   const handledLatest = useRef(0);
+  const wasHidden = useRef(hidden);
+  // The virtualizer cancels pending scrolls on cleanup, including StrictMode's effect remount.
+  useLayoutEffect(() => () => { handledLatest.current = 0; }, []);
   const latestScrollBehavior = useRef<'auto' | 'smooth'>('auto');
   const reducedMotion = useReducedMotion();
   const [atEnd, setAtEnd] = useState(true);
@@ -29,11 +32,11 @@ export function MessageTimeline({ label, items, page, loading, latestVersion, lo
     estimateSize: () => 100, overscan: 6, paddingStart: page?.has_older ? 44 : footer ? 16 : 10, paddingEnd: page?.has_newer ? 44 : 16,
     anchorTo: 'end', followOnAppend: !page?.has_newer && loading === null,
     scrollEndThreshold: 80,
-    onChange: instance => { pinned.current = instance.isAtEnd(); },
+    onChange: instance => { if (!hidden && element.current?.clientHeight) pinned.current = instance.isAtEnd(); },
   });
   useLayoutEffect(() => {
     const node = element.current;
-    if (!node || typeof ResizeObserver === 'undefined') return;
+    if (!node || hidden || typeof ResizeObserver === 'undefined') return;
     let height = node.clientHeight;
     const observer = new ResizeObserver(() => {
       const nextHeight = node.clientHeight;
@@ -43,16 +46,21 @@ export function MessageTimeline({ label, items, page, loading, latestVersion, lo
     });
     observer.observe(node);
     return () => observer.disconnect();
-  }, [atEnd, page?.has_newer]);
+  }, [atEnd, page?.has_newer, hidden]);
   useLayoutEffect(() => {
-    if (latestVersion && latestVersion !== handledLatest.current) {
+    const revealed = wasHidden.current && !hidden;
+    wasHidden.current = hidden;
+    if (!hidden && latestVersion && latestVersion !== handledLatest.current) {
       handledLatest.current = latestVersion;
       const behavior = latestScrollBehavior.current;
       latestScrollBehavior.current = 'auto';
       virtualizer.scrollToEnd({ behavior });
       if (behavior === 'auto') { pinned.current = true; setAtEnd(true); onAtEndChange?.(true); }
+    } else if (revealed) {
+      if (atEnd && !page?.has_newer) virtualizer.scrollToEnd();
+      else virtualizer.scrollToOffset(lastOffset.current);
     }
-  }, [latestVersion, virtualizer]);
+  }, [latestVersion, virtualizer, hidden, atEnd, page?.has_newer]);
   useLayoutEffect(() => {
     if (!handle) return;
     handle.current = { reveal: id => {
@@ -70,9 +78,10 @@ export function MessageTimeline({ label, items, page, loading, latestVersion, lo
     if (!await load('latest')) latestScrollBehavior.current = 'auto';
   }
   const showJump = !!page?.has_newer || !atEnd;
-  return <div className="chat-timeline-shell" data-align={align} hidden={hidden}>
+  return <div className="chat-timeline-shell" hidden={hidden}>
     <div className="chat-timeline chat-timeline--virtual" role={role} aria-label={label} aria-busy={busy} ref={element} onScroll={event => {
       const node = event.currentTarget, offset = node.scrollTop;
+      if (hidden || !node.clientHeight) return;
       const movingUp = offset < lastOffset.current, movingDown = offset > lastOffset.current;
       lastOffset.current = offset;
       pinned.current = node.scrollHeight - offset - node.clientHeight < 80;

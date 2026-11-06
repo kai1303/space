@@ -221,7 +221,6 @@ it('uses the DM header and timeline with a fixed composer and shared output tabs
  const log=screen.getByRole('log',{name:'Session conversation'});
  const editor=await screen.findByRole('textbox',{name:'Message agent session'});
  expect(log.classList.contains('chat-timeline')).toBe(true);
- expect(log.parentElement?.getAttribute('data-align')).toBe('start');
  expect(log.contains(editor)).toBe(false);
  expect(screen.getByRole('heading',{name:'Codex',exact:true,level:1})).toBeTruthy();
  expect(editor.getAttribute('data-placeholder')).toBe('Message Codex');

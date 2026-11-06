@@ -1,10 +1,12 @@
 const { BrowserWindow, dialog, shell } = require('electron');
+const { join } = require('node:path');
 const { navigationAction, spaceUrl, isAssetDownload, mediaPermissionAllowed } = require('./policy.cjs');
 
 function createSpaceWindow(configuredUrl, { show = true } = {}) {
   const url = spaceUrl(configuredUrl);
   const win = new BrowserWindow({
     title: 'Space', width: 1360, height: 900, minWidth: 800, minHeight: 600,
+    icon: join(__dirname, '../assets/space-icon.png'),
     show: false, backgroundColor: '#19171d',
     webPreferences: {
       partition: 'persist:space',

@@ -959,6 +959,7 @@ it('paginates thread history with its own cursor without expanding the channel w
   const thread = await screen.findByRole('region', { name: 'Thread' });
   await within(thread).findByText(reply.text);
   const timeline = within(thread).getByLabelText('Thread messages');
+  Object.defineProperties(timeline, { clientHeight: { value: 400 }, scrollHeight: { value: 1200 } });
   fireEvent.scroll(timeline, { target: { scrollTop: 600 } });
   fireEvent.scroll(timeline, { target: { scrollTop: 200 } });
   await within(thread).findByText(olderReply.text);
