@@ -4,6 +4,7 @@ import type { Server } from 'socket.io';
 import { AppError, localProviderForConnector, record, text, uuid } from '@space/contracts';
 import type { AgentConnectionStore } from '@space/postgres/agent-connections';
 import type { PostgresStore } from '@space/postgres/store';
+import {registerDirectTurns} from './direct-turns.js';
 import { registerLocalCodexTasks } from './local-codex.js';
 import { SubscriptionIndex, type RealtimeWork } from './realtime-work.js';
 
@@ -52,7 +53,9 @@ export function registerAgentConnections(app: FastifyInstance, io: Server, store
   const checks = new SubscriptionIndex();
   const stopWakes = onOutbox(keys => checks.wake(keys));
   agents.on('connection', socket => {
-    const delivery = registerLocalCodexTasks(socket, store, tasks, getEvents, work);
+    registerDirectTurns(socket,store,tasks,work);
+    const delivery = tasks.pool.query('SELECT connector_id FROM agent_installations WHERE id=$1',[socket.data.agent.id]).then(result=>result.rows[0]?.connector_id==='codex.local'
+      ? registerLocalCodexTasks(socket,store,tasks,getEvents,work,true) : registerLocalCodexTasks(socket, store, tasks, getEvents, work));
     const identity = socket.data.agent as { id: string; connection_id: string; workspace_id: string; owner_id: string };
     let checking = false, dirty = false;
     const stopCheck = checks.add(['global', `workspace:${identity.workspace_id}`, `actor:${identity.owner_id}`], () => {
@@ -74,9 +77,9 @@ export function registerAgentConnections(app: FastifyInstance, io: Server, store
       if (working || ++count > 5) { ack({ error: 'busy' }); return; }
       working = true;
       try {
-        await delivery.ready;
+        const currentDelivery=await delivery;await currentDelivery.ready;
         ack({ data: await work.run(socket.id, () => store.heartbeat(socket.data.token, identity.connection_id, input)) });
-        delivery.notifyReady();
+        currentDelivery.notifyReady();
       }
       catch (e) {
         const code = e instanceof AppError ? e.code : 'internal_error'; ack({ error: code });

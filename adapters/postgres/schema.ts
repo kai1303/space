@@ -90,6 +90,7 @@ export const assets = pgTable('assets', {
   processing_token: uuid(), processing_until: timestamp({ withTimezone: true }),
 });
 export const outbox = pgTable('outbox', {
+  direct: boolean().notNull().default(false), direct_connection: uuid(),
   id: id(), task_id: uuid().notNull(), execution_id: uuid().notNull(), state: text().$type<'pending' | 'delivering' | 'done' | 'dead'>().notNull().default('pending'),
   attempts: integer().notNull().default(0), available_at: time(), lease_until: timestamp({ withTimezone: true }), lease_token: uuid(), last_error: text(), created_at: time(),
 });

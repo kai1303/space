@@ -4,6 +4,8 @@ import { parsePairing, parsePairingClaim } from '@space/contracts';
 test('pairing selects a supported provider and preserves the Codex default', () => {
   assert.equal(parsePairing({}).provider, 'codex');
   assert.equal(parsePairing({ provider: 'kiro' }).provider, 'kiro');
+  assert.equal(parsePairing({ provider: 'claude' }).provider, 'claude');
+  assert.equal(parsePairingClaim({ code: 'a'.repeat(32), credential: 'b'.repeat(43), provider: 'claude' }).provider, 'claude');
   assert.throws(() => parsePairing({ provider: 'shell' }), /invalid_provider/);
   assert.equal(parsePairingClaim({ code: 'a'.repeat(32), credential: 'b'.repeat(43), provider: 'kiro' }).provider, 'kiro');
 });

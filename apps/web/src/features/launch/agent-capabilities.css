@@ -1,0 +1,87 @@
+.agent-capabilities {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 1px;
+  margin-top: 80px;
+  overflow: hidden;
+  border: 1px solid #e3e0ed;
+  border-radius: 20px;
+  background: #e3e0ed;
+  color: #211d3d;
+  font-family: 'Space Connection Geist', Lato, Arial, sans-serif;
+}
+.agent-capabilities article {
+  min-width: 0;
+  padding: 24px;
+  background: #f8f7ff;
+}
+.agent-capability-art {
+  display: grid;
+  place-items: center;
+  padding: 16px 12px;
+  margin-bottom: 24px;
+  border-radius: 14px;
+  background: #eeecf8;
+}
+.agent-capability-art svg {
+  display: block;
+  width: 100%;
+  max-width: 300px;
+  height: auto;
+  overflow: visible;
+}
+.agent-capability-art text {
+  fill: currentColor;
+  font-family: 'Space Connection Geist', Lato, Arial, sans-serif;
+  font-size: 12px;
+}
+.agent-capability-art text[fill="white"] { fill: white; }
+.agent-capability-art text[fill="#6755af"] { fill: #6755af; }
+.agent-capability-art .cap-paper { fill: #f8f7ff; stroke: #d2cde2; stroke-width: 1.2; }
+.agent-capability-art .cap-bold { font-weight: 700; }
+.agent-capability-art .cap-muted { fill: #716b8d; }
+.agent-capability-art .cap-faint { fill: #9a91b8; font-size: 11px; }
+.launch .agent-capabilities h3 { font-size: 16px; font-weight: 600; letter-spacing: -.01em; }
+.launch .agent-capabilities p { margin: 9px 0 0; color: #706986; font-size: 14.5px; line-height: 1.5; }
+@media (min-width: 640px) and (max-width: 1023px) {
+  .agent-capabilities { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .agent-capabilities article:last-child { grid-column: 1 / -1; }
+}
+@media (max-width: 639px) {
+  .agent-capabilities { grid-template-columns: minmax(0, 1fr); margin-top: 56px; }
+  .agent-capabilities article { padding: 20px; }
+}
+
+.agent-capabilities .every-tool-card { background: #fcfbff; color: #181630; }
+.every-tool-art { background: #f5f3fb; margin-bottom: 20px; }
+.every-tool-art svg { max-width: 240px; }
+.every-tool-art .tool-link { stroke: #18163024; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+.every-tool-art .tool-link-flow { stroke: #4f46b8; stroke-dasharray: 3 9; }
+.every-tool-art .tool-node { fill: #fcfbff; stroke: #18163024; stroke-width: 1; }
+.every-tool-art text { fill: #a4a0b8; font-size: 9px; letter-spacing: 0; text-rendering: geometricPrecision; }
+.launch .every-tool-card h3 { font-size: 15.5px; font-weight: 500; line-height: 1.5; }
+.launch .every-tool-card p { margin-top: 6px; color: #68647f; text-wrap: pretty; }
+
+.work-session-art { container-type: inline-size; }
+.work-session-stage { width: 100%; max-width: 300px; aspect-ratio: 300 / 174; display: grid; place-items: center; font-size: clamp(7px, 3.5cqw, 11px); line-height: 1.4; }
+.work-session-preview { width: 92%; padding: 1.1em; border: 1px solid #d5cee4; border-radius: 1.1em; background: #fcfbff; box-shadow: 0 5px 14px #30234e08; }
+.work-session-header { display: flex; align-items: center; gap: .6em; padding-bottom: .8em; border-bottom: 1px solid #e9e4f1; }
+.work-session-header img { width: 1.8em; height: 1.8em; }
+.work-session-header strong { font-size: 1.1em; font-weight: 600; }
+.work-session-header>span { margin-left: auto; color: #8d819e; font-size: .85em; }
+.work-session-activity { list-style: none; margin: .8em 0; padding: 0; display: grid; gap: .6em; color: #736780; }
+.work-session-activity li { display: flex; align-items: center; gap: .65em; }
+.work-session-art .work-session-activity svg { flex: none; width: 1em; height: 1em; color: #78917a; }
+.work-session-result { display: flex; align-items: center; gap: .65em; background: #efebfa; border: 1px solid #dfd6f0; padding: .7em; border-radius: .7em; }
+.work-session-result>div { min-width: 0; }
+.work-session-result strong { display: block; font-size: .95em; font-weight: 500; color: #564279; }
+.work-session-result span { display: block; margin-top: .15em; font-size: .8em; color: #9183a4; }
+.work-session-art .work-session-result>svg { flex: none; width: 1.65em; height: 1.65em; color: #7c64a5; }
+.work-session-art .work-session-result>svg:last-child { width: 1em; height: 1em; margin-left: auto; }
+@container (max-width: 200px) {
+  .work-session-preview { padding: .7em; }
+  .work-session-header { padding-bottom: .5em; }
+  .work-session-header img { width: 1.5em; height: 1.5em; }
+  .work-session-activity { margin-block: .5em; gap: .3em; }
+  .work-session-result { padding: .5em; }
+}

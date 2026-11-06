@@ -38,6 +38,7 @@ test('--connect prompts for a new code even with a saved platform connection', a
 
 test('CLI selects Kiro explicitly and rejects unknown providers', () => {
   assert.equal(parseOptions(['--provider', 'kiro']).provider, 'kiro');
+  assert.equal(parseOptions(['--provider', 'claude']).provider, 'claude');
   assert.equal(parseOptions(['--provider', 'codex']).provider, 'codex');
   assert.throws(() => parseOptions(['--provider', 'shell']));
 });
@@ -80,4 +81,51 @@ test('credential renewal uses an expiry deadline without spinning on short-lived
   assert.equal(credentialRenewalDelay(3600000, 0), 3540000);
   assert.equal(credentialRenewalDelay(30000, 0), 24000);
   assert.equal(credentialRenewalDelay(0, 0), 1000);
+});
+
+test('Claude CLI pairs, signs in natively and reconnects without API keys', {timeout:15000}, async()=>{
+  const {mkdtemp,mkdir,writeFile,readFile,rm}=await import('node:fs/promises');
+  const {tmpdir}=await import('node:os');const {join}=await import('node:path');
+  const {spawn}=await import('node:child_process');const {fileURLToPath}=await import('node:url');
+  const {createServer}=await import('node:http');const {Server}=await import('socket.io');
+  const directory=await mkdtemp(join(tmpdir(),'space-claude-cli-'));
+  const bin=join(directory,'bin');await mkdir(bin);
+  await writeFile(join(bin,'claude'),`#!/usr/bin/env node
+const fs=require('node:fs'),path=require('node:path');
+const auth=path.join(process.env.CLAUDE_CONFIG_DIR,'test-login');
+if(process.argv[2]==='auth'){
+ if(process.argv[3]==='login'){fs.writeFileSync(auth,'native-login');process.exit(0);}
+ if(process.argv[3]==='logout'){fs.rmSync(auth,{force:true});process.exit(0);}
+ if(!fs.existsSync(auth))process.exit(1);
+ console.log(JSON.stringify({loggedIn:true,authMethod:'claude.ai',email:'test@example.test',orgId:'test-org'}));process.exit(0);
+}
+require('node:readline').createInterface({input:process.stdin}).on('line',line=>{
+ const message=JSON.parse(line);
+ if(message.type==='control_request')console.log(JSON.stringify({type:'control_response',response:{subtype:'success',request_id:message.request_id,response:{commands:[],agents:[],models:[],account:{}}}}));
+});
+`,{mode:0o700});
+  let claims=0,received='';
+  const http=createServer(async(req,res)=>{
+    const chunks=[];for await(const chunk of req)chunks.push(chunk);const body=Buffer.concat(chunks).toString();
+    assert.equal(JSON.parse(body).provider,'claude');received+=body;claims++;
+    res.writeHead(200,{'content-type':'application/json'}).end(JSON.stringify({installation_id:'i',workspace_id:'w',provider:'claude'}));
+  });
+  const io=new Server(http);let observed=()=>{};
+  io.of('/agents').on('connection',socket=>socket.on('agent.heartbeat',(payload,ack)=>{received+=JSON.stringify(payload);ack({data:{installation_id:'i'}});observed(payload.auth_status);}));
+  await new Promise(resolve=>http.listen(0,'127.0.0.1',resolve));
+  try {
+    for(const reconnect of [false,true]){
+      const ready=new Promise(resolve=>{observed=status=>{if(status==='ready')resolve();};});
+      const child=spawn(process.execPath,[fileURLToPath(new URL('../dist/main.js',import.meta.url)),'--provider','claude',...(!reconnect?['--url',`http://127.0.0.1:${http.address().port}`,'--pair','c'.repeat(32)]:[])],{env:{...process.env,HOME:directory,PATH:bin+':'+process.env.PATH,ANTHROPIC_API_KEY:'',CLAUDE_CODE_OAUTH_TOKEN:''},stdio:'pipe'});
+      let output='';child.stdout.on('data',c=>output+=c);child.stderr.on('data',c=>output+=c);
+      const exited=new Promise(resolve=>child.once('exit',resolve));let timer;
+      try {await Promise.race([ready,exited.then(()=>{throw Error(output);}),new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error(output||'Claude CLI heartbeat timed out')),6000);})]);}
+      finally {clearTimeout(timer);child.kill('SIGTERM');await exited;}
+      assert.ok(output.includes('Claude local sign-in and runtime are ready'));
+    }
+    assert.equal(claims,1);assert.ok(!received.includes('test@example.test'));
+    const state=await readFile(join(directory,'.config','space-connector-claude','state.json'),'utf8');
+    assert.equal(JSON.parse(state).connection.provider,'claude');assert.equal(JSON.parse(state).credentials,undefined);
+    assert.ok(!state.includes('native-login'));
+  } finally {await new Promise(resolve=>io.close(resolve));await rm(directory,{recursive:true,force:true});}
 });

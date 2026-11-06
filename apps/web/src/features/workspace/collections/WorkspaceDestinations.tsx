@@ -1,8 +1,9 @@
+import { Huddles } from '../../huddles/Huddles.js';
 import {useDestinationPresence} from '../../../shared/ui/useDestinationPresence.js';
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { Tabs, Select, Avatar, Badge, Button } from '@space/ui/primitives';
 import { NavigationIcon, Spacebot } from '@space/ui/navigation';
-import { ArrowRight, Books, Headphones, Hash, MagnifyingGlass, Microphone, PuzzlePiece, Robot, Sparkle, Users, VideoCamera, TreeStructure } from '@phosphor-icons/react';
+import { ArrowRight, Books, Hash, MagnifyingGlass, PuzzlePiece, Robot, Sparkle, Users, TreeStructure } from '@phosphor-icons/react';
 import type { AgentInstallation, ChannelSummary, Page, PairedConnector, WorkspaceParticipant } from '@space/contracts';
 import { request } from '../../../shared/api/request.js';
 import { subscribeUpdates } from '../../../shared/realtime/live-updates.js';
@@ -88,6 +89,7 @@ export function WorkspaceDestinations(props: {
   viewState?:Snapshot<SpacebotView>;onOpenConnection?:(id:string)=>void;
   view: View; workspace: string; viewer: string; onOpenChannel: (id: string) => void; onOpenMembers: () => void; onOpenAgents: () => void;
 }) {
+  if(props.view==='huddles') return <Huddles key={props.workspace} workspace={props.workspace} onOpenChannel={props.onOpenChannel}/>;
   return <Destination key={`${props.workspace}:${props.view}`} {...props} />;
 }
 
@@ -176,7 +178,6 @@ function Destination({ onConnectAgent, viewState, onOpenConnection, view, worksp
             </div> : !error && <div className="wd-bot-panel wd-bot-connect"><h3>Connect your first agent</h3><p>Bring an agent into your workspace to start a conversation.</p><Button variant="primary" onClick={() => connectAgent()}>Connect an agent</Button></div>}
             <Button className="wd-bot-explore" variant="ghost" onClick={onOpenAgents}>Explore agents &amp; tools <NavigationIcon name="forward" size={16}/></Button>
           </section>}
-          {view === 'huddles' && <section className="wd-huddles"><div className="wd-huddle-scene" aria-hidden="true"><span className="wd-huddle-person"><Avatar name="Audio conversation" initials="" size="lg" tone="blue" /><Microphone size={30} /></span><span className="wd-huddle-wave"><i /><i /><i /><i /><i /></span><span className="wd-huddle-person"><Avatar name="Video conversation" initials="" size="lg" tone="purple" /><VideoCamera size={30} /></span><span className="wd-huddle-headphones"><Headphones size={32} /></span></div><h2>A little conversation goes a long way</h2><p>Huddles bring people together for quick audio and video conversations.</p><div className="wd-huddle-note"><strong>Audio and video calling are not available in Space.</strong><p>Keep the conversation going in a channel. Open a channel and start a discussion with your team.</p></div>{channelChoices}</section>}
           {view === 'directories' && data.next && <Button className="wd-load-more" loading={more} onClick={loadMore}>Load more {directory.toLowerCase()}</Button>}
         </>}
       </div>

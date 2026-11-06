@@ -8,6 +8,9 @@ import { hasChannelAccess, requireWorkspaceAccess } from './access.js';
 type Channel = { kind?: 'channel' | 'direct'; id: string; workspace_id: string; private: boolean; created_by: string | null };
 async function rows<T>(c: DbSession, query: Parameters<DbSession['execute']>[0]): Promise<T[]> { return (await c.execute(query)).rows as T[]; }
 const missing = () => new AppError(404, 'not_found');
+const notificationScope = (actor: string, workspace: string) => sql`n.user_id=${actor} AND n.workspace_id=${workspace}
+  AND EXISTS(SELECT 1 FROM workspace_members wm WHERE wm.workspace_id=n.workspace_id AND wm.user_id=${actor} AND wm.active
+    AND ((NOT ch.private AND wm.guest_type='none') OR EXISTS(SELECT 1 FROM channel_members cm WHERE cm.channel_id=ch.id AND cm.user_id=${actor})))`;
 export class MentionStore {
   readonly db;
   constructor(pool: Pool) { this.db = database(pool); }
@@ -121,7 +124,7 @@ export class MentionStore {
       FROM users u JOIN workspace_members wm ON wm.user_id=u.id AND wm.workspace_id=${channel.workspace_id} AND wm.active
       LEFT JOIN channel_members cm ON cm.channel_id=${channel.id} AND cm.user_id=u.id
       LEFT JOIN mention_preferences p ON p.user_id=u.id
-      WHERE u.id<>${actor} AND (NOT ${channel.private} OR cm.user_id IS NOT NULL)
+      WHERE u.id<>${actor} AND ((NOT ${channel.private} AND wm.guest_type='none') OR cm.user_id IS NOT NULL)
       AND (u.id=ANY(${sql.param(users)}::uuid[]) OR (cm.user_id IS NOT NULL AND (${all} OR (${active} AND u.presence='active'))))
       ON CONFLICT(message_id,user_id) DO NOTHING`);
   }
@@ -129,7 +132,7 @@ export class MentionStore {
     const v=record(input,['before']);const before=v.before===undefined?null:chatCursor(v.before);
     return this.db.transaction(async c=>{
       await requireWorkspaceAccess(c,actor,uuid(workspace));
-      const scope=sql`n.user_id=${actor} AND n.workspace_id=${workspace} AND EXISTS(SELECT 1 FROM workspace_members wm WHERE wm.workspace_id=n.workspace_id AND wm.user_id=${actor} AND wm.active) AND (NOT ch.private OR EXISTS(SELECT 1 FROM channel_members cm WHERE cm.channel_id=ch.id AND cm.user_id=${actor}))`;
+      const scope=notificationScope(actor,workspace);
       const items=await rows<MentionActivity['items'][number]>(c,sql`SELECT n.id::text,n.channel_id,ch.name AS channel_name,n.message_id,m.thread_id,left(m.text,500) AS text,u.display_name AS author_name,n.created_at,n.read_at,n.silent
         FROM mention_notifications n JOIN channels ch ON ch.id=n.channel_id JOIN messages m ON m.channel_id=n.channel_id AND m.id=n.message_id JOIN users u ON u.id=m.user_id
         WHERE ${scope} AND (${before}::bigint IS NULL OR n.id<${before}::bigint) ORDER BY n.id DESC LIMIT 51`);
@@ -140,7 +143,7 @@ export class MentionStore {
   async markRead(actor:string,workspace:string,id:string){
     return sessionTransaction(this.db,async c=>{
       await requireWorkspaceAccess(c,actor,uuid(workspace));
-      const result=await c.execute(sql`UPDATE mention_notifications n SET read_at=coalesce(read_at,now()) FROM channels ch WHERE n.id=${chatCursor(id)}::bigint AND n.user_id=${actor} AND n.workspace_id=${workspace} AND ch.id=n.channel_id AND EXISTS(SELECT 1 FROM workspace_members wm WHERE wm.workspace_id=n.workspace_id AND wm.user_id=${actor} AND wm.active) AND (NOT ch.private OR EXISTS(SELECT 1 FROM channel_members cm WHERE cm.channel_id=ch.id AND cm.user_id=${actor})) RETURNING n.id`);
+      const result=await c.execute(sql`UPDATE mention_notifications n SET read_at=coalesce(read_at,now()) FROM channels ch WHERE n.id=${chatCursor(id)}::bigint AND ch.id=n.channel_id AND ${notificationScope(actor,workspace)} RETURNING n.id`);
       if(!result.rows.length)throw missing();return {read:true};
     });
   }

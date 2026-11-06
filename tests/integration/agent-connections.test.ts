@@ -132,25 +132,25 @@ test('a missing heartbeat disconnects stale agents and commits an offline partic
   assert.equal(row.connection_id,null,'offline transition must be committed for the participant subscription');
 });
 
-test('Kiro enrollment binds the provider, grants its own skill and delivers only to its local connector', async () => {
+for (const provider of ['kiro', 'claude'] as const) test(`${provider} enrollment binds the provider, grants its own skill and delivers only to its local connector`, async () => {
   const owner = await bootstrap(pool);
-  const pairing = await api(owner.owner_token, 'POST', `/workspaces/${owner.workspace_id}/agent-pairings`, { provider: 'kiro' }, 201);
+  const pairing = await api(owner.owner_token, 'POST', `/workspaces/${owner.workspace_id}/agent-pairings`, { provider }, 201);
   const credential = randomBytes(32).toString('base64url');
   await api(undefined, 'POST', '/agent-pairings/claim', { code: pairing.code, credential, provider: 'codex' }, 409);
   await api(undefined, 'POST', '/agent-pairings/claim', { code: pairing.code, credential }, 409);
-  const claims = await Promise.all([1, 2, 3].map(() => api(undefined, 'POST', '/agent-pairings/claim', { code: pairing.code, credential, provider: 'kiro' }, 201)));
+  const claims = await Promise.all([1, 2, 3].map(() => api(undefined, 'POST', '/agent-pairings/claim', { code: pairing.code, credential, provider }, 201)));
   assert.equal(new Set(claims.map(c => c.installation_id)).size, 1);
   const connection = claims[0];
-  assert.equal(connection.provider, 'kiro');
+  assert.equal(connection.provider, provider);
   const row = (await pool.query('SELECT i.connector_id,d.capabilities FROM agent_installations i JOIN agent_definitions d ON d.id=i.definition_id WHERE i.id=$1', [connection.installation_id])).rows[0];
-  assert.equal(row.connector_id, 'kiro.local'); assert.deepEqual(row.capabilities.skills, ['kiro.run']);
+  assert.equal(row.connector_id, `${provider}.local`); assert.deepEqual(row.capabilities.skills, [`${provider}.run`]);
   const path = `/agents/connections/${connection.installation_id}/channels/${owner.channel_id}`;
   await api(owner.collaborator_token, 'POST', path, { enabled: true }, 403);
   await api(owner.owner_token, 'POST', path, { enabled: true });
   const agents = await api(owner.owner_token, 'GET', `/channels/${owner.channel_id}/local-agents`);
-  assert.ok(agents.some((a: any) => a.id === connection.installation_id && a.enabled_in_channel && a.provider === 'kiro'));
+  assert.ok(agents.some((a: any) => a.id === connection.installation_id && a.enabled_in_channel && a.provider === provider));
   const store = new PostgresStore(pool);
-  const task = await store.createTask(owner.owner_id, { workspace_id: owner.workspace_id, thread_id: owner.thread_id, installation_id: connection.installation_id, skill: 'kiro.run', goal: 'Hello from Kiro' }, randomBytes(16).toString('hex'));
+  const task = await store.createTask(owner.owner_id, { workspace_id: owner.workspace_id, thread_id: owner.thread_id, installation_id: connection.installation_id, skill: `${provider}.run`, goal: `Hello from ${provider}` }, randomBytes(16).toString('hex'));
   await store.approveTask(owner.owner_id, task.id);
   const events = await pool.query("SELECT kind FROM event_outbox WHERE payload->>'task_id'=$1 AND kind LIKE 'task.%'", [task.id]);
   assert.deepEqual(events.rows.map(r => r.kind), ['task.local.ready']);
@@ -158,15 +158,15 @@ test('Kiro enrollment binds the provider, grants its own skill and delivers only
   assert.ok(await store.claimDelivery(connection.installation_id));
 });
 
-test('Kiro mentions start managed sessions, stream over the socket, resume and stop', { timeout: 12000 }, async () => {
+for (const provider of ['kiro', 'claude'] as const) test(`${provider} mentions start managed sessions, stream over the socket, resume and stop`, { timeout: 12000 }, async () => {
   const { ChatStore } = await import('@space/postgres/chat');
   const { NavigatorStore } = await import('@space/postgres/navigator');
   const { AgentSessionStore } = await import('@space/postgres/agent-sessions');
   const { randomUUID } = await import('node:crypto');
   const owner = await bootstrap(pool);
-  const pairing = await api(owner.owner_token, 'POST', `/workspaces/${owner.workspace_id}/agent-pairings`, { provider: 'kiro' }, 201);
+  const pairing = await api(owner.owner_token, 'POST', `/workspaces/${owner.workspace_id}/agent-pairings`, { provider }, 201);
   const credential = randomBytes(32).toString('base64url');
-  const connection = await api(undefined, 'POST', '/agent-pairings/claim', { code: pairing.code, credential, provider: 'kiro' }, 201);
+  const connection = await api(undefined, 'POST', '/agent-pairings/claim', { code: pairing.code, credential, provider }, 201);
   await api(owner.owner_token, 'POST', `/agents/connections/${connection.installation_id}/channels/${owner.channel_id}`, { enabled: true });
   const socket = await connect(credential), sessions = new AgentSessionStore(pool);
   const command = (name: string, payload: object = {}) => socket.timeout(3000).emitWithAck(name, payload);
@@ -178,9 +178,9 @@ test('Kiro mentions start managed sessions, stream over the socket, resume and s
   await new NavigatorStore(pool).processOne();
   await first;
   const { data: request } = await command('agent.task.claim');
-  assert.equal(request.skill, 'kiro.run');assert.deepEqual(request.persistent_session, { resume: false });
+  assert.equal(request.skill, `${provider}.run`);assert.deepEqual(request.persistent_session, { resume: false });
   const list = await sessions.list(owner.owner_id, owner.thread_id);
-  assert.equal(list.items.length, 1);assert.equal(list.items[0]!.skill, 'kiro.run');
+  assert.equal(list.items.length, 1);assert.equal(list.items[0]!.skill, `${provider}.run`);
   for (const [sequence, type, payload] of [[1, 'execution.started', { text: 'Working' }], [2, 'execution.progress', { text: 'Ready', session_ready: true }], [3, 'execution.completed', { text: 'Aurora remembered' }]] as const) {
     assert.equal((await command('agent.task.event', { event: { id: randomUUID(), schema_version: '1.0', execution_id: request.execution_id, sequence, type, occurred_at: new Date().toISOString(), payload } })).data, true);
   }

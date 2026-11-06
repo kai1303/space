@@ -1,0 +1,79 @@
+.delegation-walkthrough {
+  display: grid;
+  grid-template-columns: minmax(220px, .7fr) minmax(0, 1.5fr);
+  gap: 32px;
+  align-items: start;
+}
+.delegation-steps { display: flex; flex-direction: column; gap: 8px; }
+.delegation-steps button {
+  display: flex; gap: 13px; text-align: left; padding: 19px 16px;
+  border: 1px solid transparent; border-radius: 13px; background: transparent; color: #756876; font: inherit;
+}
+.delegation-steps button[aria-pressed=true] { background: #eee6ef; border-color: #dbccdf; color: #3f2a46; }
+.delegation-step-icon { display: grid; place-items: center; flex: none; width: 35px; height: 35px; border-radius: 10px; background: #f4eff4; }
+.delegation-steps button[aria-pressed=true] .delegation-step-icon { background: #65466e; color: white; }
+.delegation-steps strong { display: block; font-size: 17px; line-height: 1.35; }
+.delegation-steps button>span>span { display: block; font-size: 14px; line-height: 1.5; margin-top: 6px; }
+.delegation-preview { background: #f1eaf1; border: 1px solid #ddd0de; border-radius: 18px; overflow: hidden; box-shadow: 0 15px 40px -30px #482b48; }
+.delegation-windowbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; background: #49344d; color: #fff5ff; padding: 13px 22px; font-size: 13px; }
+.delegation-windowbar>span:first-child { display: inline-flex; align-items: center; gap: 5px; font-weight: 700; }
+.delegation-windowbar>span+span { color: #e1cde3; font-size: 11px; }
+.delegation-scene { padding: 24px; min-height: 488px; }
+.delegation-task,.delegation-feedback { display: flex; align-items: flex-start; gap: 11px; }
+.delegation-person { display: grid; place-items: center; flex: none; width: 32px; height: 32px; border-radius: 9px; background: #edd5bc; color: #774d30; font: italic 20px Georgia,serif; }
+.delegation-task strong { font-size: 14px; }.delegation-task small { margin-left: 6px; font-size: 11px; font-weight: 400; color: #7c6b7d; }
+.delegation-task p { margin-top: 4px; font-size: 15px; line-height: 1.55; }
+.delegation-task b { color: #795280; }
+.delegation-context { background: #fffaf5; border: 1px solid #ded2d8; padding: 20px; border-radius: 12px; margin: 26px 0 0 43px; }
+.delegation-context>div { display: flex; align-items: center; gap: 10px; padding-bottom: 17px; margin-bottom: 14px; border-bottom: 1px solid #e8dfe2; }
+.delegation-context>div>span { flex: 1; }
+.delegation-context strong { display: block; font-size: 15px; }
+.delegation-context small { display: block; font-size: 12px; color: #7b687b; }
+.delegation-context>span { display: flex; gap: 7px; align-items: center; margin-top: 10px; font-size: 13px; }
+.delegation-session { margin: 23px 0 0 43px; }
+.delegation-session-heading { display: flex; align-items: center; gap: 7px; font-size: 14px; }
+.delegation-session-heading img { width: 24px; height: 24px; }
+.delegation-session-heading>span { margin-left: auto; font-size: 11px; color: #426e4f; background: #e1eddf; border-radius: 20px; padding: 3px 8px; }
+.delegation-session-heading>span.delegation-working { color: #79582d; background: #f5e5cb; }
+.delegation-activity>p,.delegation-agent-message { font-size: 13px; color: #6e5f70; margin-top: 9px !important; }
+.delegation-activity ol { list-style: none; padding: 0; margin: 16px 0 0; border: 1px solid #dacee0; border-radius: 10px; background: #fcfaff; overflow: hidden; }
+.delegation-activity li { display: flex; gap: 10px; align-items: center; padding: 15px 13px; border-bottom: 1px solid #ece4ef; color: #7d7085; }
+.delegation-activity li:last-child { border-bottom: 0; }
+.delegation-activity li>svg { flex: none; color: #59805f; }
+.delegation-activity strong { display: block; font-size: 12px; font-weight: 700; }
+.delegation-activity code { font: 11px/1.6 ui-monospace,monospace; overflow-wrap: anywhere; }
+.delegation-activity li small { margin-left: auto; font-size: 10px; white-space: nowrap; }
+.delegation-tool-dot { flex: none; width: 10px; height: 10px; border: 1px solid #b9a9c2; border-radius: 50%; margin: 3.5px; }
+.delegation-complete { display: flex; align-items: center; gap: 5px; min-height: 22px; margin-top: 12px; color: #4b7555; font-size: 12px; }
+.delegation-document { margin-top: 13px; background: #fffdf7; border: 1px solid #e3d8ca; border-radius: 10px; padding: 17px; }
+.delegation-document>div:first-child { display: flex; gap: 6px; align-items: center; font-size: 11px; color: #7e6f69; }
+.delegation-document small { margin-left: auto; font-size: 10px; }
+.launch .delegation-document h3 { font: 500 24px/1.1 Georgia,serif; letter-spacing: -.03em; margin: 14px 0 9px; }
+.delegation-document p,.delegation-document ul { font-size: 12px; line-height: 1.55; color: #6b5d5b; }
+.delegation-document ul { padding-left: 16px; margin: 9px 0; }
+.delegation-open-check { border-top: 1px solid #e9dfd4; padding-top: 9px; display: flex; align-items: start; gap: 5px; font-size: 11px; color: #806846; }
+.delegation-open-check svg { flex: none; margin-top: 2px; }
+.delegation-feedback { margin-top: 16px; font-size: 12px; line-height: 1.5; }
+.delegation-feedback .delegation-person { width: 24px; height: 24px; font-size: 16px; }.delegation-feedback>svg { flex: none; color: #59805f; }
+.delegation-actions { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 15px 24px; background: #fcf9fc; border-top: 1px solid #e2d7e4; }
+.delegation-actions>span { font-size: 11px; color: #7a697d; max-width: 22ch; }
+.delegation-actions button { display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-height: 38px; border: 0; border-radius: 8px; background: #49344d; color: white; font: 700 12px Lato,sans-serif; padding: 8px 12px; }
+.delegation-actions button:disabled { opacity: .5; cursor: wait; }
+@media(max-width:1023px) {
+  .delegation-walkthrough { grid-template-columns: 1fr; gap: 20px; }
+  .delegation-steps { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); }
+  .delegation-scene { min-height: 475px; }
+}
+@media(max-width:539px) {
+  .delegation-steps button { padding: 12px 8px; gap: 8px; }
+  .delegation-steps button>span>span { display: none; }
+  .delegation-steps strong { font-size: 13px; }
+  .delegation-step-icon { width: 28px; height: 28px; }
+  .delegation-windowbar { padding: 12px 14px; }
+  .delegation-scene { padding: 17px 14px; min-height: 515px; }
+  .delegation-session,.delegation-context { margin-left: 0; }
+  .delegation-task p { font-size: 14px; }
+  .delegation-document { padding: 14px; }
+  .delegation-actions { padding: 13px 14px; gap: 8px; }
+  .delegation-actions>span { max-width: 16ch; }
+}

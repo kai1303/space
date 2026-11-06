@@ -133,6 +133,21 @@ it('pairs Kiro with its own connector and local sign-in instructions', async () 
   expect(screen.queryByRole('combobox', { name: 'Agent provider' })).toBeNull();
 });
 
+it('pairs Claude with its own connector and local sign-in instructions', async () => {
+  api.listAll.mockResolvedValue(humans);
+  api.request.mockImplementation(async (path:string) => path === '/agents/connectors' ? defaultPairedConnectors : { id: 'claude-pair', provider: 'claude', code: 'k'.repeat(32), expires_at: new Date(Date.now()+600000).toISOString() });
+  render(<WorkspaceMembers {...props} />);
+  await screen.findByRole('button', { name: 'Connect Local Codex' });
+  await userEvent.click(screen.getByRole('combobox', { name: 'Agent provider' }));
+  await userEvent.click(screen.getByRole('option', { name: 'Claude' }));
+  await userEvent.click(screen.getByRole('button', { name: 'Connect Local Claude' }));
+  expect(api.request).toHaveBeenCalledWith('/workspaces/workspace/agent-pairings', {connector_id:'claude.local'});
+  expect(screen.getByText(/pnpm connector --provider claude --url/)).toBeTruthy();
+  expect(screen.getByText(/Sign in to Claude/)).toBeTruthy();
+  expect(screen.queryByText(/Continue with ChatGPT/)).toBeNull();
+  expect(screen.queryByRole('combobox', { name: 'Agent provider' })).toBeNull();
+});
+
 it('offers trusted registered connectors beyond built-in providers', async () => {
  api.listAll.mockResolvedValue(humans);
  api.request.mockImplementation(async (path:string) => path === '/agents/connectors' ? [{id:'research.local',definition_id:'research-definition',name:'Research',capabilities:{skills:['research.run'],controls:{},persistent_sessions:true}}] : {id:'research-pair',connector_id:'research.local',code:'r'.repeat(32),expires_at:new Date(Date.now()+600000).toISOString()});

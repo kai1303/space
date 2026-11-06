@@ -8,7 +8,7 @@
 
 <p>Bring team conversations, files, and shared knowledge into one workspace.<br />
 Use Space in your browser or its macOS desktop app, keep channel memory in Markdown,<br />
-and collaborate with local Codex or Kiro agents.</p>
+and collaborate with local Codex, Kiro, or Claude agents.</p>
 
 <p align="center">
   <a href="https://github.com/kai1303/space/actions/workflows/ci.yaml?query=branch%3Amain"><img src="https://img.shields.io/github/actions/workflow/status/kai1303/space/ci.yaml?branch=main&amp;style=for-the-badge&amp;label=CI" alt="CI checks status" /></a>
@@ -39,9 +39,10 @@ and collaborate with local Codex or Kiro agents.</p>
 ---
 
 > **Early development.** Chat, files, channel memory, and local connector pairing
-> are implemented. Codex and Kiro support persistent agent sessions, streamed
-> responses, and opt-in project file tools after explicit channel enablement.
-> First-time channel enablement currently requires the API; see [agent setup](#connect-a-local-agent).
+> are implemented. Codex, Kiro, and Claude support persistent agent sessions, streamed
+> responses, and opt-in project file tools. Personal outbound MCP connections add
+> explicitly granted external tools through a separate gateway; see [MCP setup](#personal-mcp-connections).
+> Channel huddles are available with an optional LiveKit service.
 > The task flow also supports a mock connector and an optional AG-UI backend.
 
 <p align="center">
@@ -57,6 +58,7 @@ and collaborate with local Codex or Kiro agents.</p>
 - [macOS app](#macos-app)
 - [How Space works](#how-space-works)
 - [Connect a local agent](#connect-a-local-agent)
+- [Personal MCP connections](#personal-mcp-connections)
 - [Architecture](#architecture)
 - [Integrations](#integrations)
 - [Project status](#project-status)
@@ -109,7 +111,9 @@ people and independently operated agents in the same workplace.
   files, and channel memory lives on your filesystem.
 - **A desktop home on macOS.** Run the existing UI in an Electron window with a
   persistent session, native menus, and authenticated file downloads.
-- **Explicit access.** Workspace roles, channel membership, and scoped agent
+- **Personal integrations.** Connect multiple MCP accounts, select tools for your
+  own agents, and review recent tool calls without sharing account credentials.
+- **Explicit access.** Workspace roles, channel membership, and per-agent tool
   grants define access boundaries.
 
 ---
@@ -254,8 +258,9 @@ for tested workflows and remaining checks.
 5. **Keep useful context.** Channel memory is opt-in. Members can save messages
    with source links, edit notes, search, and import or export text documents.
    Scoped MCP keys let external tools read or update enabled channel memory.
-6. **Work with an agent.** Pair local Codex or Kiro from **Members** and explicitly
-   enable it for a channel through the [channel-grant API](apps/connector/README.md#enable-a-channel).
+6. **Work with an agent.** Pair local Codex, Kiro, or Claude from **Members**.
+   Paired agents inherit their owner’s access to conversations; workspace and
+   channel membership checks still apply.
    Select its mention in a channel or thread to start a managed session. Open the
    session link in the channel to follow up in its own panel. One thread can
    have multiple independent sessions; ordinary thread replies do not send agent
@@ -266,6 +271,10 @@ for tested workflows and remaining checks.
    Thinking, Responding or Using tools activity above the shared composer. Stop
    interrupts the current turn while keeping its history. Project file tools
    require a local `--project` selection; shell execution is not enabled.
+8. **Use external tools.** Open your account menu → **Connections**, add an MCP
+   account, discover its tools, and grant selected tools to your own agents. Space
+   attaches temporary gateway access to your requests. Another workspace member’s
+   request cannot use your personal connection.
 
 See the [chat architecture](docs/architecture/realtime-chat.md),
 [file storage guide](docs/architecture/assets.md), and
@@ -277,23 +286,22 @@ See the [chat architecture](docs/architecture/realtime-chat.md),
 
 ## Connect a local agent
 
-Install the selected provider CLI on your `PATH`: Codex, or `kiro-cli` with ACP v3
-support. In **Members**, choose the **Agent provider**, then **Connect Local Codex**
-or **Connect Local Kiro**. Run the command shown in the dialog from this checkout:
+In **Members**, choose **Local runner**, select Codex, Kiro or Claude, and connect it.
+Codex and Kiro require their CLI on `PATH`. Kiro needs ACP v3. Claude requires the `claude` CLI and opens its native local login flow. Run the command shown in the dialog from this checkout:
 
 ```sh
 pnpm connector --url http://127.0.0.1:5173 --connect
 # For Kiro instead:
 pnpm connector --provider kiro --url http://127.0.0.1:5173 --connect
+# For Claude instead:
+pnpm connector --provider claude --url http://127.0.0.1:5173 --connect
 ```
 
 Use your actual Space origin and run only the command for the selected provider.
 Enter the pairing code, then complete **Continue with ChatGPT** for Codex or the
-connector's local Kiro sign-in. Keep the connector running to execute tasks.
+connector's local Kiro sign-in. Claude opens its own local sign-in. Keep the connector running to execute tasks.
 
-Pairing grants **no channel access**. The owner must enable each channel through
-the [channel-grant API](apps/connector/README.md#enable-a-channel); the current UI
-has no channel-enablement control. Then select the agent from the composer's
+A paired agent inherits its owner’s access to conversations. Select the agent from the composer’s
 mention suggestions and send a request. Follow-ups go in the resulting agent
 session panel. Connecting or reporting Ready does not run a model turn or prove
 inference will succeed.
@@ -314,11 +322,53 @@ remain disabled. File-tool path checks are not a general OS sandbox.
 Provider credentials and private provider history stay in separate local connector
 directories. Space stores submitted requests, streamed responses and tool details;
 the selected provider receives the context and file contents used during a task.
-Codex and Kiro can run concurrently with their own local state.
+Each provider can run in a separate terminal with its own local state.
 
 See the [connector guide](apps/connector/README.md) and
 [provider architecture](docs/architecture/local-agent-providers.md), plus
 [agent sessions](docs/architecture/agent-sessions.md) for persistence and recovery.
+
+---
+
+## Personal MCP connections
+
+Connections are personal configuration. Add multiple accounts for the same MCP
+server, then grant individual tools to each of your paired Codex, Kiro, or Claude
+agents. Your agents receive these tools automatically on your authorized requests.
+
+1. Open your **account menu → Connections → Add connection**.
+2. Enter a name, a public HTTPS MCP endpoint, and a bearer token if required.
+3. Click **Test connection** to discover the server’s tools.
+4. Open **Agent access**, choose your agent, select tools, and save.
+5. Ask that agent to use the connection in a workspace conversation or session.
+
+The screen also supports editing, disabling, deleting, and recent tool-call
+metadata. New tools are never granted automatically. Changing an endpoint or token
+clears the catalog and grants so the new account must be reviewed. Tokens are
+encrypted at rest and never returned to the browser or local agent. Tool results
+posted in a shared conversation follow that conversation’s visibility.
+
+**Operator setup:** Apply migrations, configure `OUTBOUND_MCP_KEY` (a dedicated
+64-character hexadecimal secret) and `OUTBOUND_MCP_URL` in both the API and gateway,
+and run the separate gateway with the environment exported:
+
+```sh
+pnpm migrate
+pnpm mcp-gateway
+```
+
+Restart the API with the same configuration. Local development may use
+`http://127.0.0.1:3001/mcp` for the gateway; deployed gateways and upstream servers
+require HTTPS. The default Compose stack does not start the gateway automatically.
+See the [outbound MCP guide](docs/architecture/outbound-mcp.md) for configuration,
+network restrictions, revocation, audit retention, and recovery.
+
+V1 supports remote **Streamable HTTP** with a bearer token or no authentication.
+OAuth, local stdio upstreams, legacy SSE-only servers, inbound events/messages, and
+shared workspace credentials are outside this release. Mock/AG-UI worker agents
+are not offered in the connection’s agent picker. Synthetic integration tests and
+an installed Codex transport check do not establish real-account interoperability
+or a production deployment.
 
 ---
 
@@ -341,6 +391,7 @@ Space is a TypeScript monorepo using pnpm workspaces and Turborepo.
 | macOS app | Electron shell, persistent sessions, native menus, DMG/ZIP packaging | [`apps/desktop`](apps/desktop) |
 | Shared UI | Components, rich-text composer, design tokens | [`packages/ui`](packages/ui) |
 | API | Fastify, Better Auth, Socket.IO | [`apps/server`](apps/server) |
+| Outbound MCP gateway | Personal account credentials, tool discovery, authorized upstream calls | [`apps/mcp-gateway`](apps/mcp-gateway) |
 | Persistence | PostgreSQL, Drizzle, versioned SQL migrations | [`adapters/postgres`](adapters/postgres) |
 | Durable events | PostgreSQL WAL CDC + NATS JetStream | [`adapters/events`](adapters/events), [`apps/events`](apps/events) |
 | Socket.IO adapter | Redis Pub/Sub | [`adapters/redis`](adapters/redis) |
@@ -356,7 +407,9 @@ These are the connections implemented in this checkout and their current boundar
 
 | Category | Connection | Current scope |
 | --- | --- | --- |
-| **Local agents** | Codex + ChatGPT sign-in; Kiro CLI + local sign-in | Explicit channel grants, owner approval, persistent sessions, ordered text/tool streaming, activity and Stop. Opt-in project file tools through `--project`; no native shell. |
+| **Local agents** | Codex, Kiro, and Claude with local sign-in | Owner-scoped conversation access, approval rules, persistent sessions, ordered text/tool streaming, activity and Stop. Opt-in project file tools through `--project`; no native shell. |
+| **Personal external tools** | Outbound MCP gateway | Multiple personal accounts, explicit per-agent tool grants, encrypted credentials, revocation and call metadata. HTTPS Streamable HTTP with bearer or anonymous auth. [Setup](#personal-mcp-connections). |
+| **Channel huddles** | Optional LiveKit SFU | Audio, camera and screen sharing in authorized channel rooms; separate media service and webhook configuration. [Setup](docs/architecture/channel-huddles.md). |
 | **Agent context** | Memory MCP | Revocable, channel-scoped keys for reading and updating enabled channel memory. Separate from the local project file server. |
 | **Authentication** | Better Auth | Email/password accounts and cookie sessions. Human social login and MFA are planned separately. |
 | **File storage** | SeaweedFS through its S3-compatible API | Private uploads, access-checked downloads, and previews. |
@@ -373,7 +426,7 @@ See [connector setup](apps/connector/README.md),
 **Implemented:** workspace accounts and roles, channel conversations and threaded
 replies, durable history and reconnect catch-up, file uploads and previews, opt-in
 channel memory, scoped memory MCP access, thread working context, rules-first
-Navigator suggestions, agent mention routing, and local Codex/Kiro connections.
+Navigator suggestions, agent mention routing, and local Codex/Kiro/Claude connections.
 Managed sessions retain conversations across turns and restarts, with ordered
 text/tool streaming, activity indicators and Stop. Explicit project selection
 enables scoped file reads and edits. Channel/thread typing indicators are also implemented.
@@ -384,9 +437,22 @@ enables scoped file reads and edits. Channel/thread typing indicators are also i
 
 **Navigation:** Slack-style rail and Home shortcuts open Threads, Drafts & sent, Saved, Files, To-dos, Directories and agent views, with 33 captured navigation SVG icons. Migration 041 adds personal saves, conversation stars and to-dos. See [sidebar research and capability boundaries](docs/architecture/slack-sidebar-research.md).
 
-**Still ahead:** a channel-enablement UI for paired agents, native shell execution
-and interactive tool approvals, group direct messages, broader presence,
-message editing/deletion, email invitations, and additional agent adapters.
+**Personal connections:** Outbound MCP v1 is implemented with a management screen,
+separate gateway, per-tool grants, encrypted credentials and audit metadata. Migration
+058 and gateway configuration are required. OAuth and inbound integrations are deferred.
+
+**Agent sessions and onboarding:** Managed Codex turns support direct authenticated
+handoff with admission and recovery checks. Sign-in and workspace creation use a
+focused onboarding flow. See [direct sessions](docs/architecture/direct-codex-sessions.md).
+
+**Channel huddles:** Start/join, a persistent call panel, audio/video/screen sharing,
+and access-aware discovery are implemented. Migration 059 and optional LiveKit
+configuration are required; physical-device and cross-network verification remain
+deployment work. See [channel huddles](docs/architecture/channel-huddles.md).
+
+**Still ahead:** OAuth for outbound MCP, inbound messages/events, native shell
+execution and interactive tool approvals, group direct messages, broader presence,
+and additional agent adapters.
 Streaming follow-ups include complete lifecycle-event retention, normalized
 incremental tool output, smaller browser updates and long-output paging.
 The [module roadmap](docs/architecture/module-roadmap.md) tracks the broader scope.
@@ -423,9 +489,12 @@ More guides:
 - [Authentication and session setup](docs/architecture/authentication.md)
 - [Workspaces, users, and roles](docs/architecture/workspace-users.md)
 - [Local connector setup and channel grants](apps/connector/README.md)
-- [Codex and Kiro providers](docs/architecture/local-agent-providers.md)
+- [Local agent providers](docs/architecture/local-agent-providers.md)
 - [Persistent agent sessions](docs/architecture/agent-sessions.md)
 - [Memory MCP access](docs/architecture/memory-mcp.md)
+- [Personal outbound MCP setup and permissions](docs/architecture/outbound-mcp.md)
+- [Direct Codex session execution](docs/architecture/direct-codex-sessions.md)
+- [Channel huddles and LiveKit](docs/architecture/channel-huddles.md)
 - [Navigator and thread routing](docs/architecture/navigator.md)
 - [Native Jev setup](docs/architecture/jev-navigator.md)
 - [Chat storage and partitioning](docs/architecture/chat-partitioning.md)
@@ -502,7 +571,9 @@ alone do not contain uploaded bytes or Markdown memory. See the
 Space checks current workspace and channel access on API requests and realtime
 commands. File downloads require authorization and use short-lived signed URLs.
 Channel memory is off by default; managers enable it and control scoped MCP keys.
-Connector ChatGPT tokens stay on the local computer.
+Provider login credentials stay on the local computer. External MCP account tokens
+are separately encrypted by the server with `OUTBOUND_MCP_KEY`; the gateway checks
+the owner, requester, active execution and tool grant on each operation.
 
 Project file tools are off unless the connector is launched with `--project`.
 Only select a folder the agent is authorized to read and modify. Task/tool output
@@ -524,7 +595,7 @@ The application source currently has no first-party product analytics integratio
 The API and connector write operational logs. Review the behavior of any external
 service you connect and keep private conversation content out of public reports.
 
-Connecting Codex or Kiro uses a local authorization flow; chat, files, and Markdown memory
+Connecting Codex, Kiro, or Claude uses a local authorization flow; chat, files, and Markdown memory
 can be explored without connecting a model provider. See the
 [connector guide](apps/connector/README.md) for what stays local and what Space receives.
 

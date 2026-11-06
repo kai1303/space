@@ -11,11 +11,19 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "start": "node dist/main.js",
     "dev": "node dist/main.js",
-    "test": "pnpm build && node --test agent-connectors.test.mjs storage.test.mjs previews.test.mjs pdf-thumbnail.test.mjs memory.test.mjs invitation-email.test.mjs calling-config.test.mjs",
+    "test": "pnpm build && node --test agent-connectors.test.mjs storage.test.mjs previews.test.mjs pdf-thumbnail.test.mjs memory.test.mjs invitation-email.test.mjs calling-config.test.mjs huddle-media.test.mjs",
     "test:storage": "pnpm build && node --test storage.integration.test.mjs",
     "search:backfill": "node dist/search-backfill.js"
   },
   "exports": {
+    "./huddles": {
+      "types": "./dist/huddles.d.ts",
+      "default": "./dist/huddles.js"
+    },
+    "./huddle-media": {
+      "types": "./dist/huddle-media.d.ts",
+      "default": "./dist/huddle-media.js"
+    },
     "./api": {
       "types": "./dist/api.d.ts",
       "default": "./dist/api.js"
@@ -64,6 +72,7 @@
     "better-auth": "1.7.15",
     "fastify": "^5.12.8",
     "file-type": "^22.3.0",
+    "livekit-server-sdk": "2.19.2",
     "nodemailer": "^10.3.1",
     "proper-lockfile": "4.1.2",
     "sharp": "^0.35.5",

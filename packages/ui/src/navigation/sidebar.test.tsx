@@ -113,3 +113,11 @@ it('exposes all Home shortcuts and marks the selected shortcut', async () => {
   }
   expect(screen.getByRole('button',{name:'Saved',exact:true}).getAttribute('aria-current')).toBe('page');
 });
+
+it('uses the agent avatar for sessions in both regular and starred sections',()=>{
+ const props={workspace:'Team',selectedId:'session:one',width:280,onWidthChange:()=>{},onSelect:()=>{}};
+ const {rerender}=render(<WorkspaceSidebar {...props} channels={[{id:'session:one',name:'Review README',section:'sessions',agentName:'Local Codex'}]}/>);
+ expect(screen.getByRole('button',{name:'Review README'}).querySelector('.sp-avatar')?.textContent).toBe('LO');
+ rerender(<WorkspaceSidebar {...props} channels={[{id:'session:one',name:'Review README',section:'starred',agentName:'Local Codex'}]}/>);
+ expect(screen.getByRole('button',{name:'Review README'}).querySelector('.sp-avatar')?.textContent).toBe('LO');
+});

@@ -3,6 +3,7 @@ import Markdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { AgentResponse as Response, AgentText, AgentTool } from '@space/contracts';
 import { CodeBlock } from '../rich-text/code-block.js';
+import { FileToolDetails } from './FileToolDetails.js';
 import { ToolExecution } from './work-items.js';
 import { safeLink } from '../rich-text/rich-text.js';
 
@@ -45,9 +46,9 @@ export function AgentResponse({ response, streaming = false, fallback }: { respo
       id: tool.id, icon: 'code',
       text: `${tool.name}${tool.status === 'interrupted' ? ' · Interrupted' : tool.status === 'running' ? ' · Running' : tool.status === 'calling' ? ' · Preparing' : ' · Completed'}`,
       ...((tool.status === 'calling' || tool.status === 'running') && streaming ? { status: 'in_progress' as const } : {}),
-      steps: [
+      steps: ['write_file','edit_file'].includes(tool.name) ? [{id:'file',text:<FileToolDetails tool={tool}/>}]: [
         ...(tool.arguments ? [{ id: 'arguments', text: <><strong>Input</strong><pre>{tool.arguments}</pre></> }] : []),
-        ...(tool.result ? [{ id: 'result', text: <><strong>Result</strong><pre>{tool.result}</pre></> }] : []),
+        ...(tool.result ? [{ id: 'result', text: <><strong>Result</strong><div className="sp-agent-tool-result"><CodeBlock code={tool.result} /></div></> }] : []),
       ],
     }))} />)}
     {!streaming && fallback && !response.messages.some(message => message.text.trim()) && !response.tools.length && !response.components.length && <AgentMarkdown text={fallback} />}

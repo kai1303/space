@@ -4,11 +4,12 @@ import {useDestinationPresence} from '../../shared/ui/useDestinationPresence.js'
 import {ConversationHeader,ConversationComposer,ConversationMessage,ConversationIntroduction} from '../chat/ThreadConversation.js';
 import {MessageTimeline} from '../chat/MessageTimeline.js';
 import {ConversationSkeleton} from '../chat/ConversationSkeleton.js';
+import {useStarredChannels} from '../channels/useStarredChannels.js';
 import {useAgentSessionHistory} from './useAgentSessionHistory.js';
 import {useCallback,useEffect,useId,useMemo,useRef,useState,type FormEvent} from 'react';
 import type {ChannelAgent,AgentSessionDetail,AgentSessionSummary,AgentSessionOutputs,NavigatorCandidate,RichDocument,Task,ChatEvent,ChatMessage,MentionReference} from '@space/contracts';
-import { Select, Button, Tabs, Avatar, Dialog, Menu } from '@space/ui/primitives';
-import {Plus,Robot,Stop,Paperclip,ChatCircle,Browser,GitDiff,DotsThree} from '@phosphor-icons/react';
+import { Select, Button, Tabs, Avatar, Dialog, Menu, IconButton } from '@space/ui/primitives';
+import {Plus,Robot,Stop,Paperclip,ChatCircle,Browser,GitDiff,DotsThree,Star} from '@phosphor-icons/react';
 import { request } from '../../shared/api/request.js';
 import { type MessageAttempt } from '../composer/message-sender.js';
 import {subscribeUpdates} from '../../shared/realtime/live-updates.js';
@@ -89,7 +90,11 @@ export function AgentSessions({drafts:externalDrafts,onDraftChange:externalDraft
   const attempt=state.current;
   let accepted:Task;
   try { accepted=await request<Task>(`/agent-sessions/${id}/messages`,{text,document},attempt.id); }
-  catch(reason) { if(denied(reason))revoke(); throw reason; }
+  catch(reason) { if(denied(reason))revoke(); if(reason instanceof Error && ['agent_busy','session_busy','agent_capacity','agent_unavailable','agent_start_failed'].includes(reason.message)){
+    if(state.current===attempt)state.current=undefined;
+    const messages:Record<string,string>={session_busy:'This session is already running. Your draft is saved.',agent_busy:'This session is already running. Your draft is saved.',agent_capacity:'The connector is at capacity. Send again when a session finishes.',agent_unavailable:'Your local connector is unavailable. Reconnect it and send again.',agent_start_failed:'Codex could not start this turn. Your draft is saved.'};
+    throw new Error(messages[reason.message]);
+   } throw reason; }
   if(state.current===attempt)state.current=undefined;
   if(!revokedRef.current&&JSON.stringify(getDraft(id))===JSON.stringify(document))saveDraft(id,{ops:[]});
   if(!revokedRef.current)onAccepted?.(draftKey(id),document);
@@ -113,6 +118,7 @@ export function AgentSessions({drafts:externalDrafts,onDraftChange:externalDraft
 function SessionConversation({initial,session,channel,channelName,onBack,onClose,viewerId,revision,draft,acknowledged,onDraftChange,onSend,onAccessLost,archived}: {
  initial:AgentSessionDetail;session:AgentSessionSummary;channel:string;channelName?:string;onBack?:()=>void;onClose?:()=>void;viewerId:string;revision:number;draft?:RichDocument;acknowledged?:RichDocument;onDraftChange:(document:RichDocument)=>void;onSend:(text:string,document:RichDocument)=>Promise<Task>;onAccessLost:()=>void;archived:boolean;
 }) {
+ const starred=useStarredChannels(session.workspace_id,session.id,viewerId,'starred-sessions');
  const searchMentions=useMentionSearch(channel);
  const findReferences=useCallback(async(query:string)=>{const result=await searchMentions(query);return {...result,items:result.items.filter(item=>item.kind!=='broadcast').map(item=>({...item,detail:`${item.detail||'Member'} · Reference only`}))};},[searchMentions]);
  const [submittedTask,setSubmittedTask]=useState<string>();
@@ -145,7 +151,7 @@ function SessionConversation({initial,session,channel,channelName,onBack,onClose
 
  const footer=activeSession.state==='ended'?<p className="agent-session-notice">This session has ended. Its conversation and outputs are saved.</p>:!session.managed?<p className="agent-session-notice">Start a new session to continue this earlier run.</p>:!archived?<ConversationComposer typingIndicator={<AgentActivityIndicator name={session.agent_name} turn={latestTurn}/>} channel="agent session" placeholder={`Message ${session.agent_name}`} findMentions={findReferences} sendDisabledReason={sendDisabledReason} maxLength={4000} showUnavailableActions={false} attachmentsEnabled={false} defaultValue={draft} acknowledgedDocument={acknowledged} onDraftChange={onDraftChange} onSend={async(text,document)=>{pinned.current=true;const task=await onSend(text,document);setSubmittedTask(task.id);}}/>:null;
  return <div className="agent-session" aria-label={`Agent session ${session.title}`}>
-  <ConversationHeader title="Agent session" backLabel={data?.context?"Back to my sidekick":undefined} heading={<ConversationHeading title={session.agent_name} label={`Conversation details for ${session.agent_name}`} onClick={()=>setDetailsOpen(true)} icon={<Avatar name={session.agent_name} initials={session.agent_name.slice(0,2).toUpperCase()} tone="green"/>}/>} channel={channelName} icon={<Robot size={20}/>} onBack={onBack} onClose={onClose} actions={<>{manage&&busy(latest)&&<Button size="sm" disabled={pending} onClick={()=>void action(`/agent-sessions/${session.id}/stop`)}><Stop size={14}/>Stop</Button>}<Menu label="More conversation actions" floating trigger={<DotsThree size={22} weight="bold"/>} items={[{label:"Conversation details",onSelect:()=>setDetailsOpen(true)},{label:"Browse files",onSelect:()=>setTab("files")},...(onClose?[{label:"Close agent session",separatorBefore:true,onSelect:onClose}]:[])]}/></>}/>
+  <ConversationHeader title="Agent session" backLabel={data?.context?"Back to my sidekick":undefined} heading={<ConversationHeading title={session.agent_name} label={`Conversation details for ${session.agent_name}`} onClick={()=>setDetailsOpen(true)} leading={session.managed&&<IconButton label={starred.active?'Unstar conversation':'Star conversation'} aria-pressed={starred.active} aria-disabled={starred.busy||undefined} onClick={()=>void starred.toggle(session.id,{id:session.id,name:session.title,kind:'agent_session',private:false,session:{id:session.id,agent_name:session.agent_name,origin_thread_id:session.origin_thread_id,channel_id:channel,channel_archived:archived}}).catch(reason=>setError(errorText(reason)))}><Star size={19} weight={starred.active?'fill':'regular'}/></IconButton>} icon={<Avatar name={session.agent_name} initials={session.agent_name.slice(0,2).toUpperCase()} tone="green"/>}/>} channel={channelName} icon={<Robot size={20}/>} onBack={onBack} onClose={onClose} actions={<>{manage&&busy(latest)&&<Button size="sm" disabled={pending} onClick={()=>void action(`/agent-sessions/${session.id}/stop`)}><Stop size={14}/>Stop</Button>}<Menu label="More conversation actions" floating trigger={<DotsThree size={22} weight="bold"/>} items={[{label:"Conversation details",onSelect:()=>setDetailsOpen(true)},{label:"Browse files",onSelect:()=>setTab("files")},...(onClose?[{label:"Close agent session",separatorBefore:true,onSelect:onClose}]:[])]}/></>}/>
   <Tabs className="agent-session-tabs" label="Session views" value={tab} onChange={setTab} items={[
    {id:'messages',label:'Messages',icon:<ChatCircle size={15}/>},
    {id:'preview',label:'Preview',icon:<Browser size={15}/>},

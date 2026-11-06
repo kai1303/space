@@ -7,6 +7,7 @@ import { Clock, EnvelopeSimple, Phone, Plus, Smiley, X } from '@phosphor-icons/r
 import { visibleStatus, type ProfileUpdate, type UserProfile, type UserStatus } from '@space/contracts';
 import { request } from '../../shared/api/request.js';
 import { SignOutButton } from '../auth/AuthScreen.js';
+import { Connections } from '../connections/Connections.js';
 import './profile.css';
 
 const errorText = (e: unknown) => e instanceof Error ? e.message.replaceAll('_', ' ') : 'Could not save. Please try again.';
@@ -23,6 +24,7 @@ export function UserSettings({ user, userId, onNameChange }: { user: string; use
   const [profile, setProfile] = useState<UserProfile>({ id: userId ?? '', display_name: user, full_name: '', title: '', name_pronunciation: '', phone: '', time_zone: 'UTC', image: null, email: null, status: null, presence: 'active' });
   const [loaded, setLoaded] = useState(false), [loading, setLoading] = useState(true), [error, setError] = useState(''), [busy, setBusy] = useState(false);
   const [panel, setPanel] = useState(false), [editor, setEditor] = useState<'profile' | 'status' | null>(null);
+  const [connections, setConnections] = useState(false);
   const [, tick] = useState(0);
   const alive = useRef(true), root = useRef<HTMLDivElement>(null), closePanelButton = useRef<HTMLButtonElement>(null);
   async function load() {
@@ -71,6 +73,7 @@ export function UserSettings({ user, userId, onNameChange }: { user: string; use
           {status && <button role="menuitem" disabled={busy} onClick={() => { close(); void save({ status: null }).catch(() => {}); }}>Clear status</button>}
           <button role="menuitem" disabled={busy} onClick={() => { close(); void save({ presence: profile.presence === 'active' ? 'away' : 'active' }).catch(() => {}); }}>Set yourself as {profile.presence === 'active' ? 'away' : 'active'}</button>
           <hr /><button role="menuitem" onClick={() => { close(); open('profile'); }}>Profile</button>
+          <button role="menuitem" onClick={() => { close(); setConnections(true); }}>Connections</button>
         </>}
         <hr /><SignOutButton />
       </>}
@@ -98,6 +101,7 @@ export function UserSettings({ user, userId, onNameChange }: { user: string; use
     </SidePanel>}</AnimatePresence>, document.body)}
     {editor === 'profile' && <ProfileEditor profile={profile} busy={busy} error={error} save={save} onClose={() => setEditor(null)} />}
     {editor === 'status' && <StatusEditor profile={{ ...profile, status }} busy={busy} error={error} save={save} onClose={() => setEditor(null)} />}
+    {connections && <Connections key={userId ?? profile.id} userId={userId ?? profile.id} onClose={() => setConnections(false)} />}
   </div>;
 }
 

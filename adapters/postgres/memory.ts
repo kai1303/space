@@ -25,10 +25,10 @@ export class MemoryStore {
     const [channel] = await c.select().from(s.channels).where(eq(s.channels.id, id));
     if (!channel || !await hasChannelAccess(c, actor, channel.workspace_id, id)) throw new AppError(404, 'not_found');
     if (channel.kind === 'direct') throw new AppError(403, 'direct_message_memory_forbidden');
-    const [member] = await c.select({ role: s.workspaceMembers.role }).from(s.workspaceMembers)
-      .where(and(eq(s.workspaceMembers.workspace_id, channel.workspace_id), eq(s.workspaceMembers.user_id, actor)));
+    const [member] = await c.select({ role: s.workspaceMembers.role, guest_type: s.workspaceMembers.guest_type }).from(s.workspaceMembers)
+      .where(and(eq(s.workspaceMembers.workspace_id, channel.workspace_id), eq(s.workspaceMembers.user_id, actor), eq(s.workspaceMembers.active, true)));
     return { workspace_id: channel.workspace_id, channel_id: id, enabled: channel.memory_enabled,
-      provider: channel.memory_provider, can_manage: channel.created_by === actor || member?.role === 'owner' || member?.role === 'admin' };
+      provider: channel.memory_provider, can_manage: member?.guest_type === 'none' && (channel.created_by === actor || member.role === 'owner' || member.role === 'admin') };
   }
   private async manage<T>(actor: string, channelId: string, work: (channel: MemoryChannel, c: DbSession) => Promise<T>): Promise<T> {
     return sessionTransaction(this.db, async c => work(await this.authorize(c, actor, channelId), c));

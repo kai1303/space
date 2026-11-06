@@ -19,7 +19,9 @@
     "test:search": "tsx --test contracts/search.test.ts contracts/typesense.test.ts integration/search.test.ts",
     "test:search:e2e": "tsx --test e2e/search.test.ts",
     "test:calls": "tsx --test contracts/calling.test.ts integration/calling.test.ts integration/calling-realtime.test.ts",
-    "test:calls:e2e": "tsx --test e2e/calling.test.ts"
+    "test:calls:e2e": "tsx --test e2e/calling.test.ts",
+    "test:huddles": "tsx --test integration/huddles.test.ts integration/huddles-realtime.test.ts",
+    "test:huddles:media": "tsx --test e2e/huddles-media.test.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/client": "2.4.0",
@@ -36,6 +38,7 @@
     "socket.io-client": "^4.8.4"
   },
   "devDependencies": {
+    "@livekit/rtc-node": "1.2.1",
     "@playwright/test": "^1.64.1",
     "@types/node": "22",
     "@types/pg": "^8.23.1",

@@ -141,6 +141,21 @@ test('registration cannot claim an existing UUID or mark its own email verified'
   assert.deepEqual((await call(cookies(response), '/workspaces')).json().items, []);
 });
 
+test('adding a workspace member by email requires proof of email ownership', async () => {
+  const owner = await signup(), claimed = await signup();
+  const workspace = await call(owner.cookie, '/workspaces', { name: 'Verified membership' });
+  assert.equal(workspace.statusCode, 201, workspace.body);
+  const path = `/workspaces/${workspace.json().id}/members`;
+  const add = () => call(owner.cookie, path, { email: claimed.email.toUpperCase(), role: 'member' });
+  const denied = await add();
+  assert.equal(denied.statusCode, 403, denied.body);
+  assert.equal(denied.json().error, 'account_email_unverified');
+  assert.deepEqual((await call(claimed.cookie, '/workspaces')).json().items, []);
+  await pool.query('UPDATE users SET email_verified=true WHERE id=$1', [claimed.user.id]);
+  assert.equal((await add()).statusCode, 201);
+  assert.equal((await call(claimed.cookie, `/workspaces/${workspace.json().id}`)).statusCode, 200);
+});
+
 test('HTTPS configuration issues Secure HttpOnly cookies; trusted proxy IPs are explicit', async () => {
   const secure = createApi(new PostgresStore(pool), {
     auth: createAuthentication(pool, { secret: 'https-test-secret-at-least-32-characters', baseURL: 'https://space.example' }),

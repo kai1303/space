@@ -85,7 +85,11 @@
         "DATABASE_SCHEMA",
         "TYPESENSE_URL",
         "TYPESENSE_API_KEY",
-        "TYPESENSE_COLLECTION"
+        "TYPESENSE_COLLECTION",
+        "OUTBOUND_MCP_KEY",
+        "OUTBOUND_MCP_URL",
+        "MCP_HOST",
+        "MCP_PORT"
       ]
     },
     "start": {
@@ -118,7 +122,11 @@
         "DATABASE_SCHEMA",
         "TYPESENSE_URL",
         "TYPESENSE_API_KEY",
-        "TYPESENSE_COLLECTION"
+        "TYPESENSE_COLLECTION",
+        "OUTBOUND_MCP_KEY",
+        "OUTBOUND_MCP_URL",
+        "MCP_HOST",
+        "MCP_PORT"
       ]
     },
     "migrate": {

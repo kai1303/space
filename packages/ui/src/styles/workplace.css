@@ -60,14 +60,15 @@
 .sp-sidebar-utilities button {
   display: flex;
   align-items: center;
-  gap: 9px;
+  gap: 8px;
   width: 100%;
-  padding: 5px 8px;
+  min-height: 28px;
+  padding: 0 8px;
   border: 0;
   background: transparent;
   color: inherit;
   text-align: left;
-  font: 14px var(--sp-font-sans);
+  font: 15px/22px var(--sp-font-sans);
   border-radius: 4px;
 }
 .sp-sidebar-utilities button:hover {
@@ -77,9 +78,6 @@
   overflow: auto;
   flex: 1;
   padding: 6px 8px 20px;
-}
-.sp-sidebar-section {
-  margin-bottom: 10px;
 }
 .sp-sidebar-section-toggle {
   display: flex;

@@ -251,7 +251,7 @@ test('semantic agent mentions survive renames and semantic people mentions canno
 test('a Codex mention creates one persistent session and a durable thread entry; discussion never becomes a follow-up',async()=>{
  const s=await fixture();
  await pool.query('UPDATE agent_definitions SET capabilities=$2 WHERE id=$1',[s.definition_id,{skills:['codex.run'],controls:{},persistent_sessions:true}]);
- await pool.query("UPDATE agent_installations SET connector_id='codex.local' WHERE id=$1",[s.installation_id]);
+ await pool.query("UPDATE agent_installations SET connector_id='codex.legacy-test' WHERE id=$1",[s.installation_id]);
  await pool.query("INSERT INTO agent_connections(installation_id,name) VALUES($1,'Local test agent')",[s.installation_id]);
  await pool.query("UPDATE agent_grants SET skill='codex.run' WHERE installation_id=$1",[s.installation_id]);
  await nav.configure(s.owner_id,s.channel_id,{mode:'off'});
@@ -350,4 +350,23 @@ test('Jev context excludes rich quotation and code instructions, including earli
  assert.ok(received);assert.ok(!JSON.stringify(received.state).includes('Please summarize'));
  assert.ok(!JSON.stringify(received.state).includes('Please investigate'));
  assert.match(received.state.last_message.text,/Still an example/);
+});
+
+test('routed session requests retain rich mentions and recover matching legacy requests',async()=>{
+ const s=await fixture();
+ await pool.query('UPDATE agent_definitions SET capabilities=$2 WHERE id=$1',[s.definition_id,{skills:['demo.echo'],controls:{},persistent_sessions:true}]);
+ const mention={kind:'agent',id:s.installation_id,label:'Old label'};
+ const message=await chat.send(s.owner_id,s.channel_id,{client_message_id:randomUUID(),thread_id:s.thread_id,text:'@Old label summarize',document:{ops:[{insert:'@Old label',attributes:{mention}},{insert:' summarize\n'}]}});
+ await tick(s.thread_id);
+ const task=(await pool.query('SELECT * FROM tasks WHERE thread_id=$1',[s.thread_id])).rows[0];
+ assert.deepEqual(task.request_document,message.document);
+ const sessions=new AgentSessionStore(pool);
+ assert.deepEqual((await sessions.read(s.owner_id,task.session_id)).turns[0]!.task.request_document,message.document);
+ // Simulate pre-fix rows without changing the production immutability rule.
+ await pool.query('ALTER TABLE tasks DISABLE TRIGGER tasks_immutable_document');
+ try{await pool.query('UPDATE tasks SET request_document=NULL WHERE id=$1',[task.id]);}
+ finally{await pool.query('ALTER TABLE tasks ENABLE TRIGGER tasks_immutable_document');}
+ assert.deepEqual((await sessions.read(s.owner_id,task.session_id)).turns[0]!.task.request_document,message.document);
+ await pool.query("UPDATE messages SET text='Edited after dispatch' WHERE id=$1",[message.id]);
+ assert.equal((await sessions.read(s.owner_id,task.session_id)).turns[0]!.task.request_document,null);
 });

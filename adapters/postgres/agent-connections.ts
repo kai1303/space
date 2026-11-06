@@ -5,6 +5,7 @@ import { and, eq, gt, isNull, sql } from 'drizzle-orm';
 import { AppError, localProviders, defaultPairedConnectors, parseCapabilities, text, type PairedConnector, type ChannelAgent, connectionSecret, parsePairing, parsePairingClaim, parseAgentHeartbeat, parsePage, uuid, type WorkspaceParticipant, type AgentPairingStatus } from '@space/contracts';
 import { database } from './database.js';
 import { hasChannelAccess, hasWorkspaceAccess, requireWorkspaceAccess } from './access.js';
+import { visibleWorkspacePeer } from './workspace-access.js';
 import * as s from './schema.js';
 const hash = (value: string) => createHash('sha256').update(value).digest('hex');
 const unauthorized = () => new AppError(401, 'unauthorized');
@@ -53,8 +54,8 @@ export class AgentConnectionStore {
       if (!ref) throw unauthorized();
       const [pairing] = await c.select().from(s.agentPairings).where(eq(s.agentPairings.id, ref.id));
       if (!pairing || pairing.cancelled_at || !await hasWorkspaceAccess(c, pairing.owner_id, pairing.workspace_id)) throw unauthorized();
-      // Legacy Codex clients omit provider; they must never consume a Kiro pairing.
-      if ((provider !== undefined && pairing.provider !== provider) || (provider === undefined && pairing.provider === 'kiro')) throw new AppError(409, 'provider_mismatch');
+      // Legacy Codex clients omit provider; other local providers must identify themselves.
+      if ((provider !== undefined && pairing.provider !== provider) || (provider === undefined && pairing.provider != null && pairing.provider !== 'codex')) throw new AppError(409, 'provider_mismatch');
       const definition = pairing.descriptor ?? this.connectors.find(entry => entry.id === pairing.connector_id);
       if (!definition || !this.connectors.some(entry => entry.id === definition.id)) throw new AppError(409, 'unknown_connector');
       if (pairing.installation_id) {
@@ -82,12 +83,12 @@ export class AgentConnectionStore {
       await requireWorkspaceAccess(c, actor, workspace);
       const humans = await c.select({ id: s.users.id, name: s.users.display_name }).from(s.workspaceMembers)
         .innerJoin(s.users, eq(s.users.id, s.workspaceMembers.user_id))
-        .where(and(eq(s.workspaceMembers.workspace_id, workspace), eq(s.workspaceMembers.active, true), after ? gt(s.users.id, after) : undefined)).orderBy(s.users.id).limit(limit + 1);
+        .where(and(eq(s.workspaceMembers.workspace_id, workspace), eq(s.workspaceMembers.active, true), visibleWorkspacePeer(workspace, actor, sql`${s.users.id}`), after ? gt(s.users.id, after) : undefined)).orderBy(s.users.id).limit(limit + 1);
       const agents = await c.select({ id: s.agentInstallations.id, name: s.agentConnections.name, owner_id: s.agentInstallations.owner_id,
         connector_id: s.agentInstallations.connector_id, auth_status: s.agentConnections.auth_status, connection_id: s.agentConnections.connection_id, last_seen_at: s.agentConnections.last_seen_at }).from(s.agentConnections)
         .innerJoin(s.agentInstallations, eq(s.agentInstallations.id, s.agentConnections.installation_id))
         .innerJoin(s.workspaceMembers, and(eq(s.workspaceMembers.workspace_id, s.agentInstallations.workspace_id), eq(s.workspaceMembers.user_id, s.agentInstallations.owner_id)))
-        .where(and(eq(s.agentInstallations.workspace_id, workspace), eq(s.agentInstallations.enabled, true), isNull(s.agentConnections.revoked_at), eq(s.workspaceMembers.active, true), after ? gt(s.agentInstallations.id, after) : undefined)).orderBy(s.agentInstallations.id).limit(limit + 1);
+        .where(and(eq(s.agentInstallations.workspace_id, workspace), eq(s.agentInstallations.enabled, true), isNull(s.agentConnections.revoked_at), eq(s.workspaceMembers.active, true), visibleWorkspacePeer(workspace, actor, sql`${s.agentInstallations.owner_id}`), after ? gt(s.agentInstallations.id, after) : undefined)).orderBy(s.agentInstallations.id).limit(limit + 1);
       const items: WorkspaceParticipant[] = [...humans.map(h => ({ ...h, kind: 'human' as const })), ...agents.map(a => ({ id: a.id, name: a.name, owner_id: a.owner_id, kind: 'agent' as const, ...(this.connectors.find(entry => entry.id === a.connector_id)?.provider ? { provider: this.connectors.find(entry => entry.id === a.connector_id)!.provider } : {}), auth_status: a.auth_status,
         status: (!a.connection_id || !a.last_seen_at || Date.now() - a.last_seen_at.getTime() > 45_000 ? 'offline' : a.auth_status === 'ready' ? 'online' : a.auth_status === 'required' ? 'auth_required' : 'error') as WorkspaceParticipant['status'],
       }))].sort((a, b) => a.id.localeCompare(b.id));

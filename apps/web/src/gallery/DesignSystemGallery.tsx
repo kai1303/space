@@ -91,6 +91,7 @@ function initialTheme(): "light" | "dark" {
   }
 }
 export function DesignSystemGallery() {
+  useEffect(() => { document.title = "Space — Design system"; }, []);
   const [theme, setTheme] = useState(initialTheme);
   const [query, setQuery] = useState("");
   const [active, setActive] = useState("overview");

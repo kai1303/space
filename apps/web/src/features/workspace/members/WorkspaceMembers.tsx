@@ -99,7 +99,7 @@ function MemberDialog({ initialConnector, agent, workspace, viewer, onClose }: {
   const pairingProvider = pairing?.provider ?? descriptor?.provider;
   const name = descriptor?.name ?? 'agent';
   const remote = !pairingProvider;
-  const command = `pnpm connector${pairingProvider === 'kiro' ? ' --provider kiro' : ''} --url ${window.location.origin} --connect`;
+  const command = `pnpm connector${pairingProvider && pairingProvider !== 'codex' ? ` --provider ${pairingProvider}` : ''} --url ${window.location.origin} --connect`;
   const agents = members.filter(member => member.kind === 'agent' && (!agent || member.id === agent));
   const types = [
     { id: 'local' as const, label: 'Local runner', icon: <Desktop size={19} /> },
@@ -132,12 +132,12 @@ function MemberDialog({ initialConnector, agent, workspace, viewer, onClose }: {
       </section>}
       {pairing && <section className="space-pairing" aria-label={`Connect ${name}`}>
         {pairStatus?.status === 'claimed' ? <>
-          <div className="space-agent-success"><CheckCircle size={30}/><div><strong>{name} paired with this workspace</strong><p role="status">{connected?.status === 'online' ? remote ? `${name} is connected and ready.` : `Your local ${name} is connected and signed in.` : remote ? 'Start your cloud runner and finish its setup. Its status will update here.' : pairingProvider === 'codex' ? 'Complete Continue with ChatGPT in the local connector. Its status will update here.' : `Sign in to ${name} in its connector. Its status will update here.`}</p></div></div>
+          <div className="space-agent-success"><CheckCircle size={30}/><div><strong>{name} paired with this workspace</strong><p role="status">{connected?.status === 'online' ? remote || pairingProvider === 'claude' ? `${name} is connected and ready.` : `Your local ${name} is connected and signed in.` : remote ? 'Start your cloud runner and finish its setup. Its status will update here.' : pairingProvider === 'codex' ? 'Complete Continue with ChatGPT in the local connector. Its status will update here.' : `Sign in to ${name} in its connector. Its status will update here.`}</p></div></div>
           <Button variant="primary" onClick={() => {pending.current = undefined; status.current = undefined; setPairing(undefined); setPairStatus(undefined);}}>Done</Button>
         </> : expired ? <><strong>This pairing code has expired or was cancelled.</strong><p>Create a new code to continue connecting your agent.</p><Button variant="primary" loading={busy} onClick={() => void createPairing()}>Generate new code</Button><Button size="sm" variant="ghost" disabled={busy} onClick={() => void cancel()}>Back to setup</Button></> : <>
           <div className="space-pairing-heading"><span className="space-agent-step-label">PAIR YOUR RUNNER</span><strong>{remote ? `Connect ${name} to your cloud runner` : `Connect ${name} on your computer`}</strong></div>
           <ol className="space-pairing-steps">
-            <li><strong>{remote ? 'Open your runner’s connection settings' : 'Start the local runner'}</strong>{remote ? <><p>Use a Space address your runner can reach over HTTPS.</p><label className="space-pairing-code">Space URL<input readOnly value={window.location.origin} onFocus={e => e.target.select()}/></label><p className="space-members-hint">A localhost address is only reachable from this computer. Open your deployed Space address before pairing a cloud runner.</p></> : <><p>Run this command from your Space checkout.</p><code>{command}</code></>}</li>
+            <li><strong>{remote ? 'Open your runner’s connection settings' : 'Start the local runner'}</strong>{remote ? <><p>Use a Space address your runner can reach over HTTPS.</p><label className="space-pairing-code">Space URL<input readOnly value={window.location.origin} onFocus={e => e.target.select()}/></label><p className="space-members-hint">A localhost address is only reachable from this computer. Open your deployed Space address before pairing a cloud runner.</p></> : <><p>{'Run this command from your Space checkout.'}</p><code>{command}</code></>}</li>
             <li><strong>Enter your pairing code</strong><p>Paste this into the runner when prompted.</p><div className="space-pairing-code-row"><label className="space-pairing-code">Pairing code<input readOnly value={pairing.code} onFocus={e => e.target.select()}/></label><Button size="sm" variant="secondary" aria-label={copied ? 'Copied' : 'Copy code'} onClick={() => copy(pairing.code)}><Copy size={16}/>{copied ? 'Copied' : 'Copy'}</Button></div></li>
             <li><strong>{remote ? 'Start your cloud runner' : 'Sign in to your agent'}</strong><p>{remote ? 'Keep the runner connected. Provider credentials stay in your cloud environment.' : pairingProvider === 'codex' ? <>Choose <strong>Continue with ChatGPT</strong> in the connector to authorize your account.</> : <>Sign in to {name} using the connector’s local login prompt. Your credentials stay on your computer.</>}</p></li>
           </ol>
@@ -150,7 +150,7 @@ function MemberDialog({ initialConnector, agent, workspace, viewer, onClose }: {
         <div className="space-member-details"><strong>{member.name}</strong><small><span className={`space-agent-status-dot space-agent-status-dot--${member.status ?? 'offline'}`}/>{statusText[member.status ?? 'offline']}{member.owner_id === viewer ? ' · Owned by you' : ''}</small></div>
         {member.owner_id === viewer && <Button size="sm" variant="ghost" aria-label={`Disconnect ${member.name}`} disabled={busy} onClick={() => void revoke(member.id)}>Disconnect</Button>}
       </li>)}</ul></section>}
-      <div className="space-agent-permissions"><ShieldCheck size={18}/><p>Connecting doesn’t grant channel or memory access. Your agent only works where you explicitly allow it.</p></div>
+      <div className="space-agent-permissions"><ShieldCheck size={18}/><p>A paired agent inherits your access to conversations. Channel memory requires a separate grant.</p></div>
     </div>
   </Dialog>;
 }

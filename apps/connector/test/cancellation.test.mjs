@@ -24,7 +24,7 @@ test('explicit Stop interrupts and drains the exact Codex turn before resuming o
   let claims = 0, finishes = 0, failures = 0, launches = 0, complete;
   const completed = new Promise(resolve => { complete = resolve; });
   const second = nextInvocation('77777777-7777-4777-8777-777777777777');
-  const third = { ...nextInvocation('88888888-8888-4888-8888-888888888888', false), session_id: '99999999-9999-4999-8999-999999999999' };
+  const third = { ...nextInvocation('88888888-8888-4888-8888-888888888888', false), session_id: '99999999-9999-4999-8999-999999999999',goal:'Independent third turn' };
   io.of('/agents').on('connection', socket => {
     socket.on('agent.heartbeat', (payload, ack) => { statuses.push(payload.auth_status); ack({ data: { installation_id: 'i' } }); });
     socket.on('agent.task.claim', (_payload, ack) => { const requests = [invocation, second, third]; ack({ data: requests[claims++] ?? null }); if (claims === 4) complete(); });
@@ -56,7 +56,7 @@ test('explicit Stop interrupts and drains the exact Codex turn before resuming o
           send({ id: message.id, result: { turn: { id: turnId } } });
           const params = { threadId, turnId, itemId: 'answer', delta: 'Current answer' };
           send({ method: 'item/agentMessage/delta', params });
-          if (turns === 1) previous = params;
+          if (turns === 1 && !message.params.input[0].text.includes('Independent third turn')) previous = params;
           else {
             send({ method: 'item/agentMessage/delta', params: { ...previous, delta: 'STALE OLD TURN' } });
             send({ method: 'turn/completed', params: { threadId, turn: { id: turnId, status: 'completed' } } });
@@ -75,7 +75,7 @@ test('explicit Stop interrupts and drains the exact Codex turn before resuming o
   const platform = connectPlatform(connection, () => codex.alive() ? 'ready' : 'error', () => {}, codex.invoke);
   try {
     await completed;
-    assert.equal(finishes, 2); assert.equal(failures, 0); assert.equal(launches, 1);
+    assert.equal(finishes, 2); assert.equal(failures, 0); assert.equal(launches, 2);
     assert.equal(codex.alive(), true);
     assert.equal(statuses.includes('error'), false);
     assert.equal(acceptedEvents.some(e => e.execution_id === invocation.execution_id && e.type === 'execution.completed'), false);

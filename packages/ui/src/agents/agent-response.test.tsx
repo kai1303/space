@@ -89,3 +89,26 @@ it('keeps completed code blocks, links and tables mounted when more text streams
   expect(screen.getByRole('table')).toBe(table);
   expect(document.activeElement).toBe(copy);
 });
+
+it('shows write content with a filename while raw arguments stay in Details',async()=>{
+ const input=JSON.stringify({path:'/project/src/hello.ts',content:'export const greeting = "hello";'});
+ const {container}=render(<AgentResponse response={{messages:[],components:[],tools:[{id:'write',name:'write_file',arguments:input,status:'completed',result:'Successfully wrote to /project/src/hello.ts'}]}}/>);
+ await userEvent.click(screen.getByRole('button',{name:'Expand timeline'}));
+ expect(screen.getByText('hello.ts')).toBeTruthy();expect(screen.getByText('Content sent')).toBeTruthy();
+ expect(container.querySelector('.sp-agent-file-tool details')?.hasAttribute('open')).toBe(false);
+ await userEvent.click(screen.getByText('Details'));expect(screen.getByRole('group',{name:'JSON code block'}).querySelector('code')?.textContent).toBe(input);
+});
+
+it('shows returned edit diffs and labels dry runs without claiming a write',async()=>{
+ render(<AgentResponse response={{messages:[],components:[],tools:[{id:'edit',name:'edit_file',arguments:JSON.stringify({path:'/project/README.md',dryRun:true,edits:[{oldText:'Before',newText:'After'}]}),status:'completed',result:'```diff\n--- README.md\n+++ README.md\n@@ -1 +1 @@\n-Before\n+After\n```'}]}}/>);
+ await userEvent.click(screen.getByRole('button',{name:'Expand timeline'}));
+ expect(screen.getByText('README.md')).toBeTruthy();expect(screen.getByText('Preview only')).toBeTruthy();expect(screen.getByText('Changes returned')).toBeTruthy();
+ expect(screen.getByRole('group',{name:'diff code block'}).textContent).toContain('-Before');
+});
+
+it('keeps malformed file inputs readable and shows failed edit output beside requested edits',async()=>{
+ const {rerender}=render(<AgentResponse response={{messages:[],components:[],tools:[{id:'edit',name:'edit_file',arguments:'{"path":"/truncated',status:'interrupted',result:'Tool failed.'}]}}/>);
+ await userEvent.click(screen.getByRole('button',{name:'Expand timeline'}));await userEvent.click(screen.getByText('Details'));expect(screen.getByRole('group',{name:'JSON code block'}).querySelector('code')?.textContent).toBe('{"path":"/truncated');
+ rerender(<AgentResponse response={{messages:[],components:[],tools:[{id:'edit',name:'edit_file',arguments:JSON.stringify({path:'a.txt',edits:[{oldText:'old',newText:'new'}]}),status:'interrupted',result:'Tool failed.'}]}}/>);
+ expect(screen.getByText('Requested edits')).toBeTruthy();expect(screen.getByText('Tool failed.')).toBeTruthy();
+});

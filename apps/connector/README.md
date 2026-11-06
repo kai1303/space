@@ -1,8 +1,8 @@
 # Space Connector
 
-This local connector pairs Codex or Kiro on one computer with a Space workspace, reports provider readiness, and executes approved chat tasks. A paired agent inherits its owner’s current conversation access; no separate channel grant is required. Project file tools are an explicit local opt-in with `--project`.
+This local connector pairs Codex, Kiro or Claude on one computer with a Space workspace, reports provider readiness, and executes approved chat tasks. A paired agent inherits its owner’s current conversation access; no separate channel grant is required. Project file tools are an explicit local opt-in with `--project`.
 
-Requirements: Node.js 24+, pnpm, and the selected provider CLI installed on `PATH`. Codex is the default; Kiro requires `kiro-cli` with ACP v3 support.
+Requirements: Node.js 24+, pnpm, and the selected provider CLI installed on `PATH`. Claude uses the installed `claude` executable. Codex is the default; Kiro requires `kiro-cli` with ACP v3 support.
 
 For Codex, from this repository:
 
@@ -50,6 +50,23 @@ The adapter launches ACP v3, resolving the installed `kiro-cli-chat` companion w
 
 Kiro uses its own authentication and model defaults. Model selection, native shell tools, provider-specific commands and interactive tool approval remain unsupported. See Kiro's [ACP v3 client guide](https://kiro.dev/docs/cli/v3/acp-migration/) and [agent profile reference](https://kiro.dev/docs/custom-agents/configuration-reference/).
 
+## Claude
+
+In **Members**, choose **Local runner → Claude → Connect Local Claude**. Install Claude Code on your `PATH`, then run the command shown in Space and enter its pairing code.
+
+```sh
+pnpm connector --provider claude --url http://localhost:3000 --connect
+pnpm connector --provider claude          # reconnect
+pnpm connector --provider claude --login  # sign in again
+pnpm connector --provider claude --logout # sign out of Space's Claude profile
+```
+
+On first pairing the connector launches `claude auth login`. Complete Claude's own sign-in in your browser and terminal. The connector checks `claude auth status` and starts your installed, unmodified Claude Code executable. Your Claude subscription account can be used through this native sign-in flow. The connector uses the SDK as a local protocol client for streaming and session control.
+
+Claude owns authentication in the private `~/.config/space-connector-claude/claude-home/` profile. Space's server receives pairing credentials and task events. Login tokens remain under the native CLI's control. Sign-out applies to this Space profile. Each provider can run in a separate terminal.
+
+By default Claude receives supplied conversation context and its own retained session history. Add `--project /absolute/path` to enable the selected folder's file tools. Private session mappings are scoped to the Space installation, Claude account and selected project. Start a new Space session after changing account or project. Ready confirms local sign-in and initialization. Model access is checked on the first task.
+
 ## Project file tools and activity
 
 Stop the current connector, then select the project folder explicitly on each launch:
@@ -59,7 +76,7 @@ pnpm connector --project /absolute/path/to/project
 pnpm connector --provider kiro --project /absolute/path/to/project
 ```
 
-The selected directory is resolved locally and is never accepted from a Space task. Both runtimes expose the maintained MCP filesystem server for reading text, listing/searching files, creating directories, and writing/editing files within that root. Native shell, unrelated integrations and approval escalation remain disabled. The file server checks path and symlink boundaries; this is a tool boundary, not a general OS sandbox. Reads and edits reach the selected project. Do not use a folder you have not authorized the agent to access.
+The selected directory is resolved locally and is never accepted from a Space task. The local runtimes expose the maintained MCP filesystem server for reading text, listing/searching files, creating directories, and writing/editing files within that root. Native shell, unrelated integrations and approval escalation remain disabled. The file server checks path and symlink boundaries; this is a tool boundary, not a general OS sandbox. Reads and edits reach the selected project. Do not use a folder you have not authorized the agent to access.
 
 A project changes the private session namespace. Start a new Space agent session after enabling tools or selecting a different project; an earlier chat-only session is not silently rebound to a folder. Returning to the same project and identity can resume its saved sessions. Codex ignores project-local runtime configuration; Kiro uses the generated allowlist profile. Kiro waits for the project MCP server to become connected before starting inference.
 

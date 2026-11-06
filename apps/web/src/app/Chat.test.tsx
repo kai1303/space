@@ -700,12 +700,58 @@ it('creates a workspace directly from onboarding and opens the returned workspac
     return {};
   } })));
   render(<Chat />);
-  await userEvent.type(await screen.findByRole('textbox', { name: 'Workspace name' }), 'Space studio');
+  const workspaceName = await screen.findByRole('textbox', { name: 'Workspace name' });
+  expect(screen.queryByRole('navigation', { name: 'Main navigation' })).toBeNull();
+  await userEvent.type(workspaceName, 'Space studio');
   await userEvent.click(screen.getByRole('button', { name: 'Create workspace', exact: true }));
   await screen.findByRole('button', { name: 'Switch workspaces… (Space studio)' });
   expect(vi.mocked(fetch).mock.calls.some(([path, options]) => path === '/v1/workspaces' && options?.method === 'POST' && options.body === JSON.stringify({ name: 'Space studio' }))).toBe(true);
   expect(vi.mocked(fetch).mock.calls.some(([path]) => String(path).includes('/organizations'))).toBe(false);
   expect(screen.queryByText(/organization/i)).toBeNull();
+});
+
+it('keeps navigation hidden during workspace discovery and retries a failed load before showing setup', async () => {
+  let finish!: (response: unknown) => void;
+  let attempts = 0;
+  vi.stubGlobal('fetch', vi.fn(async (path: string) => {
+    if (path.startsWith('/v1/workspaces?')) {
+      attempts++;
+      if (attempts === 1) return new Promise(resolve => { finish = resolve; });
+      return { ok: true, json: async () => ({ items: [], next_cursor: null }) };
+    }
+    return { ok: true, json: async () => ({}) };
+  }));
+  render(<Chat />);
+  await waitFor(() => expect(attempts).toBe(1));
+  expect(screen.queryByRole('navigation', { name: 'Main navigation' })).toBeNull();
+  expect(screen.queryByRole('textbox', { name: 'Workspace name' })).toBeNull();
+  await act(async () => { finish({ ok: false, status: 503, json: async () => ({ error: 'temporarily_unavailable' }) }); });
+  await screen.findByRole('alert');
+  await userEvent.click(screen.getByRole('button', { name: 'Try again', exact: true }));
+  await screen.findByRole('textbox', { name: 'Workspace name' });
+  expect(attempts).toBe(2);
+});
+
+it('validates workspace names locally and preserves the form after a failed creation', async () => {
+  let creates = 0;
+  vi.stubGlobal('fetch', vi.fn(async (path: string, options?: RequestInit) => {
+    if (path === '/v1/workspaces' && options?.method === 'POST') {
+      creates++;
+      return { ok: false, status: 503, json: async () => ({ error: 'temporarily_unavailable' }) };
+    }
+    return { ok: true, json: async () => ({ items: [], next_cursor: null }) };
+  }));
+  render(<Chat />);
+  const input = await screen.findByRole('textbox', { name: 'Workspace name' });
+  fireEvent.change(input, { target: { value: '   ' } });
+  fireEvent.submit(input.closest('form')!);
+  expect(creates).toBe(0);
+  expect(input.getAttribute('aria-invalid')).toBe('true');
+  fireEvent.change(input, { target: { value: 'My team' } });
+  await userEvent.click(screen.getByRole('button', { name: 'Create workspace', exact: true }));
+  await screen.findByRole('alert');
+  expect(input).toHaveProperty('value', 'My team');
+  expect(creates).toBe(1);
 });
 
 function paginatedMessage(id: string, sequence: string, thread = 'thread'): ChatMessage {
@@ -780,7 +826,7 @@ it('updates the Starred sidebar immediately after starring and unstarring withou
   let active = false;
   vi.mocked(fetch).mockImplementation(async (input, init) => {
     const path = String(input);
-    if (!path.includes('/hub/starred')) return fallback(input, init);
+    if (!/\/hub\/starred(?:[/?]|$)/.test(path)) return fallback(input, init);
     if (init?.body) active = JSON.parse(String(init.body)).active;
     return { ok: true, json: async () => path.includes('/starred/') ? { active } : { items: active ? [{ id: 'first', name: 'first', kind: 'channel', private: false }] : [], next_cursor: null } } as Response;
   });
@@ -1483,17 +1529,17 @@ it('updates incoming messages without replacing existing rows or the composer',a
  console.log('RENDER_INCOMING',JSON.stringify({historyPasses:mocks.timelineRenders-before,existingRowReused:true,composerReused:true}));
 });
 
-it('uses a skeleton with a screen-reader announcement during the initial session check',()=>{
+it('uses the focused access layout with an announcement during the initial session check',()=>{
  mocks.authPending=true;const view=render(<Chat/>);
- expect(screen.getByText('Opening your workspace…').classList.contains('sp-sr-only')).toBe(true);
- expect(view.container.querySelector('.chat-conversation-skeleton')).toBeTruthy();
+ expect(screen.getByRole('status').textContent).toContain('Opening your workspace…');
+ expect(view.container.querySelector('.access-frame')).toBeTruthy();
 });
-it('uses a skeleton with a screen-reader announcement while workspaces are loading',async()=>{
+it('uses the focused access layout while workspaces are loading',async()=>{
  let finish!:(value:unknown)=>void;const pending=new Promise(resolve=>{finish=resolve;});
  vi.stubGlobal('fetch',vi.fn(async(path:string)=>({ok:true,json:async()=>path.startsWith('/v1/workspaces?')?pending:[]})));
  const view=render(<Chat/>);
- expect((await screen.findByText('Loading workspaces…')).classList.contains('sp-sr-only')).toBe(true);
- expect(view.container.querySelector('.chat-conversation-skeleton')).toBeTruthy();
+ expect((await screen.findByRole('status')).textContent).toContain('Loading workspaces…');
+ expect(view.container.querySelector('.access-frame')).toBeTruthy();
  view.unmount();await act(async()=>{finish({items:[],next_cursor:null});await pending;});
 });
 

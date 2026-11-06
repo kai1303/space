@@ -5,6 +5,7 @@ import { parseLocalProvider, type LocalProvider } from '@space/contracts';
 import { resolveProject } from './project-tools.js';
 import type { AgentRuntime } from './agent-runtime.js';
 import { startKiro } from './kiro.js';
+import { claudeIdentity, claudeLogin } from './claude-auth.js';
 import { kiroIdentity, kiroLogin } from './kiro-auth.js';
 import { parseArgs } from 'node:util';
 import { pathToFileURL } from 'node:url';
@@ -25,7 +26,7 @@ export function parseOptions(args: string[]) {
 }
 
 export function connectorDirectory(provider: LocalProvider) {
-  return join(homedir(), '.config', provider === 'kiro' ? 'space-connector-kiro' : 'space-connector');
+  return join(homedir(), '.config', provider === 'codex' ? 'space-connector' : `space-connector-${provider}`);
 }
 
 export function credentialRenewalDelay(expiresAt: number, now = Date.now()) {
@@ -36,7 +37,7 @@ export function credentialRenewalDelay(expiresAt: number, now = Date.now()) {
 export async function runConnector(args = process.argv.slice(2)) {
   const options = parseOptions(args);
   if (options.help) {
-    console.log('Space Connector\n\n  --provider <codex|kiro>     Select the local agent (default: codex)\n  --url <origin> --pair <code>  Pair this computer with Space\n  --project <absolute-path>   Enable file tools within this project folder\n  --connect                   Prompt for a new pairing code\n  --login                     Sign in to the selected provider\n  --logout                    Sign out of the selected provider\n\nRun without arguments to reconnect. Pairing codes are prompted when omitted.\nKeep this terminal running. The selected provider CLI must be installed on PATH. Kiro requires ACP v3.');
+    console.log('Space Connector\n\n  --provider <codex|kiro|claude>     Select the local agent (default: codex)\n  --url <origin> --pair <code>  Pair this computer with Space\n  --project <absolute-path>   Enable file tools within this project folder\n  --connect                   Prompt for a new pairing code\n  --login                     Sign in to the selected provider\n  --logout                    Sign out of the selected provider\n\nRun without arguments to reconnect. Pairing codes are prompted when omitted.\nKeep this terminal running. The selected provider CLI must be installed on PATH. Kiro requires ACP v3. Claude opens its native local login flow.');
     return;
   }
   const project = await resolveProject(options.project);
@@ -57,6 +58,7 @@ export async function runConnector(args = process.argv.slice(2)) {
   try {
     let state = await store.load();
     if (options.logout) {
+      if (provider === 'claude') { await claudeLogin(store.directory, controller.signal, true); console.log('Signed out of Claude for Space on this computer.'); return; }
       if (provider === 'kiro') { await kiroLogin(store.directory, controller.signal, true); console.log('Signed out of Kiro for Space on this computer.'); return; }
       if (state.credentials) {
         const revoked = await revokeCredentials(state.credentials);
@@ -130,6 +132,24 @@ export async function runConnector(args = process.argv.slice(2)) {
           });
           if (controller.signal.aborted) runtime.stop();
           else { status = runtime.alive() ? 'ready' : 'error'; platform.publish(); console.log('Connected: Kiro authorization and chat mode are ready.'); }
+        }
+      } else if (provider === 'claude') {
+        if (options.login) await claudeLogin(store.directory, controller.signal);
+        let auth;
+        try { auth = await claudeIdentity(store.directory, controller.signal); }
+        catch (error) {
+          if (!paired || options.login || controller.signal.aborted) throw error;
+          console.log('Sign in to Claude for Space using Claude Code’s local login.');
+          await claudeLogin(store.directory, controller.signal);
+          auth = await claudeIdentity(store.directory, controller.signal);
+        }
+        if (!controller.signal.aborted) {
+          const { startClaude } = await import('./claude.js');
+          runtime = await startClaude(auth, { directory: store.directory, connection: state.connection, project }, () => {
+            status = 'error'; platform?.publish(); console.error('Claude stopped. Check your local sign-in and restart the connector.');
+          });
+          if (controller.signal.aborted) runtime.stop();
+          else { status = 'ready'; platform.publish(); console.log('Connected: Claude local sign-in and runtime are ready.'); }
         }
       } else if (options.login || (paired && !state.credentials)) {
         const credentials = await authorize(state.host_id, state.registration, { signal: controller.signal });

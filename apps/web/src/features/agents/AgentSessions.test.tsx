@@ -4,7 +4,14 @@ import {act,cleanup,render,screen,waitFor,within} from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import {AgentSessions} from './AgentSessions.js';
 const mocks=vi.hoisted(()=>({refresh:undefined as undefined|(()=>unknown),revoke:undefined as undefined|(()=>void)}));
-vi.mock('../../shared/realtime/live-updates.js',()=>({subscribeUpdates:(_scope:string,_id:string,refresh:()=>unknown,revoke:()=>void)=>{mocks.refresh=refresh;mocks.revoke=revoke;void refresh();return()=>{};}}));
+vi.mock('../../shared/realtime/live-updates.js',()=>{
+ const readers=new Map<string,Set<()=>unknown>>();
+ return {subscribeUpdates:(scope:string,id:string,refresh:()=>unknown,revoke:()=>void)=>{
+  if(scope==='thread'){mocks.refresh=refresh;mocks.revoke=revoke;}
+  const key=`${scope}:${id}`,group=readers.get(key)??new Set();readers.set(key,group);group.add(refresh);void refresh();
+  return()=>{group.delete(refresh);};
+ },invalidateUpdates:async(scope:string,id:string)=>{await Promise.all([...readers.get(`${scope}:${id}`)??[]].map(read=>read()));}};
+});
 // jsdom has no layout; mount fixture rows while testing the shared timeline flow.
 vi.mock('@tanstack/react-virtual',()=>({useVirtualizer:(options:any)=>({getTotalSize:()=>options.count*100+88,getVirtualItems:()=>Array.from({length:options.count},(_,index)=>({index,key:options.getItemKey(index),start:index*100+44})),measureElement:()=>{},scrollToEnd:()=>{},scrollToIndex:()=>{},isAtEnd:()=>true})}));
 const session=(id:string,title:string)=>({id,title,workspace_id:'workspace',installation_id:'agent',origin_thread_id:'thread',managed:true,state:'active',agent_name:'Codex',owner_id:'user',created_by:'user',created_at:'2026-11-03T00:00:00Z',skill:'codex.run',turn_count:1});
@@ -400,4 +407,33 @@ it('extends the same agent conversation with selected context instead of replaci
  expect(screen.getByRole('tablist',{name:'Session views'})).toBeTruthy();
  expect(screen.getByRole('textbox',{name:'Message agent session'})).toBeTruthy();
  expect(screen.getAllByRole('log',{name:'Session conversation'})).toHaveLength(1);
+});
+
+it('stars and unstars the selected agent session from its conversation header',async()=>{
+ const fetch=setup(),original=fetch.getMockImplementation()!;let active=false;
+ fetch.mockImplementation(async(path,init)=>{
+  if(path==='/v1/workspaces/workspace/hub/starred-sessions/one'){
+   if(init?.method==='POST')active=JSON.parse(String(init.body)).active;
+   return {ok:true,json:async()=>({active})};
+  }
+  return original(path,init);
+ });
+ render(<AgentSessions thread="thread" channel="channel" viewerId="user" initialSessionId="one" onAccessLost={()=>{}}/>);
+ await userEvent.click(await screen.findByRole('button',{name:'Star conversation'}));
+ await waitFor(()=>expect(screen.getByRole('button',{name:'Unstar conversation'}).getAttribute('aria-pressed')).toBe('true'));
+ expect(active).toBe(true);
+ await userEvent.click(screen.getByRole('button',{name:'Unstar conversation'}));
+ await waitFor(()=>expect(screen.getByRole('button',{name:'Star conversation'}).getAttribute('aria-pressed')).toBe('false'));
+ expect(active).toBe(false);
+});
+
+it('keeps a rejected immediate-turn draft and uses a fresh attempt when the connector becomes available',async()=>{
+ const fetch=setup(),original=fetch.getMockImplementation()!;let sends=0;
+ fetch.mockImplementation(async(path,init)=>path.endsWith('/messages')&&++sends===1?{ok:false,status:409,json:async()=>({error:'agent_unavailable'})}:original(path,init));
+ render(<SessionViews/>);await userEvent.click(await screen.findByRole('button',{name:'Research',exact:true}));
+ const editor=await screen.findByRole('textbox',{name:'Message agent session'});await userEvent.type(editor,'Please continue');await userEvent.keyboard('{Enter}');
+ await screen.findByRole('alert');expect(editor.textContent).toContain('Please continue');await userEvent.click(screen.getByRole('button',{name:'Send now'}));
+ await waitFor(()=>expect(editor.textContent?.trim()).toBe(''));
+ const attempts=fetch.mock.calls.filter(([path])=>path.endsWith('/messages'));expect(attempts).toHaveLength(2);
+ expect(new Headers(attempts[0]![1]?.headers).get('idempotency-key')).not.toBe(new Headers(attempts[1]![1]?.headers).get('idempotency-key'));
 });

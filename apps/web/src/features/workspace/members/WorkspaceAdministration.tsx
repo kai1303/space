@@ -14,6 +14,7 @@ const errors: Record<string,string> = {
   guest_role_conflict:'Guests must become full members before receiving an administrative role.',
   last_owner:'A workspace must have an owner. Make another person an owner before changing this account.',
   account_not_found:'No Space account has that email address. Ask them to create an account first.',
+  account_email_unverified:'This account has not verified its email address. Send an email invitation so they can verify before joining.',
   member_already_exists:'This person is already a member. Use Change account type to update their role.',
   member_management_forbidden:'Your role does not allow this action. The member list has been refreshed.',
   not_found:'This workspace or account is no longer available.',

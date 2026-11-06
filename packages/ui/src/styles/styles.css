@@ -450,7 +450,9 @@
   cursor: pointer;
   font-size: 14px;
 }
-.sp-channel > span:first-of-type {
+.sp-channel-name {
+  min-width: 0;
+  flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -496,7 +498,7 @@
   display: grid;
   grid-template-columns: 36px minmax(0, 1fr);
   column-gap: 8px;
-  padding: var(--sp-message-block-padding, 8px) 20px;
+  padding: var(--sp-message-block-padding, 8px) 20px 2px;
   color: var(--sp-text);
 }
 .sp-message--grouped {
@@ -752,7 +754,7 @@
     display: none;
   }
   .sp-message {
-    padding: var(--sp-message-block-padding, 12px) 12px;
+    padding: var(--sp-message-block-padding, 12px) 12px 2px;
   }
   .sp-composer-wrap {
     padding: 12px;

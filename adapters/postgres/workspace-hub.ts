@@ -1,4 +1,5 @@
 import type { Pool } from 'pg';
+import type { StarredAgentSession } from '@space/contracts';
 import { sql, type SQL } from 'drizzle-orm';
 import { AppError, HUB_FILE_KINDS, parsePage, parseHubTodo, parseHubToggle, parseHubFileQuery, record, uuid, type HubMessage, type HubFile, type HubTodo, type Page } from '@space/contracts';
 import { database } from './database.js';
@@ -44,6 +45,54 @@ const todoColumns=sql`t.id,t.title,t.completed,t.document,t.archived,t.deleted,t
 export class WorkspaceHubStore {
   readonly db;
   constructor(readonly pool: Pool) { this.db = database(pool); }
+
+  async starredSessions(actor: string, workspace: string, input: unknown = {}): Promise<Page<StarredAgentSession>> {
+    actor=uuid(actor);workspace=uuid(workspace);
+    const {after,limit}=parsePage(input);
+    return this.db.transaction(async c=>{
+      await requireWorkspaceAccess(c,actor,workspace);
+      const result=await c.execute<StarredAgentSession & Record<string,unknown>>(sql`
+        SELECT a.id,a.title AS name,'agent_session' AS kind,c.private,
+          jsonb_build_object('id',a.id,'agent_name',d.name,'origin_thread_id',a.origin_thread_id,
+            'channel_id',c.id,'channel_archived',c.archived_at IS NOT NULL) AS session
+        FROM hub_starred_agent_sessions star
+        JOIN agent_sessions a ON a.workspace_id=star.workspace_id AND a.id=star.session_id
+        JOIN threads t ON t.workspace_id=a.workspace_id AND t.id=a.origin_thread_id
+        JOIN channels c ON c.workspace_id=t.workspace_id AND c.id=t.channel_id
+        JOIN agent_installations i ON i.id=a.installation_id JOIN agent_definitions d ON d.id=i.definition_id
+        WHERE star.workspace_id=${workspace} AND star.user_id=${actor} AND a.managed AND ${channelAccess(actor,workspace)}
+          ${after?sql`AND a.id>${after}::uuid`:sql``}
+        ORDER BY a.id LIMIT ${limit+1}`);
+      return page(result.rows,limit,row=>row.id);
+    });
+  }
+
+  async sessionStarState(actor: string, workspace: string, session: string) {
+    actor=uuid(actor);workspace=uuid(workspace);session=uuid(session);
+    const result=await this.db.execute<{active:boolean}>(sql`
+      SELECT EXISTS(SELECT 1 FROM hub_starred_agent_sessions star WHERE star.workspace_id=${workspace}
+        AND star.user_id=${actor} AND star.session_id=a.id) AS active
+      FROM agent_sessions a JOIN threads t ON t.workspace_id=a.workspace_id AND t.id=a.origin_thread_id
+      JOIN channels c ON c.workspace_id=t.workspace_id AND c.id=t.channel_id
+      WHERE a.workspace_id=${workspace} AND a.id=${session} AND a.managed AND ${channelAccess(actor,workspace)}`);
+    if(!result.rows[0])throw missing();
+    return result.rows[0];
+  }
+
+  async starSession(actor: string, workspace: string, session: string, input: unknown) {
+    actor=uuid(actor);workspace=uuid(workspace);session=uuid(session);
+    const {active}=parseHubToggle(input);
+    const visible=sql`SELECT a.id FROM agent_sessions a
+      JOIN threads t ON t.workspace_id=a.workspace_id AND t.id=a.origin_thread_id
+      JOIN channels c ON c.workspace_id=t.workspace_id AND c.id=t.channel_id
+      WHERE a.workspace_id=${workspace} AND a.id=${session} AND a.managed AND ${channelAccess(actor,workspace)}`;
+    const mutation=active
+      ?sql`INSERT INTO hub_starred_agent_sessions(workspace_id,user_id,session_id) SELECT ${workspace},${actor},id FROM visible ON CONFLICT DO NOTHING`
+      :sql`DELETE FROM hub_starred_agent_sessions WHERE workspace_id=${workspace} AND user_id=${actor} AND session_id IN(SELECT id FROM visible)`;
+    const result=await this.db.execute(sql`WITH visible AS (${visible}),changed AS (${mutation} RETURNING session_id) SELECT id FROM visible`);
+    if(!result.rows.length)throw missing();
+    return {active};
+  }
 
   async messages(actor: string, workspace: string, view: 'threads' | 'sent' | 'saved', input: unknown = {}): Promise<Page<HubMessage>> {
     actor = uuid(actor); workspace = uuid(workspace);

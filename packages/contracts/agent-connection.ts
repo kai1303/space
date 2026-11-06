@@ -3,10 +3,11 @@ import { AppError, record, text } from './validation.js';
 export const localProviders = {
   codex: { name: 'Codex', connector: 'codex.local', skill: 'codex.run', definition: '41a5de8a-63df-4c25-8666-1d0290bc921f' },
   kiro: { name: 'Kiro', connector: 'kiro.local', skill: 'kiro.run', definition: 'f6090a5c-8959-4674-aec1-f7e611f35c42' },
+  claude: { name: 'Claude', connector: 'claude.local', skill: 'claude.run', definition: '16decd58-62df-4592-a3cf-939837cc2164' },
 } as const;
 export type LocalProvider = keyof typeof localProviders;
 export function parseLocalProvider(value: unknown = 'codex'): LocalProvider {
-  if (value !== 'codex' && value !== 'kiro') throw new AppError(400, 'invalid_provider');
+  if (value !== 'codex' && value !== 'kiro' && value !== 'claude') throw new AppError(400, 'invalid_provider');
   return value;
 }
 export function localProviderForConnector(connector: string) {

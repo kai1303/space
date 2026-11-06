@@ -144,12 +144,10 @@ it('offers pairing when there are no enabled agents', async () => {
   expect(screen.queryByRole('button', { name: 'Open channel' })).toBeNull();
 });
 
-it('Huddles states calling is unavailable and opens a real channel instead', async () => {
+it('Huddles explains missing media configuration', async () => {
   render(<WorkspaceDestinations view="huddles" {...props} />);
-  await screen.findByText('Audio and video calling are not available in Space.');
-  expect(screen.queryByRole('button', { name: /start.*huddle|start.*call/i })).toBeNull();
-  await userEvent.click(screen.getByRole('button', { name: 'Open channel' }));
-  expect(props.onOpenChannel).toHaveBeenCalledWith('general');
+  await screen.findByText('Huddles need a media connection');
+  expect(screen.queryByRole('button', { name: /start.*huddle/i })).toBeNull();
 });
 
 it('loads another bounded page only on request, and refreshes from workspace updates', async () => {

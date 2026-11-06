@@ -73,7 +73,9 @@ export class WorkspaceStore {
       const { membership } = await this.lock(c, actor, workspace);
       // Check authority before resolving an email, to avoid exposing registered accounts.
       canManage(membership.role, 'member', parsed.role);
-      const user_id = 'user_id' in parsed ? parsed.user_id : (await c.select({id:u.id}).from(u).where(sql`lower(${u.email})=${parsed.email}`).limit(1))[0]?.id;
+      const account = 'email' in parsed ? (await c.select({ id: u.id, verified: u.email_verified }).from(u).where(sql`lower(${u.email})=${parsed.email}`).limit(1))[0] : undefined;
+      if (account && !account.verified) throw new AppError(403, 'account_email_unverified');
+      const user_id = 'user_id' in parsed ? parsed.user_id : account?.id;
       if (!user_id) throw new AppError(404, 'account_not_found');
       const request = { user_id, role: parsed.role };
       const [existing] = await c.select().from(m).where(memberKey(workspace, request.user_id));

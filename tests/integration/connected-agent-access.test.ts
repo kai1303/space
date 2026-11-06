@@ -19,7 +19,8 @@ const pool=new Pool({connectionString:process.env.TEST_DATABASE_URL,options:`-c 
 const connections=new AgentConnectionStore(pool),nav=new NavigatorStore(pool),sessions=new AgentSessionStore(pool),tasks=new PostgresStore(pool),chat=new ChatStore(pool);
 before(async()=>{if(!process.env.TEST_DATABASE_URL)throw Error('TEST_DATABASE_URL required');await admin.query(`CREATE SCHEMA ${schema}`);await migrate(pool);});
 after(async()=>{await pool.end();await admin.query(`DROP SCHEMA ${schema} CASCADE`);await admin.end();});
-async function fixture(){const seed=await bootstrap(pool);const pairing=await connections.createPairing(seed.owner_id,seed.workspace_id,{});const agent=await connections.claim({code:pairing.code,credential:randomBytes(32).toString('base64url')});return {...seed,connected_id:agent.installation_id};}
+// Exercise queued delivery here; direct Codex admission has its own integration suite.
+async function fixture(){const seed=await bootstrap(pool);const pairing=await connections.createPairing(seed.owner_id,seed.workspace_id,{});const agent=await connections.claim({code:pairing.code,credential:randomBytes(32).toString('base64url')});await pool.query("UPDATE agent_installations SET connector_id='codex.legacy-test' WHERE id=$1",[agent.installation_id]);return {...seed,connected_id:agent.installation_id};}
 const input=(s:Awaited<ReturnType<typeof fixture>>)=>({workspace_id:s.workspace_id,thread_id:s.thread_id,installation_id:s.connected_id,skill:'codex.run',goal:'Investigate the issue'});
 
 test('connected agents inherit owner channel access for discovery, sessions and routing with no grants',async()=>{

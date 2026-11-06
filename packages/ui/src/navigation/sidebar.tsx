@@ -26,6 +26,7 @@ export type SidebarChannel = {
   private?: boolean;
   initials?: string;
   image?: string | null;
+  agentName?: string;
   online?: boolean;
 };
 type SidebarState = { query: string; expanded: Record<string, boolean> };
@@ -211,7 +212,9 @@ export function WorkspaceSidebar({
                     unread={c.unread}
                     onClick={() => onSelect(c.id)}
                     icon={
-                      c.section === "direct" ? (
+                      c.agentName ? (
+                        <span className="sp-sidebar-avatar" aria-hidden="true"><Avatar name={c.agentName} initials={c.agentName.slice(0,2).toUpperCase()} image={c.image} size="sm" tone="green"/></span>
+                      ) : c.section === "direct" ? (
                         <span className="sp-sidebar-avatar" aria-hidden="true"><Avatar name={c.name} initials={c.initials ?? c.name.slice(0, 2).toUpperCase()} image={c.image} size="sm" presence={c.online ? 'online' : 'offline'}/></span>
                       ) : (c.section === "apps" || c.section === "sessions") ? (
                         <NavigationIcon name="agents" size={16}/>
@@ -232,13 +235,6 @@ export function WorkspaceSidebar({
             </motion.section>
           );
         })}
-        {!loading && !channels.some((c) =>
-          c.name.toLowerCase().includes(query.toLowerCase()),
-        ) && (
-          <p className="sp-sidebar-empty" role="status">
-            No conversations found.
-          </p>
-        )}
       </nav></LayoutGroup>
       {onCreateChannel && !showEmptySections && !channels.some(c => c.section === "channels") && <button className="sp-sidebar-section-toggle sp-sidebar-create" type="button" onClick={onCreateChannel}>＋ Add channel</button>}
       {footer ?? <div className="sp-sidebar-profile">

@@ -55,7 +55,7 @@ export function connectPlatform(connection: Connection, status: () => AuthStatus
       socket.timeout(8_000).emit(name, payload, (error: Error | null, ack?: { data?: unknown; error?: unknown }) => {
         if (error || ack?.error || !ack || !('data' in ack)) {
           if (ack?.error && unauthorized(ack.error)) rejected();
-          if (ack?.error === 'agent_session_stopped' && ['agent.task.event', 'agent.task.renew', 'agent.task.finish'].includes(name)) { reject(new AgentSessionStopped()); return; }
+          if (ack?.error === 'agent_session_stopped' && ['agent.task.event', 'agent.task.renew', 'agent.task.finish','agent.turn.event','agent.turn.finish'].includes(name)) { reject(new AgentSessionStopped()); return; }
           reject(new Error(name === 'agent.task.claim' && ack?.error === 'agent_not_ready' ? 'agent_not_ready' : 'Space did not acknowledge this task operation.'));
         } else resolve(ack.data);
       });
@@ -71,7 +71,7 @@ export function connectPlatform(connection: Connection, status: () => AuthStatus
   };
   const claim = async () => {
     if (status() !== 'ready') { readyToClaim = false; return; }
-    if (!invoke || closed || halted || claiming || active || !socket.connected || !readyToClaim) return;
+    if (!invoke || closed || halted || claiming || active || direct.size || !socket.connected || !readyToClaim) return;
     claiming = true; claimPending = false;
     let renewal: NodeJS.Timeout | undefined, deadline: NodeJS.Timeout | undefined;
     let terminal = false, terminalSubmitted = false;
@@ -133,7 +133,47 @@ export function connectPlatform(connection: Connection, status: () => AuthStatus
     }
   };
   socket.on('agent.tasks.available', () => { claimPending = true; void claim(); });
-  const close = () => { closed = true; active?.abort(); clearInterval(heartbeat); clearTimeout(reconnect); socket.disconnect(); };
+  const direct = new Map<string,{execution:string;controller:AbortController}>();
+  const completed = new Set<string>();
+  const capacity = (session:string) => closed || halted || status()!=='ready' ? 'agent_unavailable' : direct.has(session) ? 'agent_busy' : direct.size>=4 || active || claiming ? 'agent_capacity' : undefined;
+  socket.on('agent.turn.capacity',(input:{session_id?:unknown},ack:unknown)=>{
+    if(typeof ack!=='function')return;
+    const error=typeof input?.session_id==='string'?capacity(input.session_id):'agent_unavailable';
+    ack(error?{error}:{data:true});
+  });
+  socket.on('agent.turn.stop',(input:{session_id:string;execution_id:string})=>{const turn=direct.get(input?.session_id);if(turn?.execution===input.execution_id)turn.controller.abort(new AgentSessionStopped());});
+  socket.on('agent.turn.start',(raw:unknown,ack:unknown)=>{
+    if(typeof ack!=='function')return;
+    let request:ReturnType<typeof parseInvocation>;
+    try{request=parseInvocation(raw);}catch{ack({error:'invalid_request'});return;}
+    if(request.skill!=='codex.run' || parseLocalProvider(connection.provider)!=='codex'){ack({error:'agent_unavailable'});return;}
+    if(completed.has(request.execution_id) || direct.get(request.session_id)?.execution===request.execution_id){ack({data:true});return;}
+    const error=capacity(request.session_id);if(error || !invoke){ack({error:error??'agent_unavailable'});return;}
+    const controller=new AbortController(),id=request.task_id;
+    direct.set(request.session_id,{execution:request.execution_id,controller});
+    const rpc=async(name:string,payload:object={})=>{
+      if(await taskRpc(`agent.turn.${name}`,{task_id:id,...payload})!==true)throw new Error('Turn operation was rejected.');
+    };
+    ack({data:true});
+    void (async()=>{
+      let deadline:NodeJS.Timeout|undefined,terminal=false,sequence=0;
+      try{
+        deadline=setTimeout(()=>controller.abort(),120000);
+        await invoke(request,async raw=>{
+          controller.signal.throwIfAborted();const event=parseAgentEvent(raw);
+          if(event.execution_id!==request.execution_id || event.sequence!==sequence+1 || terminal)throw new Error('Invalid turn event.');
+          if(['execution.completed','execution.failed'].includes(event.type)){terminal=true;}
+          try{await rpc('event',{event});}catch(error){if(error instanceof AgentSessionStopped)controller.abort(error);throw error;}sequence=event.sequence;
+        },controller.signal);
+        await rpc('finish');
+      }catch(error){controller.abort(error);if(!(error instanceof AgentSessionStopped) && !(controller.signal.reason instanceof AgentSessionStopped))await rpc('fail').catch(()=>{});}
+      finally{
+        clearTimeout(deadline);direct.delete(request.session_id);
+        completed.add(request.execution_id);if(completed.size>10000)completed.delete(completed.values().next().value!);
+      }
+    })();
+  });
+  const close = () => { for(const item of direct.values())item.controller.abort(); closed = true; active?.abort(); clearInterval(heartbeat); clearTimeout(reconnect); socket.disconnect(); };
   const rejected = () => { if (!closed) { close(); onUnauthorized(); } };
   const publish = () => {
     if (!socket.connected || closed) return;
@@ -155,7 +195,8 @@ export function connectPlatform(connection: Connection, status: () => AuthStatus
   socket.on('connect', () => { generation++; readyToClaim = false; reconnectDelay = 1_000; publish(); });
   socket.on('disconnect', reason => {
     generation++; readyToClaim = false;
-    if (active || claiming) { halted = true; active?.abort(); }
+    for(const item of direct.values())item.controller.abort();
+    if (active || claiming || direct.size) { halted = true; active?.abort(); }
     // A graceful API restart also disconnects the namespace; recheck credentials on reconnect.
     if (reason !== 'io server disconnect' || closed) return;
     clearTimeout(reconnect);

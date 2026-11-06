@@ -102,3 +102,14 @@
 .sp-agent-result h4 { margin: 0 0 var(--sp-space-2); }
 .sp-agent-result p { margin: 0; white-space: pre-wrap; }
 .sp-agent-streaming { margin: 0; color: var(--sp-text-secondary); font-size: var(--sp-text-sm); }
+
+.sp-agent-tool-result .sp-code-scroll { max-height: 280px; }
+.sp-agent-response .sp-tool-point > span:not(.sp-tool-indicator) { min-width: 0; flex: 1; }
+
+.sp-agent-file-tool { min-width: 0; }
+.sp-agent-file-header { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+.sp-agent-file-header strong { overflow-wrap: anywhere; color: var(--sp-text); }
+.sp-agent-file-header>span,.sp-agent-file-path,.sp-agent-file-label { color: var(--sp-text-secondary); font-size: 12px; }
+.sp-agent-file-path { overflow-wrap: anywhere; margin-bottom: 8px; }
+.sp-agent-file-raw { margin-top: 8px; }
+.sp-agent-file-raw summary { width: fit-content; cursor: pointer; }

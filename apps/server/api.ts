@@ -1,3 +1,7 @@
+import { HuddleStore } from '@space/postgres/huddles';
+import { registerHuddles, HUDDLE_WEBHOOK } from './huddles.js';
+import type { HuddleMedia } from './huddle-media.js';
+import {registerOutbound,type OutboundOptions} from './outbound.js';
 import { CallStore } from '@space/postgres/calling';
 import { registerCalling } from './calling.js';
 import { SearchStore } from '@space/postgres/search';
@@ -16,6 +20,7 @@ import { TodoSyncStore } from '@space/postgres/todo-sync';
 import { TODO_SYNC_PATH, registerTodoSyncRoutes } from './todo-sync.js';
 import { registerEventDeadlines } from './event-deadlines.js';
 import { AgentSessionStore } from '@space/postgres/agent-sessions';
+import {directTurns} from './direct-turns.js';
 import { registerAgentSessionRoutes } from './agent-sessions.js';
 import { NavigatorStore } from '@space/postgres/navigator';
 import { registerNavigatorRoutes } from './navigator.js';
@@ -42,7 +47,7 @@ declare module 'fastify' {
   interface FastifyRequest { actorId: string }
 }
 
-export function createApi(store: PostgresStore, options: { search?: TypesenseOptions; invitationEmail?: {config:InvitationEmailConfig;mailer:ReturnType<typeof createInvitationMailer>}; pairedConnectors?: import('@space/contracts').PairedConnector[]; logger?: boolean; realtime?: RealtimeOptions; auth?: Authentication; allowDevelopmentTokens?: boolean; trustedProxies?: string[]; storage?: AssetStorage; memory?: MemoryOptions } = {}) {
+export function createApi(store: PostgresStore, options: { huddles?: HuddleMedia; outbound?: OutboundOptions; search?: TypesenseOptions; invitationEmail?: {config:InvitationEmailConfig;mailer:ReturnType<typeof createInvitationMailer>}; pairedConnectors?: import('@space/contracts').PairedConnector[]; logger?: boolean; realtime?: RealtimeOptions; auth?: Authentication; allowDevelopmentTokens?: boolean; trustedProxies?: string[]; storage?: AssetStorage; memory?: MemoryOptions } = {}) {
   if (options.allowDevelopmentTokens && process.env.NODE_ENV === 'production') throw new Error('Development tokens are forbidden in production');
   const authenticate = async (headers: IncomingHttpHeaders, socketToken?: unknown) => {
     const actor = await options.auth?.actor(headers);
@@ -61,12 +66,14 @@ export function createApi(store: PostgresStore, options: { search?: TypesenseOpt
   app.server.headersTimeout = 10_000;
   app.server.maxHeadersCount = 50;
   app.decorateRequest('actorId', '');
+  registerOutbound(app,store,options.outbound);
 
   app.addHook('onRequest', async (request, reply) => {
     reply.header('cache-control', 'no-store');
     reply.header('x-content-type-options', 'nosniff');
     if (['/healthz','/readyz'].includes(request.routeOptions.url ?? '') && request.method === 'GET') return;
     if (request.routeOptions.url === MEMORY_MCP_PATH) return;
+    if (request.routeOptions.url === HUDDLE_WEBHOOK) return;
     // This route authenticates a source-scoped token itself; it never grants actor access.
     if (request.routeOptions.url === TODO_SYNC_PATH) return;
     if (options.auth && request.routeOptions.url === '/v1/auth/*') return;
@@ -75,7 +82,8 @@ export function createApi(store: PostgresStore, options: { search?: TypesenseOpt
     if (options.auth && request.headers.cookie && !['GET', 'HEAD', 'OPTIONS'].includes(request.method)) assertTrustedOrigin(options.auth, request.headers.origin);
   });
   app.addHook('preParsing', async request => {
-    if (['POST', 'PATCH'].includes(request.method) && request.routeOptions.url && request.headers['content-type']?.split(';')[0]?.trim().toLowerCase() !== 'application/json') {
+    if (request.routeOptions.url === HUDDLE_WEBHOOK) return;
+    if (['POST', 'PATCH', 'PUT'].includes(request.method) && request.routeOptions.url && request.headers['content-type']?.split(';')[0]?.trim().toLowerCase() !== 'application/json') {
       throw new AppError(415, 'json_required');
     }
   });
@@ -100,7 +108,6 @@ export function createApi(store: PostgresStore, options: { search?: TypesenseOpt
   registerWorkspaceInvitationRoutes(app, invitations);
   registerWorkspaceHubRoutes(app, new WorkspaceHubStore(store.pool));
   registerTodoSyncRoutes(app, new TodoSyncStore(store.pool));
-  registerAgentSessionRoutes(app, new AgentSessionStore(store.pool));
 
   app.get('/healthz', async () => {
     await store.health();
@@ -123,7 +130,9 @@ export function createApi(store: PostgresStore, options: { search?: TypesenseOpt
       const id = uuid(request.params.taskId);
       await store.readTask(request.actorId, id);
       record(request.body, []);
-      return action === 'approve' ? store.approveTask(request.actorId, id) : store.rejectTask(request.actorId, id);
+      const task=action === 'approve' ? await store.approveTask(request.actorId, id) : await store.rejectTask(request.actorId, id);
+      if(action==='approve' && task.status==='running')await immediate.dispatch(task.id);
+      return task;
     });
   }
   app.post<{ Params: { taskId: string } }>('/v1/tasks/:taskId/control', async request => {
@@ -144,7 +153,9 @@ export function createApi(store: PostgresStore, options: { search?: TypesenseOpt
   registerAssetRoutes(app, assets, options.storage);
   const connections = new AgentConnectionStore(store.pool, { connectors: options.pairedConnectors });
   registerAgentConnectionRoutes(app, connections);
-  const { io, onOutbox, getEvents, work, health } = registerRealtime(app, authenticate, chat, { ...options.realtime, ...(options.auth ? { allowedOrigins: [...options.auth.origins], strictOrigins: true } : {}) });
+  const { io, onOutbox, getEvents, work, health, invalidate } = registerRealtime(app, authenticate, chat, { ...options.realtime, ...(options.auth ? { allowedOrigins: [...options.auth.origins], strictOrigins: true } : {}) });
+  const immediate = directTurns(app,io,store,invalidate);
+  registerAgentSessionRoutes(app,new AgentSessionStore(store.pool,store),immediate.accepted,immediate.stop);
   app.get('/readyz', async (_request, reply) => {
     try {
       const realtime = await health();
@@ -152,6 +163,7 @@ export function createApi(store: PostgresStore, options: { search?: TypesenseOpt
     } catch { return reply.code(503).send({status:'unavailable'}); }
   });
   registerCalling(app, io, new CallStore(store.pool), authenticate, getEvents, work, onOutbox);
+  registerHuddles(app, new HuddleStore(store.pool), getEvents, options.huddles);
   registerAgentConnections(app, io, connections, store, onOutbox, getEvents, work);
   registerSearch(app, new SearchStore(store.pool), getEvents, options.search);
   registerEventDeadlines(app, getEvents, store, assets, options.storage);

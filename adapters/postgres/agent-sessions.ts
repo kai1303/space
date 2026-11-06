@@ -83,8 +83,15 @@ export class AgentSessionStore {
       const session = await this.visible(c, actor, id);
       if (cursor && !(await c.select({ id: s.tasks.id }).from(s.tasks).where(and(eq(s.tasks.id, cursor), eq(s.tasks.session_id, id)))).length) throw notFound();
       const result = await c.execute<{ task: Task & { created_at: string }; requester_name: string; payload: Record<string, unknown> | null; response_payload: Record<string, unknown> | null } & Record<string, unknown>>(sql`
-        SELECT to_jsonb(t) AS task,u.display_name AS requester_name,latest.payload,snapshot.payload AS response_payload
+        SELECT to_jsonb(t)||jsonb_build_object('request_document',coalesce(t.request_document,origin.document)) AS task,u.display_name AS requester_name,latest.payload,snapshot.payload AS response_payload
         FROM tasks t JOIN users u ON u.id=t.requester_id
+        -- Older routed tasks saved only text; recover markup only from their exact matching source message.
+        LEFT JOIN LATERAL (
+          SELECT m.document FROM navigator_decisions n JOIN messages m ON m.thread_id=n.thread_id AND m.sequence=n.through_sequence
+          WHERE t.request_document IS NULL AND n.thread_id=t.thread_id AND n.route='mention' AND n.decision->>'task_id'=t.id::text
+            AND m.workspace_id=t.workspace_id AND m.user_id=t.requester_id AND m.text=t.goal
+          LIMIT 1
+        ) origin ON true
         LEFT JOIN LATERAL (SELECT payload FROM task_events WHERE correlation_id=t.id ORDER BY sequence DESC LIMIT 1) latest ON true
         LEFT JOIN LATERAL (SELECT payload FROM task_events WHERE correlation_id=t.id AND payload ? 'response' ORDER BY sequence DESC LIMIT 1) snapshot ON true
         WHERE t.session_id=${id} ${before ? sql`AND (t.created_at,t.id)<(SELECT created_at,id FROM tasks WHERE id=${before} AND session_id=${id})` : sql``}

@@ -28,7 +28,8 @@ async function api(token: string, method: 'GET' | 'POST', path: string, payload?
 async function fixture() {
   const seed = await bootstrap(pool);
   await pool.query("UPDATE agent_definitions SET capabilities=$2 WHERE id=$1", [seed.definition_id, { skills: ['codex.run'], controls: {}, persistent_sessions: true }]);
-  await pool.query("UPDATE agent_installations SET connector_id='codex.local' WHERE id=$1", [seed.installation_id]);
+  // Exercise the legacy durable delivery protocol here; immediate Codex admission has its own suite.
+  await pool.query("UPDATE agent_installations SET connector_id='codex.legacy-test' WHERE id=$1", [seed.installation_id]);
   await pool.query("UPDATE agent_grants SET skill='codex.run' WHERE installation_id=$1", [seed.installation_id]);
   await pool.query("INSERT INTO agent_connections(installation_id,name) VALUES($1,'Local test agent')", [seed.installation_id]);
   return seed;
@@ -266,6 +267,7 @@ async function pairedSession() {
   const installation_id: string = claim.json().installation_id;
   const seed = { ...a, installation_id };
   await api(a.owner_token, 'POST', `/agents/connections/${installation_id}/channels/${a.channel_id}`, { enabled: true });
+  await pool.query("UPDATE agent_installations SET connector_id='codex.legacy-test' WHERE id=$1",[seed.installation_id]);
   const socket = io(`${origin}/agents`, { transports: ['websocket'], auth: { token: credential }, autoConnect: false, reconnection: false });
   sockets.push(socket);
   let available = false;

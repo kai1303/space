@@ -11,6 +11,10 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "exports": {
+    "./huddles": {
+      "types": "./dist/huddles.d.ts",
+      "default": "./dist/huddles.js"
+    },
     "./provisioning": {
       "types": "./dist/provisioning.d.ts",
       "default": "./dist/provisioning.js"
@@ -106,7 +110,16 @@
     "./calling": {
       "types": "./dist/calling.d.ts",
       "default": "./dist/calling.js"
-    }
+    },
+    "./outbound": {
+      "types": "./dist/outbound.d.ts",
+      "default": "./dist/outbound.js"
+    },
+    "./outbound-security": {
+      "types": "./dist/outbound-security.d.ts",
+      "default": "./dist/outbound-security.js"
+    },
+    "./outbound-changes": "./dist/outbound-changes.js"
   },
   "dependencies": {
     "@space/contracts": "workspace:*",

@@ -7,7 +7,7 @@ import type { PostgresStore } from '@space/postgres/store';
 import type { RealtimeWork } from './realtime-work.js';
 
 // Broker delivery owns work; connector commands never choose an installation or attempt.
-export function registerLocalCodexTasks(socket: Socket, connections: AgentConnectionStore, tasks: PostgresStore, getEvents: () => Promise<EventBus>, work: RealtimeWork) {
+export function registerLocalCodexTasks(socket: Socket, connections: AgentConnectionStore, tasks: PostgresStore, getEvents: () => Promise<EventBus>, work: RealtimeWork, independent = false) {
   const identity = socket.data.agent as { id: string; connection_id: string };
   let active: Delivery | undefined;
   let offered: EventDelivery | undefined, receipt: EventDelivery | undefined;
@@ -30,7 +30,7 @@ export function registerLocalCodexTasks(socket: Socket, connections: AgentConnec
     const finished = new Promise<void>(resolve => { releaseReceipt = resolve; });
     socket.emit('agent.tasks.available');
     await finished;
-  })).catch(() => { if (socket.connected) socket.disconnect(true); return undefined; });
+  })).catch(() => { if (!independent && socket.connected) socket.disconnect(true); return undefined; });
   let deadline = 0;
   let queue = Promise.resolve();
   let pending = 0, count = 0, windowStart = Date.now();
@@ -129,5 +129,5 @@ export function registerLocalCodexTasks(socket: Socket, connections: AgentConnec
     })).catch(() => settle(true)); // If admission fails, broker redelivery and the durable deadline retain recovery.
     void queue.finally(async () => { const stop = await subscription; await stop?.(); });
   });
-  return { ready: subscription.then(() => {}), notifyReady: () => { if (offered && socket.connected) socket.emit('agent.tasks.available'); } };
+  return { ready: independent ? Promise.resolve() : subscription.then(() => {}), notifyReady: () => { if (offered && socket.connected) socket.emit('agent.tasks.available'); } };
 }

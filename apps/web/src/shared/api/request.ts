@@ -1,6 +1,6 @@
 import type { Page } from '@space/contracts';
 
-export async function request<T>(path: string, body?: object, key?: string, method: 'POST' | 'PATCH' | 'DELETE' = 'POST', signal?: AbortSignal): Promise<T> {
+export async function request<T>(path: string, body?: object, key?: string, method: 'POST' | 'PATCH' | 'PUT' | 'DELETE' = 'POST', signal?: AbortSignal): Promise<T> {
   const response = await fetch(`/v1${path}`, {
     method: method === 'DELETE' ? 'DELETE' : body ? method : 'GET',
     credentials: 'same-origin', signal,

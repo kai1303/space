@@ -211,7 +211,7 @@ test('installation creation cannot escape a concurrent workspace member removal'
 
 test('admin directory filters, paginates and protects inactive members and email addresses', async () => {
   const a = await fixture(), b = await fixture();
-  await pool.query('UPDATE users SET display_name=$1,email=$2 WHERE id=$3', ['Ada Unique', 'ada-directory@example.test', a.collaborator_id]);
+  await pool.query('UPDATE users SET display_name=$1,email=$2,email_verified=true WHERE id=$3', ['Ada Unique', 'ada-directory@example.test', a.collaborator_id]);
   const result = await api(a.token, 'GET', `${a.path}/directory?q=Ada&role=member&status=active&limit=1`);
   assert.equal(result.items.length, 1); assert.equal(result.items[0].email, 'ada-directory@example.test');
   assert.equal(result.role, 'owner');

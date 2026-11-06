@@ -29,7 +29,7 @@ export interface ControlCommand { id: string; execution_id: string; expected_rev
 export type AgentEventType = 'execution.started' | 'execution.progress' | 'execution.completed' | 'execution.failed';
 export interface AgentEvent { id: string; schema_version: '1.0'; execution_id: string; sequence: number; type: AgentEventType; occurred_at: string; payload: { text: string; response?: AgentResponse; session_ready?: true } }
 export interface WorkplaceEvent { id: string; schema_version: '1.0'; type: string; workspace_id: string; actor_id: string; resource_id: string; correlation_id: string; causation_id: string | null; sequence: number; occurred_at: string; payload: Record<string, unknown> }
-export interface InvocationRequest { persistent_session?: { resume: boolean }; schema_version: typeof SCHEMA_VERSION; task_id: string; execution_id: string; session_id: string; idempotency_key: string; goal: string; skill: string; context?: {handoff?:import('./sidekick.js').SidekickContext;channel_memory?:import('./memory.js').AgentMemoryContext;working_memory?:ThreadContext;thread_id:string;messages:{id:string;text:string;author_type:'human'|'agent'}[]} }
+export interface InvocationRequest { outbound?: import('./outbound.js').OutboundAccess; persistent_session?: { resume: boolean }; schema_version: typeof SCHEMA_VERSION; task_id: string; execution_id: string; session_id: string; idempotency_key: string; goal: string; skill: string; context?: {handoff?:import('./sidekick.js').SidekickContext;channel_memory?:import('./memory.js').AgentMemoryContext;working_memory?:ThreadContext;thread_id:string;messages:{id:string;text:string;author_type:'human'|'agent'}[]} }
 export interface InvocationReceipt { external_execution_id: string; status: 'completed' }
 // Invoke resolves only after terminal events are accepted in Increment A. Async receipt/status
 // transports will extend this contract after local/cloud conformance in Increment B.
@@ -71,3 +71,6 @@ export * from './todo-sync.js';
 export * from './workspace-settings.js';
 
 export * from './workspace-invitations.js';
+
+export * from "./outbound.js";
+export * from './huddles.js';

@@ -1,9 +1,10 @@
 # Agent-native workplace: module roadmap
 
-Date: 2026-11-03
-Status: Architecture overview. The actionable work breakdown is now
-[Small-module backlog](../plans/module-backlog.md), W01–W34.
-The product handoff is an epic, not one implementation task.
+Updated: 2026-11-06
+Status: Current implementation and next delivery slices. The original S-series
+below records the foundation sequence; it is not a list of remaining work.
+[Small-module backlog](../plans/module-backlog.md), W01–W34, retains the original
+work breakdown. Current feature boundaries and follow-up priorities are listed here.
 
 ## How we will work
 
@@ -12,7 +13,8 @@ permission rules and acceptance tests. Finish and demonstrate that slice before 
 the next. Keep unresolved product decisions explicit. A module is a code ownership
 boundary; it does not automatically need a package, service or deployable.
 
-Start with a single modular backend, an asynchronous worker and eventually a web app.
+Space now has a modular API, asynchronous worker, event bridge, React web app,
+macOS shell, local agent connectors, and a separate outbound MCP gateway.
 Contracts, authorization, persistence, audit records and tests grow with each slice.
 Do not pre-create all folders, abstract interfaces or database tables in the handoff.
 
@@ -27,7 +29,9 @@ Do not pre-create all folders, abstract interfaces or database tables in the han
 | M05 | Agent gateway | Connector registration, invocation, authenticated event normalization, delivery receipts | Deciding whether someone has authorized work | M03, M04 contracts |
 | M06 | Human controls | Authorized steer/follow-up/cancel commands, target execution/version, receipt lifecycle | Claiming unsupported actions succeeded | M01, M04, M05 |
 | M07 | Navigator | Scoped observation, filtering, capability matching, task proposals, configurable rules/providers and evaluation | Approval, credentials, direct execution | M01–M05 |
-| M08 | Workplace interface | Conversation view, agent directory, task cards/activity, controls and settings | Duplicating backend authorization or lifecycle logic | Relevant APIs from M01–M07 |
+| M08 | Workplace interface | Conversation view, onboarding, agent directory, task cards/activity, controls and settings | Duplicating backend authorization or lifecycle logic | Relevant APIs from M01–M07 |
+| M09 | Personal outbound integrations | Personal connection configuration, encrypted credentials, catalogs, exact tool grants, scoped gateway access and call metadata | Inbound events, shared workspace credentials, provider login or integration-specific APIs | M01, M03, M04, M05 |
+| M10 | Channel huddles | Authorized room lifecycle, media access, participant controls and discovery | Transporting media through chat or storing recordings | M01, M02, event delivery, optional LiveKit |
 
 Shared contracts are introduced when a module needs them. Event envelopes, errors,
 IDs and schemas are shared; provider SDK types stay inside adapters. Operational work
@@ -95,18 +99,19 @@ Scope: M04 policy and outbox.
 Done: an unapproved/rejected task cannot dispatch, and concurrent approvals produce
 one execution. Collaborator approval policy is a separate future decision.
 
-### S04 — Invoke the mock and return a result
+### S04 — Invoke the mock and return a result (historical foundation slice)
 
 Scope: M05 mock adapter plus M04 event ingestion.
 
-- Claim a durable delivery with a lease.
+- Admit an exact durable delivery attempt; do not introduce a renewable ownership lease.
 - Invoke the mock through the common connector interface.
 - Validate installation identity, event IDs, execution sequence and lifecycle.
 - Save progress and completion; insert one result reply in the originating thread.
 - Bound discovery/invocation time, retries and dead-letter behavior.
 
-Done: the CLI shows proposal → owner approval → progress → result. Recovery from
-an expired lease and completion-before-acknowledgment produces no duplicate reply.
+Done: the CLI shows proposal → owner approval → progress → result. Deadline and
+completion-before-acknowledgment recovery must not replay uncertain provider work
+or produce duplicate replies.
 This is the first end-to-end milestone; no full chat UI or paid API is needed.
 
 ### S05 — Replace seeded workspace access
@@ -183,28 +188,60 @@ interaction. A polished full workspace is not required to validate S04.
 
 ## Current implementation snapshot
 
-The initial workspace was empty. A provisional scaffold now covers S01–S04 with seeded
-access/registry/thread records, PostgreSQL, mock worker and a small HTTP API. The last
-verification ran 13 passing tests plus TypeScript typecheck/build. This is limited
-local evidence, not production readiness or proof of real-agent interoperability.
+“Implemented” means present in the application source with development validation;
+it does not mean deployed, production-ready, or verified against every real provider.
 
-The live CLI/Compose demonstration, contributor documentation and final review are
-still unfinished. S01–S04 are therefore **in progress**, not a completed milestone.
-No implementation of S05–S12 should be inferred from the seeded tables or contracts.
-The owner requested module decomposition before further feature expansion.
+| Area | Implemented | Remaining boundary |
+| --- | --- | --- |
+| Workspace and conversations | Accounts, roles, channel/thread chat, DMs, files, notifications, search, Markdown memory and scoped memory MCP | Production operation, remaining access/concurrency migration work and additional collaboration features |
+| Agent registry and sessions | Paired Codex/Kiro/Claude, owner-scoped conversation access, approvals, persistent sessions, streamed text/tools, Stop, starred sessions and opt-in project tools | Native shell and interactive tool approvals; wider provider conformance |
+| Direct Codex execution | Authenticated immediate handoff for managed sessions, admission limits, saved attempts and no replay of uncertain inference | Production failure/capacity validation; other delivery paths retain their own protocol |
+| Navigator | Rules/provider configuration, suggestions, session orchestration and observe mode | Evaluation and production behavior for each configured model; inference does not grant authority |
+| Personal outbound MCP | Connections UI, multiple accounts per endpoint, separate gateway, encrypted bearer tokens, discovery, exact tool grants, active-request authorization, revocation and call metadata | Operator setup and real-account validation; OAuth, stdio upstreams and inbound integration are deferred |
+| Onboarding and navigation | Focused account/workspace setup, returning-user flow, launch page and workspace navigation | Continued accessibility/device checks and product refinement |
+| Channel huddles | Start/join, persistent room panel, audio/video/screen sharing, authorized discovery and durable cleanup | Optional LiveKit configuration, target-network TURN/device validation; no recording/transcripts |
 
-## Decisions to resolve at the appropriate slice
+Key implementation guides:
 
-- Before public distribution: license, project naming and contribution/governance policy.
-- Before S05/S06: authentication and native versus existing chat backend.
-- Before S07/S08: secret storage, ownership verification and third-party consent/retention.
-- Before S08/S09: actual protocol/runtime versions, async receipt semantics and isolation.
-- Before S10: who can control another owner's agent and cancellation guarantees.
-- Before S11: Navigator configuration ownership, languages and evaluation targets.
+- [Local providers](local-agent-providers.md), [agent sessions](agent-sessions.md), and [direct Codex execution](direct-codex-sessions.md).
+- [Personal outbound MCP](outbound-mcp.md): migration 058, separate gateway startup, credential/key handling and current test boundaries.
+- [Channel huddles](channel-huddles.md): migration 059, LiveKit configuration and media verification boundaries.
+- [Architecture principles and remaining gaps](principles.md): no polling or new explicit/distributed locks; bounded work and durable recovery.
 
-The S-series above describes milestone outcomes, not individual work items.
-Use the W-series in the small-module backlog for task selection. Recommended next
-module after the completed foundation: W05 task proposals. W01–W04 are now
-implemented and locally verified; see `foundation.md` and ADR 0002. Other modules
-remain unselected. The earlier implementation snapshot above describes the initial
-scaffold, before foundation completion.
+## Next delivery slices
+
+### N01 — Activate and validate outbound MCP v1
+
+- Configure the gateway URL and dedicated encryption/signing key in the API and gateway.
+- Apply migrations and run the gateway alongside the API/event services.
+- Connect a real HTTPS Streamable HTTP server, discover tools and grant a small tool set.
+- Verify each supported agent against actual account permissions, expiry, revocation and failure behavior.
+
+Done: a real account works through Space with recorded evidence for the chosen
+provider. Current synthetic database/HTTP/provider tests and the installed Codex
+transport check remain development evidence, not that real-account acceptance.
+
+### N02 — Add OAuth connections
+
+Design consent, callback/state validation, token storage, refresh, revocation and
+recovery before adding OAuth-only providers. Preserve personal ownership and
+explicit tool grants. This is deferred; bearer/no-auth v1 does not imply OAuth support.
+
+### N03 — Revisit inbound connections and personal events/messages
+
+Deferred until outbound use is established. Define webhook/subscription delivery,
+sender authentication, deduplication, personal event/message storage, authorization
+and durable recovery. Evaluate integration reuse separately; no n8n integration
+framework or inbound event service ships with outbound v1.
+
+### N04 — Complete deployment and reliability work
+
+- Replace remaining explicit locks/coordination identified in the principles guide while preserving correctness.
+- Validate gateway failure/restart behavior and real provider cleanup; never retry uncertain writes automatically.
+- Verify huddles on target networks and physical devices, including TURN and permission flows.
+- Provision backups, monitoring, independent failure domains and measured capacity before production claims.
+
+These priorities do not authorize adding scope to an already selected slice.
+Choose the next slice explicitly and keep its acceptance evidence separate from
+existing foundation tests. The project license and core stack are already selected;
+future decisions concern provider consent, deployment boundaries and product behavior.

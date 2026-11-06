@@ -21,6 +21,8 @@ function mergeOutputPaths<T extends { path: string }>(existing: T[], incoming: T
 async function navigatorPresent(c: DbSession) { return Boolean((await c.execute<{present:boolean}>(sql`SELECT to_regclass('navigator_decisions') IS NOT NULL AS present`)).rows[0]?.present); }
 export class PostgresStore implements DeliveryStore {
   readonly db;
+  admitLocalTurn?: (installation: string, session: string) => Promise<void>;
+  outboundAccess?: (execution:string,installation:string) => Promise<import('@space/contracts').OutboundAccess|undefined>;
   memoryReader?: (task: Pick<Task, 'installation_id' | 'requester_id' | 'thread_id'>) => Promise<import('@space/contracts').AgentMemoryContext | undefined>;
   constructor(readonly pool: Pool) { this.db = database(pool); }
   async health(): Promise<void> { await this.db.execute(sql`SELECT 1`); }
@@ -117,20 +119,30 @@ export class PostgresStore implements DeliveryStore {
       const task = await this.visibleTask(c, actor, id);
       const installation = await this.eligible(c, task);
       assertApprover(actor, task, installation);
-      if (task.status === 'queued') return task;
+      if (task.status === 'queued' || task.status==='running') return task;
       assertTransition(task.status, 'queued');
       const managed = task.session_id ? (await c.select().from(s.agentSessions).where(eq(s.agentSessions.id, task.session_id)))[0] : undefined;
       if (managed?.managed && managed.state === 'ended') throw new AppError(409, 'session_ended');
       reuseSession ??= managed?.managed ? managed.id : undefined;
+      let directConnection: string | undefined;
+      const direct = !!managed?.managed && installation.connector_id === 'codex.local';
+      if (direct) {
+        const [connection] = await c.select().from(s.agentConnections).where(eq(s.agentConnections.installation_id,installation.id));
+        if (!connection?.connection_id || connection.auth_status !== 'ready' || !connection.last_seen_at || Date.now()-connection.last_seen_at.getTime()>45000) throw new AppError(409,'agent_unavailable');
+        directConnection=connection.connection_id;
+        await this.admitLocalTurn?.(installation.id,managed!.id);
+      }
       const sessionId = reuseSession ?? randomUUID(), executionId = randomUUID();
       if (reuseSession) {
         const found = await c.select().from(s.agentSessions).where(and(eq(s.agentSessions.id, reuseSession), eq(s.agentSessions.origin_thread_id, task.thread_id), eq(s.agentSessions.installation_id, task.installation_id)));
         if (!found.length) throw new AppError(409, 'invalid_session');
       } else await c.insert(s.agentSessions).values({ id: sessionId, workspace_id: task.workspace_id, installation_id: task.installation_id, origin_thread_id: task.thread_id });
       await c.insert(s.executions).values({ id: executionId, workspace_id: task.workspace_id, task_id: task.id, installation_id: task.installation_id, session_id: sessionId, status: 'queued' });
-      const [result] = await c.update(s.tasks).set({ status: 'queued', approved_by: actor, session_id: sessionId, active_execution_id: executionId, revision: sql`${s.tasks.revision}+1`, updated_at: now }).where(and(eq(s.tasks.id, id), eq(s.tasks.revision, task.revision))).returning();
+      const [result] = await c.update(s.tasks).set({ status: direct ? 'running' : 'queued', approved_by: actor, session_id: sessionId, active_execution_id: executionId, revision: sql`${s.tasks.revision}+1`, updated_at: now }).where(and(eq(s.tasks.id, id), eq(s.tasks.revision, task.revision))).returning();
       if (!result) throw new SessionConflict();
-      await c.insert(s.outbox).values({ id: randomUUID(), task_id: task.id, execution_id: executionId });
+      await c.insert(s.outbox).values({ id: randomUUID(), task_id: task.id, execution_id: executionId, ...(direct ? {direct:true,direct_connection:directConnection,state:'delivering' as const,attempts:1,lease_token:randomUUID(),lease_until:sql`now()+interval '180 seconds'`} : {}) });
+      // Direct attempts have a fixed deadline and are never renewed or reclaimed.
+      if(direct) await c.execute(sql`SELECT pg_notify('space_direct_turn',${JSON.stringify({task_id:task.id})})`);
       await this.append(c, result!, 'task.approved', actor, { execution_id: executionId });
       if(await navigatorPresent(c))await c.execute(sql`UPDATE agent_thread_subscriptions SET session_id=${sessionId},approved_by=${actor} WHERE task_id=${id} AND status='active'`);
       return result!;
@@ -165,18 +177,35 @@ export class PostgresStore implements DeliveryStore {
     });
   }
   async installations(actor: string, workspace: string): Promise<AgentInstallation[]> { return new FoundationStore(this.pool).list(actor, workspace); }
+  async failUnstartedDelivery(delivery: Delivery, code: string): Promise<boolean> {
+    return this.taskTransaction(delivery.task_id, async c => {
+      const [execution] = await c.select().from(s.executions).where(eq(s.executions.id,delivery.execution_id));
+      if (!execution || execution.last_sequence > 0) return false;
+      // The task revision fences a concurrent first-event commit. A retry rechecks the execution.
+      await this.failDeliveryIn(c,delivery,code,true);
+      return true;
+    });
+  }
+  async directDelivery(taskId: string, installationId?: string): Promise<(Delivery & {installation_id:string;connection_id:string;last_sequence:number;status:string}) | undefined> {
+    const result = await this.db.execute<Delivery & {installation_id:string;connection_id:string;last_sequence:number;status:string} & Record<string,unknown>>(sql`
+      SELECT o.*,t.installation_id,o.direct_connection AS connection_id,e.last_sequence,t.status FROM outbox o JOIN tasks t ON t.id=o.task_id
+      JOIN executions e ON e.id=o.execution_id JOIN agent_connections ac ON ac.installation_id=t.installation_id
+      WHERE o.task_id=${uuid(taskId)} AND o.direct AND o.state='delivering' AND t.active_execution_id=e.id
+      ${installationId ? sql`AND t.installation_id=${uuid(installationId)}` : sql``}`);
+    return result.rows[0];
+  }
   async claimDelivery(localInstallation?: string, deliveryId?: string): Promise<Delivery | null> {
     // Compatibility for one-shot callers; broker consumers always supply the durable event target.
     if (!deliveryId) {
       const candidate = await this.db.execute<{ id: string }>(sql`SELECT o.id FROM outbox o JOIN tasks t ON t.id=o.task_id JOIN agent_installations i ON i.id=t.installation_id
-        WHERE o.state='pending' AND o.available_at<=now() AND ${localInstallation ? sql`i.id=${uuid(localInstallation)} AND EXISTS(SELECT 1 FROM agent_connections ac WHERE ac.installation_id=i.id)` : sql`NOT EXISTS(SELECT 1 FROM agent_connections ac WHERE ac.installation_id=i.id)`} ORDER BY o.available_at,o.id LIMIT 1`);
+        WHERE NOT o.direct AND o.state='pending' AND o.available_at<=now() AND ${localInstallation ? sql`i.id=${uuid(localInstallation)} AND EXISTS(SELECT 1 FROM agent_connections ac WHERE ac.installation_id=i.id)` : sql`NOT EXISTS(SELECT 1 FROM agent_connections ac WHERE ac.installation_id=i.id)`} ORDER BY o.available_at,o.id LIMIT 1`);
       deliveryId = candidate.rows[0]?.id;
       if (!deliveryId) return null;
     }
     const result = await this.db.execute<Delivery & Record<string, unknown>>(sql`UPDATE outbox o
       SET state='delivering',attempts=attempts+1,lease_until=now()+interval '30 seconds',lease_token=${randomUUID()}
       FROM tasks t JOIN agent_installations i ON i.id=t.installation_id
-      WHERE o.id=${uuid(deliveryId)} AND t.id=o.task_id AND o.state='pending' AND o.available_at<=now()
+      WHERE o.id=${uuid(deliveryId)} AND NOT o.direct AND t.id=o.task_id AND o.state='pending' AND o.available_at<=now()
       AND ${localInstallation ? sql`i.id=${uuid(localInstallation)} AND EXISTS(SELECT 1 FROM agent_connections ac WHERE ac.installation_id=i.id)` : sql`NOT EXISTS(SELECT 1 FROM agent_connections ac WHERE ac.installation_id=i.id)`}
       RETURNING o.*`);
     // Duplicate ready events never invalidate a healthy attempt; its exact deadline owns recovery.
@@ -207,6 +236,7 @@ export class PostgresStore implements DeliveryStore {
       const priorReady = session?.managed && (await c.execute(sql`SELECT 1 FROM tasks previous JOIN task_events e ON e.correlation_id=previous.id AND e.payload->>'session_ready'='true' WHERE previous.session_id=${task.session_id} AND previous.id<>${task.id} LIMIT 1`)).rows.length > 0;
       return { installation, request: { ...(session?.managed ? { persistent_session: { resume: Boolean(priorReady) } } : {}), schema_version: '1.0', task_id: task.id, session_id: task.session_id!, execution_id: delivery.execution_id, idempotency_key: delivery.execution_id, goal: task.goal, skill: task.skill, context } };
     });
+    if (prepared && this.outboundAccess) prepared.request.outbound = await this.outboundAccess(prepared.request.execution_id,prepared.installation.id);
     if (!prepared || !this.memoryReader || prepared.request.context?.handoff) return prepared;
     const task = await this.task(this.db, delivery.task_id);
     const memory = await this.memoryReader(task);

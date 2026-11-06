@@ -63,19 +63,20 @@ export function parseAgentComponent(input: unknown): AgentComponent {
   }
   throw new AppError(400, 'unsupported_agent_component');
 }
+// Accept fields already saved by the reverted turn presentation; project them into the original response shape.
 export function parseAgentResponse(input: unknown): AgentResponse {
-  const v = record(input, ['messages', 'tools', 'components', 'items', 'activity', 'step', 'outputs']);
+  const v = record(input, ['messages', 'tools', 'components', 'items', 'activity', 'step', 'outputs', 'metadata']);
   if (v.activity !== undefined && !['working', 'thinking', 'responding', 'using_tools'].includes(v.activity as string)) throw new AppError(400, 'invalid_agent_activity');
   const messages = unique(list(v.messages, 30, (item): AgentText => {
-    const m = record(item, ['id', 'text', 'status']);
+    const m = record(item, ['id', 'text', 'status', 'phase']);
     if (m.status !== 'streaming' && m.status !== 'complete') throw new AppError(400, 'invalid_agent_response');
     return { id: text(m.id, 128), text: string(m.text, 16000), status: m.status };
   }));
   const tools = unique(list(v.tools, 30, item => {
-    const t = record(item, ['id', 'name', 'arguments', 'result', 'status']);
-    if (!['calling', 'running', 'completed', 'interrupted'].includes(t.status as string)) throw new AppError(400, 'invalid_agent_response');
+    const t = record(item, ['id', 'name', 'arguments', 'result', 'status', 'duration_ms', 'arguments_characters', 'result_characters']);
+    if (!['calling', 'running', 'completed', 'interrupted', 'failed'].includes(t.status as string)) throw new AppError(400, 'invalid_agent_response');
     return { id: text(t.id, 128), name: text(t.name, 200), arguments: string(t.arguments, 8000),
-      status: t.status as AgentTool['status'], ...(t.result === undefined ? {} : { result: string(t.result, 16000) }) };
+      status: (t.status === 'failed' ? 'interrupted' : t.status) as AgentTool['status'], ...(t.result === undefined ? {} : { result: string(t.result, 16000) }) };
   }));
   const components = unique(list(v.components, 20, parseAgentComponent));
   let items: AgentResponseItem[] | undefined;

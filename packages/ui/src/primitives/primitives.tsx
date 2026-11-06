@@ -509,7 +509,7 @@ export function ChannelItem({
       onClick={onClick}
     >
       {icon}
-      <span>{name}</span>
+      <span className="sp-channel-name" title={name}>{name}</span>
       {unread > 0 && (
         <span className="sp-unread" aria-label={`${unread} unread`}>
           {unread}

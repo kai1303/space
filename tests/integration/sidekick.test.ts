@@ -25,7 +25,8 @@ async function api(token: string, method: 'GET' | 'POST', path: string, payload?
 async function fixture() {
   const a = await bootstrap(pool);
   await pool.query('UPDATE agent_definitions SET capabilities=$2 WHERE id=$1', [a.definition_id, { skills: ['codex.run'], controls: {}, persistent_sessions: true }]);
-  await pool.query("UPDATE agent_installations SET connector_id='codex.local' WHERE id=$1", [a.installation_id]);
+  // This fixture claims queued work; direct Codex handoff is covered separately.
+  await pool.query("UPDATE agent_installations SET connector_id='codex.legacy-test' WHERE id=$1", [a.installation_id]);
   await pool.query("INSERT INTO agent_connections(installation_id,name) VALUES($1,'Sidekick')", [a.installation_id]);
   const ids = [randomUUID(), randomUUID()];
   for (const [index,id] of ids.entries()) await pool.query(`INSERT INTO messages(id,workspace_id,channel_id,thread_id,author_type,user_id,text,client_message_id,request_hash) VALUES($1,$2,$3,$4,'human',$5,$6,gen_random_uuid(),'test')`, [id,a.workspace_id,a.channel_id,a.thread_id,index ? a.collaborator_id : a.owner_id,index ? 'Investigate the retry behavior' : 'We found a problem']);

@@ -4,6 +4,9 @@ import type { WorkspaceHubStore } from '@space/postgres/workspace-hub';
 
 export function registerWorkspaceHubRoutes(app: FastifyInstance, store: WorkspaceHubStore) {
   const base = '/v1/workspaces/:workspaceId/hub';
+  app.get<{ Params: { workspaceId: string } }>(`${base}/starred-sessions`, r => store.starredSessions(r.actorId, uuid(r.params.workspaceId), r.query));
+  app.get<{ Params: { workspaceId: string; sessionId: string } }>(`${base}/starred-sessions/:sessionId`, r => store.sessionStarState(r.actorId, uuid(r.params.workspaceId), uuid(r.params.sessionId)));
+  app.post<{ Params: { workspaceId: string; sessionId: string } }>(`${base}/starred-sessions/:sessionId`, r => store.starSession(r.actorId, uuid(r.params.workspaceId), uuid(r.params.sessionId), r.body));
   for (const view of ['threads', 'sent', 'saved'] as const) {
     app.get<{ Params: { workspaceId: string } }>(`${base}/${view}`, r => store.messages(r.actorId, uuid(r.params.workspaceId), view, r.query));
   }

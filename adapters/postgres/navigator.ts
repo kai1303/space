@@ -38,7 +38,7 @@ export class NavigatorStore {
  }
  private async manager(c:DbSession,actor:string,channel:typeof s.channels.$inferSelect) {
   const [member]=await c.select().from(s.workspaceMembers).where(and(eq(s.workspaceMembers.workspace_id,channel.workspace_id),eq(s.workspaceMembers.user_id,actor),eq(s.workspaceMembers.active,true)));
-  return channel.created_by===actor||member?.role==='owner'||member?.role==='admin';
+  return member?.guest_type==='none'&&(channel.created_by===actor||member.role==='owner'||member.role==='admin');
  }
  private async settings(c:DbSession,channel:string):Promise<Settings> {return readNavigatorSettings(c,channel);}
  private async catalog(c:DbSession,channel:string):Promise<NavigatorCandidate[]> {
@@ -92,8 +92,8 @@ export class NavigatorStore {
    return task;
   });
  }
- private async start(c:DbSession,actor:string,workspace:string,thread:string,candidate:NavigatorCandidate,goal:string,key:string):Promise<Task> {
-  const input={workspace_id:workspace,thread_id:thread,installation_id:candidate.installation_id,goal,skill:candidate.skill};
+ private async start(c:DbSession,actor:string,workspace:string,thread:string,candidate:NavigatorCandidate,goal:string,key:string,document?:RichDocument|null):Promise<Task> {
+  const input={workspace_id:workspace,thread_id:thread,installation_id:candidate.installation_id,goal,skill:candidate.skill,...(document?{request_document:document}:{})};
   const installation=await this.tasks.eligible(c,{...input,requester_id:actor},true);
   const [existing]=await c.select().from(s.tasks).where(and(eq(s.tasks.workspace_id,workspace),eq(s.tasks.requester_id,actor),eq(s.tasks.idempotency_key,key)));
   if(existing)return this.tasks.createTaskIn(c,actor,input,key);
@@ -226,7 +226,7 @@ export class NavigatorStore {
     await c.execute(sql`INSERT INTO navigator_decisions(id,channel_id,thread_id,through_sequence,route,decision) VALUES(${id},${job.channel_id},${job.thread_id},${through}::bigint,${authorized?(observed?'observe':route):'unavailable'},${JSON.stringify(detail)}::jsonb) ON CONFLICT(thread_id,through_sequence) DO NOTHING`);
     if(authorized&&candidate){
      const goal=job.messages.map(m=>m.text).join('\n\n').slice(0,16000);
-     const task=await this.start(c,job.messages.at(-1)!.user_id,job.workspace_id,job.thread_id,candidate,goal,`navigation:${job.thread_id}:${through}`);
+     const task=await this.start(c,job.messages.at(-1)!.user_id,job.workspace_id,job.thread_id,candidate,goal,`navigation:${job.thread_id}:${through}`,job.messages.length===1?job.messages[0]!.document:undefined);
      const authorization=await this.routing.recordStart(c,task,id,job.messages.at(-1)!.id,job.channel_id,liveSettings);
      detail={...decision,task_id:task.id,authorization_id:authorization};
     }else if(authorized&&!observed&&(decision.action==='continue'||decision.action==='stop')){

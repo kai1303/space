@@ -7,6 +7,7 @@ import {CallController,emptyCallView,type CallView} from './controller.js';
 import './calling.css';
 
 const CallingContext=createContext<{controller:CallController|null;view:CallView}|null>(null);
+export function useCallingState(){return useContext(CallingContext)?.view;}
 export function CallingProvider({actor,children}:{actor:string;children:ReactNode}){
  const [controller,setController]=useState<CallController|null>(null),[view,setView]=useState(emptyCallView);
  useEffect(()=>{const next=new CallController(actor,setView);setController(next);return()=>next.dispose();},[actor]);

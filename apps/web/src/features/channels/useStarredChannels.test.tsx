@@ -52,3 +52,21 @@ it.each([true,false])('updates sibling views before confirmation and rolls back 
   expect(result.current.header.active).toBe(success);
   expect(result.current.sidebar.ids).toEqual(success?['channel']:[]);
 });
+it('keeps session stars separate from channel stars and restores them after remount',async()=>{
+ let saved=false;
+ const conversation={id:'session',name:'Review README',kind:'agent_session',private:false,session:{id:'session',agent_name:'Local Codex',origin_thread_id:'thread',channel_id:'channel',channel_archived:false}};
+ mocks.request.mockImplementation(async(path:string,body?:{active:boolean})=>{
+  if(body){saved=body.active;return {active:saved};}
+  if(path.includes('/starred-sessions/'))return {active:saved};
+  return {items:path.includes('/starred-sessions?')&&saved?[conversation]:[],next_cursor:null};
+ });
+ const {result,unmount}=renderHook(()=>({header:useStarredChannels('one','session','viewer','starred-sessions'),sidebar:useStarredChannels('one',undefined,'viewer','starred-sessions'),channels:useStarredChannels('one',undefined,'viewer')}));
+ await waitFor(()=>expect(mocks.request).toHaveBeenCalledTimes(3));
+ await act(async()=>result.current.header.toggle('session',conversation));
+ expect(mocks.request).toHaveBeenCalledWith('/workspaces/one/hub/starred-sessions/session',{active:true});
+ expect(result.current.sidebar.conversations).toEqual([conversation]);
+ expect(result.current.channels.ids).toEqual([]);
+ unmount();
+ const restored=renderHook(()=>useStarredChannels('one','session','viewer','starred-sessions'));
+ await waitFor(()=>expect(restored.result.current.active).toBe(true));
+});

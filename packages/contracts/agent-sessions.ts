@@ -6,6 +6,8 @@ export interface AgentSessionSummary extends AgentSession {
   created_by: string | null; created_at: string; skill: string; turn_count: number;
 }
 export interface WorkspaceAgentSession extends AgentSessionSummary { channel_id: string; channel_archived: boolean }
+export type AgentSessionReference = Pick<WorkspaceAgentSession, 'id' | 'agent_name' | 'origin_thread_id' | 'channel_id' | 'channel_archived'>;
+export interface StarredAgentSession { id: string; name: string; kind: 'agent_session'; private: boolean; session: AgentSessionReference }
 export interface AgentSessionTurn { task: Task; created_at: string; requester_name: string; response?: AgentResponse; detail: string }
 export interface AgentSessionDetail { context?: import('./sidekick.js').SidekickContext; outputs?: AgentSessionOutputs; session: AgentSessionSummary; turns: AgentSessionTurn[]; next_cursor: string | null; has_newer?: boolean }
 export function parseAgentSessionInput(value: unknown) {

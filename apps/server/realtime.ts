@@ -349,6 +349,6 @@ export function registerRealtime(app: FastifyInstance, authenticate: (headers: I
   };
   let checkingHealth: ReturnType<typeof checkHealth> | undefined;
   const health = () => checkingHealth ??= checkHealth().finally(() => { checkingHealth = undefined; });
-  return { io, getEvents, work, health,
+  return { io, getEvents, work, health, invalidate: wake,
     onOutbox: (listener: (keys?: readonly string[]) => void) => { outboxListeners.add(listener); return () => { outboxListeners.delete(listener); }; } };
 }

@@ -61,7 +61,7 @@ export async function localSessionStore(storage: LocalSessionStorage, provider: 
       }
       if ((resume && !threadId) || (!resume && threadId && ready)) throw new Error('Agent session mapping does not match the requested operation.');
       return {
-        cwd: work, threadId,
+        cwd: work, threadId, ready,
         async save(id: string, ready: boolean) {
           const temporary = join(session, `.thread-${randomUUID()}`);
           const file = await open(temporary, 'wx', 0o600);

@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
-import type { Page } from '@space/contracts';
+import type { AgentSessionReference, Page } from '@space/contracts';
 import { request } from '../../shared/api/request.js';
 import { invalidateUpdates, subscribeUpdates } from '../../shared/realtime/live-updates.js';
-type StarredConversation = {id:string;name:string;kind:string;private:boolean};
+type StarredConversation = {id:string;name:string;kind:string;private:boolean;session?:AgentSessionReference};
 type PendingStar = { active: boolean; conversation?: StarredConversation };
 const pendingStars = new Map<string, ReadonlyMap<string, PendingStar>>();
 const emptyPending: ReadonlyMap<string, PendingStar> = new Map();
@@ -14,21 +14,21 @@ function updatePending(scope: string, id: string, pending?: PendingStar) {
   if (next.size) pendingStars.set(scope, next); else pendingStars.delete(scope);
   for (const listener of listeners) listener();
 }
-export function useStarredChannels(workspace:string,channel?:string,viewerId='') {
-  const scope = `${viewerId}:${workspace}`;
+export function useStarredChannels(workspace:string,channel?:string,viewerId='',resource:'starred'|'starred-sessions'='starred') {
+  const scope = `${viewerId}:${workspace}:${resource}`;
   const optimistic = useSyncExternalStore(subscribePending, useCallback(() => pendingStars.get(scope) ?? emptyPending, [scope]));
   const [pagination,setPagination]=useState({workspace,after:''});
   const after=pagination.workspace===workspace?pagination.after:'';
   const setAfter=(after:string)=>setPagination({workspace,after});
   const [state,setState]=useState({key:'',conversations:[] as StarredConversation[],active:false,next:null as string|null});
   const alive=useRef(false),writing=useRef(false);
-  const key=`${viewerId}:${workspace}:${channel??''}:${after}`;
+  const key=`${scope}:${channel??''}:${after}`;
   useEffect(()=>{
     let active=true,version=0;alive.current=true;
     const read=async()=>{const attempt=++version;try{
       const [page,exact]=await Promise.all([
-        channel?Promise.resolve({items:[],next_cursor:null} as Page<StarredConversation>):request<Page<StarredConversation>>(`/workspaces/${workspace}/hub/starred?limit=100${after?`&after=${after}`:''}`),
-        channel?request<{active:boolean}>(`/workspaces/${workspace}/hub/starred/${channel}`):Promise.resolve({active:false}),
+        channel?Promise.resolve({items:[],next_cursor:null} as Page<StarredConversation>):request<Page<StarredConversation>>(`/workspaces/${workspace}/hub/${resource}?limit=100${after?`&after=${after}`:''}`),
+        channel?request<{active:boolean}>(`/workspaces/${workspace}/hub/${resource}/${channel}`):Promise.resolve({active:false}),
       ]);
       if(active&&attempt===version)setState({key,conversations:Array.isArray(page.items)?page.items:[],active:exact.active===true,next:page.next_cursor});
     }catch{if(active&&attempt===version)setState({key,conversations:[],active:false,next:null});}};
@@ -43,7 +43,7 @@ export function useStarredChannels(workspace:string,channel?:string,viewerId='')
     if(!alive.current||writing.current||pendingStars.get(scope)?.has(id))return;writing.current=true;
     const desired = {active:channel===id?!active:!conversations.some(item=>item.id===id),conversation:conversation??conversations.find(item=>item.id===id)};
     updatePending(scope,id,desired);
-    try{await request(`/workspaces/${workspace}/hub/starred/${id}`,{active:desired.active});await invalidateUpdates('workspace',workspace);}
+    try{await request(`/workspaces/${workspace}/hub/${resource}/${id}`,{active:desired.active});await invalidateUpdates('workspace',workspace);}
     finally{updatePending(scope,id);writing.current=false;}
   }};
 }

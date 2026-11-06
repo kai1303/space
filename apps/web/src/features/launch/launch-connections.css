@@ -1,0 +1,93 @@
+@font-face {
+  font-family: 'Space Connection Geist';
+  src: url('/launch/fonts/Geist-Variable.woff2') format('woff2');
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+.launch .launch-connections {
+  background: #f5f5ff;
+  color: #181630;
+  border: 0;
+  padding: 88px 0 112px;
+  font-family: 'Space Connection Geist', Arial, sans-serif;
+}
+.connections-heading {
+  width: min(1200px, 100%);
+  margin-inline: auto;
+  padding-inline: 32px;
+}
+.launch .connections-heading h2 {
+  max-width: 20ch;
+  margin: 0;
+  font: 500 56px/1 'Space Connection Geist', Arial, sans-serif;
+  letter-spacing: -.02em;
+  text-wrap: balance;
+}
+.connection-demo { margin-top: 32px; width: 100%; max-width: 400px; }
+.connection-status {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-height: 72px;
+  padding: 13px 14px;
+  border-radius: 16px;
+  border: 1px solid #18163014;
+  background: #fafaff80;
+  box-shadow: 0 1px 2px #18163004;
+}
+.connection-provider-logo {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 48px;
+  height: 48px;
+  border: 1px solid #18163014;
+  border-radius: 14px;
+  background: #fafaff;
+}
+.connection-account { min-width: 0; flex: 1; }
+.connection-account strong { display: block; font-size: 15px; font-weight: 500; line-height: 1.2; }
+.connection-account>span {
+  display: block; margin-top: 4px; color: #73718b;
+  font-size: 13px; line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.connection-badge {
+  display: inline-flex; align-items: center; gap: 6px; flex: none;
+  height: 28px; padding: 0 10px; border-radius: 30px; background: #1816300d; color: #65677f; font-size: 12.5px; font-weight: 500;
+}
+.connection-badge svg { width: 14px; height: 14px; }
+.connection-badge.connected { background: #e6f5ec; color: #1f7a4d; }
+.launch-connection-tracks { display: flex; flex-direction: column; gap: 16px; margin-top: 80px; }
+.launch-loop.horizontal { container-type: inline-size; mask-image: linear-gradient(90deg,transparent,#000 14%,#000 86%,transparent); }
+.launch-loop.horizontal .launch-loop-strip { width: max-content; }
+.launch-loop.horizontal .launch-loop-group { min-width: 100cqw; gap: 16px; padding: 4px 16px 4px 0; }
+.launch-connection-tile {
+  display: grid; place-items: center; flex: none; width: 60px; height: 60px;
+  border-radius: 16px; background: #fafaff; border: 1px solid #18163013; box-shadow: 0 1px 2px #18163008;
+}
+.launch-connection-tile img { display: block; width: 36px; height: 36px; object-fit: contain; }
+.connection-caption { width: min(1136px,calc(100% - 64px)); margin: 22px auto -42px; display: flex; justify-content: space-between; align-items: center; color: #77748b; font-size: 11px; }
+.connection-caption button { display: inline-flex; align-items: center; gap: 5px; border: 0; background: transparent; color: inherit; font: inherit; padding: 6px; }
+@media (min-width: 1024px) {
+  .connections-heading { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,400px); gap: 48px; align-items: end; }
+  .launch .connections-heading h2 { font-size: 64px; }
+  .connection-demo { margin-top: 0; padding-bottom: 12px; }
+}
+@media (max-width: 639px) {
+  .launch .launch-connections { padding: 64px 0 80px; }
+  .connections-heading { padding-inline: 20px; }
+  .launch .connections-heading h2 { font-size: 44px; }
+  .launch-connection-tracks { margin-top: 56px; gap: 12px; }
+  .launch-loop.horizontal .launch-loop-group { gap: 12px; padding-right: 12px; }
+  .launch-connection-tile { width: 52px; height: 52px; border-radius: 14px; }
+  .launch-connection-tile img { width: 30px; height: 30px; }
+  .connection-caption { width: calc(100% - 40px); margin-bottom: -28px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .connection-caption button, .launch-connection-tile[aria-hidden] { display: none; }
+  .launch-loop.horizontal { mask-image: none; }
+  .launch-loop.horizontal .launch-loop-strip { width: 100%; transform: none !important; }
+  .launch-loop.horizontal .launch-loop-group { width: 100%; min-width: 0; flex-wrap: wrap; justify-content: center; padding-inline: 20px; }
+}
