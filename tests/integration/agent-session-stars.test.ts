@@ -14,9 +14,11 @@ after(async()=>{await pool.end();await admin.query(`DROP SCHEMA ${schema} CASCAD
 test('session stars persist, remain personal, paginate, and recheck channel and workspace access',async()=>{
  const a=await bootstrap(pool),b=await bootstrap(pool),ids=[randomUUID(),randomUUID()].sort();
  for(const id of ids)await pool.query("INSERT INTO agent_sessions(id,workspace_id,installation_id,origin_thread_id,title,managed) VALUES($1,$2,$3,$4,'Review README',true)",[id,a.workspace_id,a.installation_id,a.thread_id]);
- const beforeDelivery=Number((await pool.query('SELECT count(*) AS count FROM chat_delivery_outbox')).rows[0].count);
+ // Revisions survive CDC cleanup; outbox row counts race with delivery.
+ const revision=async()=>Number((await pool.query('SELECT revision FROM resource_update_revisions WHERE resource=$1',[`workspace:${a.workspace_id}`])).rows[0].revision);
+ const beforeDelivery=await revision();
  await Promise.all(Array.from({length:6},()=>store.starSession(a.owner_id,a.workspace_id,ids[0]!,{active:true})));
- assert.equal(Number((await pool.query('SELECT count(*) AS count FROM chat_delivery_outbox')).rows[0].count),beforeDelivery+1);
+ assert.equal(await revision(),beforeDelivery+1);
  assert.deepEqual(await store.sessionStarState(a.owner_id,a.workspace_id,ids[0]!),{active:true});
  assert.equal((await new WorkspaceHubStore(pool).starredSessions(a.owner_id,a.workspace_id)).items.length,1);
  assert.equal((await store.starredSessions(a.collaborator_id,a.workspace_id)).items.length,0);

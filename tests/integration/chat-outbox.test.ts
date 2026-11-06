@@ -5,20 +5,36 @@ import { Pool } from 'pg';
 import { bootstrap } from '@space/postgres/bootstrap';
 import { ChatStore } from '@space/postgres/chat';
 import { migrate } from '@space/postgres/migrate';
-import { EventBus, type DomainEvent } from '@space/events';
+import { EventBus, streamName, type DomainEvent } from '@space/events';
+import { EventBridge } from '@space/event-service/bridge';
+import { connect } from 'nats';
 
 const url = process.env.TEST_DATABASE_URL;
 if (!url) throw new Error('TEST_DATABASE_URL is required');
 const schema = `chat_outbox_${randomBytes(8).toString('hex')}`;
 const admin = new Pool({ connectionString: url });
-const pool = new Pool({ connectionString: url, options: `-c search_path=${schema}` });
-const bus = new EventBus(process.env.TEST_NATS_URL ?? 'nats://127.0.0.1:54222',schema);
+// Keep this WAL assertion independent of other suites' migrations and event backlog.
+const databaseUrl = new URL(url); databaseUrl.pathname = `/${schema}`;
+const pool = new Pool({ connectionString: databaseUrl.toString(), options: `-c search_path=${schema}` });
+const natsUrl = process.env.TEST_NATS_URL ?? 'nats://127.0.0.1:54222';
+const bus = new EventBus(natsUrl,schema);
+const bridge = new EventBridge({ databaseUrl: databaseUrl.toString(), natsUrl, schema });
 const events: DomainEvent[] = [];
 before(async () => {
-  await admin.query(`CREATE SCHEMA ${schema}`); await migrate(pool); await bus.start();
+  await admin.query(`CREATE DATABASE ${schema}`);
+  await pool.query(`CREATE SCHEMA ${schema}`); await migrate(pool); await bus.start();
   await bus.subscribe('chat.changed.*',{durable:`test-${randomUUID()}`},async message => { events.push(message.event); await message.ack(); });
+  await bridge.start();
 });
-after(async () => { await bus.close(); await pool.end(); await admin.query(`DROP SCHEMA ${schema} CASCADE`); await admin.end(); });
+after(async () => {
+  await bridge.close(); await bus.close(); await pool.end();
+  await admin.query(`DROP DATABASE ${schema}`); await admin.end();
+  const connection = await connect({ servers: natsUrl });
+  try {
+    const manager = await connection.jetstreamManager();
+    for (const suffix of ['CHAT','WORK','SEARCH']) await manager.streams.delete(`${streamName(schema)}_${suffix}`);
+  } finally { await connection.close(); }
+});
 async function received(predicate: (event:DomainEvent) => boolean) {
   const until = Date.now()+5000;
   while (!events.some(predicate)) { assert.ok(Date.now()<until,'committed WAL event must reach broker'); await new Promise(resolve=>setTimeout(resolve,10)); }

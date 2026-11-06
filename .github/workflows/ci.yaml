@@ -65,6 +65,12 @@ jobs:
       - name: Test
         run: pnpm exec turbo run test --concurrency=1
 
+      - name: Event infrastructure diagnostics
+        if: failure()
+        run: |
+          tail -n 200 /tmp/space-cdc.log || true
+          docker logs --tail 100 space-nats || true
+
       - name: Browser search E2E
         run: |
           pnpm --filter @space/tests exec playwright install --with-deps chromium
