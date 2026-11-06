@@ -7,6 +7,8 @@ export function registerWorkspaceRoutes(app: FastifyInstance, store: WorkspaceSt
   const users = new UserStore(store.pool);
   app.get('/v1/me', request => users.profile(request.actorId));
   app.patch('/v1/me', { bodyLimit: 220_000 }, request => users.updateProfile(request.actorId, request.body));
+  app.get<{ Params: { workspaceId: string; kind: string; id: string } }>('/v1/workspaces/:workspaceId/profiles/:kind/:id', request =>
+    users.workspaceProfile(request.actorId, request.params.workspaceId, request.params.kind, request.params.id));
   app.post('/v1/workspaces', async (request, reply) =>
     reply.code(201).send(await store.create(request.actorId, request.body)));
   app.get('/v1/workspaces', request => store.list(request.actorId, request.query));

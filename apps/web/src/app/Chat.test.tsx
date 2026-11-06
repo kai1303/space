@@ -1140,7 +1140,7 @@ it('opens the current profile for a stored mention and sends selected mentions w
  const original=vi.mocked(fetch).getMockImplementation()!;
  vi.mocked(fetch).mockImplementation(async(...args)=>{
   const path=String(args[0]);
-  if(path.includes('/mentions/user/'))return new Response(JSON.stringify({...person,label:'Jamie Updated'}),{status:200});
+  if(path.includes('/profiles/user/'))return new Response(JSON.stringify({kind:'user',id:person.id,display_name:'Jamie Updated',full_name:'Jamie Updated',title:'Engineer',name_pronunciation:'',phone:'',time_zone:'UTC',image:null,email:'jamie@example.test',presence:'active',status:null}),{status:200});
   if(path.includes('/mentions?q='))return new Response(JSON.stringify({items:[person],member_count:2}),{status:200});
   if(path.endsWith('/mention-settings'))return new Response(JSON.stringify({paused_until:null,broadcast_permission:'all',can_manage:false,member_count:2,general_channel_id:'first'}),{status:200});
   if(path.endsWith('/mentions'))return new Response(JSON.stringify({items:[],unread_count:0,next_cursor:null}),{status:200});
@@ -1148,8 +1148,9 @@ it('opens the current profile for a stored mention and sends selected mentions w
  });
  render(<Chat/>);
  await userEvent.click(await screen.findByRole('button',{name:'@Jamie Chen'}));
- const profile=await screen.findByRole('dialog',{name:'Jamie Updated'});
- await userEvent.click(within(profile).getByRole('button',{name:'Close dialog'}));
+ const profile=await screen.findByRole('region',{name:'Profile'});
+ await within(profile).findByRole('heading',{name:'Jamie Updated'});
+ await userEvent.click(within(profile).getByRole('button',{name:'Close profile'}));
  const editor=await screen.findByRole('textbox',{name:'Message first'});
  await userEvent.type(editor,'@Ja');await screen.findByRole('option',{name:/Jamie Chen/});await userEvent.keyboard('{Enter}');
  await userEvent.keyboard('review{Enter}');

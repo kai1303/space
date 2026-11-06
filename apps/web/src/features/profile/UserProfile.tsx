@@ -1,3 +1,4 @@
+import { useMemberProfile } from './MemberProfile.js';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { AnimatePresence } from 'motion/react';
@@ -21,6 +22,8 @@ const presets = [
 
 
 export function UserSettings({ user, userId, onNameChange }: { user: string; userId?: string; onNameChange?: (name: string) => void }) {
+  const profiles = useMemberProfile();
+  useEffect(() => { if (profiles?.selected) setPanel(false); }, [profiles?.selected]);
   const [profile, setProfile] = useState<UserProfile>({ id: userId ?? '', display_name: user, full_name: '', title: '', name_pronunciation: '', phone: '', time_zone: 'UTC', image: null, email: null, status: null, presence: 'active' });
   const [loaded, setLoaded] = useState(false), [loading, setLoading] = useState(true), [error, setError] = useState(''), [busy, setBusy] = useState(false);
   const [panel, setPanel] = useState(false), [editor, setEditor] = useState<'profile' | 'status' | null>(null);
@@ -63,7 +66,7 @@ export function UserSettings({ user, userId, onNameChange }: { user: string; use
     } catch (e) { if (alive.current) setError(errorText(e)); throw e; }
     finally { if (alive.current) setBusy(false); }
   }
-  function open(next: 'profile' | 'status') { setError(''); if (next === 'profile') setPanel(true); else setEditor('status'); }
+  function open(next: 'profile' | 'status') { setError(''); if (next === 'profile') { profiles?.close(); setPanel(true); } else setEditor('status'); }
   return <div className={`space-user-settings ${panel ? 'is-profile-open' : ''}`} ref={root}>
     <Popover label="Your account" panelLabel="Your account" role="menu" floating align="start" className="space-account-menu" panelClassName="space-account-popover" trigger={<ProfilePhoto profile={profile} small />}>
       {close => <>

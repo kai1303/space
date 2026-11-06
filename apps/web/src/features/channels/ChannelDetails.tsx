@@ -1,3 +1,4 @@
+import { useMemberProfile } from '../profile/MemberProfile.js';
 import { useEffect, useId, useRef, useState, type FormEvent } from 'react';
 import { Avatar, Badge, Button, Dialog, Tabs } from '@space/ui/primitives';
 import { Archive, Copy, Hash, Lock, MagnifyingGlass, UserPlus } from '@phosphor-icons/react';
@@ -14,6 +15,7 @@ export function ChannelDetails(props: Props) {
   return props.open ? <DetailsDialog key={props.channel.id} {...props} /> : null;
 }
 function DetailsDialog({ channel, viewer, initialTab = 'about', onClose, onChange, onLeft }: Props) {
+  const profiles = useMemberProfile();
   const id = useId();
   const [details, setDetails] = useState<Details>(), [members, setMembers] = useState<ChannelMember[]>([]);
   const [tab, setTab] = useState(initialTab), [query, setQuery] = useState(''), [error, setError] = useState('');
@@ -60,7 +62,7 @@ function DetailsDialog({ channel, viewer, initialTab = 'about', onClose, onChang
             <ul className="space-channel-people" aria-label="Channel members">
               {editable && <li><button className="space-channel-add" onClick={() => setAdding(true)}><span><UserPlus size={22} /></span>Add people</button></li>}
               {filtered.map(member => <li key={member.id}>
-                <MemberAvatar member={member} /><div><strong>{member.name}{member.id === viewer && <span className="space-channel-muted"> (you)</span>}</strong>{member.title && <small>{member.title}</small>}</div>
+                <button type="button" className="space-profile-trigger" aria-label={`View ${member.name}’s profile`} onClick={() => {onClose(); profiles?.open({kind:'user',id:member.id});}}><MemberAvatar member={member} /><div><strong>{member.name}{member.id === viewer && <span className="space-channel-muted"> (you)</span>}</strong>{member.title && <small>{member.title}</small>}</div></button>
                 {editable && member.id !== viewer && <button className="space-channel-link" aria-label={`Remove ${member.name} from channel`} onClick={() => setConfirmation(member)}>Remove</button>}
               </li>)}
             </ul>

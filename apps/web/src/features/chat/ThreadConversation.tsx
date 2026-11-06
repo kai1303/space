@@ -1,3 +1,4 @@
+import { useMemberProfile } from '../profile/MemberProfile.js';
 import type {ComponentProps,ReactNode} from 'react';
 import type {ChatMessage,MentionReference} from '@space/contracts';
 import { IconButton } from '@space/ui/primitives';
@@ -33,8 +34,10 @@ export function ConversationMessage({message,previous,viewerId,arrival,onReact,o
  message:ChatMessage;viewerId:string;arrival?:boolean;onReact?:(emoji:string)=>void;onReply?:()=>void;replyCount?:number;
  actions?:ComponentProps<typeof Message>['actions'];footer?:ReactNode;onMentionClick?:(mention:MentionReference)=>void;streaming?:boolean;body?:ReactNode;children?:ReactNode;
 }) {
- return <Message grouped={continuesMessageGroup(message,previous)} author={message.author.name} initials={message.author.name.slice(0,2).toUpperCase()} agent={message.author.kind==='agent'} tone={message.author.kind==='agent'?'green':message.author.id===viewerId?'blue':'purple'} arrival={arrival} time={new Date(message.created_at).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})} reactions={(message.reactions??[]).map(reaction=>({emoji:reaction.emoji,count:reaction.count,active:reaction.user_ids.includes(viewerId)}))} onReact={onReact} onReply={onReply} replyCount={replyCount??message.reply_count} actions={actions} footer={footer}>
-  {body??<><AgentMessageBody message={message} viewerId={viewerId} onMentionClick={onMentionClick} streaming={streaming}/>{!!message.attachments?.length&&<AssetAttachments assets={message.attachments}/>}</>}{children}
+ const profiles = useMemberProfile();
+ const openMention = (mention:MentionReference) => { if(profiles && mention.kind !== 'broadcast') profiles.open({kind:mention.kind,id:mention.id}); else onMentionClick?.(mention); };
+ return <Message onAuthorClick={profiles ? () => profiles.open({kind:message.author.kind === 'agent' ? 'agent' : 'user',id:message.author.id}) : undefined} grouped={continuesMessageGroup(message,previous)} author={message.author.name} initials={message.author.name.slice(0,2).toUpperCase()} agent={message.author.kind==='agent'} tone={message.author.kind==='agent'?'green':message.author.id===viewerId?'blue':'purple'} arrival={arrival} time={new Date(message.created_at).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})} reactions={(message.reactions??[]).map(reaction=>({emoji:reaction.emoji,count:reaction.count,active:reaction.user_ids.includes(viewerId)}))} onReact={onReact} onReply={onReply} replyCount={replyCount??message.reply_count} actions={actions} footer={footer}>
+  {body??<><AgentMessageBody message={message} viewerId={viewerId} onMentionClick={openMention} streaming={streaming}/>{!!message.attachments?.length&&<AssetAttachments assets={message.attachments}/>}</>}{children}
  </Message>;
 }
 export function ConversationReplyDivider({count}:{count:number}) {

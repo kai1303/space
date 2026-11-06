@@ -7,6 +7,12 @@ export interface UserProfile {
   phone: string; time_zone: string; image: string | null; email: string | null;
   presence: 'active' | 'away'; status: UserStatus | null;
 }
+export type WorkspaceProfile = (UserProfile & { kind: 'user' }) | {
+  kind: 'agent'; id: string; display_name: string; image: string | null;
+  owner_id: string; owner_name: string; enabled: boolean;
+  availability: 'online' | 'offline' | 'auth_required' | 'error' | 'unknown';
+  can_message: boolean;
+};
 export type ProfileUpdate = Partial<Omit<UserProfile, 'id' | 'email'>>;
 export function parseProfileUpdate(input: unknown): ProfileUpdate {
   const v = record(input, ['display_name', 'full_name', 'title', 'name_pronunciation', 'phone', 'time_zone', 'image', 'presence', 'status']);

@@ -15,6 +15,7 @@ export function Message({
   reactions = [],
   onReact,
   onReply,
+  onAuthorClick,
   replyCount = 0,
   tone = "purple",
   arrival = false,
@@ -30,6 +31,7 @@ export function Message({
   reactions?: Reaction[];
   onReact?: (emoji: string) => void;
   onReply?: () => void;
+  onAuthorClick?: () => void;
   replyCount?: number;
   tone?: "purple" | "blue" | "green" | "orange";
   arrival?: boolean;
@@ -45,10 +47,10 @@ export function Message({
       animate={{ opacity: 1 }}
       transition={motionTransition(reduced, 0.14)}
     >
-      {grouped ? <span className="sp-message-compact-time" aria-hidden="true">{time}</span> : <Avatar name={author} initials={initials} tone={tone} />}
+      {grouped ? <span className="sp-message-compact-time" aria-hidden="true">{time}</span> : <>{onAuthorClick ? <button type="button" className="sp-message-author-avatar" aria-label={`View ${author}’s profile`} onClick={onAuthorClick}><Avatar name={author} initials={initials} tone={tone}/></button> : <Avatar name={author} initials={initials} tone={tone}/>}</>}
       <div className="sp-message-body">
         <div className={grouped ? "sp-sr-only" : "sp-message-meta"}>
-          <strong>{author}</strong>
+          <strong>{onAuthorClick && !grouped ? <button type="button" className="sp-message-author-name" aria-label={`View ${author}’s profile`} onClick={onAuthorClick}>{author}</button> : author}</strong>
           {agent && <Badge>Agent</Badge>}
           <span className="sp-message-time">{time}</span>
         </div>

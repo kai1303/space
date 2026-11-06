@@ -867,3 +867,5 @@ button.sp-conversation-title{cursor:pointer}button.sp-conversation-title:hover{b
 
 [data-sp-popover-panel][data-floating=true]{box-sizing:border-box;max-width:calc(100vw - 16px);max-height:calc(100dvh - 16px);overflow-y:auto;overscroll-behavior:contain}
 summary[aria-disabled=true]{opacity:.5;cursor:default}
+
+.sp-message-author-avatar,.sp-message-author-name{border:0;padding:0;background:none;color:inherit;font:inherit;cursor:pointer;text-align:left}.sp-message-author-avatar{display:flex;border-radius:8px;align-self:start}.sp-message-author-name:hover{text-decoration:underline}.sp-message-author-avatar:focus-visible,.sp-message-author-name:focus-visible{outline:2px solid var(--sp-info);outline-offset:3px}
