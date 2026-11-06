@@ -15,7 +15,7 @@ export const migrationFiles = [
   '022_local_codex_execution.sql', '023_message_reactions.sql', '024_storage_claims.sql',
   '025_mentions.sql', '026_thread_context.sql', '027_channel_reads.sql', '028_thread_messages.sql',
   '029_resource_updates.sql', '030_agent_sessions.sql', '031_agent_session_revisions.sql', '032_event_stream.sql', '033_thread_agent_session_entries.sql', '034_inline_agent_session_links.sql', '035_session_request_documents.sql', '036_local_agent_providers.sql', '037_agent_connector_capabilities.sql', '038_agent_memory_grants.sql', '039_direct_messages.sql', '040_notifications.sql', '041_workspace_hub.sql', '042_file_library.sql', '043_workspace_todos.sql', '044_workspace_settings.sql', '045_workspace_invitations.sql', '046_workspace_membership.sql', '047_workspace_retention.sql', '048_todo_sync.sql',
-  '049_realtime_targets.sql', '050_message_search.sql', '051_dm_calls.sql', '052_sidekick_sessions.sql', '053_session_sidebar.sql',
+  '049_realtime_targets.sql', '050_message_search.sql', '051_dm_calls.sql', '052_sidekick_sessions.sql', '053_session_sidebar.sql', '057_navigator_orchestration.sql',
 ] as const;
 
 export async function migrate(pool: Pool): Promise<void> {
@@ -24,7 +24,8 @@ export async function migrate(pool: Pool): Promise<void> {
     await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(current_schema() || ':migrations'))`);
     await tx.execute(sql`CREATE TABLE IF NOT EXISTS schema_migrations (version integer PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())`);
     for (const [index, migration] of migrations.entries()) {
-      const version = index + 1;
+      // Keep migration identities stable when independent branches leave gaps in the list.
+      const version = Number(migrationFiles[index]!.split('_')[0]);
       if ((await tx.select().from(schemaMigrations).where(eq(schemaMigrations.version, version))).length) continue;
       // Only version-controlled local migration files use raw SQL, never request input.
       await tx.execute(sql.raw(migration));

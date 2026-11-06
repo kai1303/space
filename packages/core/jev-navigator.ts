@@ -50,10 +50,14 @@ export class JevNavigatorProvider implements NavigatorProvider {
    const assessment:NavigationAssessment={version:'execution-intent-v1',workStateHash:navigationWorkStateHash(context.workState),model:value.model,targetMessageId:request.last.id,requestsAgentWork,taskClear,continuesExistingWork,capabilityRelevance:relevance};
    const selected=request.capabilities.filter(c=>relevance[c.skill]!>=this.yes).sort((a,b)=>relevance[b.skill]!-relevance[a.skill]!).slice(0,8);
    let action:NavigationDecision['action']='ignore',reason='No clear new execution request in the latest message.';
-   if(requestsAgentWork>=this.yes&&taskClear>=this.yes&&continuesExistingWork<=this.no){
+   if(continuesExistingWork>=this.yes&&context.workState?.sessions.some(session=>session.state==='active')){
+    action='escalate';reason='Classify whether the latest message updates or stops an active session, or only discusses progress.';
+   }else if(requestsAgentWork>=this.yes&&taskClear>=this.yes&&continuesExistingWork<=this.no){
     if(selected.length){action='suggest';reason='The latest message requests or confirms clear new work. Choose an available capability to execute it.';}
     else if(Object.values(relevance).every(p=>p<=this.no)){action='clarify';reason='The latest message requests clear new work, but no available capability matches.';}
-    else reason='The requested capability is uncertain.';
+    else {action='escalate';reason='The requested capability is uncertain.';}
+   }else if(requestsAgentWork>this.no&&continuesExistingWork<this.yes){
+    action='escalate';reason='The latest message may request work but needs deeper intent or context reasoning.';
    }
    const decision=parseNavigationDecision({action,capabilities:action==='suggest'?selected.map(c=>c.skill):[],evidenceMessageIds:[request.last.id],reason,assessment},context);
    return {decision,inputTokens:usage(value.usage?.input_tokens),outputTokens:usage(value.usage?.output_tokens)};

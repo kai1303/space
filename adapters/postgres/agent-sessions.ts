@@ -15,7 +15,7 @@ const summaryColumns = sql`a.id,a.workspace_id,a.installation_id,a.origin_thread
 
 export class AgentSessionStore {
   readonly db; readonly tasks; readonly sidekicks;
-  constructor(readonly pool: Pool) { this.db = database(pool); this.tasks = new PostgresStore(pool); this.sidekicks = new SidekickStore(this.db); }
+  constructor(readonly pool: Pool, tasks = new PostgresStore(pool)) { this.db = database(pool); this.tasks = tasks; this.sidekicks = new SidekickStore(this.db); }
   private async visible(c: DbSession, actor: string, id: string) {
     const [session] = await c.select().from(s.agentSessions).where(eq(s.agentSessions.id, uuid(id)));
     if (!session || !await hasThreadAccess(c, actor, session.origin_thread_id)) throw notFound();
@@ -98,8 +98,10 @@ export class AgentSessionStore {
     }, { isolationLevel: 'repeatable read', accessMode: 'read only' });
   }
   async send(actor: string, id: string, raw: unknown, key: string): Promise<Task> {
+    return sessionTransaction(this.db, c => this.sendIn(c, actor, id, raw, key));
+  }
+  async sendIn(c: DbSession, actor: string, id: string, raw: unknown, key: string): Promise<Task> {
     const input = parseAgentSessionMessage(raw); key = text(key, 128);
-    return sessionTransaction(this.db, async c => {
       const session = await this.visible(c, actor, id);
       if (!session.managed) throw new AppError(409, 'session_unmanaged');
       if (session.state === 'ended') throw new AppError(409, 'session_ended');
@@ -118,21 +120,22 @@ export class AgentSessionStore {
       const changed = await c.update(s.agentSessions).set({ revision: session.revision + 1 }).where(and(eq(s.agentSessions.id, id), eq(s.agentSessions.revision, session.revision), eq(s.agentSessions.state, 'active'))).returning({ id: s.agentSessions.id });
       if (!changed.length) throw new SessionConflict();
       return result;
-    });
   }
   async control(actor: string, id: string, operation: 'stop' | 'end'): Promise<AgentSessionSummary> {
-    return sessionTransaction(this.db, async c => {
+    return sessionTransaction(this.db, c => this.controlIn(c, actor, id, operation));
+  }
+  async controlIn(c: DbSession, actor: string, id: string, operation: 'stop' | 'end'): Promise<AgentSessionSummary> {
       const session = await this.visible(c, actor, id);
       if (!session.managed) throw new AppError(409, 'session_unmanaged');
       const [installation] = await c.select().from(s.agentInstallations).where(eq(s.agentInstallations.id, session.installation_id));
       if (actor !== session.created_by && actor !== installation?.owner_id) throw new AppError(403, 'session_control_not_authorized');
+      const cancelled=await c.execute(sql`UPDATE navigator_followups SET status='cancelled',reason='session_stopped' WHERE session_id=${id} AND status='pending' RETURNING id`);
       const active = await c.select().from(s.tasks).where(and(eq(s.tasks.session_id, id), sql`${s.tasks.status} IN ('awaiting_approval','queued','running')`)).orderBy(s.tasks.id);
       for (const task of active) await this.tasks.stopTaskIn(c, task, actor);
-      if (active.length || (operation === 'end' && session.state !== 'ended')) {
+      if (active.length || cancelled.rows.length || (operation === 'end' && session.state !== 'ended')) {
         const changed = await c.update(s.agentSessions).set({ revision: session.revision + 1, ...(operation === 'end' ? { state: 'ended' as const } : {}) }).where(and(eq(s.agentSessions.id, id), eq(s.agentSessions.revision, session.revision))).returning({ id: s.agentSessions.id });
         if (!changed.length) throw new SessionConflict();
       }
       return this.summary(c, id);
-    });
   }
 }

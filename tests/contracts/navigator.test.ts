@@ -83,3 +83,40 @@ test('versioned intent assessments are strict while historical assessments remai
  for(const assessment of [current,legacy])assert.deepEqual(parseNavigationDecision({...decision,assessment},context).assessment,assessment);
  for(const assessment of [{...current,workStateHash:undefined},{...current,workStateHash:'bad'},{...current,taskClear:undefined},{...current,continuesExistingWork:2},{...current,version:'future'},{...current,assistanceUseful:.99},{...legacy,taskClear:.99}])assert.throws(()=>parseNavigationDecision({...decision,assessment},context));
 });
+
+const managedContext: NavigationContext = {
+  ...context, pendingMessageIds: ['message-1'],
+  workState: {pendingProposals: [], tasks: [], sessions: [{id: 'session-1', title: 'Fix bug', skill: 'code', state: 'active'}]},
+};
+test('continue and stop require an active known session and exact latest pending human evidence', () => {
+  for (const action of ['continue', 'stop']) {
+    const followup = {action, targetSessionId: 'session-1', capabilities: [], evidenceMessageIds: ['message-1'], reason: 'Update existing work.'};
+    assert.deepEqual(parseNavigationDecision(followup, managedContext), followup);
+    for (const value of [{...followup, targetSessionId: undefined}, {...followup, targetSessionId: 'unknown'}, {...followup, capabilities: ['code']}, {...followup, evidenceMessageIds: []}, {...followup, readMessageIds: ['message-1']}]) assert.throws(() => parseNavigationDecision(value, managedContext));
+    for (const invalid of [context, {...managedContext, pendingMessageIds: []}, {...managedContext, pendingMessageIds: ['missing']}, {...managedContext, messages: [{id:'message-1',text:'Update',author:{id:'agent',kind:'agent' as const}}]}, {...managedContext, workState: {...managedContext.workState!, sessions: [{...managedContext.workState!.sessions[0]!,state:'ended'}]}}]) assert.throws(() => parseNavigationDecision(followup, invalid));
+    assert.throws(() => parseNavigationDecision({...followup,evidenceMessageIds:['old','message-1']}, {...managedContext,messages:[{id:'old',text:'Previous request'},...context.messages]}));
+  }
+  for (const action of ['ignore','suggest','clarify','escalate']) assert.throws(() => parseNavigationDecision({...decision,action,targetSessionId:'session-1'}, managedContext));
+});
+test('read_context reads at most eight unique known IDs once, including the working memory root', () => {
+  const root = {id:'root',sequence:'1',text:'Root',text_truncated:true,author:{id:'human',kind:'human' as const},attachments:[]};
+  const source = {...managedContext, workingMemory:{root,checkpoint:null}};
+  const read = {action:'read_context',readMessageIds:['root','message-1'],capabilities:[],evidenceMessageIds:['message-1'],reason:'Resolve truncated context.'};
+  assert.deepEqual(parseNavigationDecision(read, source), read);
+  for (const value of [{...read,readMessageIds:[]},{...read,readMessageIds:undefined},{...read,readMessageIds:['unknown']},{...read,readMessageIds:['root','root']},{...read,readMessageIds:Array(9).fill('root')},{...read,targetSessionId:'session-1'},{...read,capabilities:['code']},{...read,evidenceMessageIds:[]}]) assert.throws(() => parseNavigationDecision(value, source));
+  assert.throws(() => parseNavigationDecision(read, {...source,retrievedMessages:[]}));
+  assert.throws(() => parseNavigationDecision({...decision,readMessageIds:['root']}, source));
+});
+
+test('automatic follow-ups require the complete latest human message, including recovered truncated targets', () => {
+  const source: NavigationContext = {...managedContext, messages: [{...context.messages[0]!, truncated: true}]};
+  for (const action of ['continue', 'stop']) {
+    const followup = {action, targetSessionId: 'session-1', capabilities: [], evidenceMessageIds: ['message-1'], reason: 'Follow up.'};
+    for (const retrievedMessages of [undefined, [], [{id:'other',text:'Complete',truncated:false}], [{id:'message-1',text:'Partial',truncated:true}], [{id:'message-1',text:'Unknown completeness'}]]) {
+      assert.throws(() => parseNavigationDecision(followup, {...source,retrievedMessages}));
+    }
+    assert.deepEqual(parseNavigationDecision(followup, {...source,retrievedMessages:[{id:'message-1',text:'Full request',truncated:false}]}), followup);
+  }
+  assert.equal(parseNavigationDecision({action:'read_context',readMessageIds:['message-1'],capabilities:[],evidenceMessageIds:['message-1'],reason:'Read the full target.'},source).action,'read_context');
+  assert.equal(parseNavigationDecision(decision,source).action,'suggest');
+});

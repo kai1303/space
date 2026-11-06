@@ -37,7 +37,7 @@ The editable questions and policy are in `packages/core/jev-navigator.ts`, expor
 }
 ```
 
-When supplied, author identity/kind is retained. The last pending message is the target; earlier pending messages and older conversation are history. Messages after that target are excluded. An empty, unknown, duplicate or explicitly agent-authored target is rejected before HTTP. Production routing supplies a human target and bounded thread context: at most 16 recent messages, each text capped at 1,000 characters. Rich code/quote instructions are removed from routing text. A truncated latest message fails closed before HTTP, so a trailing cancellation cannot be silently omitted. This is context-aware classification, not unlimited transcript ingestion or persistent provider-side conversation memory.
+When supplied, author identity/kind is retained. The last pending message is the target; earlier pending messages and older conversation are history. Messages after that target are excluded. An empty, unknown, duplicate or explicitly agent-authored target is rejected before HTTP. Production routing supplies a human target and bounded thread context: at most 16 recent messages, each text capped at 1,000 characters. Rich code/quote instructions are removed from routing text. A truncated latest message is not sent to Jev; the host may escalate it to configured Level 2 for bounded context retrieval, so a trailing cancellation cannot be silently omitted by Jev. This is context-aware classification, not unlimited transcript ingestion or persistent provider-side conversation memory.
 
 The independent questions ask:
 
@@ -66,19 +66,20 @@ Default mapping uses yes >= 0.7 and no <= 0.3:
 - Request and clarity must both reach yes, and existing-work probability must be no or lower.
 - With a matching capability: suggest up to eight skills.
 - With all capabilities below the no threshold: clarify the missing capability.
-- All uncertain or non-actionable cases: ignore quietly. Jev no longer escalates based on task complexity.
+- Existing work with a known active session: escalate so Level 2 can distinguish continuation, stop, progress questions, and acknowledgments.
+- Plausible requests with uncertain intent, clarity, or capability: escalate. Clear nonrequests remain ignored. Task complexity alone does not cause escalation.
 
 Thresholds remain 0.7/0.3. Optional worker settings `NAVIGATOR_L1_YES_THRESHOLD` and `NAVIGATOR_L1_NO_THRESHOLD` configure them. Yes must exceed 0.5 and no must be below 0.5. These thresholds are not calibrated production guarantees.
 
-In semantic mode with Jev, every unaddressed batch passes through this intent gate; keyword rules cannot bypass it, including on budget exhaustion or provider failure. Rules-only mode and compatible-provider behavior are unchanged. Explicit mentions bypass Jev, and managed-session messages stay with the session executor.
+In semantic mode with Jev, every unaddressed batch passes through this intent gate; keyword rules cannot bypass it, including on budget exhaustion or provider failure. Rules-only mode remains deterministic. With an active managed session, compatible semantic routing also classifies existing work before keyword suggestions. Explicit mentions bypass Jev, and managed-session messages stay with the session executor.
 
-A high probability does not start an agent or grant permission. Suggestions still require selection and the existing execution policy. If conversation or work state changes before the suggestion is persisted, Space suppresses the stale decision. The same check applies to cached inference replay. Historical usefulness-based assessments remain readable but cannot be replayed into new Jev routing. No database migration is needed.
+A high probability does not start an agent or grant permission. Suggestions still require selection and the existing execution policy. If conversation or work state changes before the suggestion is persisted, Space suppresses the stale decision. The same check applies to cached inference replay. Historical usefulness-based assessments remain readable but cannot be replayed into new Jev routing. Migration 057 records routing authorizations and inference snapshots; see [Navigator orchestration](navigator.md#deeper-routing-authorization-and-observation).
 
 ## Cost and failure behavior
 
 The worker reserves the serialized native request size, including all per-capability questions, in the existing persistent daily budget before HTTP. Reported usage is stored separately. Unknown or failed outcomes retain their reservation; retries never repeat a paid call for the same batch/level. Providers without an estimator retain the existing conservative fallback.
 
-Shared transport caps requests at 32 KiB, responses at 64 KiB and calls at ten seconds, including body reads. Oversized context/catalogs fail closed before an outbound call. Only HTTPS and loopback HTTP are accepted, redirects are rejected, and errors never expose keys or raw provider bodies. There are no automatic HTTP retries. Explicit routing remains available if Jev fails or the daily budget is exhausted. Jev semantic mode stays quiet; rules-only mode remains a separately configured option.
+Shared transport caps requests at 32 KiB, responses at 64 KiB and calls at ten seconds, including body reads. Oversized context/catalogs fail closed before an outbound call. Only HTTPS and loopback HTTP are accepted, redirects are rejected, and errors never expose keys or raw provider bodies. There are no automatic HTTP retries. Explicit routing remains available if Jev fails or the daily budget is exhausted. Unavailable or exhausted deeper routing fails closed; rules-only mode remains a separately configured option.
 
 ## Verification scope
 

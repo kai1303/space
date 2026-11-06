@@ -25,9 +25,11 @@ test('only clear new execution requests suggest, even when several capabilities 
  assert.equal(result.decision.action,'suggest');assert.deepEqual(result.decision.capabilities,['writing.summarize','engineering.investigate']);
  assert.equal(result.decision.assessment?.version,'execution-intent-v1');
 });
-test('discussion, uncertainty and existing work stay quiet without escalation',async()=>{
- const cases:Record<string,number>[]=[{requests_agent_work:.02},{requests_agent_work:.5},{task_clear:.5},{task_clear:.1},{continues_existing_work:.9},{continues_existing_work:.4},{capability_0:.5,capability_1:.4}];
+test('discussion and existing work without active sessions stay quiet while uncertain requests escalate',async()=>{
+ const cases:Record<string,number>[]=[{requests_agent_work:.02},{continues_existing_work:.9}];
  for(const values of cases)assert.equal((await provider(response(values)).decide(context,1,new AbortController().signal)).decision.action,'ignore');
+ const uncertain:Record<string,number>[]=[{requests_agent_work:.5},{task_clear:.5},{task_clear:.1},{continues_existing_work:.4},{capability_0:.5,capability_1:.4}];
+ for(const values of uncertain)assert.equal((await provider(response(values)).decide(context,1,new AbortController().signal)).decision.action,'escalate');
  const unavailable=await provider(response({capability_0:.02,capability_1:.01})).decide(context,1,new AbortController().signal);
  assert.equal(unavailable.decision.action,'clarify');
 });
@@ -93,4 +95,12 @@ test('Jev receives bounded pending proposals and work status as reference data',
  assert.match(request.questions.task_clear.instructions,/proposal/);
  await assert.rejects(p.decide({...context,workState:{...workState,tasks:Array(9).fill(workState.tasks[0])}},1,new AbortController().signal));
  assert.equal(calls,1);
+});
+
+test('existing work with active sessions escalates for follow-up classification even without new execution intent', async () => {
+ const workState={pendingProposals:[],tasks:[],sessions:[{id:'session',title:'Write summary',skill:'writing.summarize',state:'active'}]};
+ const result=await provider(response({requests_agent_work:.02,continues_existing_work:.98})).decide({...context,workState},1,new AbortController().signal);
+ assert.equal(result.decision.action,'escalate');
+ assert.deepEqual(result.decision.capabilities,[]);
+ assert.equal((await provider(response({requests_agent_work:.02,continues_existing_work:.05})).decide({...context,workState},1,new AbortController().signal)).decision.action,'ignore');
 });

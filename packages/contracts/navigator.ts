@@ -11,11 +11,13 @@ export type NavigationAssessment = AssessmentBase & (
 export interface NavigationWorkState {
   pendingProposals:{id:string;goal:string;capabilities:string[]}[];
   tasks:{id:string;goal:string;skill:string;status:string}[];
-  sessions:{id:string;title:string;skill:string;state:string}[];
+  sessions:{id:string;title:string;skill:string;state:string;installation_id?:string;revision?:number;created_by?:string}[];
 }
 export interface NavigationDecision {
   assessment?:NavigationAssessment;
-  action: 'ignore' | 'suggest' | 'clarify' | 'escalate';
+  action: 'ignore' | 'suggest' | 'clarify' | 'escalate' | 'continue' | 'stop' | 'read_context';
+  targetSessionId?: string;
+  readMessageIds?: string[];
   capabilities: string[];
   evidenceMessageIds: string[];
   reason: string;
@@ -23,6 +25,7 @@ export interface NavigationDecision {
 }
 export interface NavigationContext {
   workState?: NavigationWorkState;
+  retrievedMessages?: {id:string;text:string;truncated?:boolean}[];
   workingMemory?: Pick<import('./thread-context.js').ThreadContext, 'root' | 'checkpoint'>;
   pendingMessageIds?: string[];
   messages: { id: string; text: string; truncated?:boolean; author?:{id:string;kind:'human'|'agent';name?:string} }[];

@@ -15,14 +15,34 @@ function strings(value: unknown, max: number, allowed?: Set<string>): string[] {
 }
 
 export function parseNavigationDecision(value: unknown, context: NavigationContext): NavigationDecision {
-  const v = record(value, ['action', 'capabilities', 'evidenceMessageIds', 'reason', 'tasks', 'assessment']);
-  if (context.candidates.length > 100 || !['ignore', 'suggest', 'clarify', 'escalate'].includes(v.action as string)) return invalid();
+  const v = record(value, ['action', 'capabilities', 'evidenceMessageIds', 'reason', 'tasks', 'assessment', 'targetSessionId', 'readMessageIds']);
+  if (context.candidates.length > 100 || !['ignore', 'suggest', 'clarify', 'escalate', 'continue', 'stop', 'read_context'].includes(v.action as string)) return invalid();
   const capabilities = strings(v.capabilities, 8, new Set(context.candidates.map(c => c.skill)));
   const evidenceMessageIds = strings(v.evidenceMessageIds, 32, new Set(context.messages.map(m => m.id)));
   if(v.action==='suggest'&&context.pendingMessageIds&&!evidenceMessageIds.some(id=>context.pendingMessageIds!.includes(id)))return invalid();
   const reason = text(v.reason, 1000);
   if ((v.action === 'ignore' && capabilities.length) || (v.action === 'suggest' && (!capabilities.length || !evidenceMessageIds.length))) return invalid();
   const result: NavigationDecision = { action: v.action as NavigationDecision['action'], capabilities, evidenceMessageIds, reason };
+  const targetsSession = v.action === 'continue' || v.action === 'stop';
+  if (targetsSession || v.action === 'read_context') {
+    const targetId = context.pendingMessageIds?.at(-1);
+    const target = context.messages.find(message => message.id === targetId);
+    if (!target || target.author?.kind === 'agent' || capabilities.length || evidenceMessageIds.length !== 1 || evidenceMessageIds[0] !== targetId) return invalid();
+    if (targetsSession && target.truncated === true && !context.retrievedMessages?.some(message => message.id === targetId && message.truncated === false)) return invalid();
+  }
+  if (targetsSession) {
+    const targetSessionId = text(v.targetSessionId, 200);
+    if (!context.workState?.sessions.some(session => session.id === targetSessionId && session.state === 'active')) return invalid();
+    result.targetSessionId = targetSessionId;
+  } else if (v.targetSessionId !== undefined) return invalid();
+  if (v.action === 'read_context') {
+    if (context.retrievedMessages !== undefined) return invalid();
+    const knownIds = new Set(context.messages.map(message => message.id));
+    if (context.workingMemory?.root) knownIds.add(context.workingMemory.root.id);
+    const readMessageIds = strings(v.readMessageIds, 8, knownIds);
+    if (!readMessageIds.length) return invalid();
+    result.readMessageIds = readMessageIds;
+  } else if (v.readMessageIds !== undefined) return invalid();
   if(v.assessment!==undefined){
     const fields=['model','targetMessageId','requestsAgentWork','capabilityRelevance'];
     const shape=record(v.assessment,[...fields,'version','workStateHash','taskClear','continuesExistingWork','assistanceUseful','needsDeeperReasoning']);

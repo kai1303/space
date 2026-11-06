@@ -29,6 +29,11 @@ test('Drizzle rolls back on failure, reuses the pool, binds text and preserves m
     assert.equal((await db.select().from(users))[0]?.id, id);
     assert.equal((await db.select().from(agentDefinitions))[0]?.name, name);
     assert.equal((await pool.query('SELECT * FROM schema_migrations')).rowCount, migrationFiles.length);
+    // Independently merged migrations can leave gaps; their filenames retain their identity.
+    assert.deepEqual(
+      (await pool.query('SELECT version FROM schema_migrations ORDER BY version')).rows.map(row => row.version),
+      migrationFiles.map(file => Number(file.split('_')[0])).sort((a, b) => a - b),
+    );
   } finally {
     await pool.end();
     await admin.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);
