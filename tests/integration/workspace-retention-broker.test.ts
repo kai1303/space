@@ -14,7 +14,9 @@ test('registered retention consumer redacts an expired message after its schedul
   const schema=`retention_broker_${randomBytes(8).toString('hex')}`;
   const url=process.env.TEST_NATS_URL??'nats://127.0.0.1:54222';
   const admin=new Pool({connectionString:process.env.TEST_DATABASE_URL});
-  const pool=new Pool({connectionString:process.env.TEST_DATABASE_URL,options:`-c search_path=${schema}`});
+  // Stream cleanup must not race a shared CDC publisher still reading this fixture's WAL.
+  const databaseUrl=new URL(process.env.TEST_DATABASE_URL);databaseUrl.pathname=`/${schema}`;
+  const pool=new Pool({connectionString:databaseUrl.toString(),options:`-c search_path=${schema}`});
   const producer=new EventBus(url,schema);
   const messageId=randomUUID(),recentId=randomUUID();
   let handled!:(at:number)=>void;
@@ -33,7 +35,7 @@ test('registered retention consumer redacts an expired message after its schedul
   const app=createApi(new PostgresStore(pool),{allowDevelopmentTokens:true,realtime:{events:consumer}});
   let timer:NodeJS.Timeout|undefined;
   try {
-    await admin.query(`CREATE SCHEMA ${schema}`);await migrate(pool);
+    await admin.query(`CREATE DATABASE ${schema}`);await pool.query(`CREATE SCHEMA ${schema}`);await migrate(pool);
     const a=await bootstrap(pool);
     await pool.query('INSERT INTO workspace_preferences(workspace_id,retention_days) VALUES($1,1)',[a.workspace_id]);
     const writer=await pool.connect();
@@ -52,8 +54,7 @@ test('registered retention consumer redacts an expired message after its schedul
     assert.ok(outbox);
     const availableAt=outbox.available_at.toISOString();
     await producer.start();
-    // Keep the SQL-generated deadline: a running wildcard CDC bridge may publish the same event.
-    // Explicit publication makes WAL/CDC optional; either delivery must respect actual database expiry.
+    // Publish the SQL-generated deadline directly; WAL/CDC recovery is tested separately.
     await producer.publish({id:outbox.id,schema,kind:outbox.kind,aggregate_id:outbox.aggregate_id,data:outbox.payload,available_at:availableAt});
     await producer.close();
     await app.ready();
@@ -71,7 +72,7 @@ test('registered retention consumer redacts an expired message after its schedul
     assert.ok(history.length>=2);assert.ok(history.every(row=>!JSON.stringify(row.payload).includes('Confidential')));
   }finally{
     clearTimeout(timer);await app.close();await producer.close();await consumer.close();
-    await pool.end();await admin.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);await admin.end();
+    await pool.end();await admin.query(`DROP DATABASE ${schema}`);await admin.end();
     const connection=await connect({servers:url});
     try{
       const manager=await connection.jetstreamManager();

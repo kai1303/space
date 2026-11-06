@@ -52,10 +52,17 @@ test('busy follow-ups wait for completion events and retain collaborator approva
  await send(s,'Add regression coverage',s.collaborator_id);await run(nav,s.thread_id);
  assert.equal((await pool.query('SELECT 1 FROM tasks WHERE session_id=$1',[s.session.id])).rowCount,1);
  assert.equal((await pool.query("SELECT 1 FROM navigator_followups WHERE session_id=$1 AND status='pending'",[s.session.id])).rowCount,1);
- const before=(await pool.query("SELECT count(*)::int n FROM event_outbox WHERE kind='navigator.ready' AND aggregate_id=$1",[s.thread_id])).rows[0].n;
- await pool.query("UPDATE tasks SET status='completed' WHERE id=$1",[first.id]);
- const after=(await pool.query("SELECT count(*)::int n FROM event_outbox WHERE kind='navigator.ready' AND aggregate_id=$1",[s.thread_id])).rows[0].n;
- assert.ok(after>before,'completion durably wakes pending continuation');
+ const tx=await pool.connect();
+ try {
+  // Compare one snapshot before CDC can drain the completion event.
+  await tx.query('BEGIN ISOLATION LEVEL REPEATABLE READ');
+  const before=(await tx.query("SELECT count(*)::int n FROM event_outbox WHERE kind='navigator.ready' AND aggregate_id=$1",[s.thread_id])).rows[0].n;
+  await tx.query("UPDATE tasks SET status='completed' WHERE id=$1",[first.id]);
+  const after=(await tx.query("SELECT count(*)::int n FROM event_outbox WHERE kind='navigator.ready' AND aggregate_id=$1",[s.thread_id])).rows[0].n;
+  assert.ok(after>before,'completion durably wakes pending continuation');
+  await tx.query('COMMIT');
+ } catch(error) { await tx.query('ROLLBACK'); throw error; }
+ finally { tx.release(); }
  await Promise.all([nav.processOne(s.thread_id),nav.processOne(s.thread_id)]);
  const turns=(await pool.query('SELECT * FROM tasks WHERE session_id=$1 ORDER BY created_at',[s.session.id])).rows;
  assert.equal(turns.length,2);assert.equal(turns[1].requester_id,s.collaborator_id);assert.equal(turns[1].status,'awaiting_approval');
