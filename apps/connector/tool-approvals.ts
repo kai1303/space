@@ -33,7 +33,7 @@ export function toolApprovalClient(socket:Wire,rpc:(name:string,payload:unknown,
      cleanup();resolve(decision);
     }};
     pending.set(input.id,item);signal.addEventListener('abort',abort,{once:true});
-    void rpc('agent.tool.request',{...run,approval:input},()=>!signal.aborted).then(async result=>{
+    void rpc('agent.tool.request',{task_id:run.task_id,execution_id:run.execution_id,approval:input},()=>!signal.aborted).then(async result=>{
      if(signal.aborted)return;
      const status=(result as {status?:unknown})?.status;
      if(status==='allow'||status==='deny')await item.settle(status);
