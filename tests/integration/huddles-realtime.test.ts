@@ -15,6 +15,8 @@ import type {HuddleMedia} from '@space/server/huddle-media';
 test('authenticated routes, pushed discovery and durable room shutdown across API instances',{timeout:60000},async t=>{
  assert.ok(process.env.TEST_DATABASE_URL);
  const schema=`huddle_rt_${randomBytes(6).toString('hex')}`,url=new URL(process.env.TEST_DATABASE_URL);
+ // This fixture owns and deletes its broker streams; the shared CDC must not publish to them.
+ url.pathname=`/${schema}`;
  url.searchParams.set('options',`-c search_path=${schema}`);
  const admin=new Pool({connectionString:process.env.TEST_DATABASE_URL}),pool=new Pool({connectionString:url.toString()});
  const natsUrl=process.env.NATS_URL??'nats://127.0.0.1:54222';
@@ -24,10 +26,10 @@ test('authenticated routes, pushed discovery and durable room shutdown across AP
  const removed=new Promise<string>(resolve=>closed=resolve);
  const media:HuddleMedia={url:'ws://localhost:7880',create:async id=>{rooms.add(id);},remove:async id=>{rooms.delete(id);closed(id);},exists:async id=>rooms.has(id),token:async()=> 'room-scoped-test-token',webhook:async()=>{throw Error('bad signature');}};
  const apps=[0,1].map(()=>createApi(new PostgresStore(pool),{allowDevelopmentTokens:true,huddles:media,realtime:{eventUrl:natsUrl}}));
- t.after(async()=>{await failures?.close();await Promise.all(apps.map(a=>a.close()));await bridge.close();await pool.end();await admin.query('SELECT pg_drop_replication_slot(slot_name) FROM pg_replication_slots WHERE slot_name=$1',[bridge.slot]);await admin.query(`DROP PUBLICATION IF EXISTS "${bridge.publication}"`);await admin.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);await admin.end();
+ t.after(async()=>{await failures?.close();await Promise.all(apps.map(a=>a.close()));await bridge.close();await pool.end();await admin.query(`DROP DATABASE ${schema}`);await admin.end();
   const broker=await connect({servers:natsUrl});try{const manager=await broker.jetstreamManager();for(const suffix of ['CHAT','WORK','SEARCH'])await manager.streams.delete(`${streamName(schema)}_${suffix}`).catch(()=>{});}finally{await broker.close();}
  });
- await admin.query(`CREATE SCHEMA ${schema}`);await migrate(pool);const a=await bootstrap(pool);
+ await admin.query(`CREATE DATABASE ${schema}`);await pool.query(`CREATE SCHEMA ${schema}`);await migrate(pool);const a=await bootstrap(pool);
  const addresses=await Promise.all(apps.map(a=>a.listen({port:0,host:'127.0.0.1'})));await bridge.start();
  const client=io(addresses[1]!,{transports:['websocket'],auth:{token:a.collaborator_token},autoConnect:false});t.after(()=>{client.disconnect();});
  await new Promise<void>((resolve,reject)=>{client.once('connect',resolve);client.once('connect_error',reject);client.connect();});
