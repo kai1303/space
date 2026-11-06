@@ -319,6 +319,28 @@ folder determines the retained session namespace. Tools can read, list, search,
 create and edit files within that root; native shell and unrelated integrations
 remain disabled. File-tool path checks are not a general OS sandbox.
 
+### Coding sessions
+
+Codex, Claude, and Kiro can also edit code, run tests, and use Git through their
+native tools. Opt in locally by combining `--coding` with an explicit project:
+
+```sh
+pnpm connector --coding --project /absolute/path/to/project
+pnpm connector --provider claude --coding --project /absolute/path/to/project
+pnpm connector --provider kiro --coding --project /absolute/path/to/project
+```
+
+Start a new Space agent session after changing mode or project. Before native
+tools run, each coding turn requires the computer owner to approve the selected
+project in Space. Additional provider requests for command, file, or permission
+access appear as separate **Allow once** or **Deny** cards for that execution.
+Other session participants cannot grant the owner's local tool access.
+
+The provider CLI must already be installed and signed in through its local Space
+connector profile. Git identity, repository access, and any required credential
+helper must also be configured in the connector's execution environment; Space
+does not copy Git credentials or desktop chat sessions.
+
 Provider credentials and private provider history stay in separate local connector
 directories. Space stores submitted requests, streamed responses and tool details;
 the selected provider receives the context and file contents used during a task.
