@@ -1,0 +1,20 @@
+import { afterEach, expect, it, vi } from 'vitest';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { ThreadComposer } from '../composer/ThreadComposer.js';
+const mocks = vi.hoisted(() => ({ send: vi.fn() }));
+vi.mock('../composer/message-sender.js', () => ({ messageSender: () => mocks.send }));
+vi.mock('../chat/typing.js', () => ({ TypingIndicator: () => null, useTypingPublisher: () => ({ blur() {}, change() {}, stop() {} }) }));
+vi.mock('../mentions/Mentions.js', () => ({ useMentionSearch: () => vi.fn() }));
+vi.mock('../chat/ThreadConversation.js', () => ({ ConversationComposer: ({ sendDisabledReason, defaultValue }: { sendDisabledReason?: string; defaultValue?: unknown }) => <><textarea aria-label="Draft" defaultValue={String(defaultValue)} /><button disabled={!!sendDisabledReason}>Send reply</button><span role="status">{sendDisabledReason}</span></> }));
+afterEach(() => { cleanup(); vi.clearAllMocks(); });
+it('disables replies without replacing the draft when channel access changes', () => {
+  const props = { viewerId: 'viewer', mentions: [], uploads: { attempt: vi.fn(), drafts: {}, acknowledged: {}, enabled: true }, socket: {}, channel: 'channel', thread: 'thread', onDraftChange: vi.fn(), onSent: vi.fn() } as unknown as Parameters<typeof ThreadComposer>[0];
+  const { rerender } = render(<ThreadComposer {...props} />);
+  const draft = screen.getByRole('textbox', { name: 'Draft' });
+  fireEvent.change(draft, { target: { value: 'Keep my unfinished reply' } });
+  rerender(<ThreadComposer {...props} sendDisabledReason="You can read this thread, but replies are restricted." />);
+  expect(screen.getByRole('button', { name: 'Send reply' })).toHaveProperty('disabled', true);
+  expect(screen.getByRole('textbox')).toBe(draft);
+  expect(draft).toHaveProperty('value', 'Keep my unfinished reply');
+  expect(screen.getByRole('status').textContent).toContain('replies are restricted');
+});

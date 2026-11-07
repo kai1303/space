@@ -50,6 +50,22 @@ async function upload(seed: Awaited<ReturnType<typeof bootstrap>>, token = seed.
   return { created, asset };
 }
 
+test('descriptions and file order persist in messages, replay and the file library with idempotent retries', async () => {
+  const a = await bootstrap(pool);
+  const first = (await upload(a)).asset, second = (await upload(a)).asset;
+  const input = { client_message_id: randomUUID(), text: '', asset_ids: [second.id, first.id], asset_descriptions: { [second.id]: 'A blue square' } };
+  const sent = (await api(a.owner_token, 'POST', `/channels/${a.channel_id}/messages`, input, 201)).json();
+  assert.deepEqual(sent.attachments, [{ ...second, description: 'A blue square' }, first]);
+  assert.deepEqual((await api(a.owner_token, 'POST', `/channels/${a.channel_id}/messages`, input, 201)).json(), sent);
+  await api(a.owner_token, 'POST', `/channels/${a.channel_id}/messages`, { ...input, asset_descriptions: { [second.id]: 'Changed' } }, 409);
+  const history = (await api(a.collaborator_token, 'GET', `/channels/${a.channel_id}/history`)).json();
+  assert.deepEqual(history.events[0].payload.attachments, sent.attachments);
+  const listing = (await api(a.owner_token, 'GET', `/channels/${a.channel_id}/assets`)).json();
+  assert.equal(listing.items.find((file: { id: string }) => file.id === second.id).description, 'A blue square');
+  const workspaceFiles = (await api(a.owner_token, 'GET', `/workspaces/${a.workspace_id}/hub/files`)).json();
+  assert.equal(workspaceFiles.items.find((file: { id: string }) => file.id === second.id).description, 'A blue square');
+});
+
 test('PDF thumbnails are private, generated once on demand, and cache conversion failures', async () => {
   const outsider = await bootstrap(pool);
   for (const valid of [true, false]) {

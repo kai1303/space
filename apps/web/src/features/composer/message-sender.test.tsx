@@ -4,6 +4,21 @@ import type { ChatEvent } from '@space/contracts';
 import { mergeEvents } from '../chat/merge-events.js';
 import { messageSender } from './message-sender.js';
 
+it('sends ordered attachment descriptions and changes retry identity when descriptions change', async () => {
+  const emitWithAck = vi.fn().mockRejectedValue(new Error('timed out'));
+  const socket = { connected: true, timeout: () => ({ emitWithAck }) } as unknown as Socket;
+  const send = messageSender(socket, 'channel');
+  const files = [{ id: 'b', description: 'Blue square' }, { id: 'a' }];
+  await expect(send('', undefined, files)).rejects.toThrow('timed out');
+  await expect(send('', undefined, files)).rejects.toThrow('timed out');
+  await expect(send('', undefined, [{ id: 'b', description: 'Red square' }, { id: 'a' }])).rejects.toThrow('timed out');
+  const payloads = emitWithAck.mock.calls.map(call => call[1]);
+  expect(payloads[0].asset_ids).toEqual(['b', 'a']);
+  expect(payloads[0].asset_descriptions).toEqual({ b: 'Blue square' });
+  expect(payloads[1].client_message_id).toBe(payloads[0].client_message_id);
+  expect(payloads[2].client_message_id).not.toBe(payloads[0].client_message_id);
+});
+
 describe('chat delivery state', () => {
   it('forwards formatting and keeps the same retry ID only for the same document', async () => {
     const emitWithAck = vi.fn().mockRejectedValueOnce(new Error('timed out')).mockRejectedValueOnce(new Error('timed out')).mockResolvedValue({ data: {} });
@@ -46,9 +61,9 @@ it('keeps attachment retry IDs stable and changes identity when attachments chan
   const emitWithAck = vi.fn().mockRejectedValue(new Error('timed out'));
   const socket = { connected: true, timeout: () => ({ emitWithAck }) } as unknown as Socket;
   const send = messageSender(socket, 'channel');
-  await expect(send('', undefined, ['asset-a'])).rejects.toThrow('timed out');
-  await expect(send('', undefined, ['asset-a'])).rejects.toThrow('timed out');
-  await expect(send('', undefined, ['asset-b'])).rejects.toThrow('timed out');
+  await expect(send('', undefined, [{ id: 'asset-a' }])).rejects.toThrow('timed out');
+  await expect(send('', undefined, [{ id: 'asset-a' }])).rejects.toThrow('timed out');
+  await expect(send('', undefined, [{ id: 'asset-b' }])).rejects.toThrow('timed out');
   const payloads = emitWithAck.mock.calls.map(call => call[1]);
   expect(payloads[0].asset_ids).toEqual(['asset-a']);
   expect(payloads[1].client_message_id).toBe(payloads[0].client_message_id);
@@ -58,9 +73,9 @@ it('retains retry identity when an attachment sender is recreated with session d
   const emitWithAck = vi.fn().mockRejectedValueOnce(new Error('timed out')).mockResolvedValue({ data: {} });
   const socket = { connected: true, timeout: () => ({ emitWithAck }) } as unknown as Socket;
   const state = {};
-  await expect(messageSender(socket, 'channel', undefined, state)('', undefined, ['asset'])).rejects.toThrow('timed out');
-  await messageSender(socket, 'channel', undefined, state)('', undefined, ['asset']);
+  await expect(messageSender(socket, 'channel', undefined, state)('', undefined, [{ id: 'asset' }])).rejects.toThrow('timed out');
+  await messageSender(socket, 'channel', undefined, state)('', undefined, [{ id: 'asset' }]);
   expect(emitWithAck.mock.calls[1]![1].client_message_id).toBe(emitWithAck.mock.calls[0]![1].client_message_id);
-  await messageSender(socket, 'channel', undefined, state)('', undefined, ['asset']);
+  await messageSender(socket, 'channel', undefined, state)('', undefined, [{ id: 'asset' }]);
   expect(emitWithAck.mock.calls[2]![1].client_message_id).not.toBe(emitWithAck.mock.calls[0]![1].client_message_id);
 });

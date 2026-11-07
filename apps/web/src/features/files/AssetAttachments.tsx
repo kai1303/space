@@ -2,7 +2,7 @@ import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
 import type { AssetAttachment, AssetPreview } from '@space/contracts';
 import { Button, Dialog, IconButton } from '@space/ui/primitives';
 import { CodeBlock } from '@space/ui/rich-text';
-import { ArrowLeft, ArrowRight, DownloadSimple, File, FileCode, FilePdf, MagnifyingGlassMinus, MagnifyingGlassPlus, MusicNote, VideoCamera } from '@phosphor-icons/react';
+import { ArrowLeft, ArrowRight, DownloadSimple, Eye, File, FileCode, FilePdf, MagnifyingGlassMinus, MagnifyingGlassPlus, MusicNote, VideoCamera } from '@phosphor-icons/react';
 import './asset-attachments.css';
 
 const PdfPreview = lazy(() => import('./PdfPreview.js').then(module => ({ default: module.PdfPreview })));
@@ -44,19 +44,19 @@ function AttachmentCard({ asset, onOpen, onPreview }: { asset: AssetAttachment; 
   }, [asset.id, preview, onPreview]);
   return <div className={`asset-card ${preview?.kind === 'image' ? 'asset-card--image' : ''}`} style={preview?.kind === 'image' ? { width: Math.max(160, Math.min(360, preview.width, 320 * preview.width / preview.height)) } : undefined}>
     {preview?.kind === 'image' && <button type="button" className="asset-image-button" aria-label={`Preview ${asset.name}`} onClick={event => onOpen(event.currentTarget)}>
-      <img src={assetUrl(asset.id, 'thumbnail')} alt={asset.name} width={preview.width} height={preview.height} loading="lazy" onError={fail} />
+      <img src={assetUrl(asset.id, 'thumbnail')} alt={asset.description || asset.name} width={preview.width} height={preview.height} loading="lazy" onError={fail} />
     </button>}
     {(preview?.kind === 'video' || preview?.kind === 'audio') && <NativeMedia asset={asset} kind={preview.kind} onError={fail} />}
     <div className="asset-card-info">
       {preview?.kind !== 'image' && <span className={`asset-file-icon asset-file-icon--${preview?.kind ?? 'file'}`}><FileSymbol kind={preview?.kind} /></span>}
-      <button type="button" className="asset-filename" aria-label={`Open ${asset.name}`} onClick={event => onOpen(event.currentTarget)}><span>{asset.name}</span><small>{Math.max(1, Math.round(asset.size / 1024))} KB{preview?.kind === 'pdf' ? ' · PDF' : ''}</small></button>
+      <button type="button" className="asset-filename" title={asset.name} aria-label={`Open ${asset.name}`} onClick={event => onOpen(event.currentTarget)}><span>{asset.name}</span><small>{Math.max(1, Math.round(asset.size / 1024))} KB{preview?.kind === 'pdf' ? ' · PDF' : ''}</small></button>
       <a className="asset-card-download sp-button sp-button--ghost sp-button--sm sp-icon-button" aria-label={`Download ${asset.name}`} title={`Download ${asset.name}`} href={assetUrl(asset.id, 'download')}><DownloadSimple size={18} aria-hidden="true" /></a>
-      {preview?.kind !== 'image' && <IconButton label={`Preview ${asset.name}`} size="sm" onClick={event => onOpen(event.currentTarget)}><span aria-hidden="true">↗</span></IconButton>}
+      {(preview || failed) && preview?.kind !== 'image' && preview?.kind !== 'text' && <IconButton label={`Preview ${asset.name}`} size="sm" onClick={event => onOpen(event.currentTarget)}><Eye size={18} aria-hidden="true" /></IconButton>}
     </div>
     {preview?.kind === 'pdf' && preview.thumbnail !== false && !thumbnailFailed && <button type="button" className="asset-pdf-thumbnail" aria-label={`Preview first page of ${asset.name}`} onClick={event => onOpen(event.currentTarget)}>
       <img src={assetUrl(asset.id, 'thumbnail')} alt={`First page of ${asset.name}`} loading="lazy" width={360} height={240} onError={() => setThumbnailFailed(true)} />
     </button>}
-    {preview?.kind === 'text' && <div className="asset-snippet"><span className="asset-preview-label">Text preview</span><CodeBlock code={preview.text.slice(0, 1800).split('\n').slice(0, 8).join('\n')} language={preview.language} /></div>}
+    {preview?.kind === 'text' && <div className="asset-snippet"><span className="asset-preview-label">Text preview</span><pre>{preview.text.slice(0, 600).replace(/[\uD800-\uDBFF]$/, '').split('\n').slice(0, 5).join('\n')}</pre><button type="button" className="asset-open-preview" aria-label={`Open preview of ${asset.name}`} onClick={event => onOpen(event.currentTarget)}>Open preview</button></div>}
     {(failed || preview?.kind === 'unsupported') && <p className="asset-unavailable">Preview unavailable</p>}
   </div>;
 }
@@ -75,7 +75,7 @@ function ImagePreview({ asset, preview, onError }: { asset: AssetAttachment; pre
   }, [preview.width, preview.height]);
   return <>
     <div className="asset-image-stage" ref={stage}>
-      <img src={assetUrl(asset.id, 'content')} alt={asset.name} onError={onError} style={{ width: Math.max(1, preview.width * Math.max(0.01, fit) * zoom), height: Math.max(1, preview.height * Math.max(0.01, fit) * zoom) }} />
+      <img src={assetUrl(asset.id, 'content')} alt={asset.description || asset.name} onError={onError} style={{ width: Math.max(1, preview.width * Math.max(0.01, fit) * zoom), height: Math.max(1, preview.height * Math.max(0.01, fit) * zoom) }} />
     </div>
     <div className="asset-image-tools" role="group" aria-label="Image zoom">
       <IconButton label="Zoom out" disabled={zoom <= 0.25} onClick={() => setZoom(value => Math.max(0.25, value - 0.25))}><MagnifyingGlassMinus size={20} /></IconButton>
@@ -97,7 +97,7 @@ function TextPreview({ preview }: { preview: Extract<AssetPreview, { kind: 'text
     if (++lines > 1000) { code = code.slice(0, match.index); break; }
   }
   const shortened = code.length < preview.text.length;
-  return <div className="asset-text-preview"><CodeBlock code={code} language={preview.language} />
+  return <div className="asset-text-preview" role="region" aria-label="Text file preview" tabIndex={0}><CodeBlock code={code} language={preview.language} />
     {(shortened || preview.truncated) && <p role="status">{shortened ? 'Preview shortened to 20,000 characters, 32 KiB, or 1,000 lines.' : 'Showing the first 256 KiB.'} Download to read the complete file.</p>}
   </div>;
 }

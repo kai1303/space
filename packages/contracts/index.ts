@@ -75,3 +75,5 @@ export * from './workspace-invitations.js';
 
 export * from "./outbound.js";
 export * from './huddles.js';
+
+export * from './channel-permissions.js';

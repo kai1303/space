@@ -8,6 +8,7 @@ import { bootstrap } from '@space/postgres/bootstrap';
 import { migrate, migrationFiles } from '@space/postgres/migrate';
 import { PostgresStore } from '@space/postgres/store';
 import { createApi } from '@space/server/api';
+import { EventBridge } from '@space/event-service/bridge';
 const schema=`notifications_${randomBytes(8).toString('hex')}`;
 const admin=new Pool({connectionString:process.env.TEST_DATABASE_URL});
 const pool=new Pool({connectionString:process.env.TEST_DATABASE_URL,options:`-c search_path=${schema}`});
@@ -22,6 +23,69 @@ const send=(a:Seed,text='Hello',extra:object={},token=a.owner_token,channel=a.ch
 const mention=(id:string,label='Demo collaborator')=>({ops:[{insert:`@${label}`,attributes:{mention:{kind:'user',id,label}}},{insert:' hello'}]});
 const mark=(a:Seed,id:string,read:boolean,token=a.collaborator_token)=>api(token,'PATCH',`/workspaces/${a.workspace_id}/notifications/${id}`,{read});
 const claim=(a:Seed,id:string,token=a.collaborator_token)=>api(token,'POST',`/workspaces/${a.workspace_id}/notifications/${id}/claim`,{});
+
+test('public nonmember mentions reach Activity silently, synchronize reads, and never grant channel access',async()=>{
+ const a=await bootstrap(pool),b=await bootstrap(pool);
+ await pool.query("INSERT INTO workspace_members(workspace_id,user_id,role) VALUES($1,$2,'member')",[a.workspace_id,b.owner_id]);
+ await settings(a,{mode:'all',desktop_enabled:true},b.owner_token);
+ const request={client_message_id:randomUUID(),text:'@Demo owner hello',document:mention(b.owner_id,'Demo owner')};
+ const sent=await api(a.owner_token,'POST',`/channels/${a.channel_id}/messages`,request,201);
+ await api(a.owner_token,'POST',`/channels/${a.channel_id}/messages`,request,201);
+ const page=await activity(a,b.owner_token,'?kind=mention');
+ assert.equal(page.items.length,1);assert.equal(page.unread_count,1);
+ const item=page.items[0];assert.equal(item.message_id,sent.id);assert.equal(item.silent,true);
+ assert.equal((await claim(a,item.id,b.owner_token)).deliver,false);
+ await api(b.owner_token,'GET',`/channels/${a.channel_id}/messages/${sent.id}`,undefined,404);
+ await mark(a,item.id,true,b.owner_token);
+ assert.ok((await api(b.owner_token,'GET',`/workspaces/${a.workspace_id}/mentions`)).items[0].read_at);
+ await mark(a,item.id,false,b.owner_token);
+ await api(b.owner_token,'POST',`/workspaces/${a.workspace_id}/notifications/read`,{through:page.latest_id});
+ assert.equal((await activity(a,b.owner_token)).unread_count,0);
+ await send(a,'A normal channel post');assert.equal((await activity(a,b.owner_token)).items.length,1);
+ await api(b.owner_token,'POST',`/channels/${a.channel_id}/join`,{});
+ await api(b.owner_token,'GET',`/channels/${a.channel_id}/messages/${sent.id}`);
+ assert.equal((await claim(a,item.id,b.owner_token)).deliver,false);
+});
+
+test('public mention access is rechecked for guests, private conversion, and workspace removal',async()=>{
+ const a=await bootstrap(pool);
+ await send(a,'@Demo collaborator hello',{document:mention(a.collaborator_id)});
+ const item=(await activity(a)).items[0];
+ await pool.query('DELETE FROM channel_members WHERE channel_id=$1 AND user_id=$2',[a.channel_id,a.collaborator_id]);
+ assert.equal((await activity(a)).items.length,1);
+ await pool.query("UPDATE workspace_members SET guest_type='multi' WHERE workspace_id=$1 AND user_id=$2",[a.workspace_id,a.collaborator_id]);
+ assert.equal((await activity(a)).items.length,0);assert.equal((await claim(a,item.id)).deliver,false);
+ await markDenied();
+ await pool.query("UPDATE workspace_members SET guest_type='none' WHERE workspace_id=$1 AND user_id=$2",[a.workspace_id,a.collaborator_id]);
+ await pool.query('UPDATE channels SET private=true WHERE id=$1',[a.channel_id]);
+ assert.equal((await activity(a)).items.length,0);await markDenied();
+ await send(a,'@Demo collaborator hello',{document:mention(a.collaborator_id)});
+ assert.equal((await activity(a)).items.length,0);
+ await pool.query('UPDATE channels SET private=false WHERE id=$1',[a.channel_id]);
+ assert.equal((await activity(a)).items.length,1);
+ await pool.query('UPDATE workspace_members SET active=false WHERE workspace_id=$1 AND user_id=$2',[a.workspace_id,a.collaborator_id]);
+ await api(a.collaborator_token,'GET',`/workspaces/${a.workspace_id}/notifications`,undefined,404);
+ async function markDenied(){await api(a.collaborator_token,'PATCH',`/workspaces/${a.workspace_id}/notifications/${item.id}`,{read:true},404);}
+});
+
+test('broadcast recipient rules feed Activity once, suppress thread broadcasts, and retain paused unreads',async()=>{
+ const a=await bootstrap(pool);
+ const broadcast=(ids:string[],extra:object={})=>send(a,ids.map(id=>`@${id}`).join(' '),{document:{ops:ids.flatMap(id=>[{insert:`@${id}`,attributes:{mention:{kind:'broadcast',id,label:id}}},{insert:' '}])},...extra});
+ await pool.query("UPDATE users SET presence='away' WHERE id=$1",[a.collaborator_id]);
+ await broadcast(['here']);assert.equal((await activity(a)).items.length,0);
+ const root=await broadcast(['channel','everyone']);assert.equal((await activity(a)).items.length,1);
+ await broadcast(['channel','here','everyone'],{thread_id:root.thread_id});assert.equal((await activity(a)).items.length,1);
+ await pool.query("UPDATE users SET presence='active' WHERE id=$1",[a.collaborator_id]);
+ await broadcast(['here','channel','everyone']);assert.equal((await activity(a)).items.length,2);
+ await settings(a,{paused_until:new Date(Date.now()+3600000).toISOString(),desktop_enabled:true});
+ await broadcast(['everyone']);
+ const page=await activity(a);assert.equal(page.items.length,3);assert.equal(page.unread_count,3);assert.equal(page.items[0].silent,true);
+ assert.equal((await claim(a,page.items[0].id)).deliver,false);
+ const legacy=await api(a.collaborator_token,'GET',`/workspaces/${a.workspace_id}/mentions`);
+ assert.equal(legacy.unread_count,page.unread_count);
+ await send(a,'@Demo collaborator hello',{document:mention(a.collaborator_id),thread_id:root.thread_id});
+ assert.equal((await activity(a)).items[0].kind,'mention');assert.equal((await activity(a)).items.length,4);
+});
 
 test('mentions and DMs deduplicate, exclude self, and display viewer-relative DM names',async()=>{
  const a=await bootstrap(pool),dm=await api(a.owner_token,'POST',`/workspaces/${a.workspace_id}/direct-messages`,{user_id:a.collaborator_id});
@@ -86,11 +150,11 @@ test('required mutation bodies cannot silently become reads or no-ops',async()=>
  await api(a.collaborator_token,'PATCH',`/threads/${a.thread_id}/notification-subscription`,{},400);
 });
 
-test('activity has stable bounded pages, excludes inaccessible public mentions and retains authorized unreads only',async()=>{
+test('activity has stable bounded pages, includes public mentions and retains authorized unreads only',async()=>{
  const a=await bootstrap(pool),b=await bootstrap(pool);
  await pool.query("INSERT INTO workspace_members(workspace_id,user_id,role) VALUES($1,$2,'member')",[a.workspace_id,b.owner_id]);
  await send(a,'@Demo owner hello',{document:mention(b.owner_id,'Demo owner')});
- assert.equal((await activity(a,b.owner_token)).items.length,0);
+ assert.equal((await activity(a,b.owner_token)).items.length,1);
  await settings(a,{mode:'all'});
  for(let i=0;i<52;i++)await send(a,`Message ${i}`);
  const first=await activity(a),second=await activity(a,a.collaborator_token,`?before=${first.next_cursor}`);
@@ -145,9 +209,14 @@ test('notification mutations use atomic optimistic writes without explicit datab
  assert.ok(statements.length>0);assert.ok(statements.every(statement=>!/(?:FOR (?:UPDATE|SHARE)|pg_advisory|LOCK TABLE)/i.test(statement)));
 });
 
-test('workspace-only subscriptions wake for unopened notifications and replay after reconnect',async()=>{
+for(const joined of [true,false])test(`workspace-only subscriptions wake for mentions and recover after reconnect: joined=${joined}`,async t=>{
+ const bridge=new EventBridge({databaseUrl:process.env.TEST_DATABASE_URL!,natsUrl:process.env.NATS_URL??process.env.TEST_NATS_URL??'nats://127.0.0.1:54222',schema});
+ t.after(async()=>{await bridge.close();await admin.query('SELECT pg_drop_replication_slot(slot_name) FROM pg_replication_slots WHERE slot_name=$1',[bridge.slot]);await admin.query(`DROP PUBLICATION IF EXISTS "${bridge.publication}"`);});
+ await bridge.start();
  const temporary=createApi(new PostgresStore(pool),{allowDevelopmentTokens:true,realtime:{}});
+ t.after(()=>temporary.close());
  const base=await temporary.listen({host:'127.0.0.1',port:0}),a=await bootstrap(pool);
+ if(!joined)await pool.query('DELETE FROM channel_members WHERE channel_id=$1 AND user_id=$2',[a.channel_id,a.collaborator_id]);
  const connect=async()=>{const socket=io(base,{transports:['websocket'],auth:{token:a.collaborator_token},reconnection:false});await new Promise<void>((resolve,reject)=>{socket.once('connect',resolve);socket.once('connect_error',reject);});return socket;};
  let socket=await connect();
  const changed=()=>new Promise<void>((resolve,reject)=>{const deadline=setTimeout(()=>reject(Error('No workspace notification invalidation')),3000);socket.once('updates.changed',(value,ack)=>{ack?.();clearTimeout(deadline);assert.equal(value.scope,'workspace');resolve();});});

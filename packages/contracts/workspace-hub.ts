@@ -7,6 +7,7 @@ export interface HubMessage {
   document?: RichDocument | null;
 }
 export interface HubFile {
+  description?: string;
   id: string; channel_id: string; channel_name: string; message_id: string;
   uploader_id: string; uploader_name: string; starred: boolean; last_viewed_at: string | null;
   filename: string; content_type: string; byte_size: number; preview_kind: string; created_at: string;

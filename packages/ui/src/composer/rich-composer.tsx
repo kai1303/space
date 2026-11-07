@@ -1,3 +1,4 @@
+import { AttachmentDrafts } from "./attachment-drafts.js";
 import { registerMention } from "./mention-blot.js";
 import { useMentions, type FindMentions } from "./use-mentions.js";
 import { documentMentions } from "@space/contracts";
@@ -23,8 +24,6 @@ import {
   Quotes,
   Code,
   CodeBlock,
-  X,
-  File,
   Microphone,
   VideoCamera,
   Lightning,
@@ -484,34 +483,7 @@ export function RichComposer({
             Loading editor…
           </p>
         )}
-        {files.length > 0 && (
-          <div className="sp-attachment-list">
-            {files.map((file) => (
-              <div key={file.id}>
-                <File size={20} />
-                <span>
-                  {file.name}
-                  <small>
-                    {Math.max(1, Math.round(file.size / 1024))} KB · {file.status === "ready" ? "Ready" : file.status === "uploading" ? "Uploading…" : file.status === "error" ? "Upload failed" : "local file"}
-                  </small>
-                </span>
-                {file.status === "uploading" && <progress aria-label={`Uploading ${file.name}`} value={file.progress ?? 0} max={100} />}
-                {file.status === "error" && <><small role="alert">{file.error ?? "Upload failed"}</small><Button size="sm" aria-label={`Retry upload ${file.name}`} disabled={sending} data-send-disabled={sending || undefined} onClick={() => onRetryAttachment?.(file.id)}>Retry</Button></>}
-                <IconButton
-                  label={`Remove ${file.name}`}
-                  size="sm"
-                  disabled={sending}
-                  data-send-disabled={sending || undefined}
-                  onClick={() =>
-                    setFiles(files.filter((f) => f.id !== file.id))
-                  }
-                >
-                  <X size={14} />
-                </IconButton>
-              </div>
-            ))}
-          </div>
-        )}
+        {files.length > 0 && <AttachmentDrafts files={files} onChange={setFiles} disabled={sending} onRetry={onRetryAttachment} />}
         <div
           className="sp-rich-actions"
           role="toolbar"

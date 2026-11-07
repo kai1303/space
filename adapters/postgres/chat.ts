@@ -1,3 +1,4 @@
+import {ChannelPermissionStore,readChannelPermissions,requireChannelCapability,requireRemainingChannelManager} from './channel-permissions.js';
 import { requireFullWorkspaceMember } from './workspace-access.js';
 import { requireWorkspacePolicy } from './workspace-settings.js';
 import { NotificationStore } from './notifications.js';
@@ -16,8 +17,8 @@ import * as s from './schema.js';
 const notFound = () => new AppError(404, 'not_found');
 
 export class ChatStore {
-  readonly db; readonly notifications; readonly mentions; readonly unread; readonly directMessages;
-  constructor(readonly pool: Pool) { this.db = database(pool); this.notifications = new NotificationStore(pool); this.directMessages = new DirectMessageStore(this.db); this.mentions = new MentionStore(pool); this.unread = new UnreadStore(pool); }
+  readonly db; readonly permissions; readonly notifications; readonly mentions; readonly unread; readonly directMessages;
+  constructor(readonly pool: Pool) { this.db = database(pool); this.permissions = new ChannelPermissionStore(this.db); this.notifications = new NotificationStore(pool); this.directMessages = new DirectMessageStore(this.db); this.mentions = new MentionStore(pool); this.unread = new UnreadStore(pool); }
   async channels(actor: string, workspace: string, query: unknown = {}) {
     const { after, limit } = parsePage(query);
     return this.db.transaction(async c => {
@@ -32,8 +33,7 @@ export class ChatStore {
   }
   async createChannel(actor: string, workspace: string, input: unknown) {
     const request = parseChannelInput(input);
-    return this.db.transaction(async c => {
-      await lockWorkspace(c, workspace);
+    return sessionTransaction(this.db, async c => {
       await requireWorkspaceAccess(c, actor, workspace);
       await requireFullWorkspaceMember(c, actor, workspace);
       await requireWorkspacePolicy(c, actor, workspace, 'create_channel');
@@ -75,20 +75,20 @@ export class ChatStore {
       const direct = await this.directMessages.summary(c, actor, channel.workspace_id, channel.id);
       return { ...direct, creator_name: null, member_count: direct.participants.length, can_manage: false };
     }
-    const [membership] = await c.select().from(s.workspaceMembers).where(and(eq(s.workspaceMembers.workspace_id, channel.workspace_id), eq(s.workspaceMembers.user_id, actor), eq(s.workspaceMembers.active, true)));
+    const permissions = await readChannelPermissions(c, actor, channel.id);
     const [creator] = channel.created_by ? await c.select({ name: s.users.display_name }).from(s.users).where(eq(s.users.id, channel.created_by)) : [];
     const [count] = await c.select({ total: sql<number>`count(*)::int` }).from(s.channelMembers)
       .innerJoin(s.workspaceMembers, and(eq(s.workspaceMembers.workspace_id, s.channelMembers.workspace_id), eq(s.workspaceMembers.user_id, s.channelMembers.user_id)))
       .where(and(eq(s.channelMembers.channel_id, channel.id), eq(s.workspaceMembers.active, true)));
     return { ...channelDto(channel, true), creator_name: creator?.name ?? null, member_count: count!.total,
-      can_manage: membership?.guest_type === 'none' && (channel.created_by === actor || membership?.role === 'owner' || membership?.role === 'admin') };
+      permissions, can_manage: permissions.capabilities.manage };
   }
   async updateChannel(actor: string, id: string, input: unknown): Promise<ChannelDetails> {
     const { archived, ...metadata } = parseChannelUpdate(input);
-    return this.db.transaction(async c => {
-      const channel = await this.lockedChannel(c, id);
-      await this.manager(c, actor, channel);
+    return sessionTransaction(this.db, async c => {
+      const channel = await this.authorize(c, actor, id);
       if (archived === undefined && channel.archived_at) throw new AppError(409, 'channel_archived');
+      await this.manager(c, actor, channel, archived === undefined ? 'edit_details' : 'archive');
       if (archived && !channel.archived_at) {
         const active = await c.select({ id: s.tasks.id }).from(s.tasks).innerJoin(s.threads, eq(s.threads.id, s.tasks.thread_id))
           .where(and(eq(s.threads.channel_id, id), inArray(s.tasks.status, ['awaiting_approval', 'queued', 'running']))).limit(1);
@@ -102,7 +102,7 @@ export class ChatStore {
     const { after, limit } = parsePage(query);
     return this.db.transaction(async c => {
       await this.authorize(c, actor, id);
-      const rows = await c.select({ id: s.users.id, name: s.users.display_name, image: s.users.image, title: s.users.title, presence: s.users.presence }).from(s.channelMembers)
+      const rows = await c.select({ id: s.users.id, name: s.users.display_name, image: s.users.image, title: s.users.title, presence: s.users.presence, guest_type:s.workspaceMembers.guest_type, is_manager:sql<boolean>`EXISTS(SELECT 1 FROM channel_permissions cp WHERE cp.channel_id=${s.channelMembers.channel_id} AND ${s.channelMembers.user_id}=ANY(cp.manager_ids))` }).from(s.channelMembers)
         .innerJoin(s.users, eq(s.users.id, s.channelMembers.user_id))
         .innerJoin(s.workspaceMembers, and(eq(s.workspaceMembers.workspace_id, s.channelMembers.workspace_id), eq(s.workspaceMembers.user_id, s.channelMembers.user_id)))
         .where(and(eq(s.channelMembers.channel_id, id), eq(s.workspaceMembers.active, true), after ? gt(s.users.id, after) : undefined))
@@ -111,8 +111,9 @@ export class ChatStore {
     });
   }
   async join(actor: string, id: string) {
-    return this.db.transaction(async c => {
-      const channel = await this.lockedChannel(c, id);
+    return sessionTransaction(this.db, async c => {
+      const [channel] = await c.select().from(s.channels).where(eq(s.channels.id, uuid(id)));
+      if (!channel) throw notFound();
       await requireWorkspaceAccess(c, actor, channel.workspace_id);
       if (channel.kind === 'direct') { await this.authorize(c, actor, id); throw new AppError(403, 'direct_message_immutable'); }
       if (!await hasChannelAccess(c, actor, channel.workspace_id, id)) {
@@ -123,19 +124,16 @@ export class ChatStore {
       return { joined: true };
     });
   }
-  private async manager(c: DbSession, actor: string, channel: typeof s.channels.$inferSelect) {
-    await this.authorize(c, actor, channel.id);
+  private async manager(c: DbSession, actor: string, channel: typeof s.channels.$inferSelect, action: 'invite'|'remove'|'edit_details'|'archive') {
     if (channel.kind === 'direct') throw new AppError(403, 'direct_message_immutable');
-    const [membership] = await c.select().from(s.workspaceMembers)
-      .where(and(eq(s.workspaceMembers.workspace_id, channel.workspace_id), eq(s.workspaceMembers.user_id, actor)));
-    if (membership?.guest_type !== 'none' || (channel.created_by !== actor && membership?.role === 'member')) throw new AppError(403, 'channel_management_forbidden');
+    await requireChannelCapability(c, actor, channel.id, action);
   }
   async addMember(actor: string, id: string, input: unknown) {
     const user = uuid(record(input, ['user_id']).user_id);
-    return this.db.transaction(async c => {
-      const channel = await this.lockedChannel(c, id);
-      await this.manager(c, actor, channel);
+    return sessionTransaction(this.db, async c => {
+      const channel = await this.authorize(c, actor, id);
       if (channel.archived_at) throw new AppError(409, 'channel_archived');
+      await this.manager(c, actor, channel, 'invite');
       await requireWorkspaceAccess(c, user, channel.workspace_id);
       const [target] = await c.select().from(s.workspaceMembers).where(and(eq(s.workspaceMembers.workspace_id,channel.workspace_id),eq(s.workspaceMembers.user_id,user)));
       if(target!.guest_type !== 'none') {
@@ -149,24 +147,20 @@ export class ChatStore {
   }
   async removeMember(actor: string, id: string, user: string) {
     user = uuid(user);
-    await this.db.transaction(async c => {
-      const channel = await this.lockedChannel(c, id);
-      await this.authorize(c, actor, id);
+    await sessionTransaction(this.db, async c => {
+      const channel = await this.authorize(c, actor, id);
       if (channel.kind === 'direct') throw new AppError(403, 'direct_message_immutable');
-      if (actor !== user) await this.manager(c, actor, channel);
+      if (actor !== user) await this.manager(c, actor, channel, 'remove');
       if (channel.private) {
-        const managers = await c.select({ id: s.channelMembers.user_id }).from(s.channelMembers)
-          .innerJoin(s.workspaceMembers, and(eq(s.workspaceMembers.workspace_id, s.channelMembers.workspace_id), eq(s.workspaceMembers.user_id, s.channelMembers.user_id)))
-          .where(and(eq(s.channelMembers.channel_id, id), eq(s.workspaceMembers.active, true),
-            or(inArray(s.workspaceMembers.role, ['owner', 'admin']), channel.created_by ? eq(s.channelMembers.user_id, channel.created_by) : undefined))).limit(2);
-        if (managers.length === 1 && managers[0]!.id === user) throw new AppError(409, 'channel_needs_manager');
+        const permissions = await readChannelPermissions(c, actor, id);
+        await requireRemainingChannelManager(c, id, permissions.manager_ids, user);
       }
       await c.delete(s.channelMembers).where(and(eq(s.channelMembers.channel_id, id), eq(s.channelMembers.user_id, user)));
     });
   }
   async send(actor: string, channelId: string, input: unknown): Promise<ChatMessage> {
     const request = parseMessageInput(input);
-    const hash = createHash('sha256').update(JSON.stringify({ channel_id: channelId, thread_id: request.thread_id, text: request.text, ...(request.document ? { document: request.document } : {}), ...(request.asset_ids?.length ? { asset_ids: request.asset_ids } : {}) })).digest('hex');
+    const hash = createHash('sha256').update(JSON.stringify({ channel_id: channelId, thread_id: request.thread_id, text: request.text, ...(request.document ? { document: request.document } : {}), ...(request.asset_ids?.length ? { asset_ids: request.asset_ids } : {}), ...(request.asset_descriptions ? { asset_descriptions: request.asset_descriptions } : {}) })).digest('hex');
     return sessionTransaction(this.db, async c => {
       const channel = await this.authorize(c, actor, channelId);
       const [existing] = await c.select().from(s.messageIdentities).where(and(eq(s.messageIdentities.workspace_id, channel.workspace_id), eq(s.messageIdentities.user_id, actor), eq(s.messageIdentities.client_message_id, request.client_message_id)));
@@ -175,6 +169,10 @@ export class ChatStore {
         return this.message(c, existing.id, existing.channel_id);
       }
       if (channel.archived_at) throw new AppError(409, 'channel_archived');
+      if (channel.kind !== 'direct') {
+        await requireChannelCapability(c, actor, channel.id, request.thread_id ? 'reply' : 'post');
+        if (request.document?.ops.some(op => op.attributes?.mention?.kind === 'broadcast')) await requireChannelCapability(c, actor, channel.id, 'broadcast');
+      }
       if (channel.kind === 'direct') {
         const inactive = await c.execute(sql`SELECT 1 FROM workspace_members WHERE workspace_id=${channel.workspace_id}
           AND user_id IN (${channel.direct_user_low},${channel.direct_user_high}) AND NOT active LIMIT 1`);
@@ -191,7 +189,7 @@ export class ChatStore {
       if (files.length !== (request.asset_ids?.length ?? 0) || files.some(file => file.channel_id !== channelId || file.uploader_id !== actor || file.status !== 'ready' || file.message_id || file.expires_at <= new Date())) throw new AppError(409, 'asset_unavailable');
       const attachments = (request.asset_ids ?? []).map(id => {
         const file = files.find(file => file.id === id)!;
-        return { id: file.id, name: file.name, size: file.size, type: file.type };
+        return { id: file.id, name: file.name, size: file.size, type: file.type, ...(request.asset_descriptions?.[id] ? { description: request.asset_descriptions[id] } : {}) };
       });
       await c.insert(s.messages).values({ id, workspace_id: channel.workspace_id, channel_id: channelId, thread_id: threadId,
         author_type: 'human', user_id: actor, client_message_id: request.client_message_id, request_hash: hash, text: prepared.document ? prepared.document.ops.map(op => op.insert).join('').trim() : request.text, document: prepared.document ?? null, attachments });

@@ -336,32 +336,28 @@
   font-size: 13px;
   text-align: left;
 }
-.sp-attachment-list {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-  padding: 8px 12px;
-}
-.sp-attachment-list > div {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  max-width: 100%;
-  background: var(--sp-surface);
-  border: 1px solid var(--sp-border);
-  border-radius: 6px;
-  padding: 7px;
-}
-.sp-attachment-list > div > span {
-  min-width: 0;
-  overflow-wrap: anywhere;
-  font-size: 12px;
-}
-.sp-attachment-list small {
-  display: block;
-  font-size: 9px;
-  color: var(--sp-text-secondary);
-}
+/* Attachment drafts keep content and per-file actions visible at narrow widths. */
+.sp-attachment-drafts{display:flex;gap:10px;flex-wrap:wrap;list-style:none;margin:0;padding:10px 12px}
+.sp-attachment-drafts>li{width:220px;max-width:100%;min-width:0;align-self:flex-start;background:var(--sp-surface);border:1px solid var(--sp-border);border-radius:8px;overflow:hidden}
+.sp-draft-file-content{position:relative;display:flex;align-items:center;gap:10px;padding:12px 36px 12px 12px;min-width:0}
+.sp-draft-file-content--image{display:block;padding:0}
+.sp-draft-thumbnail{display:grid;place-items:center;width:100%;height:124px;border:0;border-bottom:1px solid var(--sp-border);padding:8px;background:var(--sp-surface-raised);color:var(--sp-text-secondary);cursor:zoom-in}
+.sp-draft-thumbnail img{max-width:100%;max-height:108px;object-fit:contain}
+.sp-draft-file-info{min-width:0;font-size:13px}.sp-draft-file-content--image .sp-draft-file-info{padding:10px 12px}
+.sp-draft-file-info strong{display:block;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;font-weight:600}.sp-draft-file-info small{display:block;color:var(--sp-text-secondary);font-size:11px;margin-top:3px}
+.sp-draft-file-icon{flex:none;color:var(--sp-text-secondary)}
+.sp-draft-remove.sp-icon-button{position:absolute;right:4px;top:4px;width:28px;height:28px;min-width:28px;background:var(--sp-surface);border:1px solid var(--sp-border);border-radius:50%}
+.sp-draft-reorder{display:flex;align-items:center;gap:4px;padding:4px 8px;border-top:1px solid var(--sp-border);color:var(--sp-text-secondary);font-size:11px}.sp-draft-reorder>span{flex:1}.sp-draft-reorder .sp-icon-button{width:28px;height:28px;min-width:28px}
+.sp-draft-drag{touch-action:none;user-select:none;display:grid;place-items:center;padding:4px;border:0;background:none;color:inherit;cursor:grab}.sp-draft-drag:active{cursor:grabbing}
+.sp-draft-description-trigger.sp-button{justify-content:flex-start;width:100%;font-size:12px;padding:6px 12px}
+.sp-attachment-drafts progress{display:block;width:calc(100% - 24px);height:5px;margin:4px 12px 10px;accent-color:var(--sp-accent)}
+.sp-draft-upload-error{display:flex;align-items:center;gap:8px;padding:8px 12px;font-size:12px}.sp-draft-upload-error small{flex:1;overflow-wrap:anywhere}
+.sp-draft-image-details{display:grid;gap:8px;max-width:100%}.sp-draft-image-details>img{display:block;max-width:100%;max-height:240px;object-fit:contain;justify-self:center}.sp-draft-image-details label{font-size:14px;font-weight:600}.sp-draft-image-details p{font-size:13px;margin:0;color:var(--sp-text-secondary)}
+.sp-draft-image-details textarea{width:100%;box-sizing:border-box;resize:vertical;max-height:200px;border:1px solid var(--sp-border);border-radius:6px;padding:10px;font:inherit;background:var(--sp-surface);color:var(--sp-text)}.sp-draft-image-details>small{color:var(--sp-text-secondary);text-align:right}
+.sp-draft-dialog-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:8px}
+.sp-draft-thumbnail:focus-visible,.sp-draft-drag:focus-visible,.sp-draft-image-details textarea:focus-visible{outline:2px solid var(--sp-accent);outline-offset:-2px}
+.sp-draft-drag:disabled,.sp-draft-thumbnail:disabled{cursor:default;opacity:.5}
+@media(max-width:600px){.sp-attachment-drafts>li{width:min(220px,100%)}.sp-draft-reorder .sp-icon-button,.sp-draft-drag{min-width:36px;height:36px}}
 .sp-link-dialog-actions {
   display: flex;
   justify-content: flex-end;
@@ -580,3 +576,5 @@
 .sp-sidebar-utilities button[aria-current="page"]{background:var(--sp-sidebar-selection);color:var(--sp-sidebar-content-active)}
 
 .sp-workspace-sidebar .sp-sidebar-utilities{flex:0 0 auto;overflow:visible;padding:4px 8px 12px}
+
+.sp-attachment-drafts>li.sp-draft-drop-target{outline:2px solid var(--sp-accent);outline-offset:2px}

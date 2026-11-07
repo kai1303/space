@@ -27,6 +27,16 @@ test('messages accept up to five unique asset IDs and attachment-only content', 
   assert.throws(() => parseMessageInput({ client_message_id: randomUUID(), text: '' }));
 });
 
+test('attachment descriptions are bounded, normalized and restricted to attached IDs', () => {
+  const id = randomUUID(), other = randomUUID();
+  const input = { client_message_id: randomUUID(), text: '', asset_ids: [id] };
+  assert.deepEqual(parseMessageInput({ ...input, asset_descriptions: { [id]: ' A blue square ' } }).asset_descriptions, { [id]: 'A blue square' });
+  for (const asset_descriptions of [[], null, 'bad', { [other]: 'foreign' }, { [id]: 42 }, { [id]: 'x'.repeat(1001) }, { [id]: 'bad\0' }]) {
+    assert.throws(() => parseMessageInput({ ...input, asset_descriptions }));
+  }
+  assert.equal(parseMessageInput({ ...input, asset_descriptions: { [id]: '  ' } }).asset_descriptions, undefined);
+});
+
 
 test('channel file queries validate literal search, known filters and bounded string pagination', () => {
   assert.equal(typeof contracts.parseAssetListQuery, 'function');

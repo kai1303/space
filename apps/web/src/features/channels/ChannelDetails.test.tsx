@@ -66,3 +66,56 @@ it('adding a workspace person posts their ID and refreshes membership', async ()
   const call = vi.mocked(fetch).mock.calls.find(([url, init]) => url === '/v1/channels/channel/members' && init?.method === 'POST');
   expect(call?.[1]?.body).toBe('{"user_id":"other"}');
 });
+
+it('uses separate action capabilities and exposes posting and manager editors', async () => {
+  setup();
+  const permissions = { revision: '1', posting: 'admins' as const, poster_ids: [], manager_ids: ['owner'], allow_replies: true, allow_broadcast: false, invite: 'members' as const, remove: 'managers' as const, edit_details: 'members' as const, archive: 'managers' as const, capabilities: { post: false, reply: true, broadcast: false, invite: true, remove: false, edit_details: true, archive: false, manage: true } };
+  render(<ChannelDetails {...props} viewer="other" permissions={permissions} />);
+  await screen.findByRole('button', { name: 'Edit channel topic' });
+  expect(screen.getByRole('button', { name: 'Edit channel managers' })).toBeTruthy();
+  await userEvent.click(screen.getByRole('tab', { name: 'Members 1' }));
+  expect(screen.getByRole('button', { name: 'Add people' })).toBeTruthy();
+  expect(screen.queryByRole('button', { name: 'Remove Owner from channel' })).toBeNull();
+  await userEvent.click(screen.getByRole('tab', { name: 'Settings' }));
+  expect(screen.queryByRole('button', { name: 'Archive channel for everyone' })).toBeNull();
+  await userEvent.click(screen.getByRole('button', { name: 'Edit posting permissions' }));
+  expect(screen.getByRole('dialog', { name: 'Posting permissions' })).toBeTruthy();
+});
+
+it('fails closed for individual actions while production permissions are unavailable', async () => {
+  setup(); render(<ChannelDetails {...props} permissionsPending />);
+  await screen.findByText('Milestone');
+  expect(screen.queryByRole('button', { name: 'Edit channel topic' })).toBeNull();
+  await userEvent.click(screen.getByRole('tab', { name: 'Members 1' }));
+  expect(screen.queryByRole('button', { name: 'Add people' })).toBeNull();
+  await userEvent.click(screen.getByRole('tab', { name: 'Settings' }));
+  expect(screen.queryByRole('button', { name: 'Archive channel for everyone' })).toBeNull();
+});
+it('preserves an open permission draft during refresh and disables save on capability loss', async () => {
+  setup();
+  const permissions = { revision: '1', posting: 'everyone' as const, poster_ids: [], manager_ids: ['owner'], allow_replies: true, allow_broadcast: true, invite: 'managers' as const, remove: 'managers' as const, edit_details: 'managers' as const, archive: 'managers' as const, capabilities: { post: true, reply: true, broadcast: true, invite: true, remove: true, edit_details: true, archive: true, manage: true } };
+  const { rerender } = render(<ChannelDetails {...props} initialTab="settings" permissions={permissions} />);
+  await userEvent.click(await screen.findByRole('button', { name: 'Edit posting permissions' }));
+  await userEvent.click(screen.getByRole('radio', { name: 'Admins only' }));
+  rerender(<ChannelDetails {...props} initialTab="settings" permissionsPending />);
+  expect(screen.getByRole('dialog', { name: 'Posting permissions' })).toBeTruthy();
+  expect(screen.getByRole('radio', { name: 'Admins only' })).toHaveProperty('checked', true);
+  expect(screen.getByRole('button', { name: 'Save', exact: true })).toHaveProperty('disabled', true);
+  rerender(<ChannelDetails {...props} initialTab="settings" permissions={{ ...permissions, capabilities: { ...permissions.capabilities, manage: false } }} />);
+  expect(screen.getByRole('button', { name: 'Save', exact: true })).toHaveProperty('disabled', true);
+});
+it('updates Managed by and member manager badges from the live snapshot after revocation', async () => {
+  setup();
+  const permissions = { revision: '1', posting: 'everyone' as const, poster_ids: [], manager_ids: ['owner'], allow_replies: true, allow_broadcast: true, invite: 'managers' as const, remove: 'managers' as const, edit_details: 'managers' as const, archive: 'managers' as const, capabilities: { post: true, reply: true, broadcast: true, invite: true, remove: true, edit_details: true, archive: true, manage: true } };
+  const baseFetch = vi.mocked(fetch).getMockImplementation()!;
+  vi.mocked(fetch).mockImplementation(async (url, init) => String(url).includes('/members?') ? { ok: true, status: 200, json: async () => ({ items: [{ ...members[0], is_manager: true }], next_cursor: null }) } as Response : baseFetch(url, init));
+  const { rerender } = render(<ChannelDetails {...props} permissions={permissions} />);
+  await screen.findByText('Managed by');
+  expect(screen.getByText('Managed by').parentElement?.parentElement?.textContent).toContain('Owner');
+  await userEvent.click(screen.getByRole('tab', { name: 'Members 1' }));
+  expect(screen.getByText('Channel manager')).toBeTruthy();
+  rerender(<ChannelDetails {...props} permissions={{ ...permissions, revision: '2', manager_ids: [] }} />);
+  expect(screen.queryByText('Channel manager')).toBeNull();
+  await userEvent.click(screen.getByRole('tab', { name: 'About' }));
+  expect(screen.getByText('Managed by').parentElement?.parentElement?.textContent).not.toContain('Owner');
+});

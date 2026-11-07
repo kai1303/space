@@ -1,7 +1,7 @@
 import { isUnicodeEmoji } from './emoji.js';
 import { AppError, record, text, uuid } from './validation.js';
 import { parseRichDocument, type RichDocument } from './rich-text.js';
-import { parseAssetIds, type AssetAttachment } from './assets.js';
+import { parseAssetIds, parseAssetDescriptions, type AssetAttachment } from './assets.js';
 import type { AgentResponse } from './agent-response.js';
 export interface MessageReaction { emoji: string; count: number; user_ids: string[] }
 export interface MessageAgentSession { id: string; title: string; agent_name: string }
@@ -50,14 +50,15 @@ export function chatCursor(value: unknown = '0'): string {
   return value;
 }
 export function parseMessageInput(input: unknown) {
-  const v = record(input, ['client_message_id', 'thread_id', 'text', 'document', 'asset_ids', 'broadcast_confirmed']);
+  const v = record(input, ['client_message_id', 'thread_id', 'text', 'document', 'asset_ids', 'asset_descriptions', 'broadcast_confirmed']);
   if (v.broadcast_confirmed !== undefined && typeof v.broadcast_confirmed !== 'boolean') throw new AppError(400, 'invalid_confirmation');
   const asset_ids = v.asset_ids === undefined ? undefined : parseAssetIds(v.asset_ids);
+  const asset_descriptions = v.asset_descriptions === undefined ? undefined : parseAssetDescriptions(v.asset_descriptions, asset_ids ?? []);
   const plain = asset_ids?.length && typeof v.text === 'string' && !v.text.trim() ? '' : text(v.text, 16000).trim();
   if (typeof v.text !== 'string' || v.text.length > 16000 || v.text.includes('\0')) throw new AppError(400, 'invalid_text');
   const document = v.document === undefined ? undefined : parseRichDocument(v.document);
   if (document && document.ops.map(op => op.insert).join('').trim() !== plain) throw new AppError(400, 'document_text_mismatch');
-  return { ...(v.broadcast_confirmed === true ? { broadcast_confirmed: true } : {}), client_message_id: uuid(v.client_message_id), text: plain, thread_id: v.thread_id === undefined ? null : uuid(v.thread_id), ...(document ? { document } : {}), ...(asset_ids ? { asset_ids } : {}) };
+  return { ...(v.broadcast_confirmed === true ? { broadcast_confirmed: true } : {}), client_message_id: uuid(v.client_message_id), text: plain, thread_id: v.thread_id === undefined ? null : uuid(v.thread_id), ...(document ? { document } : {}), ...(asset_ids ? { asset_ids } : {}), ...(asset_descriptions ? { asset_descriptions } : {}) };
 }
 export function parseChannelInput(input: unknown) {
   const v = record(input, ['name', 'private']);
@@ -71,10 +72,11 @@ export interface ChannelSummary {
   topic: string; description: string; archived_at: string | null; created_by: string | null; created_at: string;
 }
 export interface ChannelDetails extends ChannelSummary {
+  permissions?: import('./channel-permissions.js').ChannelPermissionSnapshot;
   participants?: ChannelMember[]; hidden?: boolean; last_message?: DirectMessageSummary['last_message'];
   creator_name: string | null; member_count: number; can_manage: boolean;
 }
-export interface ChannelMember { id: string; name: string; image: string | null; title: string; presence: 'active' | 'away' }
+export interface ChannelMember { guest_type?: 'none'|'single'|'multi'; is_manager?: boolean; id: string; name: string; image: string | null; title: string; presence: 'active' | 'away' }
 export function parseChannelUpdate(input: unknown) {
   const v = record(input, ['name', 'topic', 'description', 'archived']);
   if (!Object.keys(v).length) throw new AppError(400, 'empty_update');

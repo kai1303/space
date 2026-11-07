@@ -134,6 +134,7 @@ export class WorkspaceHubStore {
       await requireWorkspaceAccess(c, actor, workspace);
       const rows = await c.execute<HubFile & { sort_at: string } & Record<string, unknown>>(sql`SELECT a.id,a.channel_id,${channelName(actor)} AS channel_name,a.message_id,
         a.name AS filename,a.type AS content_type,a.size AS byte_size,coalesce(a.preview->>'kind','file') AS preview_kind,
+        (SELECT entry->>'description' FROM jsonb_array_elements(m.attachments) entry WHERE entry->>'id'=a.id::text LIMIT 1) AS description,
         a.uploader_id,u.display_name AS uploader_name,coalesce(state.starred,false) AS starred,
         to_char(state.last_viewed_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS last_viewed_at,
         to_char(${sortTime} AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS sort_at,
@@ -154,7 +155,7 @@ export class WorkspaceHubStore {
           ${after ? query.sort === 'oldest' ? sql`AND (${sortTime},a.id)>(${after.time}::timestamptz,${after.id}::uuid)` : sql`AND (${sortTime},a.id)<(${after.time}::timestamptz,${after.id}::uuid)` : sql``}
         ORDER BY ${sortTime} ${order},a.id ${order} LIMIT ${limit + 1}`);
       const result = page(rows.rows, limit, row => chronologicalCursor({ id: row.id, created_at: row.sort_at }));
-      return { ...result, items: result.items.map(({ sort_at, ...file }) => file) };
+      return { ...result, items: result.items.map(({ sort_at, description, ...file }) => ({ ...file, ...(description ? { description } : {}) })) };
     });
   }
 

@@ -15,6 +15,7 @@ import {
   X,
 } from "@phosphor-icons/react";
 import { SectionHeading } from "./Foundations.js";
+import { AttachmentExample } from './AttachmentExample.js';
 
 const previewPeople: MentionOption[] = [
   {kind:'user',id:'00000000-0000-4000-8000-000000000001',label:'Alex Morgan',detail:'Product design',joined:true},
@@ -64,6 +65,7 @@ export function Conversation() {
         title="Better together"
         description="A few building blocks. One familiar conversation."
       />
+      <AttachmentExample />
       <div className="pattern-label">
         <span>
           <span className="live-dot" />

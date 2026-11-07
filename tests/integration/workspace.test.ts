@@ -183,22 +183,24 @@ test('installation creation cannot escape a concurrent workspace member removal'
     const removePid = (await removePool.query('SELECT pg_backend_pid() AS pid')).rows[0].pid;
     const installation = new FoundationStore(installPool).install(a.collaborator_id, {
       workspace_id: a.workspace_id, definition_id: a.definition_id, connector_id: 'mock',
-    });
+    }).then(value=>({value,error:undefined}),error=>({value:undefined,error}));
     pending.push(installation);
     await waitFor(async () => (await control.query("SELECT 1 FROM pg_locks WHERE pid=$1 AND locktype='advisory' AND NOT granted", [installPid])).rowCount === 1);
     let removalFinished = false;
     const removal = new WorkspaceStore(removePool).removeMember(a.owner_id, a.workspace_id, a.collaborator_id)
       .then(() => { removalFinished = true; });
     pending.push(removal);
-    // Before the fix removal finished while insertion was paused; after the fix
-    // it waits for the workspace lock and then sees/disables the new row.
+    // Removal may finish while insertion is paused. Serializable installation
+    // then retries against revoked membership instead of creating an enabled agent.
     await waitFor(async () => removalFinished || (await control.query('SELECT 1 FROM pg_locks WHERE pid=$1 AND NOT granted', [removePid])).rowCount! > 0);
     await control.query('SELECT pg_advisory_unlock(hashtext($1))', [key]);
     const created = await installation;
     await removal;
-    assert.equal((await pool.query('SELECT enabled FROM agent_installations WHERE id=$1', [created.id])).rows[0].enabled, false);
+    if(created.error)assert.equal(created.error.code,'not_found');
+    else assert.equal((await pool.query('SELECT enabled FROM agent_installations WHERE id=$1', [created.value!.id])).rows[0].enabled, false);
+    assert.equal((await pool.query('SELECT count(*)::int AS n FROM agent_installations WHERE owner_id=$1 AND workspace_id=$2 AND enabled',[a.collaborator_id,a.workspace_id])).rows[0].n,0);
     await api(a.token, 'POST', `${a.path}/members`, { user_id: a.collaborator_id, role: 'member' }, 201);
-    assert.equal((await new FoundationStore(pool).list(a.collaborator_id, a.workspace_id)).find(i => i.id === created.id)?.enabled, false);
+    assert.ok((await new FoundationStore(pool).list(a.collaborator_id, a.workspace_id)).filter(i=>i.owner_id===a.collaborator_id).every(i=>!i.enabled));
   } finally {
     await control.query('SELECT pg_advisory_unlock(hashtext($1))', [key]);
     await Promise.allSettled(pending);

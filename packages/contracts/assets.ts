@@ -3,7 +3,8 @@ import { parsePage } from './workspace.js';
 
 export const MAX_ASSET_BYTES = 25 * 1024 * 1024;
 export const MAX_MESSAGE_ASSETS = 5;
-export type AssetAttachment = { id: string; name: string; size: number; type: string };
+export const MAX_ASSET_DESCRIPTION_LENGTH = 1000;
+export type AssetAttachment = { id: string; name: string; size: number; type: string; description?: string };
 export type AssetUpload = { asset: AssetAttachment; upload: { url: string; fields: Record<string, string> }; expires_at: string };
 export type AssetPreview =
   | { kind: 'image'; mime: 'image/webp' | 'image/gif'; width: number; height: number }
@@ -51,4 +52,16 @@ export function parseAssetIds(input: unknown): string[] {
   const ids = input.map(uuid);
   if (new Set(ids).size !== ids.length) throw new AppError(400, 'invalid_assets');
   return ids;
+}
+
+export function parseAssetDescriptions(input: unknown, ids: string[]): Record<string, string> | undefined {
+  const values = record(input, ids);
+  const descriptions: Record<string, string> = {};
+  // Canonical attachment order makes retry hashes independent of JSON key order.
+  for (const id of ids) if (Object.hasOwn(values, id)) {
+    const value = values[id];
+    if (typeof value !== 'string' || value.length > MAX_ASSET_DESCRIPTION_LENGTH || value.includes('\0')) throw new AppError(400, 'invalid_asset_description');
+    if (value.trim()) descriptions[id] = value.trim();
+  }
+  return Object.keys(descriptions).length ? descriptions : undefined;
 }

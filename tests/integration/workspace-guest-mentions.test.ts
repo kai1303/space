@@ -25,6 +25,15 @@ async function fixture(kind:'single'|'multi') {
   return {workspace,guest};
 }
 const mention=(id:string)=>({client_message_id:randomUUID(),text:'@Unrelated person hello',document:{ops:[{insert:'@Unrelated person',attributes:{mention:{kind:'user',id,label:'Unrelated person'}}},{insert:' hello\n'}]}});
+test('guests can mention their channel but cannot notify the general channel with everyone',async()=>{
+  const {workspace:a,guest:g}=await fixture('multi');
+  const directory=await api(g.owner_token,'GET',`/channels/${a.channel_id}/mentions`);
+  assert.ok(directory.items.some((item:{id:string})=>item.id==='channel'));
+  assert.ok(!directory.items.some((item:{id:string})=>item.id==='everyone'));
+  const broadcast=(id:string)=>({client_message_id:randomUUID(),text:`@${id}`,document:{ops:[{insert:`@${id}`,attributes:{mention:{kind:'broadcast',id,label:id}}}]}});
+  await api(g.owner_token,'POST',`/channels/${a.channel_id}/messages`,broadcast('everyone'),403);
+  await api(g.owner_token,'POST',`/channels/${a.channel_id}/messages`,broadcast('channel'),201);
+});
 for(const kind of ['single','multi'] as const)test(`${kind} guests cannot enumerate, inspect or mention unrelated workspace people`,async()=>{
   const {workspace:a,guest:g}=await fixture(kind),base=`/channels/${a.channel_id}/mentions`;
   const all=await api(g.owner_token,'GET',base);

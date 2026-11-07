@@ -46,7 +46,7 @@ export function useAttachmentUploads(viewer: string) {
     };
     update(file => ({ ...file, status: 'uploading', progress: 0, error: undefined }));
     void uploadAsset(channel, attachment.file, progress => update(file => ({ ...file, progress })), job.controller.signal)
-      .then(asset => update(() => ({ ...asset, status: 'ready' })))
+      .then(asset => update(file => ({ ...file, ...asset, draftId: file.draftId ?? attachment.id, status: 'ready', progress: undefined, error: undefined })))
       .catch(error => update(file => ({ ...file, status: 'error', error: errorText(error) })))
       .finally(() => { if (uploadJobs.current.get(attachment.id) === job) uploadJobs.current.delete(attachment.id); });
   }

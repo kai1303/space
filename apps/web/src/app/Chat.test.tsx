@@ -2,7 +2,7 @@ import { afterAll, afterEach, beforeAll, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { Chat } from './Chat.js';
-import type { ChatMessage, MessagePage } from '@space/contracts';
+import type { ChannelPermissionSnapshot, ChatMessage, MessagePage } from '@space/contracts';
 
 it('renders live structured agent responses and replaces activity with one saved response', async () => {
   const root = paginatedMessage('Root message', '1');
@@ -61,8 +61,18 @@ vi.mock('@tanstack/react-virtual', () => ({ useVirtualizer: (options: any) => {
   getVirtualItems: () => Array.from({ length: options.count }, (_, index) => ({ index, key: options.getItemKey(index), start: index * 100 + 44 })),
   measureElement: () => {}, scrollToEnd: () => {}, scrollToIndex: () => {},
 }; } }));
-const mocks = vi.hoisted(() => ({ sockets: [] as any[], sessionId: 'session-a', authPending: false, refetch: vi.fn(), upload: vi.fn(), sendFailures: 0, pendingSend: undefined as undefined | Promise<void>, timelineRenders: 0, badgeOverride: false, setBadge: undefined as undefined | ((count:number)=>void) }));
+const mocks = vi.hoisted(() => ({ sockets: [] as any[], sessionId: 'session-a', authPending: false, refetch: vi.fn(), upload: vi.fn(), sendFailures: 0, pendingSend: undefined as undefined | Promise<void>, timelineRenders: 0, channelPost: true, channelReply: true, permissionsError: false, badgeOverride: false, setBadge: undefined as undefined | ((count:number)=>void) }));
 const latestChatSocket = () => mocks.sockets.at(-1);
+vi.mock('../shared/api/request.js', async original => {
+  const actual = await original<typeof import('../shared/api/request.js')>();
+  return { ...actual, request: async (...args: Parameters<typeof actual.request>) => {
+    if (/^\/channels\/[^/]+\/permissions$/.test(args[0])) {
+      if (mocks.permissionsError) throw new Error('offline');
+      return { revision: '1', posting: 'everyone', poster_ids: [], manager_ids: [], allow_replies: true, allow_broadcast: true, invite: 'managers', remove: 'managers', edit_details: 'managers', archive: 'managers', capabilities: { post: mocks.channelPost, reply: mocks.channelReply, broadcast: true, invite: true, remove: true, edit_details: true, archive: true, manage: true } } satisfies ChannelPermissionSnapshot;
+    }
+    return actual.request(...args);
+  } };
+});
 vi.mock('../features/files/assets.js', () => ({ uploadAsset: mocks.upload }));
 vi.mock('../features/notifications/Notifications.js', async original => {
   const actual = await original<typeof import('../features/notifications/Notifications.js')>();
@@ -85,7 +95,7 @@ vi.mock('socket.io-client', () => ({ io: () => {
   };
   mocks.sockets.push(client); return client;
 } }));
-afterEach(() => { localStorage.removeItem('space:composer-drafts:user'); cleanup(); localStorage.clear(); vi.unstubAllGlobals(); mocks.sockets.length = 0; mocks.upload.mockReset(); mocks.sendFailures = 0; mocks.pendingSend = undefined; mocks.badgeOverride = false; mocks.setBadge = undefined; mocks.authPending = false; });
+afterEach(() => { localStorage.removeItem('space:composer-drafts:user'); cleanup(); localStorage.clear(); vi.unstubAllGlobals(); mocks.sockets.length = 0; mocks.upload.mockReset(); mocks.sendFailures = 0; mocks.pendingSend = undefined; mocks.badgeOverride = false; mocks.setBadge = undefined; mocks.authPending = false; mocks.channelPost = true; mocks.channelReply = true; mocks.permissionsError = false; });
 beforeAll(() => {
   Object.defineProperties(Range.prototype, {
     getBoundingClientRect: { configurable: true, value: () => new DOMRect() },
@@ -1441,6 +1451,29 @@ it('opens Activity from the rail and routes its notification to the source messa
   expect(await screen.findByRole('textbox',{name:'Message first'})).toBeTruthy();
 });
 
+it('opens a public nonmember mention through the join screen before loading its source', async () => {
+  const message = paginatedMessage('Public mention destination', '1');
+  mockPaginatedChat(() => messagePage([message]));
+  const original = vi.mocked(fetch).getMockImplementation()!;
+  let joined = false;
+  vi.mocked(fetch).mockImplementation(async (...args) => {
+    const path = String(args[0]);
+    const notification = { id:'8',kind:'mention',channel_id:'public',channel_name:'public',channel_kind:'channel',message_id:message.id,thread_id:message.thread_id,author_name:'Alex',text:'Please join this discussion',emoji:null,created_at:message.created_at,read_at:null,silent:true };
+    if(path.includes('/notifications'))return new Response(JSON.stringify(args[1]?.method==='PATCH'?{read:true}:{items:[notification],unread_count:1,next_cursor:null,latest_id:'8'}),{status:200});
+    if(path.includes('/channels?'))return new Response(JSON.stringify({items:[{id:'first',workspace_id:'workspace',name:'first',kind:'channel',joined:true,private:false},{id:'public',workspace_id:'workspace',name:'public',kind:'channel',joined,private:false}],next_cursor:null}),{status:200});
+    if(path==='/v1/channels/public/join'){joined=true;return new Response(JSON.stringify({joined:true}),{status:200});}
+    if(path==='/v1/channels/public')return new Response(JSON.stringify(joined?{id:'public',workspace_id:'workspace',name:'public',kind:'channel',joined:true}:{error:'not_found'}),{status:joined?200:404});
+    if(path===`/v1/channels/public/messages/${encodeURIComponent(message.id)}`)return new Response(JSON.stringify(message),{status:200});
+    return original(...args);
+  });
+  render(<Chat/>);await screen.findByRole('textbox',{name:'Message first'});
+  await userEvent.click(await screen.findByRole('button',{name:'Activity (1 unread)',exact:true}));
+  await userEvent.click(await screen.findByRole('button',{name:/Open notification from Alex/}));
+  await userEvent.click(await screen.findByRole('button',{name:'Join channel',exact:true}));
+  await screen.findByRole('dialog',{name:'Original message in #public'});
+  expect(await screen.findByRole('textbox',{name:'Message public'})).toBeTruthy();
+});
+
 it('opens workspace search from a Home shortcut without leaving it', async () => {
   mockPaginatedChat(() => messagePage([paginatedMessage('Search destination', '1')]));
   render(<Chat />);
@@ -1679,4 +1712,33 @@ it('opens agent sessions below direct messages, retains drafts, and refreshes si
  await user.type(screen.getByRole('searchbox',{name:'Find a conversation'}),'Launch');
  expect(within(nav).queryByRole('button',{name:'New discussion',exact:true})).toBeNull();
  expect(within(nav).getByRole('button',{name:'Launch checklist',exact:true})).toBeTruthy();
+});
+
+it('applies live post and reply capabilities independently without losing either draft', async () => {
+  const root = paginatedMessage('Permission thread', '1');
+  mockPaginatedChat(() => messagePage([root]), '1');
+  render(<Chat />);
+  const draft = await screen.findByRole('textbox', { name: 'Message first' });
+  await userEvent.type(draft, 'Keep channel draft');
+  await userEvent.click(screen.getByRole('button', { name: 'Reply to Kai' }));
+  const thread = screen.getByRole('region', { name: 'Thread', exact: true });
+  const reply = await within(thread).findByRole('textbox', { name: 'Message thread' });
+  await userEvent.type(reply, 'Keep thread draft');
+  mocks.channelPost = false;
+  await act(async () => { latestChatSocket().receive('updates.changed', { scope: 'channel', id: 'first' }); });
+  await screen.findByText('You can read this channel, but posting is restricted.');
+  expect(screen.getByRole('textbox', { name: 'Message first' })).toBe(draft);
+  expect(draft.textContent).toContain('Keep channel draft');
+  expect(within(thread).getByRole('textbox', { name: 'Message thread' })).toBe(reply);
+  expect(within(thread).queryByText('You can read this thread, but replies are restricted.')).toBeNull();
+  mocks.channelPost = true; mocks.channelReply = false;
+  await act(async () => { latestChatSocket().receive('updates.changed', { scope: 'workspace', id: 'workspace' }); });
+  await within(thread).findByText('You can read this thread, but replies are restricted.');
+  expect(screen.queryByText('You can read this channel, but posting is restricted.')).toBeNull();
+  expect(reply.textContent).toContain('Keep thread draft');
+  mocks.permissionsError = true;
+  await act(async () => { latestChatSocket().receive('updates.changed', { scope: 'channel', id: 'first' }); });
+  await waitFor(() => expect(screen.getAllByText(/Unable to check channel permissions/)).toHaveLength(2));
+  expect(draft.textContent).toContain('Keep channel draft');
+  expect(reply.textContent).toContain('Keep thread draft');
 });

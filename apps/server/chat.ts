@@ -29,6 +29,8 @@ export function registerChatRoutes(app: FastifyInstance, chat: ChatStore) {
 
   app.get<{ Params: { workspaceId: string } }>('/v1/workspaces/:workspaceId/channels', r => chat.channels(r.actorId, uuid(r.params.workspaceId), r.query));
   app.post<{ Params: { workspaceId: string } }>('/v1/workspaces/:workspaceId/channels', async (r, reply) => reply.code(201).send(await chat.createChannel(r.actorId, uuid(r.params.workspaceId), r.body)));
+  app.get<{ Params: { channelId: string } }>('/v1/channels/:channelId/permissions', r => chat.permissions.read(r.actorId, uuid(r.params.channelId)));
+  app.patch<{ Params: { channelId: string } }>('/v1/channels/:channelId/permissions', r => chat.permissions.update(r.actorId, uuid(r.params.channelId), r.body));
   app.get<{ Params: { channelId: string } }>('/v1/channels/:channelId', r => chat.details(r.actorId, uuid(r.params.channelId)));
   app.patch<{ Params: { channelId: string } }>('/v1/channels/:channelId', r => chat.updateChannel(r.actorId, uuid(r.params.channelId), r.body));
   app.get<{ Params: { channelId: string } }>('/v1/channels/:channelId/members', r => chat.members(r.actorId, uuid(r.params.channelId), r.query));

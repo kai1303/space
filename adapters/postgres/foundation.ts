@@ -4,7 +4,8 @@ import { and, eq, exists, getTableColumns, or, sql } from 'drizzle-orm';
 import { AppError, parseDefinitionInput, parseInstallationInput, parseGrantInput, uuid, type AgentDefinition, type AgentInstallation, type AgentGrant } from '@space/contracts';
 import { database, type DbSession } from './database.js';
 import { agentDefinitions as d, agentInstallations as i, agentGrants as g, channelMembers as m, channels, foundationEvents, agentConnections } from './schema.js';
-import { requireWorkspaceAccess, hasChannelAccess, lockWorkspace } from './access.js';
+import { requireWorkspaceAccess, hasChannelAccess } from './access.js';
+import { sessionTransaction } from './session-concurrency.js';
 const installationColumns = { ...getTableColumns(i), capabilities: d.capabilities };
 export class FoundationStore {
   readonly db;
@@ -16,9 +17,8 @@ export class FoundationStore {
   }
   async install(actor: string, input: unknown): Promise<AgentInstallation> {
     const request = parseInstallationInput(input);
-    return this.db.transaction(async c => {
-      // Serialize creation with offboarding so removal cannot miss a new agent.
-      await lockWorkspace(c, request.workspace_id);
+    return sessionTransaction(this.db, async c => {
+      // Retry against current membership when installation races offboarding.
       await requireWorkspaceAccess(c, actor, request.workspace_id);
       const definition = (await c.select().from(d).where(eq(d.id, request.definition_id)))[0];
       if (!definition) throw new AppError(404, 'not_found');

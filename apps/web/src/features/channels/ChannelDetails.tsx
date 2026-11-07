@@ -2,20 +2,22 @@ import { useMemberProfile } from '../profile/MemberProfile.js';
 import { useEffect, useId, useRef, useState, type FormEvent } from 'react';
 import { Avatar, Badge, Button, Dialog, Tabs } from '@space/ui/primitives';
 import { Archive, Copy, Hash, Lock, MagnifyingGlass, UserPlus } from '@phosphor-icons/react';
-import type { ChannelDetails as Details, ChannelMember, ChannelSummary, WorkspaceParticipant } from '@space/contracts';
+import type { ChannelDetails as Details, ChannelMember, ChannelSummary, ChannelPermissionSnapshot, WorkspaceParticipant } from '@space/contracts';
 import { listAll, request } from '../../shared/api/request.js';
 import './channel-details.css';
+import { ChannelPermissionEditor, postingLabels, type PermissionSection } from './ChannelPermissions.js';
 
 const errorText = (error: unknown) => error instanceof Error ? error.message === 'channel_has_active_tasks'
   ? 'Resolve pending or running agent tasks before archiving this channel.' : error.message === 'channel_needs_manager'
-  ? 'Add another workspace admin to this private channel before leaving.' : error.message.replaceAll('_', ' ') : 'Unable to update channel';
-type Props = { channel: ChannelSummary; viewer: string; open: boolean; initialTab?: string; onClose: () => void; onChange: (channel: ChannelSummary) => void; onLeft: () => void };
+  ? 'Assign another channel manager or add a workspace admin before leaving this private channel.' : error.message.replaceAll('_', ' ') : 'Unable to update channel';
+type Props = { channel: ChannelSummary; viewer: string; open: boolean; initialTab?: string; permissions?: ChannelPermissionSnapshot; permissionsPending?: boolean; onClose: () => void; onChange: (channel: ChannelSummary) => void; onLeft: () => void };
 type Field = 'name' | 'topic' | 'description';
 export function ChannelDetails(props: Props) {
   return props.open ? <DetailsDialog key={props.channel.id} {...props} /> : null;
 }
-function DetailsDialog({ channel, viewer, initialTab = 'about', onClose, onChange, onLeft }: Props) {
+function DetailsDialog({ channel, viewer, initialTab = 'about', permissions, permissionsPending = false, onClose, onChange, onLeft }: Props) {
   const profiles = useMemberProfile();
+  const [permissionEditor, setPermissionEditor] = useState<{ section: PermissionSection; snapshot: ChannelPermissionSnapshot }>();
   const id = useId();
   const [details, setDetails] = useState<Details>(), [members, setMembers] = useState<ChannelMember[]>([]);
   const [tab, setTab] = useState(initialTab), [query, setQuery] = useState(''), [error, setError] = useState('');
@@ -36,7 +38,10 @@ function DetailsDialog({ channel, viewer, initialTab = 'about', onClose, onChang
   useEffect(() => { setDetails(previous => previous ? { ...previous, ...channel } : previous); }, [channel]);
   function saved(detail: Details) { setDetails(detail); onChange(detail); }
   const current = details ?? channel, archived = Boolean(current.archived_at);
-  const editable = details?.can_manage && !archived;
+  const policy = permissionsPending ? undefined : permissions ?? details?.permissions;
+  const can = (action: keyof ChannelPermissionSnapshot['capabilities']) => !permissionsPending && (policy?.capabilities[action] ?? details?.can_manage ?? false);
+  const isManager = (member: ChannelMember) => policy ? policy.manager_ids.includes(member.id) : !!member.is_manager;
+  const editable = can('edit_details') && !archived;
   const filtered = members.filter(member => member.name.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
   return <>
     <Dialog open title={`${current.private ? '🔒' : '#'} ${current.name}`} onClose={onClose}>
@@ -52,6 +57,7 @@ function DetailsDialog({ channel, viewer, initialTab = 'about', onClose, onChang
                 <div className="space-channel-field-heading"><h3>{key === 'name' ? 'Channel name' : key === 'topic' ? 'Topic' : 'Description'}</h3>{editable && <button className="space-channel-link" aria-label={`Edit channel ${key}`} onClick={() => setField(key)}>Edit</button>}</div>
                 <p className={!details[key] ? 'space-channel-muted' : undefined}>{key === 'name' && (details.private ? <Lock size={15} /> : <Hash size={15} />)}{details[key] || (key === 'topic' ? 'Add a topic' : 'Add a description')}</p>
               </section>)}
+              {policy && <section><div className="space-channel-field-heading"><h3>Managed by</h3>{can('manage') && !archived && <button className="space-channel-link" aria-label="Edit channel managers" onClick={() => setPermissionEditor({ section: 'managers', snapshot: policy })}>Edit</button>}</div><p>{members.filter(isManager).map(member => member.name).join(', ') || 'Workspace admins'}</p></section>}
               <section><h3>Created by</h3><p>{details.creator_name ?? 'Workspace'} on {new Date(details.created_at).toLocaleDateString([], { month: 'long', day: 'numeric', year: 'numeric' })}</p></section>
               <button className="space-channel-action space-channel-danger" onClick={() => setConfirmation('leave')}>Leave channel</button>
             </div>
@@ -60,22 +66,26 @@ function DetailsDialog({ channel, viewer, initialTab = 'about', onClose, onChang
           {tab === 'members' && <>
             <label className="space-channel-search"><MagnifyingGlass size={18} /><input type="search" aria-label="Find channel members" placeholder="Find members" value={query} onChange={e => setQuery(e.target.value)} /></label>
             <ul className="space-channel-people" aria-label="Channel members">
-              {editable && <li><button className="space-channel-add" onClick={() => setAdding(true)}><span><UserPlus size={22} /></span>Add people</button></li>}
+              {can('invite') && !archived && <li><button className="space-channel-add" onClick={() => setAdding(true)}><span><UserPlus size={22} /></span>Add people</button></li>}
               {filtered.map(member => <li key={member.id}>
-                <button type="button" className="space-profile-trigger" aria-label={`View ${member.name}’s profile`} onClick={() => {onClose(); profiles?.open({kind:'user',id:member.id});}}><MemberAvatar member={member} /><div><strong>{member.name}{member.id === viewer && <span className="space-channel-muted"> (you)</span>}</strong>{member.title && <small>{member.title}</small>}</div></button>
-                {editable && member.id !== viewer && <button className="space-channel-link" aria-label={`Remove ${member.name} from channel`} onClick={() => setConfirmation(member)}>Remove</button>}
+                <button type="button" className="space-profile-trigger" aria-label={`View ${member.name}’s profile`} onClick={() => {onClose(); profiles?.open({kind:'user',id:member.id});}}><MemberAvatar member={member} /><div><strong>{member.name}{member.id === viewer && <span className="space-channel-muted"> (you)</span>}</strong>{member.title && <small>{member.title}</small>}{isManager(member) && <Badge>Channel manager</Badge>}</div></button>
+                {can('remove') && !archived && member.id !== viewer && <button className="space-channel-link" aria-label={`Remove ${member.name} from channel`} onClick={() => setConfirmation(member)}>Remove</button>}
               </li>)}
             </ul>
             {!filtered.length && <p className="space-channel-muted">No members match “{query}”.</p>}
           </>}
           {tab === 'settings' && <>
-            <div className="space-channel-card"><section><h3>Channel visibility</h3><p>{details.private ? 'Only invited members can find this channel and read its messages.' : 'Everyone in this workspace can find and join this channel.'}</p></section>
-              <section><h3>{archived ? 'Archived channel' : 'Archive channel'}</h3><p>{archived ? 'Message history is preserved. Restore this channel to send messages again.' : 'Archive this channel when it’s no longer needed. Its history will remain available to members.'}</p>{details.can_manage && <Button onClick={() => setConfirmation('archive')}><Archive size={16} />{archived ? 'Restore channel' : 'Archive channel for everyone'}</Button>}</section></div>
-            {!details.can_manage && <p className="space-channel-muted">The channel creator and workspace admins can manage channel settings and members.</p>}
+            <div className="space-channel-card">
+              {policy && <><section><div className="space-channel-field-heading"><h3>Posting permissions</h3>{can('manage') && !archived && <button className="space-channel-link" aria-label="Edit posting permissions" onClick={() => setPermissionEditor({ section: 'posting', snapshot: policy })}>Edit</button>}</div><p>{postingLabels[policy.posting]}</p><p className="space-channel-muted">{policy.allow_replies ? 'Threads are allowed.' : 'Only people who can post can reply.'} {policy.allow_broadcast ? 'Channel-wide mentions are allowed, subject to workspace settings.' : 'Channel-wide mentions are disabled.'}</p></section>
+              <section><div className="space-channel-field-heading"><h3>Member permissions</h3>{can('manage') && !archived && <button className="space-channel-link" aria-label="Edit member permissions" onClick={() => setPermissionEditor({ section: 'actions', snapshot: policy })}>Edit</button>}</div><p>Choose who can invite and remove people, edit details, or archive this channel.</p></section></>}
+              <section><h3>Channel visibility</h3><p>{details.private ? 'Only invited members can find this channel and read its messages.' : 'Everyone in this workspace can find and join this channel.'}</p></section>
+              <section><h3>{archived ? 'Archived channel' : 'Archive channel'}</h3><p>{archived ? 'Message history is preserved. Restore this channel to send messages again.' : 'Archive this channel when it’s no longer needed. Its history will remain available to members.'}</p>{can('archive') && <Button onClick={() => setConfirmation('archive')}><Archive size={16} />{archived ? 'Restore channel' : 'Archive channel for everyone'}</Button>}</section></div>
+            {permissionsPending && <p className="space-channel-muted" role="status">Checking channel permissions…</p>}
           </>}
         </div>}
       </div>
     </Dialog>
+    {permissionEditor && <ChannelPermissionEditor channel={channel.id} snapshot={permissionEditor.snapshot} members={members} section={permissionEditor.section} canEdit={can('manage') && !archived} onClose={() => setPermissionEditor(undefined)} onSaved={next => { setDetails(current => current ? { ...current, permissions: next } : current); }} />}
     {field && details && <ChannelEditor field={field} details={details} onClose={() => setField(undefined)} onSaved={saved} />}
     {adding && details && <AddPeople details={details} members={members} onClose={() => setAdding(false)} onAdded={async () => { const detail = await refresh(); onChange(detail); }} />}
     {confirmation && <ChannelConfirmation

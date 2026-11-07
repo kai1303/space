@@ -45,7 +45,7 @@ test('broadcasts respect presence, threads, general channel identity, pause and 
  await api(a.owner_token,'PATCH',`/channels/${a.channel_id}`,{name:'lobby'});
  await send('everyone');
  await api(a.collaborator_token,'PATCH',`/workspaces/${a.workspace_id}/mention-settings`,{paused_until:new Date(Date.now()+3600000).toISOString()});
- await send('channel');const inbox=await api(a.collaborator_token,'GET',`/workspaces/${a.workspace_id}/mentions`);assert.equal(inbox.items[0].silent,true);assert.equal(inbox.unread_count,3);
+ await send('channel');const inbox=await api(a.collaborator_token,'GET',`/workspaces/${a.workspace_id}/mentions`);assert.equal(inbox.items[0].silent,true);assert.equal(inbox.unread_count,4);
  await api(a.owner_token,'PATCH',`/workspaces/${a.workspace_id}/mention-settings`,{broadcast_permission:'admins'});
  await api(a.collaborator_token,'PATCH',`/workspaces/${a.workspace_id}/mention-settings`,{broadcast_permission:'all'},403);
  await api(a.collaborator_token,'POST',`/channels/${a.channel_id}/messages`,{client_message_id:randomUUID(),text:'@channel hello',document:document({kind:'broadcast',id:'channel',label:'channel'},'channel')},403);

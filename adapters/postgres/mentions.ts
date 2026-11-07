@@ -1,3 +1,4 @@
+import { readChannelPermissions } from './channel-permissions.js';
 import { visibleWorkspacePeer } from './workspace-access.js';
 import { sessionTransaction } from './session-concurrency.js';
 import type { Pool } from 'pg';
@@ -71,10 +72,11 @@ export class MentionStore {
     return this.db.transaction(async c=>{
       const channel=await this.channel(c,actor,channelId);
       const options=(await this.options(c,actor,channel,query)).filter(item=>item.kind!=='user'||!channel.private||item.joined);
-      const [scope]=await rows<{general_channel_id:string|null;allowed:boolean;member_count:number}>(c,sql`SELECT s.general_channel_id,(coalesce(s.broadcast_permission,'all')='all' OR wm.role IN ('owner','admin')) AS allowed,
+      const [scope]=await rows<{general_channel_id:string|null;allowed:boolean;full_member:boolean;member_count:number}>(c,sql`SELECT s.general_channel_id,wm.guest_type='none' AS full_member,(coalesce(s.broadcast_permission,'all')='all' OR wm.role IN ('owner','admin')) AS allowed,
         (SELECT count(*)::int FROM channel_members cm JOIN workspace_members m ON m.workspace_id=cm.workspace_id AND m.user_id=cm.user_id AND m.active WHERE cm.channel_id=${channelId}) AS member_count
         FROM workspace_members wm LEFT JOIN workspace_mention_settings s ON s.workspace_id=wm.workspace_id WHERE wm.user_id=${actor} AND wm.workspace_id=${channel.workspace_id} AND wm.active`);
-      if(scope?.allowed)for(const id of ['here','channel',...(scope.general_channel_id===channelId?['everyone']:[])])if(id.includes(query.toLowerCase()))options.push({kind:'broadcast',id,label:id,detail:id==='here'?'Notify active channel members':`Notify channel members (${scope.member_count})`,joined:true});
+      const broadcastAllowed=channel.kind==='direct'?scope?.allowed:(await readChannelPermissions(c,actor,channelId)).capabilities.broadcast;
+      if(scope&&broadcastAllowed)for(const id of ['here','channel',...(scope.full_member&&scope.general_channel_id===channelId?['everyone']:[])])if(id.includes(query.toLowerCase()))options.push({kind:'broadcast',id,label:id,detail:id==='here'?'Notify active channel members':`Notify channel members (${scope.member_count})`,joined:true});
       return {items:options.slice(0,63),member_count:scope?.member_count??0};
     });
   }
@@ -97,10 +99,10 @@ export class MentionStore {
     const canonical=new Map<string,MentionReference>();
     for(const ref of refs){
       if(ref.kind==='broadcast'){
-        const [scope]=await rows<{allowed:boolean;general_channel_id:string|null;members:number}>(c,sql`SELECT (coalesce(s.broadcast_permission,'all')='all' OR wm.role IN ('owner','admin')) AS allowed,s.general_channel_id,
+        const [scope]=await rows<{allowed:boolean;full_member:boolean;general_channel_id:string|null;members:number}>(c,sql`SELECT (coalesce(s.broadcast_permission,'all')='all' OR wm.role IN ('owner','admin')) AS allowed,wm.guest_type='none' AS full_member,s.general_channel_id,
           (SELECT count(*)::int FROM channel_members cm JOIN workspace_members m ON m.workspace_id=cm.workspace_id AND m.user_id=cm.user_id AND m.active WHERE cm.channel_id=${channel.id}) AS members
           FROM workspace_members wm LEFT JOIN workspace_mention_settings s ON s.workspace_id=wm.workspace_id WHERE wm.user_id=${actor} AND wm.workspace_id=${channel.workspace_id} AND wm.active`);
-        if(!scope?.allowed)throw new AppError(403,'broadcast_forbidden');
+        if(!scope?.allowed||(ref.id==='everyone'&&!scope.full_member))throw new AppError(403,'broadcast_forbidden');
         if(ref.id==='everyone'&&scope.general_channel_id!==channel.id)throw new AppError(400,'invalid_broadcast_channel');
         if(!inThread&&scope.members>=6&&!confirmed)throw new AppError(409,'broadcast_confirmation_required');
         canonical.set(`${ref.kind}:${ref.id}`,ref);
@@ -136,7 +138,7 @@ export class MentionStore {
       const items=await rows<MentionActivity['items'][number]>(c,sql`SELECT n.id::text,n.channel_id,ch.name AS channel_name,n.message_id,m.thread_id,left(m.text,500) AS text,u.display_name AS author_name,n.created_at,n.read_at,n.silent
         FROM mention_notifications n JOIN channels ch ON ch.id=n.channel_id JOIN messages m ON m.channel_id=n.channel_id AND m.id=n.message_id JOIN users u ON u.id=m.user_id
         WHERE ${scope} AND (${before}::bigint IS NULL OR n.id<${before}::bigint) ORDER BY n.id DESC LIMIT 51`);
-      const [count]=await rows<{count:number}>(c,sql`SELECT count(*)::int AS count FROM mention_notifications n JOIN channels ch ON ch.id=n.channel_id WHERE ${scope} AND n.read_at IS NULL AND NOT n.silent`);
+      const [count]=await rows<{count:number}>(c,sql`SELECT count(*)::int AS count FROM mention_notifications n JOIN channels ch ON ch.id=n.channel_id WHERE ${scope} AND n.read_at IS NULL`);
       return {items:items.slice(0,50),unread_count:count!.count,next_cursor:items.length>50?items[49]!.id:null};
     });
   }

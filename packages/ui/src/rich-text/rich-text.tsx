@@ -8,6 +8,8 @@ export type Attachment = {
   name: string;
   size: number;
   type: string;
+  description?: string;
+  draftId?: string;
   file?: File;
   status?: "uploading" | "ready" | "error";
   progress?: number;

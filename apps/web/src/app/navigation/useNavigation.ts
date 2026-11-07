@@ -28,10 +28,11 @@ export function useNavigation(workspaces: Workspace[], workspace: string, setWor
   const lastHomeChannel = useRef<string | undefined>(undefined);
   const [navigationError, setNavigationError] = useState('');
   const mentionNavigation = useRef(0);
-  async function openMention(item: {channel_id:string;message_id:string;thread_id?:string}) {
+  async function openMention(item: {channel_id:string;message_id:string;thread_id?:string;channel_kind?:'channel'|'direct'}) {
     const attempt = ++mentionNavigation.current;
     try {
-      const destination = await request<Channel>(`/channels/${item.channel_id}`);
+      // Activity can mention a public channel before joining; discovery renders its join screen.
+      const destination = item.channel_kind === 'channel' ? {id:item.channel_id,kind:'channel'} : await request<Channel>(`/channels/${item.channel_id}`);
       if (attempt !== mentionNavigation.current) return;
       setNavigationError(''); setHubView(undefined); setActivityOpen(false); setDirectCompose(0); setSearchOpen(false);
       setDirectOpen(destination.kind === 'direct');

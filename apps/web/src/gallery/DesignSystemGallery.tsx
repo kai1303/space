@@ -79,6 +79,7 @@ const groups: {
     links: [
       { id: "patterns", label: "Conversations", icon: ChatCircle },
       { id: "chat-composer", label: "Chat composer" },
+      { id: "attachment-composer", label: "Attachments" },
       { id: "guidelines", label: "Usage & accessibility", icon: BookOpen },
     ],
   },

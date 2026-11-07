@@ -5,6 +5,7 @@ import {
   AppError, parseWorkspaceInput, parseWorkspaceMemberInput, parseRoleInput, parsePage, parseDirectoryQuery, uuid, record,
 } from '@space/contracts';
 import { sessionTransaction } from './session-concurrency.js';
+import { requireManagedPrivateChannels } from './channel-permissions.js';
 import { visibleWorkspacePeer } from './workspace-access.js';
 import { readWorkspacePreferences, joinDefaultChannels } from './workspace-settings.js';
 import { database, type DbSession } from './database.js';
@@ -125,13 +126,14 @@ export class WorkspaceStore {
   async changeRole(actor: string, workspace: string, user: string, input: unknown) {
     user = uuid(user);
     const { role } = parseRoleInput(input);
-    return this.db.transaction(async c => {
-      const { membership } = await this.lock(c, actor, workspace);
+    return sessionTransaction(this.db, async c => {
+      const membership = await this.member(c, uuid(workspace), uuid(actor));
       const target = await this.member(c, workspace, user);
       canManage(membership.role, target.role, role);
       if (target.role === role) return target;
       if (target.guest_type !== 'none' && role !== 'member') throw new AppError(409,'guest_role_conflict');
       if (target.role === 'owner') { await this.requireAnotherOwner(c, workspace, user); await this.requireNotPrimaryOwner(c,workspace,user); }
+      if(role==='member') await requireManagedPrivateChannels(c,workspace,user,true);
       const [result] = await c.update(m).set({ role }).where(memberKey(workspace, user)).returning();
       await this.audit(c, actor, workspace, 'member.role_changed', { user_id: user, previous_role: target.role, role });
       return result!;
@@ -139,13 +141,14 @@ export class WorkspaceStore {
   }
   async removeMember(actor: string, workspace: string, user: string): Promise<void> {
     user = uuid(user);
-    await this.db.transaction(async c => {
-      const { membership } = await this.lock(c, actor, workspace);
+    await sessionTransaction(this.db, async c => {
+      const membership = await this.member(c, uuid(workspace), uuid(actor));
       const [target] = await c.select().from(m).where(memberKey(workspace, user));
       if (!target) throw notFound();
       if (actor !== user) canManage(membership.role, target.active ? target.role : 'member');
       if (!target.active) return;
       if (target.role === 'owner') { await this.requireAnotherOwner(c, workspace, user); await this.requireNotPrimaryOwner(c,workspace,user); }
+      await requireManagedPrivateChannels(c,workspace,user);
       await c.update(agentInstallations).set({ enabled: false })
         .where(and(eq(agentInstallations.workspace_id, workspace), eq(agentInstallations.owner_id, user)));
       await c.delete(channelMembers).where(and(eq(channelMembers.workspace_id, workspace), eq(channelMembers.user_id, user), sql`NOT EXISTS (SELECT 1 FROM channels ch WHERE ch.id=${channelMembers.channel_id} AND ch.kind='direct')`));

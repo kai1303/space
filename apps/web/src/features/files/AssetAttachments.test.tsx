@@ -13,6 +13,22 @@ beforeAll(() => {
   HTMLDialogElement.prototype.close = function () { this.open = false; this.dispatchEvent(new Event('close')); };
 });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
+it('uses saved image descriptions for the card and full preview', async () => {
+  previews({ a: { kind: 'image', mime: 'image/webp', width: 200, height: 100 } });
+  render(<AssetAttachments assets={[{ ...asset('a'), description: 'Blue square on white' }]} />);
+  expect(await screen.findByRole('img', { name: 'Blue square on white' })).toBeTruthy();
+  await userEvent.click(screen.getByRole('button', { name: 'Preview a.png' }));
+  expect(await within(screen.getByRole('dialog')).findByRole('img', { name: 'Blue square on white' })).toBeTruthy();
+});
+it('offers an explicit full preview from a compact, bounded text card', async () => {
+  previews({ a: { kind: 'text', text: 'A very long line '.repeat(500), language: 'text', truncated: false } });
+  render(<AssetAttachments assets={[asset('a', 'notes.txt')]} />);
+  const open = await screen.findByRole('button', { name: 'Open preview of notes.txt' });
+  expect(screen.getAllByRole('button', { name: /preview.*notes\.txt/i })).toHaveLength(1);
+  expect(document.querySelector('.asset-snippet pre')!.textContent!.length).toBeLessThanOrEqual(600);
+  await userEvent.click(open);
+  expect(await within(screen.getByRole('dialog')).findByRole('region', { name: 'Text file preview' })).toBeTruthy();
+});
 it('shows server-approved image thumbnails and navigates files in a shared viewer with focus return', async () => {
   previews({ a: { kind: 'image', mime: 'image/webp', width: 1200, height: 600 }, b: { kind: 'image', mime: 'image/gif', width: 500, height: 800 } });
   render(<AssetAttachments assets={[asset('a'), asset('b')]} />);
@@ -58,7 +74,7 @@ it('renders HTML as bounded source text, shows truncation, and leaves unsupporte
   await screen.findByText('Text preview');
   expect(container.querySelector('script,iframe,object')).toBeNull();
   expect(container.querySelector('.asset-snippet')!.textContent!.length).toBeLessThan(2500);
-  await userEvent.click(screen.getByRole('button', { name: 'Preview source.html' }));
+  await userEvent.click(await screen.findByRole('button', { name: 'Open preview of source.html' }));
   const dialog = await screen.findByRole('dialog');
   expect(await within(dialog).findByText('Showing the first 256 KiB. Download to read the complete file.')).toBeTruthy();
   expect(dialog.querySelector('pre')!.textContent).toBe(text);
@@ -105,7 +121,7 @@ it.each([
 ])('bounds full text viewer code and line nodes for %s', async (_name, text) => {
   previews({ source: { kind: 'text', language: 'text', text, truncated: false } });
   render(<AssetAttachments assets={[asset('source', 'large.txt')]} />);
-  await userEvent.click(screen.getByRole('button', { name: 'Preview large.txt' }));
+  await userEvent.click(await screen.findByRole('button', { name: 'Open preview of large.txt' }));
   const dialog = await screen.findByRole('dialog');
   await within(dialog).findByText(/Preview shortened/);
   const code = dialog.querySelector('pre')!;
@@ -127,7 +143,7 @@ it('drops a trailing high surrogate when the text limit splits an emoji', async 
   const prefix = 'a'.repeat(19999);
   previews({ source: { kind: 'text', language: 'text', text: `${prefix}😀`, truncated: false } });
   render(<AssetAttachments assets={[asset('source', 'emoji.txt')]} />);
-  await userEvent.click(screen.getByRole('button', { name: 'Preview emoji.txt' }));
+  await userEvent.click(await screen.findByRole('button', { name: 'Open preview of emoji.txt' }));
   const dialog = await screen.findByRole('dialog');
   await within(dialog).findByText(/Preview shortened/);
   expect(dialog.querySelector('pre')!.textContent).toBe(prefix);

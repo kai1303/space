@@ -3,3 +3,14 @@
 .asset-preview-type{flex:none;margin:0;padding:8px 16px;border-bottom:1px solid var(--sp-border);font-size:12px;color:var(--sp-text-secondary);overflow-wrap:anywhere}
 
 .asset-filename small{display:block;color:var(--sp-text-secondary);margin-top:3px}.asset-card-download{flex:none}.asset-pdf-thumbnail{display:block;width:100%;height:240px;border:0;border-top:1px solid var(--sp-border);padding:12px;background:var(--sp-surface);cursor:zoom-in}.asset-pdf-thumbnail img{display:block;width:100%;height:100%;object-fit:contain}.asset-filename:focus-visible,.asset-pdf-thumbnail:focus-visible,.asset-image-button:focus-visible{outline:2px solid var(--sp-accent);outline-offset:-2px}
+
+/* Compact snippets stay readable; full code tools belong in the viewer. */
+.asset-snippet{max-height:none;background:var(--sp-surface)}
+.asset-snippet pre{margin:0;padding:4px 12px 10px;font-family:var(--sp-font-mono,monospace);font-size:12px;line-height:1.5;white-space:pre-wrap;overflow-wrap:anywhere;display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;overflow:hidden;max-height:6em}
+.asset-open-preview{display:flex;align-items:center;justify-content:space-between;gap:8px;width:100%;border:0;border-top:1px solid var(--sp-border);padding:8px 12px;background:var(--sp-surface-raised);color:var(--sp-text-secondary);font:inherit;font-size:12px;cursor:pointer}.asset-open-preview:hover{color:var(--sp-text);background:var(--sp-surface)}.asset-open-preview:focus-visible{outline:2px solid var(--sp-accent);outline-offset:-2px}
+.sp-dialog[open]:has(.asset-text-preview),.sp-dialog[open]:has(.asset-viewer-fallback){width:min(920px,calc(100vw - 32px));height:fit-content;max-height:calc(100dvh - 32px)}
+.asset-viewer-content:has(.asset-text-preview){flex:0 1 auto;max-height:calc(100dvh - 240px)}
+.asset-viewer-content:has(.asset-viewer-fallback){min-height:200px}
+@media(max-width:600px){.sp-dialog[open]:has(.asset-text-preview),.sp-dialog[open]:has(.asset-viewer-fallback){width:calc(100vw - 16px);max-height:calc(100dvh - 16px);border-radius:8px}.asset-viewer-content:has(.asset-text-preview){max-height:calc(100dvh - 220px)}}
+
+.sp-dialog:has(.asset-text-preview)>.asset-viewer,.sp-dialog:has(.asset-viewer-fallback)>.asset-viewer{flex:0 1 auto}

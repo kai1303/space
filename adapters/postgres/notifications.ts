@@ -14,10 +14,11 @@ function booleanInput(input: unknown, key: string) {
   if (typeof value !== 'boolean') throw new AppError(400, 'invalid_boolean');
   return value;
 }
-// Every operation uses current membership, including public-channel notifications.
+// Public mentions remain visible to full workspace members; other activity requires channel membership.
 const scope = (actor: string, workspace: string) => sql`n.user_id=${actor} AND n.workspace_id=${workspace}
-  AND EXISTS(SELECT 1 FROM workspace_members wm WHERE wm.workspace_id=n.workspace_id AND wm.user_id=n.user_id AND wm.active)
-  AND EXISTS(SELECT 1 FROM channel_members cm WHERE cm.channel_id=n.channel_id AND cm.user_id=n.user_id)`;
+  AND EXISTS(SELECT 1 FROM workspace_members wm WHERE wm.workspace_id=n.workspace_id AND wm.user_id=n.user_id AND wm.active
+    AND (EXISTS(SELECT 1 FROM channel_members cm WHERE cm.channel_id=n.channel_id AND cm.user_id=n.user_id)
+      OR (n.kind='mention' AND wm.guest_type='none' AND EXISTS(SELECT 1 FROM channels visible WHERE visible.id=n.channel_id AND visible.kind='channel' AND NOT visible.private))))`;
 const selection = sql`n.id::text,n.kind,n.channel_id,
   CASE WHEN ch.kind='direct' THEN (SELECT u.display_name FROM users u WHERE u.id=CASE WHEN ch.direct_user_low=n.user_id THEN ch.direct_user_high ELSE ch.direct_user_low END) ELSE ch.name END AS channel_name,
   ch.kind AS channel_kind,n.message_id,m.thread_id,u.display_name AS author_name,left(m.text,500) AS text,n.emoji,n.created_at,n.read_at,n.silent`;
@@ -36,16 +37,16 @@ export class NotificationStore {
       ON CONFLICT DO NOTHING`);
     await c.execute(sql`INSERT INTO notifications(workspace_id,channel_id,message_id,user_id,actor_id,kind,silent)
       SELECT ${channel.workspace_id},${channel.id},${message},recipient.user_id,${actor},recipient.kind,
-        coalesce(p.paused_until>now(),false) OR coalesce(p.mode,'mentions')='none' OR (recipient.kind='thread_reply' AND NOT coalesce(p.thread_replies,true))
+        NOT recipient.joined OR coalesce(p.paused_until>now(),false) OR coalesce(p.mode,'mentions')='none' OR (recipient.kind='thread_reply' AND NOT coalesce(p.thread_replies,true))
       FROM (
         SELECT wm.user_id,CASE WHEN mn.id IS NOT NULL THEN 'mention' WHEN ${channel.kind === 'direct'} THEN 'direct_message'
-          WHEN ${reply} AND ns.following THEN 'thread_reply' ELSE 'channel_message' END AS kind
-        FROM workspace_members wm JOIN channel_members cm ON cm.workspace_id=wm.workspace_id AND cm.user_id=wm.user_id AND cm.channel_id=${channel.id}
+          WHEN ${reply} AND ns.following THEN 'thread_reply' ELSE 'channel_message' END AS kind,cm.user_id IS NOT NULL AS joined
+        FROM workspace_members wm LEFT JOIN channel_members cm ON cm.workspace_id=wm.workspace_id AND cm.user_id=wm.user_id AND cm.channel_id=${channel.id}
         LEFT JOIN mention_notifications mn ON mn.message_id=${message} AND mn.user_id=wm.user_id
         LEFT JOIN notification_subscriptions ns ON ns.thread_id=${thread} AND ns.user_id=wm.user_id
         LEFT JOIN mention_preferences p ON p.user_id=wm.user_id
         WHERE wm.workspace_id=${channel.workspace_id} AND wm.active AND wm.user_id<>${actor}
-          AND (mn.id IS NOT NULL OR ${channel.kind === 'direct'} OR (${reply} AND ns.following) OR (NOT ${reply} AND p.mode='all'))
+          AND (mn.id IS NOT NULL OR (cm.user_id IS NOT NULL AND (${channel.kind === 'direct'} OR (${reply} AND ns.following) OR (NOT ${reply} AND p.mode='all'))))
       ) recipient LEFT JOIN mention_preferences p ON p.user_id=recipient.user_id
       ORDER BY recipient.user_id ON CONFLICT DO NOTHING`);
   }
@@ -130,6 +131,7 @@ export class NotificationStore {
       await requireWorkspaceAccess(c, actor, uuid(workspace));
       const result = await c.execute(sql`UPDATE notifications n SET claimed_at=now() FROM mention_preferences p
         WHERE n.id=${id}::bigint AND ${scope(actor, workspace)} AND p.user_id=n.user_id
+          AND EXISTS(SELECT 1 FROM channel_members cm WHERE cm.channel_id=n.channel_id AND cm.user_id=n.user_id)
           AND n.claimed_at IS NULL AND n.read_at IS NULL AND NOT n.silent AND n.created_at>=now()-interval '2 minutes'
           AND p.desktop_enabled AND p.mode<>'none' AND (p.paused_until IS NULL OR p.paused_until<=now())
           AND (n.kind<>'thread_reply' OR p.thread_replies) AND (n.kind<>'channel_message' OR p.mode='all')
