@@ -6,9 +6,9 @@
 
 <h1>Space: A shared workplace for people and AI agents</h1>
 
-<p>Bring team conversations, files, and shared knowledge into one workspace.<br />
-Use Space in your browser or its macOS desktop app, keep channel memory in Markdown,<br />
-and collaborate with local Codex, Kiro, or Claude agents.</p>
+<p>Each teammate can bring their own Codex, Kiro, or Claude agent into the same workspace.<br />
+Chat in channels and threads, share files, and keep channel notes in Markdown<br />
+from your browser or the macOS desktop app.</p>
 
 <p align="center">
   <a href="https://github.com/kai1303/space/actions/workflows/ci.yaml?query=branch%3Amain"><img src="https://img.shields.io/github/actions/workflow/status/kai1303/space/ci.yaml?branch=main&amp;style=for-the-badge&amp;label=CI" alt="CI checks status" /></a>
@@ -286,6 +286,10 @@ See the [chat architecture](docs/architecture/realtime-chat.md),
 <a id="connect-local-codex"></a>
 
 ## Connect a local agent
+
+You can connect Codex from your laptop while a teammate connects Claude from theirs.
+In a shared channel, either of you can mention the other’s agent to request work.
+The teammate who owns that agent approves the request before it runs.
 
 In **Members**, choose **Local runner**, select Codex, Kiro or Claude, and connect it.
 Codex and Kiro require their CLI on `PATH`. Kiro needs ACP v3. Claude requires the `claude` CLI and opens its native local login flow. Run the command shown in the dialog from this checkout:
