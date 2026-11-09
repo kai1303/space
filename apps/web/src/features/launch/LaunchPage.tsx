@@ -35,7 +35,15 @@ const questions = [
   ['Where do our decisions live?', 'When channel memory is enabled, you can save a message to the channel’s Markdown notes with a link back to its thread.'],
   ['Can I host my own workspace?', 'Yes. Space is MIT licensed. The setup guide covers the database, file storage, API, web client and optional agent connector.'],
 ];
-function Brand() { const { feedback } = useLaunchMotion(); return <motion.a {...feedback} className="launch-brand" href="/" aria-label="Space home"><img src="/launch/wordmark.webp" width="123" height="32" alt="Space"/></motion.a>; }
+function Brand({ animate = false }: { animate?: boolean }) {
+  const { feedback } = useLaunchMotion();
+  return <motion.a {...feedback} className="launch-brand" href="/" aria-label="Space home">
+    <picture>
+      {animate && <source media="(prefers-reduced-motion: no-preference)" srcSet="/brand/space-logo-orbit.webp" />}
+      <img src="/launch/wordmark.webp" width="123" height="32" alt="Space" />
+    </picture>
+  </motion.a>;
+}
 function Navigation() {
   const [open, setOpen] = useState(false);
   const menuButton = useRef<HTMLButtonElement>(null);
@@ -51,7 +59,7 @@ function Navigation() {
   return <header className={'launch-nav' + (open ? ' menu-open' : '')} onKeyDown={event => {
     if (event.key === 'Escape' && open) { setOpen(false); menuButton.current?.focus(); }
   }} onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget)) setOpen(false); }}>
-    <div className="nav-inner"><Brand/>
+    <div className="nav-inner"><Brand animate/>
       <nav className="launch-desktop-navigation" aria-label="Primary">{links}</nav>
       <div className="nav-actions"><motion.a {...feedback} className="launch-nav-open" href="/chat">Open Space <ArrowUpRight/></motion.a>
         <motion.button {...feedback} ref={menuButton} className="launch-menu" onClick={() => setOpen(!open)} aria-expanded={open} aria-controls="launch-navigation" aria-label={open ? 'Close menu' : 'Open menu'}>
