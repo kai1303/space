@@ -1,0 +1,24 @@
+global:
+  scrape_interval: 15s
+  scrape_timeout: 5s
+  evaluation_interval: 15s
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: [alertmanager:9093]
+rule_files: [rules.yaml]
+scrape_configs:
+  - job_name: space-api
+    sample_limit: 100000
+    static_configs:
+      - targets: [server:9464]
+  - job_name: space-infra
+    scrape_interval: 5s
+    scrape_timeout: 4s
+    sample_limit: 300
+    static_configs:
+      - targets: [infra-metrics:9798]
+  - job_name: monitor
+    static_configs:
+      - targets: [prometheus:9090, alertmanager:9093, loki:3100, 'log-collector:8888']

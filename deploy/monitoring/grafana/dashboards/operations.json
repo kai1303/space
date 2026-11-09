@@ -1,0 +1,207 @@
+{
+  "uid": "space-operations",
+  "title": "Space operations",
+  "schemaVersion": 39,
+  "tags": [
+    "space"
+  ],
+  "editable": false,
+  "refresh": "30s",
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "API readiness",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "space-prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 8,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "space_api_ready",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "space-prometheus"
+          },
+          "legendFormat": "Ready (1 = yes)"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 2,
+      "title": "Oldest unpublished event",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "space-prometheus"
+      },
+      "gridPos": {
+        "x": 8,
+        "y": 0,
+        "w": 8,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "space_cdc_outbox_oldest_age_seconds",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "space-prometheus"
+          },
+          "legendFormat": "Age"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 3,
+      "title": "Storage available",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "space-prometheus"
+      },
+      "gridPos": {
+        "x": 16,
+        "y": 0,
+        "w": 8,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "100 * space_volume_available_bytes / space_volume_capacity_bytes",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "space-prometheus"
+          },
+          "legendFormat": "{{volume}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 4,
+      "title": "API requests",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "space-prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 8,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (status_class) (rate(space_api_http_requests_total{route!~\"/(readyz|healthz)\"}[5m]))",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "space-prometheus"
+          },
+          "legendFormat": "{{status_class}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 5,
+      "title": "Messages pending acknowledgement",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "space-prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 8,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "space_jetstream_consumer_ack_pending",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "space-prometheus"
+          },
+          "legendFormat": "{{consumer}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 6,
+      "title": "Space service logs",
+      "type": "logs",
+      "datasource": {
+        "type": "loki",
+        "uid": "space-loki"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 16,
+        "w": 24,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "{service_name=~\"space-(server|worker|events)\"}",
+          "datasource": {
+            "type": "loki",
+            "uid": "space-loki"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      }
+    }
+  ]
+}

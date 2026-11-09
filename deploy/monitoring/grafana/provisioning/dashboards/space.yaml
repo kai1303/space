@@ -1,0 +1,6 @@
+apiVersion: 1
+providers:
+  - name: Space
+    type: file
+    options:
+      path: /etc/space/dashboards

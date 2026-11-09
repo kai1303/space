@@ -536,6 +536,10 @@ worker, CDC bridge, database, NATS JetStream, Redis, and file storage. It does n
 create accounts automatically. The quick start above runs the API on the host
 instead; choose one setup to avoid port conflicts.
 
+Self-hosters can enable Prometheus metrics and Loki logs for the whole installation
+with an optional Compose override. Grafana includes a Space operations dashboard.
+See [enable, verify and disable monitoring](docs/operations/monitoring.md).
+
 The CDC service retains its PostgreSQL replication slot across restarts and reads
 committed WAL with `pgoutput`. It publishes each event to JetStream before keyed
 outbox cleanup and only then acknowledges the transaction end LSN. Restarting the

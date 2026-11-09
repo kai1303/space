@@ -1,0 +1,161 @@
+# Add to COMPOSE_FILE after compose.yaml to enable installation-wide monitoring.
+x-space-log-options: &space-log-options
+  fluentd-address: 127.0.0.1:${SPACE_LOG_PORT:-15514}
+  fluentd-async: "true"
+  fluentd-buffer-limit: "128"
+  fluentd-max-retries: "4"
+  fluentd-retry-wait: 250ms
+  fluentd-sub-second-precision: "true"
+  fluentd-request-ack: "true"
+  mode: non-blocking
+  max-buffer-size: 1m
+
+services:
+  server:
+    environment:
+      SPACE_MONITORING_ENABLED: "true"
+    logging:
+      driver: fluentd
+      options:
+        <<: *space-log-options
+        tag: space-server
+  events:
+    logging:
+      driver: fluentd
+      options:
+        <<: *space-log-options
+        tag: space-events
+  worker:
+    logging:
+      driver: fluentd
+      options:
+        <<: *space-log-options
+        tag: space-worker
+  log-collector:
+    image: otel/opentelemetry-collector-contrib:0.131.0
+    command: ["--config=/etc/otelcol/logs.yaml"]
+    volumes:
+      - ./deploy/monitoring/log-collector.yaml:/etc/otelcol/logs.yaml:ro
+    ports:
+      - "127.0.0.1:${SPACE_LOG_PORT:-15514}:15514/tcp"
+    mem_limit: 128m
+    restart: unless-stopped
+  loki:
+    image: grafana/loki:3.7.9
+    command: ["-config.file=/etc/loki/space.yaml"]
+    volumes:
+      - ./deploy/monitoring/loki.yaml:/etc/loki/space.yaml:ro
+      - loki_data:/loki
+    mem_limit: 384m
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:v3.16.0
+    restart: unless-stopped
+    mem_limit: 384m
+    command:
+      - --config.file=/etc/prometheus/prometheus.yaml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=7d
+      - --storage.tsdb.retention.size=1GB
+    volumes:
+      - ./deploy/monitoring/prometheus.yaml:/etc/prometheus/prometheus.yaml:ro
+      - ./deploy/monitoring/rules.yaml:/etc/prometheus/rules.yaml:ro
+      - prometheus_data:/prometheus
+    ports: ["127.0.0.1:${SPACE_PROMETHEUS_PORT:-59090}:9090"]
+
+  alertmanager:
+    image: prom/alertmanager:v0.34.2
+    restart: unless-stopped
+    mem_limit: 96m
+    command:
+      - --config.file=/etc/space/alertmanager.yaml
+      - --storage.path=/alertmanager
+      - --cluster.listen-address=
+    volumes:
+      - ${SPACE_ALERTMANAGER_CONFIG:-./deploy/monitoring/alertmanager.yaml}:/etc/space/alertmanager.yaml:ro
+      - alertmanager_data:/alertmanager
+    ports: ["127.0.0.1:${SPACE_ALERTMANAGER_PORT:-59093}:9093"]
+
+  grafana:
+    image: grafana/grafana:13.3.0
+    restart: unless-stopped
+    mem_limit: 384m
+    environment:
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_ANALYTICS_CHECK_FOR_PLUGIN_UPDATES: "false"
+      GF_NEWS_NEWS_FEED_ENABLED: "false"
+      GF_PLUGINS_PREINSTALL_DISABLED: "true"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /etc/space/dashboards/operations.json
+    entrypoint: [/bin/sh, -ec]
+    command:
+      - |
+        umask 077
+        password_file=/var/lib/grafana/.initial-admin-password
+        if [ ! -s "$$password_file" ]; then
+          head -c 32 /dev/urandom | base64 > "$$password_file.tmp"
+          mv "$$password_file.tmp" "$$password_file"
+        fi
+        export GF_SECURITY_ADMIN_PASSWORD__FILE="$$password_file"
+        exec /run.sh
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./deploy/monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./deploy/monitoring/grafana/dashboards:/etc/space/dashboards:ro
+    ports: ["127.0.0.1:${SPACE_GRAFANA_PORT:-53001}:3000"]
+
+  infra-db-init:
+    image: postgres:16-alpine
+    entrypoint: ["/bin/sh", "/init-monitor-role.sh"]
+    environment:
+      PGHOST: postgres
+      PGDATABASE: workplace
+      PGUSER: workplace
+      PGPASSWORD: ${POSTGRES_PASSWORD:-local_demo_only}
+      PGCONNECT_TIMEOUT: "5"
+      PGOPTIONS: "-c statement_timeout=5s"
+    volumes:
+      - ./deploy/monitoring/infra-db-init.sh:/init-monitor-role.sh:ro
+      - monitor_db_credentials:/credentials
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [CHOWN]
+    security_opt: [no-new-privileges:true]
+
+  infra-metrics:
+    mem_limit: 128m
+    build: .
+    command: ["node", "/app/apps/events/infra-metrics.cjs"]
+    user: "1000:1000"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    restart: unless-stopped
+    volumes:
+      - ./deploy/monitoring/infra-metrics.cjs:/app/apps/events/infra-metrics.cjs:ro
+      - monitor_db_credentials:/credentials:ro
+      - type: volume
+        source: postgres_data
+        target: /volumes/postgres
+        read_only: true
+        volume: {nocopy: true}
+      - type: volume
+        source: nats_data
+        target: /volumes/nats
+        read_only: true
+        volume: {nocopy: true}
+    depends_on:
+      infra-db-init:
+        condition: service_completed_successfully
+
+volumes:
+  prometheus_data:
+  alertmanager_data:
+  grafana_data:
+  loki_data:
+  monitor_db_credentials:

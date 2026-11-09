@@ -1,0 +1,83 @@
+rule_files: [rules.yaml]
+evaluation_interval: 5s
+tests:
+  - name: outbox exceeds early warning threshold then recovers
+    interval: 5s
+    input_series:
+      - series: 'space_cdc_outbox_oldest_age_seconds{job="space-infra",instance="example"}'
+        values: '0 2 7 12 0'
+    alert_rule_test:
+      - eval_time: 10s
+        alertname: SpaceOutboxDelayed
+        exp_alerts:
+          - exp_labels: {job: space-infra, instance: example, severity: warning}
+            exp_annotations:
+              summary: Committed events are waiting for publication
+      - eval_time: 20s
+        alertname: SpaceOutboxDelayed
+        exp_alerts: []
+  - name: missing disk data while exporter is reachable
+    interval: 5s
+    input_series:
+      - series: 'space_infra_source_up{job="space-infra",source="disk"}'
+        values: '0+0x40'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: SpaceInfraCollectionFailed
+        exp_alerts:
+          - exp_labels: {job: space-infra, source: disk, severity: warning}
+            exp_annotations:
+              summary: Infrastructure collection failed for disk
+  - name: low disk space fires after five minutes and clears on recovery
+    interval: 1m
+    input_series:
+      - series: 'space_volume_available_bytes{volume="postgres"}'
+        values: '8+0x5 40'
+      - series: 'space_volume_capacity_bytes{volume="postgres"}'
+        values: '100+0x6'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: SpaceDiskLow
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: SpaceDiskLow
+        exp_alerts:
+          - exp_labels: {volume: postgres, severity: warning}
+            exp_annotations: {summary: Less than 10% disk space remains for postgres}
+      - eval_time: 6m
+        alertname: SpaceDiskLow
+        exp_alerts: []
+  - name: idle queues stay healthy while a stalled consumer fires
+    interval: 1m
+    input_series:
+      - series: 'space_jetstream_consumer_pending{consumer="busy"}'
+        values: '2+0x10'
+      - series: 'space_jetstream_consumer_ack_pending{consumer="busy"}'
+        values: '1+0x10'
+      - series: 'space_jetstream_consumer_ack_floor{consumer="busy"}'
+        values: '4+0x10'
+      - series: 'space_jetstream_consumer_pending{consumer="idle"}'
+        values: '0+0x10'
+      - series: 'space_jetstream_consumer_ack_pending{consumer="idle"}'
+        values: '0+0x10'
+      - series: 'space_jetstream_consumer_ack_floor{consumer="idle"}'
+        values: '4+0x10'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: SpaceConsumerStalled
+        exp_alerts:
+          - exp_labels: {consumer: busy, severity: warning}
+            exp_annotations: {summary: Queued work is waiting for busy to advance acknowledgements}
+  - name: missing available bytes is visible even if capacity still arrives
+    interval: 15s
+    input_series:
+      - series: 'space_volume_capacity_bytes{volume="postgres"}'
+        values: '100+0x12'
+      - series: 'space_infra_source_up{source="disk"}'
+        values: '1+0x12'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="SpaceInfraMetricsMissing",alertstate="firing",volume="postgres"}'
+        eval_time: 2m
+        exp_samples:
+          - labels: 'ALERTS{alertname="SpaceInfraMetricsMissing",alertstate="firing",severity="warning",volume="postgres"}'
+            value: 1

@@ -6,7 +6,7 @@ The installation operator controls monitoring for the whole deployment. The firs
 
 Ship a Compose override, `compose.monitoring.yaml`. On Linux the operator enables it by adding `COMPOSE_FILE=compose.yaml:compose.monitoring.yaml` to the deployment's Compose environment and applying `docker compose up -d`. The override enables API instrumentation and adds the collectors in one operation. A fresh installation using the base file alone starts with monitoring off. Existing readiness probes work in both modes.
 
-Provide a disable procedure that explicitly stops and removes the monitoring services before removing the override and reconciling the API. Simply removing an override can leave its containers running. Preserve metric history in a dedicated volume across disable and re-enable. Document the API restart when applying either configuration.
+Provide a disable procedure that explicitly stops and removes the monitoring services before removing the override and reconciling the API. Simply removing an override can leave its containers running. Preserve metric and log history in dedicated volumes across disable and re-enable. Document the restart of instrumented services when applying either configuration.
 
 ## Signals and alerts
 
@@ -19,15 +19,19 @@ Provide a disable procedure that explicitly stops and removes the monitoring ser
 
 Use Prometheus to store metrics and evaluate rules, and Alertmanager to group and deliver notifications to an optional operator-configured webhook. Provide a local alert view and a test notification procedure. Keep the interfaces private and publish operator access on loopback. Collection stays on the installation. Allow only bounded service, route, status and stream labels. Exclude message content, raw paths, query strings, credentials and user or workspace identifiers.
 
+## Operational logs
+
+Send selected API, CDC bridge and worker events to Loki through a local collector. Use Docker's asynchronous Fluent Forward driver with bounded queues so long-running services reconnect after the collector restarts. Project each recognized event into a fixed set of diagnostic fields before export. Give operators a single Grafana installation with provisioned Prometheus and Loki data sources so they can select the time window of a firing alert and search the corresponding logs. Keep local storage, finite log retention, bounded buffering and drop-on-overflow behavior. Losing telemetry during a prolonged outage is preferable to blocking chat delivery. Alert on collection errors where the collector can observe them.
+
 ## Failure isolation and bounds
 
 The external monitoring services own the collection interval. The API records observations in memory and serves them on a private listener. Chat requests and event publication never wait for a collector. Use a read-only database identity with limited connections, statement deadlines and indexed queries. Collect disk capacity from the actual data filesystems without mounting the Docker socket. Configure time and size retention limits for Prometheus and document the headroom needed for storage overhead. A monitor on the same host cannot report total host loss while that host is down. Operators needing that signal can probe readiness from another host.
 
 ## Acceptance checks
 
-1. Render both Compose configurations and start each in an isolated project. Verify the default has no monitoring services, listener or exports. Enable, disable and re-enable with existing volumes. Confirm chat works after each transition and metrics history survives.
+1. Render both Compose configurations and start each in an isolated project. Verify the default has no monitoring services, listener or exports. Enable, disable and re-enable with existing volumes. Confirm chat works after each transition and metric and log history survive.
 2. Send a message, then stop the CDC bridge and send another. Observe the delivery alert, restart the bridge, and verify both message delivery and alert resolution. Check idle periods for false alarms.
 3. Exercise storage and missing-series alert rules against synthetic samples. Stop a collector to exercise the live missing-data path. Deliver a firing and resolved notification to a local test receiver.
-4. Stop the entire monitoring stack while the application is running. Verify message send and realtime receipt. Inspect exported labels and host port bindings. Record CPU, memory and disk usage during the rehearsal before publishing sizing guidance.
+4. Stop the entire monitoring stack while the application is running. Verify message send and realtime receipt. Verify that a known service event reaches Loki and that injected secrets and message content do not. Inspect exported labels and host port bindings. Record CPU, memory and disk usage during the rehearsal before publishing sizing guidance.
 
 The deployment runbook defines the existing recovery signals and operator responsibilities. [Realtime availability and recovery](../../architecture/realtime-deployment.md)

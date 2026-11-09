@@ -1,0 +1,73 @@
+receivers:
+  fluentforward/docker:
+    endpoint: 0.0.0.0:15514
+
+processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 96
+    spike_limit_mib: 24
+  transform/events:
+    error_mode: silent
+    log_statements:
+      - context: log
+        statements:
+          - set(log.cache["service"], log.attributes["fluent.tag"]) where IsString(log.attributes["fluent.tag"]) and IsMatch(log.attributes["fluent.tag"], "^space-(server|events|worker)$")
+          - set(log.cache["pino"], ParseJSON(log.body)) where log.cache["service"] == "space-server" and IsString(log.body) and IsMatch(log.body, "^[{]")
+          - set(log.cache["event"], "server_ready") where IsString(log.cache["pino"]["msg"]) and IsMatch(log.cache["pino"]["msg"], "^Server listening at ")
+          - set(log.cache["event"], log.cache["pino"]["msg"]) where IsString(log.cache["pino"]["msg"]) and IsMatch(log.cache["pino"]["msg"], "^(api_request_failed|startup_failed|shutdown_failed|huddle_media_retry_exhausted|metrics_listener_unavailable)$")
+          - set(log.cache["event"], "typing_transport_unavailable") where log.cache["service"] == "space-server" and log.body == "typing_transport_unavailable"
+          - set(log.cache["event"], "worker_ready") where log.cache["service"] == "space-worker" and log.body == "Worker ready"
+          - set(log.cache["event"], log.body) where log.cache["service"] == "space-worker" and IsMatch(log.body, "^(worker_operation_failed|worker_progress_failed)$")
+          - set(log.cache["event"], "cdc_ready") where log.cache["service"] == "space-events" and log.body == "CDC ready"
+          - set(log.cache["event"], "cdc_interrupted") where log.cache["service"] == "space-events" and IsMatch(log.body, "^CDC interrupted; retained WAL will replay( |$)")
+          - >-
+            set(log.cache["access"], Format("{\"msg\":\"http_request_completed\",\"httpMethod\":\"%s\",\"statusCode\":%d,\"durationMs\":%d}",
+            [log.cache["pino"]["httpMethod"], Int(log.cache["pino"]["statusCode"]), Int(log.cache["pino"]["durationMs"])]))
+            where log.cache["pino"]["msg"] == "http_request_completed"
+            and IsString(log.cache["pino"]["httpMethod"])
+            and IsMatch(log.cache["pino"]["httpMethod"], "^(GET|HEAD|POST|PUT|PATCH|DELETE|OPTIONS|OTHER)$")
+            and IsDouble(log.cache["pino"]["statusCode"]) and Double(Int(log.cache["pino"]["statusCode"])) == log.cache["pino"]["statusCode"] and log.cache["pino"]["statusCode"] >= 100 and log.cache["pino"]["statusCode"] <= 599
+            and IsDouble(log.cache["pino"]["durationMs"]) and Double(Int(log.cache["pino"]["durationMs"])) == log.cache["pino"]["durationMs"] and log.cache["pino"]["durationMs"] >= 0 and log.cache["pino"]["durationMs"] <= 9007199254740991
+          # Only a recognized event can survive the next filter. Clear the source fields first.
+          - set(log.body, "")
+          - set(log.body, log.cache["event"]) where log.cache["event"] != nil
+          - set(log.body, log.cache["access"]) where log.cache["access"] != nil
+          - keep_keys(log.attributes, [])
+          - set(log.attributes["service.name"], log.cache["service"]) where log.cache["service"] != nil
+          - set(log.severity_text, "error")
+          - set(log.severity_text, "warn") where log.body == "metrics_listener_unavailable"
+          - set(log.severity_text, "info") where IsMatch(log.body, "_ready$") or log.cache["access"] != nil
+  filter/unknown:
+    logs:
+      log_record:
+        - 'body == ""'
+  groupbyattrs/service:
+    keys: [service.name]
+  batch:
+    timeout: 1s
+    send_batch_size: 128
+    send_batch_max_size: 128
+exporters:
+  otlphttp/loki:
+    endpoint: http://loki:3100/otlp
+    timeout: 5s
+    sending_queue:
+      queue_size: 32
+      num_consumers: 1
+    retry_on_failure:
+      max_elapsed_time: 30s
+service:
+  telemetry:
+    metrics:
+      readers:
+        - pull:
+            exporter:
+              prometheus:
+                host: 0.0.0.0
+                port: 8888
+  pipelines:
+    logs:
+      receivers: [fluentforward/docker]
+      processors: [memory_limiter, transform/events, filter/unknown, groupbyattrs/service, batch]
+      exporters: [otlphttp/loki]

@@ -11,7 +11,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "start": "node dist/main.js",
     "dev": "node dist/main.js",
-    "test": "pnpm build && node --test agent-connectors.test.mjs storage.test.mjs previews.test.mjs pdf-thumbnail.test.mjs memory.test.mjs invitation-email.test.mjs calling-config.test.mjs huddle-media.test.mjs",
+    "test": "pnpm build && node --test agent-connectors.test.mjs storage.test.mjs previews.test.mjs pdf-thumbnail.test.mjs memory.test.mjs invitation-email.test.mjs calling-config.test.mjs huddle-media.test.mjs request-metrics.test.mjs",
     "test:storage": "pnpm build && node --test storage.integration.test.mjs",
     "search:backfill": "node dist/search-backfill.js"
   },
@@ -64,6 +64,7 @@
     "@better-auth/drizzle-adapter": "1.7.15",
     "@modelcontextprotocol/node": "2.1.2",
     "@modelcontextprotocol/server": "2.4.0",
+    "@prometheus-io/client": "0.16.1",
     "@space/contracts": "workspace:*",
     "@space/core": "workspace:*",
     "@space/events": "workspace:*",

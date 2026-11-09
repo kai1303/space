@@ -75,6 +75,7 @@ services:
     build: .
     environment:
       <<: *database
+      NODE_ENV: development
       NATS_URL: nats://nats:4222
     command: ["node", "apps/events/dist/main.js"]
     restart: unless-stopped
@@ -131,6 +132,7 @@ services:
     build: .
     environment:
       <<: *database
+      NODE_ENV: development
       NATS_URL: nats://nats:4222
       NAVIGATOR_L1_PROVIDER: ${NAVIGATOR_L1_PROVIDER:-compatible}
       TYPESAFE_API_KEY: ${TYPESAFE_API_KEY:-}

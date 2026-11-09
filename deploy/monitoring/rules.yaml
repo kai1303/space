@@ -1,0 +1,91 @@
+groups:
+  - name: space-delivery
+    interval: 5s
+    rules:
+      - alert: SpaceOutboxDelayed
+        expr: space_cdc_outbox_oldest_age_seconds > 5
+        labels: {severity: warning}
+        annotations: {summary: Committed events are waiting for publication}
+      - alert: SpaceApiUnavailable
+        expr: space_api_ready == 0
+        for: 30s
+        labels: {severity: critical}
+        annotations: {summary: Space API readiness is failing}
+      - alert: SpaceCdcSlotInactive
+        expr: space_cdc_slot_active == 0
+        for: 30s
+        labels: {severity: critical}
+        annotations: {summary: Space CDC does not have an active usable replication slot}
+  - name: space-capacity
+    rules:
+      - alert: SpaceWalRetained
+        expr: space_cdc_slot_retained_wal_bytes > 1024^3
+        for: 5m
+        labels: {severity: warning}
+        annotations: {summary: The replication slot is retaining over 1 GiB of WAL}
+      - alert: SpaceDiskLow
+        expr: space_volume_available_bytes / space_volume_capacity_bytes < 0.10
+        for: 5m
+        labels: {severity: warning}
+        annotations: {summary: 'Less than 10% disk space remains for {{ $labels.volume }}'}
+      - alert: SpaceJetStreamStorageHigh
+        expr: (space_jetstream_store_used_bytes / space_jetstream_store_limit_bytes > 0.85) and (space_jetstream_store_limit_bytes > 0)
+        for: 5m
+        labels: {severity: warning}
+        annotations: {summary: JetStream is above 85% of its configured storage limit}
+      - alert: SpaceConsumerStalled
+        expr: ((space_jetstream_consumer_pending + space_jetstream_consumer_ack_pending) > 0) and (changes(space_jetstream_consumer_ack_floor[5m]) == 0)
+        for: 5m
+        labels: {severity: warning}
+        annotations: {summary: 'Queued work is waiting for {{ $labels.consumer }} to advance acknowledgements'}
+      - alert: SpaceConsumerMissing
+        expr: space_jetstream_consumer_present == 0
+        for: 2m
+        labels: {severity: warning}
+        annotations: {summary: 'Expected JetStream consumer {{ $labels.consumer }} is missing'}
+  - name: space-http
+    rules:
+      - record: space:api_requests:rate5m
+        expr: sum(rate(space_api_http_requests_total{route!~"/(readyz|healthz)"}[5m]))
+      - alert: SpaceHttpErrors
+        expr: (sum(rate(space_api_http_requests_total{route!~"/(readyz|healthz)",status_class="5xx"}[5m])) / space:api_requests:rate5m > 0.05) and (space:api_requests:rate5m > 0.1)
+        for: 5m
+        labels: {severity: warning}
+        annotations: {summary: Over 5% of API requests are failing}
+      - alert: SpaceHttpSlow
+        expr: (histogram_quantile(0.95, sum by (le) (rate(space_api_http_request_duration_seconds_bucket{route!~"/(readyz|healthz)"}[5m]))) > 2) and (space:api_requests:rate5m > 0.1)
+        for: 5m
+        labels: {severity: warning}
+        annotations: {summary: API request p95 exceeds two seconds}
+  - name: space-monitoring
+    rules:
+      - alert: SpaceMonitoringTargetDown
+        expr: up == 0
+        for: 1m
+        labels: {severity: warning}
+        annotations: {summary: 'Prometheus cannot scrape {{ $labels.instance }}'}
+      - alert: SpaceInfraCollectionFailed
+        expr: space_infra_source_up == 0
+        for: 30s
+        labels: {severity: warning}
+        annotations: {summary: 'Infrastructure collection failed for {{ $labels.source }}'}
+      - alert: SpaceInfraMetricsMissing
+        expr: >-
+          absent(space_api_ready) or absent(space_cdc_slot_active)
+          or absent(space_cdc_outbox_oldest_age_seconds) or absent(space_cdc_slot_retained_wal_bytes)
+          or absent(space_volume_available_bytes{volume="postgres"}) or absent(space_volume_capacity_bytes{volume="postgres"})
+          or absent(space_volume_available_bytes{volume="nats"}) or absent(space_volume_capacity_bytes{volume="nats"})
+          or absent(space_jetstream_store_used_bytes) or absent(space_jetstream_store_limit_bytes)
+          or absent(space_jetstream_consumer_present{stream="SEARCH",consumer="message-search-v1"})
+          or (count(space_jetstream_consumer_present{stream="WORK",consumer=~"remote-workers|navigator-workers|call-deadlines|todo-reminders|connection-deadlines|delivery-deadlines|asset-deadlines|workspace-retention-backfill|workspace-retention-messages|workspace-retention-assets"}) or vector(0)) < 10
+        for: 1m
+        labels: {severity: warning}
+        annotations: {summary: Required infrastructure metrics are missing}
+      - alert: SpaceLogExportErrors
+        expr: sum(increase(otelcol_exporter_send_failed_log_records__records__total[5m])) > 0 or sum(increase(otelcol_receiver_refused_log_records__records__total[5m])) > 0
+        labels: {severity: warning}
+        annotations: {summary: The log collector failed to send records to Loki}
+      - alert: SpaceNotificationFailures
+        expr: sum(increase(alertmanager_notifications_failed_total[5m])) > 0
+        labels: {severity: warning}
+        annotations: {summary: Alertmanager could not deliver notifications}

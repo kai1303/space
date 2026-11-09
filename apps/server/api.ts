@@ -1,3 +1,4 @@
+import { registerRequestMetrics, type MonitoringListener } from './request-metrics.js';
 import { HuddleStore } from '@space/postgres/huddles';
 import {ToolApprovalStore} from '@space/postgres/tool-approvals';
 import {registerToolApprovals} from './tool-approvals.js';
@@ -49,7 +50,7 @@ declare module 'fastify' {
   interface FastifyRequest { actorId: string }
 }
 
-export function createApi(store: PostgresStore, options: { huddles?: HuddleMedia; outbound?: OutboundOptions; search?: TypesenseOptions; invitationEmail?: {config:InvitationEmailConfig;mailer:ReturnType<typeof createInvitationMailer>}; pairedConnectors?: import('@space/contracts').PairedConnector[]; logger?: boolean; realtime?: RealtimeOptions; auth?: Authentication; allowDevelopmentTokens?: boolean; trustedProxies?: string[]; storage?: AssetStorage; memory?: MemoryOptions } = {}) {
+export function createApi(store: PostgresStore, options: { monitoring?: MonitoringListener; huddles?: HuddleMedia; outbound?: OutboundOptions; search?: TypesenseOptions; invitationEmail?: {config:InvitationEmailConfig;mailer:ReturnType<typeof createInvitationMailer>}; pairedConnectors?: import('@space/contracts').PairedConnector[]; logger?: boolean; realtime?: RealtimeOptions; auth?: Authentication; allowDevelopmentTokens?: boolean; trustedProxies?: string[]; storage?: AssetStorage; memory?: MemoryOptions } = {}) {
   if (options.allowDevelopmentTokens && process.env.NODE_ENV === 'production') throw new Error('Development tokens are forbidden in production');
   const authenticate = async (headers: IncomingHttpHeaders, socketToken?: unknown) => {
     const actor = await options.auth?.actor(headers);
@@ -65,6 +66,7 @@ export function createApi(store: PostgresStore, options: { huddles?: HuddleMedia
     bodyLimit: 32768,
     requestTimeout: 15_000,
   });
+  if (options.monitoring) registerRequestMetrics(app, options.monitoring);
   app.server.headersTimeout = 10_000;
   app.server.maxHeadersCount = 50;
   app.decorateRequest('actorId', '');
