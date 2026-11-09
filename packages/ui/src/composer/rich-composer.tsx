@@ -397,38 +397,42 @@ export function RichComposer({
     setLinkOpen(true);
   }
   const tools = [
-    { name: "Bold", icon: TextB, format: "bold", value: true },
-    { name: "Italic", icon: TextItalic, format: "italic", value: true },
+    { name: "Bold", icon: TextB, iconSize: 22, format: "bold", value: true },
+    { name: "Italic", icon: TextItalic, iconSize: 23, format: "italic", value: true },
     {
       name: "Underline",
       icon: TextUnderline,
+      iconSize: 22,
       format: "underline",
       value: true,
     },
     {
       name: "Strikethrough",
       icon: TextStrikethrough,
+      iconSize: 20,
       format: "strike",
       value: true,
     },
     {
       name: "Ordered list",
       icon: ListNumbers,
+      iconSize: 20,
       format: "list",
       value: "ordered",
     },
     {
       name: "Bulleted list",
       icon: ListBullets,
+      iconSize: 24,
       format: "list",
       value: "bullet",
     },
-    { name: "Blockquote", icon: Quotes, format: "blockquote", value: true },
-    { name: "Code", icon: Code, format: "code", value: true },
-    { name: "Code block", icon: CodeBlock, format: "code-block", value: true },
+    { name: "Blockquote", icon: Quotes, iconSize: 22, format: "blockquote", value: true },
+    { name: "Code", icon: Code, iconSize: 18, format: "code", value: true },
+    { name: "Code block", icon: CodeBlock, iconSize: 20, format: "code-block", value: true },
   ];
   const codeBlockActive = Boolean(formats["code-block"]);
-  const formatButtons = tools.map(({ name, icon: Icon, format: key, value }) => {
+  const formatButtons = tools.map(({ name, icon: Icon, iconSize, format: key, value }) => {
     const unavailable = !ready || (codeBlockActive && !["list", "blockquote", "code-block"].includes(key));
     return (
     <IconButton key={name} label={name} size="sm"
@@ -436,7 +440,7 @@ export function RichComposer({
       data-send-disabled={sending && !unavailable || undefined}
       aria-pressed={key === "code-block" ? codeBlockActive : formats[key] === value}
       onMouseDown={(e) => e.preventDefault()} onClick={() => format(key, value)}>
-      <Icon size={18} />
+      <Icon size={iconSize} />
     </IconButton>
   ); });
   return (
@@ -464,7 +468,7 @@ export function RichComposer({
               onMouseDown={(e) => e.preventDefault()}
               onClick={openLink}
             >
-              <Link size={18} />
+              <Link size={19} />
             </IconButton>
             <span className="sp-rich-format-separator" aria-hidden="true" />
             {formatButtons.slice(4, 7)}
