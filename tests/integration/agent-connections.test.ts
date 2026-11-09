@@ -1,3 +1,4 @@
+import { observeOutbox } from '../fixtures/observe-outbox.js';
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
@@ -15,7 +16,7 @@ const pool = new Pool({ connectionString: url, options: `-c search_path=${schema
 const app = createApi(new PostgresStore(pool), { allowDevelopmentTokens: true, realtime: { } });
 let origin = '';
 const sockets: Socket[] = [];
-before(async () => { await admin.query(`CREATE SCHEMA ${schema}`); await migrate(pool); await migrate(pool); origin = await app.listen({ host: '127.0.0.1', port: 0 }); });
+before(async () => { await admin.query(`CREATE SCHEMA ${schema}`); await migrate(pool); await migrate(pool); await observeOutbox(pool); origin = await app.listen({ host: '127.0.0.1', port: 0 }); });
 after(async () => { sockets.forEach(s => s.disconnect()); await app.close(); await pool.end(); await admin.query(`DROP SCHEMA ${schema} CASCADE`); await admin.end(); });
 async function api(token: string | undefined, method: 'GET' | 'POST', path: string, payload?: object, status = 200) {
   const response = await app.inject({ method, url: `/v1${path}`, headers: { ...(token ? { authorization: `Bearer ${token}` } : {}), ...(payload ? { 'content-type': 'application/json' } : {}) }, ...(payload ? { payload } : {}) });
@@ -152,7 +153,7 @@ for (const provider of ['kiro', 'claude'] as const) test(`${provider} enrollment
   const store = new PostgresStore(pool);
   const task = await store.createTask(owner.owner_id, { workspace_id: owner.workspace_id, thread_id: owner.thread_id, installation_id: connection.installation_id, skill: `${provider}.run`, goal: `Hello from ${provider}` }, randomBytes(16).toString('hex'));
   await store.approveTask(owner.owner_id, task.id);
-  const events = await pool.query("SELECT kind FROM event_outbox WHERE payload->>'task_id'=$1 AND kind LIKE 'task.%'", [task.id]);
+  const events = await pool.query("SELECT kind FROM observed_outbox WHERE payload->>'task_id'=$1 AND kind LIKE 'task.%'", [task.id]);
   assert.deepEqual(events.rows.map(r => r.kind), ['task.local.ready']);
   assert.equal(await store.claimDelivery(), null);
   assert.ok(await store.claimDelivery(connection.installation_id));

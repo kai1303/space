@@ -1,3 +1,4 @@
+import { observeOutbox } from '../fixtures/observe-outbox.js';
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomBytes, randomUUID } from 'node:crypto';
@@ -13,7 +14,7 @@ const schema = `capabilities_${randomBytes(8).toString('hex')}`;
 const admin = new Pool({ connectionString: url }), pool = new Pool({ connectionString: url, options: `-c search_path=${schema}` });
 const descriptor = { id: 'research.local', definition_id: randomUUID(), name: 'Research', capabilities: { skills: ['research.run', 'research.review'], controls: { progress_stream: true }, persistent_sessions: true } };
 const store = new AgentConnectionStore(pool, { connectors: [descriptor] });
-before(async () => { await admin.query(`CREATE SCHEMA ${schema}`); await migrate(pool); });
+before(async () => { await admin.query(`CREATE SCHEMA ${schema}`); await migrate(pool); await observeOutbox(pool); });
 after(async () => { await pool.end(); await admin.query(`DROP SCHEMA ${schema} CASCADE`); await admin.end(); });
 test('trusted custom connector controls enrollment, inherited access, skill selection and local delivery', async () => {
  const owner = await bootstrap(pool);
@@ -40,7 +41,7 @@ test('trusted custom connector controls enrollment, inherited access, skill sele
  await store.setChannelEnabled(owner.owner_id, id, owner.channel_id, true, 'research.run');
  await assert.rejects(sessions.create(owner.owner_id, owner.thread_id, { client_session_id: randomUUID(), installation_id: id, title: 'Choose skill' }), /session_skill_required/);
  const task = await sessions.send(owner.owner_id, session.id, { text: 'Review this' }, randomUUID());
- const event = (await pool.query("SELECT kind FROM event_outbox WHERE payload->>'task_id'=$1 AND kind LIKE 'task.%.ready'", [task.id])).rows;
+ const event = (await pool.query("SELECT kind FROM observed_outbox WHERE payload->>'task_id'=$1 AND kind LIKE 'task.%.ready'", [task.id])).rows;
  assert.ok(event.some(row => row.kind === 'task.local.ready')); assert.ok(!event.some(row => row.kind === 'task.remote.ready'));
  const tasks = new PostgresStore(pool);
  assert.equal(await tasks.claimDelivery(), null);

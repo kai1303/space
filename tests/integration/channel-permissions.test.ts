@@ -1,3 +1,4 @@
+import { observeOutbox } from '../fixtures/observe-outbox.js';
 import {test,before,after} from 'node:test';
 import assert from 'node:assert/strict';
 import {randomBytes,randomUUID} from 'node:crypto';
@@ -20,7 +21,7 @@ app.decorateRequest('actorId','');
 app.addHook('onRequest',async r=>{r.actorId=await store.authenticate(r.headers.authorization?.slice(7)??'');});
 app.setErrorHandler((e,_r,reply)=>reply.code(e instanceof AppError?e.status:500).send({error:e instanceof AppError?e.code:'internal_error'}));
 registerChatRoutes(app,chat);
-before(async()=>{await admin.query(`CREATE SCHEMA ${schema}`);await migrate(pool);});
+before(async()=>{await admin.query(`CREATE SCHEMA ${schema}`);await migrate(pool); await observeOutbox(pool);});
 after(async()=>{await app.close();await pool.end();await admin.query(`DROP SCHEMA ${schema} CASCADE`);await admin.end();});
 async function call(token:string,method:'GET'|'PATCH'|'POST'|'DELETE',path:string,payload?:object,status=200){
  const r=await app.inject({method,url:`/v1${path}`,headers:{authorization:`Bearer ${token}`},...(payload?{payload}:{})});
@@ -90,7 +91,7 @@ test('concurrent editors have one winner and membership removal clears explicit 
  assert.deepEqual(cleaned.manager_ids,[a.owner_id]);assert.deepEqual(cleaned.poster_ids,[]);assert.notEqual(cleaned.revision,next.revision);
  await call(a.collaborator_token,'POST',`/channels/${a.channel_id}/join`,{});
  assert.equal((await permissions(a.collaborator_token,a.channel_id)).capabilities.manage,false);
- const events=await pool.query("SELECT count(*)::int AS n FROM event_outbox WHERE payload->>'channel_id'=$1 AND payload->>'resource_scope'='metadata'",[a.channel_id]);assert.ok(events.rows[0].n>0);
+ const events=await pool.query("SELECT count(*)::int AS n FROM observed_outbox WHERE payload->>'channel_id'=$1 AND payload->>'resource_scope'='metadata'",[a.channel_id]);assert.ok(events.rows[0].n>0);
 });
 
 test('member action policies are independent and private channels retain management',async()=>{

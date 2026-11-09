@@ -71,11 +71,16 @@ test('WAL delivery survives deleted legacy hints and revokes a lost membership',
 
 test('UI triggers omit channel sequence and agent heartbeat-only writes', async () => {
  const a=await bootstrap(pool);
- await pool.query('DELETE FROM chat_delivery_outbox');
- await pool.query('UPDATE channels SET event_sequence=event_sequence+1 WHERE id=$1',[a.channel_id]);
- assert.equal((await pool.query('SELECT count(*) FROM chat_delivery_outbox')).rows[0].count,'0');
- await pool.query('UPDATE users SET display_name=$1 WHERE id=$2',['Changed profile',a.owner_id]);
- assert.ok((await pool.query('SELECT count(*) FROM chat_delivery_outbox')).rows[0].count!=='0','profiles must enqueue UI updates');
+ const tx=await pool.connect();
+ try {
+  // Inspect trigger output before commit, while the delivery bridge cannot drain it.
+  await tx.query('BEGIN');
+  await tx.query('DELETE FROM chat_delivery_outbox');
+  await tx.query('UPDATE channels SET event_sequence=event_sequence+1 WHERE id=$1',[a.channel_id]);
+  assert.equal((await tx.query('SELECT count(*) FROM chat_delivery_outbox')).rows[0].count,'0');
+  await tx.query('UPDATE users SET display_name=$1 WHERE id=$2',['Changed profile',a.owner_id]);
+  assert.notEqual((await tx.query('SELECT count(*) FROM chat_delivery_outbox')).rows[0].count,'0','profiles must enqueue UI updates');
+ } finally { await tx.query('ROLLBACK');tx.release(); }
 });
 
 test('workspace updates and connector wake hints cross API instances through durable events', async () => {

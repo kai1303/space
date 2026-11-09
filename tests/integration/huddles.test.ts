@@ -1,3 +1,4 @@
+import { observeOutbox } from '../fixtures/observe-outbox.js';
 import {test,before,after} from 'node:test';
 import assert from 'node:assert/strict';
 import {randomBytes} from 'node:crypto';
@@ -13,7 +14,7 @@ const schema=`huddles_${randomBytes(6).toString('hex')}`;
 const admin=new Pool({connectionString:process.env.TEST_DATABASE_URL});
 const pool=new Pool({connectionString:process.env.TEST_DATABASE_URL,options:`-c search_path=${schema}`});
 const store=new HuddleStore(pool);
-before(async()=>{assert.ok(process.env.TEST_DATABASE_URL);await admin.query(`CREATE SCHEMA ${schema}`);await migrate(pool);});
+before(async()=>{assert.ok(process.env.TEST_DATABASE_URL);await admin.query(`CREATE SCHEMA ${schema}`);await migrate(pool); await observeOutbox(pool);});
 after(async()=>{await pool.end();await admin.query(`DROP SCHEMA ${schema} CASCADE`);await admin.end();});
 function media(){const rooms=new Set<string>();const provider:HuddleMedia={url:'ws://localhost:7880',create:async id=>{rooms.add(id);},remove:async id=>{rooms.delete(id);},exists:async id=>rooms.has(id),token:async(id,actor)=>`${id}:${actor}`,webhook:async()=>({event:'room_finished'})};return {rooms,provider};}
 
@@ -43,7 +44,7 @@ test('revocation during room creation cannot issue a token or resurrect the room
  assert.equal(issued,0);assert.equal(m.rooms.size,0);
  const h=(await pool.query('SELECT * FROM channel_huddles WHERE channel_id=$1',[a.channel_id])).rows[0];
  assert.equal(h.state,'ended');
- assert.equal((await pool.query("SELECT count(*)::int n FROM event_outbox WHERE kind='huddle.close' AND aggregate_id=$1",[h.id])).rows[0].n,1);
+ assert.equal((await pool.query("SELECT count(*)::int n FROM observed_outbox WHERE kind='huddle.close' AND aggregate_id=$1",[h.id])).rows[0].n,1);
 });
 test('duplicate terminal events and delayed provisioning cannot reopen a room',async()=>{
  const a=await bootstrap(pool),m=media(),service=new HuddleService(store,m.provider);
@@ -73,5 +74,5 @@ test('deleted huddle state preserves the durable media cleanup obligation',async
  const a=await bootstrap(pool),h=await store.start(a.owner_id,a.channel_id);
  await pool.query('DELETE FROM channel_huddles WHERE id=$1',[h.id]);
  assert.equal(await store.raw(h.id),null);
- assert.equal((await pool.query("SELECT count(*)::int n FROM event_outbox WHERE kind='huddle.close' AND aggregate_id=$1",[h.id])).rows[0].n,1);
+ assert.equal((await pool.query("SELECT count(*)::int n FROM observed_outbox WHERE kind='huddle.close' AND aggregate_id=$1",[h.id])).rows[0].n,1);
 });

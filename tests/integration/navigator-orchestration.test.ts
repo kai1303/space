@@ -37,7 +37,12 @@ test('continuation reuses a known session once and records immutable authorizati
  const s=await fixture();
  const nav=new NavigatorStore(pool,{level1:provider(c=>decision(c,'continue',{targetSessionId:s.session.id}))});
  const m=await send(s,'Apply the same fix to the worker');
- await Promise.all([run(nav,s.thread_id),run(nav,s.thread_id)]);
+ await pool.query('UPDATE navigator_threads SET available_at=now() WHERE thread_id=$1',[s.thread_id]);
+ const attempts=await Promise.allSettled([nav.processOne(s.thread_id),nav.processOne(s.thread_id)]);
+ assert.ok(attempts.some(result=>result.status==='fulfilled' && result.value));
+ for(const result of attempts) {
+  if(result.status==='rejected') assert.equal(result.reason.code,'navigation_inference_pending');
+ }
  await nav.processOne(s.thread_id);
  const turns=await pool.query('SELECT * FROM tasks WHERE session_id=$1',[s.session.id]);
  assert.equal(turns.rowCount,1);assert.equal(turns.rows[0].goal,m.text);assert.equal(turns.rows[0].requester_id,s.owner_id);

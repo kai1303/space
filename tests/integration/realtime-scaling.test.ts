@@ -45,18 +45,19 @@ test('a channel change does no authentication or revision reads for an unrelated
   }finally{store.authenticate=original;socket.disconnect();}
 });
 
+class RoutingBus extends EventBus {
+  changed!:Parameters<EventBus['subscribe']>[2];
+  override async start() {}
+  override async subscribeTransient() { return () => {}; }
+  override async close() {}
+  override async subscribe(filter:string,_options:Parameters<EventBus['subscribe']>[1],handler:Parameters<EventBus['subscribe']>[2]) {
+    if(filter==='chat.changed.*')this.changed=handler;
+    return async()=>{};
+  }
+}
+
 test('credential invalidation targets its actor, including sockets without subscriptions',async()=>{
   // Deliver only this mutation's SQL-generated hint, excluding delayed bootstrap hints.
-  class RoutingBus extends EventBus {
-    changed!:Parameters<EventBus['subscribe']>[2];
-    override async start() {}
-    override async subscribeTransient() { return () => {}; }
-    override async close() {}
-    override async subscribe(filter:string,_options:Parameters<EventBus['subscribe']>[1],handler:Parameters<EventBus['subscribe']>[2]) {
-      if(filter==='chat.changed.*')this.changed=handler;
-      return async()=>{};
-    }
-  }
   const bus=new RoutingBus('nats://unused',schema),isolatedStore=new PostgresStore(pool);
   const temporary=createApi(isolatedStore,{allowDevelopmentTokens:true,realtime:{events:bus}});
   const base=await temporary.listen({host:'127.0.0.1',port:0});
@@ -152,14 +153,28 @@ test('one slow ACK does not occupy the only database work slot',async()=>{
 });
 
 test('task progress does not schedule unrelated metadata subscriptions in the same workspace',async()=>{
-  const a=await bootstrap(pool),socket=await connect(a.owner_token);
-  await socket.timeout(2000).emitWithAck('updates.subscribe',{scope:'channel',id:a.channel_id});await settled();
-  const original=store.authenticate.bind(store);let reads=0;
-  store.authenticate=async token=>{reads++;return original(token);};
+  const bus=new RoutingBus('nats://unused',schema),isolatedStore=new PostgresStore(pool);
+ const temporary=createApi(isolatedStore,{allowDevelopmentTokens:true,realtime:{events:bus}});
+ const base=await temporary.listen({host:'127.0.0.1',port:0});
+ const a=await bootstrap(pool),socket=await connect(a.owner_token,base);
+ try{
+  await socket.timeout(2000).emitWithAck('updates.subscribe',{scope:'channel',id:a.channel_id});
+  const original=isolatedStore.authenticate.bind(isolatedStore);let reads=0;
+  isolatedStore.authenticate=async token=>{reads++;return original(token);};
+  const client=await pool.connect();
+  let hints;
   try{
-    await pool.query("SELECT append_chat_event($1,$2,'task.event',$3::jsonb)",[a.channel_id,a.thread_id,JSON.stringify({task_id:randomUUID()})]);
-    await settled();assert.equal(reads,0);
-  }finally{store.authenticate=original;socket.disconnect();}
+   await client.query('BEGIN');
+   await client.query("SELECT append_chat_event($1,$2,'task.event',$3::jsonb)",[a.channel_id,a.thread_id,JSON.stringify({task_id:randomUUID()})]);
+   hints=(await client.query("SELECT id,kind,aggregate_id,payload FROM event_outbox WHERE kind='chat.changed' AND xmin=pg_current_xact_id()::xid")).rows;
+   await client.query('COMMIT');
+  }catch(error){await client.query('ROLLBACK');throw error;}finally{client.release();}
+  assert.ok(hints.length>0,'task progress must emit a routing hint');
+  for(const hint of hints) {
+   await bus.changed({event:{id:hint.id,schema,kind:hint.kind,aggregate_id:hint.aggregate_id,data:hint.payload},ack:()=>{},retry:()=>{assert.fail('routing must not retry');}});
+  }
+  await settled();assert.equal(reads,0);
+ }finally{socket.disconnect();await temporary.close();}
 });
 
 test('API starts and delivers chat with an unavailable Redis adapter',async()=>{

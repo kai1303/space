@@ -1,3 +1,4 @@
+import { observeOutbox } from '../fixtures/observe-outbox.js';
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomBytes, randomUUID } from 'node:crypto';
@@ -10,7 +11,7 @@ const admin=new Pool({connectionString:process.env.TEST_DATABASE_URL});
 const pool=new Pool({connectionString:process.env.TEST_DATABASE_URL,options:`-c search_path=${schema}`});
 const store=new WorkspaceRetentionStore(pool), zero='00000000-0000-0000-0000-000000000000';
 before(async()=>{
-  assert.ok(process.env.TEST_DATABASE_URL); await admin.query(`CREATE SCHEMA ${schema}`); await migrate(pool);
+  assert.ok(process.env.TEST_DATABASE_URL); await admin.query(`CREATE SCHEMA ${schema}`); await migrate(pool); await observeOutbox(pool);
 });
 after(async()=>{await pool.end();await admin.query(`DROP SCHEMA ${schema} CASCADE`);await admin.end();});
 type Seed=Awaited<ReturnType<typeof bootstrap>>;
@@ -64,7 +65,7 @@ test('historical backfill is bounded, duplicate-safe and cancelled by changed po
   const version=await policy(a,1);
   const counts=await Promise.all([store.backfill(a.workspace_id,version,zero),store.backfill(a.workspace_id,version,zero)]);
   assert.deepEqual(counts.sort((a,b)=>a-b),[0,100]);
-  const continuation=(await pool.query("SELECT payload FROM event_outbox WHERE kind='retention.backfill' AND aggregate_id=$1 AND payload->>'after_id'<>$2",[a.workspace_id,zero])).rows[0].payload;
+  const continuation=(await pool.query("SELECT payload FROM observed_outbox WHERE kind='retention.backfill' AND aggregate_id=$1 AND payload->>'after_id'<>$2",[a.workspace_id,zero])).rows[0].payload;
   assert.equal(await store.backfill(a.workspace_id,version,continuation.after_id),3);
   await policy(a,null);assert.equal(await store.backfill(a.workspace_id,version,randomUUID()),0);
 });
@@ -74,7 +75,7 @@ test('new message deadlines survive concurrent policy activation and wait for ac
   try{
     await client.query('BEGIN');await client.query("INSERT INTO messages(id,workspace_id,channel_id,thread_id,author_type,user_id,client_message_id,request_hash,text,created_at) VALUES($1,$2,$3,$4,'human',$5,gen_random_uuid(),'test','Concurrent secret',now()-interval '2 days')",[id,a.workspace_id,a.channel_id,a.thread_id,a.owner_id]);
     const version=await policy(a,1);await store.backfill(a.workspace_id,version,zero);await client.query('COMMIT');
-    const event=(await pool.query("SELECT payload FROM event_outbox WHERE kind='retention.message_due' AND aggregate_id=$1",[id])).rows[0].payload;
+    const event=(await pool.query("SELECT payload FROM observed_outbox WHERE kind='retention.message_due' AND aggregate_id=$1",[id])).rows[0].payload;
     assert.equal(event.version,'0');
     const asset=randomUUID();await pool.query("INSERT INTO assets(id,workspace_id,channel_id,uploader_id,name,size,type,staging_key,object_key,status,message_id,processing_token,processing_until) VALUES($1::uuid,$2,$3,$4,'busy.txt',10,'text/plain',$1::text,$1::text,'ready',$5,gen_random_uuid(),now()+interval '1 minute')",[asset,a.workspace_id,a.channel_id,a.owner_id,id]);
     assert.ok(await expire(a,id,event.version)>0);

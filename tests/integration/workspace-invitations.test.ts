@@ -1,3 +1,4 @@
+import { observeOutbox } from '../fixtures/observe-outbox.js';
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomBytes, randomUUID } from 'node:crypto';
@@ -12,7 +13,7 @@ const url=process.env.TEST_DATABASE_URL;
 if(!url)throw new Error('TEST_DATABASE_URL is required');
 const schema=`invitations_${randomBytes(8).toString('hex')}`,admin=new Pool({connectionString:url}),pool=new Pool({connectionString:url,options:`-c search_path=${schema}`});
 const store=new WorkspaceInvitationStore(pool);
-before(async()=>{await admin.query(`CREATE SCHEMA ${schema}`);await migrate(pool);});
+before(async()=>{await admin.query(`CREATE SCHEMA ${schema}`);await migrate(pool); await observeOutbox(pool);});
 after(async()=>{await pool.end();await admin.query(`DROP SCHEMA ${schema} CASCADE`);await admin.end();});
 async function person(email=`${randomUUID()}@example.test`,verified=true){const id=randomUUID();await pool.query('INSERT INTO users(id,display_name,email,email_verified) VALUES($1,$2,$3,$4)',[id,'Invited person',email,verified]);return {id,email};}
 const error=(code:string)=>(value:unknown)=>value instanceof Error&&value.message===code;
@@ -97,7 +98,7 @@ test('SMTP outbox encrypts tokens, emits durable targeted events, cancels stale 
  const invite=await mail.create(a.owner_id,a.workspace_id,{request_id:randomUUID(),email:user.email});
  const job=(await pool.query('SELECT * FROM workspace_invitation_emails WHERE invitation_id=$1',[invite.invitation.id])).rows[0];
  assert.equal(invite.invitation.delivery_status,'queued');assert.ok(!JSON.stringify(job).includes(invite.token!));
- const event=(await pool.query("SELECT payload FROM event_outbox WHERE kind='invitation.email_requested' AND aggregate_id=$1",[job.id])).rows[0];assert.deepEqual(event.payload,{email_id:job.id});
+ const event=(await pool.query("SELECT payload FROM observed_outbox WHERE kind='invitation.email_requested' AND aggregate_id=$1",[job.id])).rows[0];assert.deepEqual(event.payload,{email_id:job.id});
  const decoded=await mail.emailAttempt(job.id);assert.equal(decoded?.token,invite.token);assert.equal(decoded?.attempts,1);
  const rotated=await mail.resend(a.owner_id,a.workspace_id,invite.invitation.id,{request_id:randomUUID()});assert.equal(await mail.emailAttempt(job.id),null);
  const next=(await pool.query('SELECT id FROM workspace_invitation_emails WHERE invitation_id=$1 AND version=$2',[invite.invitation.id,rotated.invitation.version])).rows[0];
