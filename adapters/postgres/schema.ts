@@ -70,6 +70,7 @@ export const messages = pgTable('messages', {
   sequence: bigint({ mode: 'bigint' }).notNull().default(0n),
   id: uuid().notNull(), workspace_id: uuid().notNull(), channel_id: uuid().notNull(), thread_id: uuid().notNull(), task_id: uuid(), installation_id: uuid(),
   agent_session_id: uuid(),
+  deleted_at: timestamp({ withTimezone: true }),
   agent_milestone: boolean().notNull().default(false),
   author_type: text().$type<'human' | 'agent'>().notNull().default('agent'), user_id: uuid(), client_message_id: uuid(), request_hash: text(),
   text: text().notNull(), document: jsonb().$type<RichDocument>(), attachments: jsonb().$type<AssetAttachment[]>().notNull().default([]), created_at: time(),

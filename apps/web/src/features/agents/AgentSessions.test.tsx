@@ -431,7 +431,8 @@ it('keeps a rejected immediate-turn draft and uses a fresh attempt when the conn
  fetch.mockImplementation(async(path,init)=>path.endsWith('/messages')&&++sends===1?{ok:false,status:409,json:async()=>({error:'agent_unavailable'})}:original(path,init));
  render(<SessionViews/>);await userEvent.click(await screen.findByRole('button',{name:'Research',exact:true}));
  const editor=await screen.findByRole('textbox',{name:'Message agent session'});await userEvent.type(editor,'Please continue');await userEvent.keyboard('{Enter}');
- await screen.findByRole('alert');expect(editor.textContent).toContain('Please continue');await userEvent.click(screen.getByRole('button',{name:'Send now'}));
+ expect((await screen.findByRole('alert')).textContent).toBe('Your local connector is unavailable. Reconnect it and send again.');
+ expect(editor.textContent).toContain('Please continue');await userEvent.click(screen.getByRole('button',{name:'Send now'}));
  await waitFor(()=>expect(editor.textContent?.trim()).toBe(''));
  const attempts=fetch.mock.calls.filter(([path])=>path.endsWith('/messages'));expect(attempts).toHaveLength(2);
  expect(new Headers(attempts[0]![1]?.headers).get('idempotency-key')).not.toBe(new Headers(attempts[1]![1]?.headers).get('idempotency-key'));

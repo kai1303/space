@@ -3,6 +3,7 @@ import { requireFullWorkspaceMember } from './workspace-access.js';
 import { requireWorkspacePolicy } from './workspace-settings.js';
 import { NotificationStore } from './notifications.js';
 import { DirectMessageStore } from './direct-messages.js';
+import { eraseMessageReferences } from './workspace-retention.js';
 import { sessionTransaction } from './session-concurrency.js';
 import { MentionStore } from './mentions.js';
 import { UnreadStore } from './unread.js';
@@ -168,6 +169,11 @@ export class ChatStore {
         if (existing.request_hash !== hash) throw new AppError(409, 'idempotency_conflict');
         return this.message(c, existing.id, existing.channel_id);
       }
+      // Both the send and cancellation check the other's identity in serializable
+      // transactions. If both observe an absence, PostgreSQL retries one of them.
+      const cancelled = await c.execute(sql`SELECT 1 FROM cancelled_message_sends
+        WHERE channel_id=${channelId} AND user_id=${actor} AND client_message_id=${request.client_message_id}`);
+      if (cancelled.rows.length) throw new AppError(409, 'message_cancelled');
       if (channel.archived_at) throw new AppError(409, 'channel_archived');
       if (channel.kind !== 'direct') {
         await requireChannelCapability(c, actor, channel.id, request.thread_id ? 'reply' : 'post');
@@ -207,6 +213,55 @@ export class ChatStore {
     // Spread channel/recipient contention across five attempts, with less than 3s total backoff.
     }, 'serializable', 100);
   }
+  async cancelOutgoing(actor: string, channelId: string, clientId: string): Promise<{message: ChatMessage | null}> {
+    clientId = uuid(clientId);
+    return sessionTransaction(this.db, async c => {
+      const channel = await this.authorize(c, actor, channelId);
+      const [sent] = await c.select({ id: s.messageIdentities.id }).from(s.messageIdentities).where(and(
+        eq(s.messageIdentities.workspace_id, channel.workspace_id), eq(s.messageIdentities.channel_id, channelId),
+        eq(s.messageIdentities.user_id, actor), eq(s.messageIdentities.client_message_id, clientId),
+      ));
+      if (sent) return { message: await this.eraseMessage(c, actor, channel.workspace_id, channelId, sent.id) };
+      await c.execute(sql`INSERT INTO cancelled_message_sends(channel_id,user_id,client_message_id)
+        VALUES(${channelId},${actor},${clientId}) ON CONFLICT DO NOTHING`);
+      return { message: null };
+    });
+  }
+
+  async deleteMessage(actor: string, channelId: string, messageId: string): Promise<ChatMessage> {
+    return sessionTransaction(this.db, async c => {
+      const channel = await this.authorize(c, actor, channelId);
+      return this.eraseMessage(c, actor, channel.workspace_id, channelId, uuid(messageId));
+    });
+  }
+
+  private async eraseMessage(c: DbSession, actor: string, workspace: string, channelId: string, messageId: string): Promise<ChatMessage> {
+    const [target] = await c.select({ deleted_at: s.messages.deleted_at }).from(s.messages).where(and(
+      eq(s.messages.channel_id, channelId), eq(s.messages.id, messageId), eq(s.messages.user_id, actor), eq(s.messages.author_type, 'human'),
+    ));
+    if (!target) throw notFound();
+    if (target.deleted_at) return this.message(c, messageId, channelId);
+
+    // Preview generation can write into object storage until its processing claim ends.
+    const busy = await c.execute(sql`SELECT 1 FROM assets WHERE channel_id=${channelId} AND message_id=${messageId} AND processing_until>now() LIMIT 1`);
+    if (busy.rows.length) throw new AppError(409, 'asset_processing_busy');
+
+    const revision = await c.execute<{sequence: string}>(sql`UPDATE channels SET event_sequence=event_sequence+1 WHERE id=${channelId} RETURNING event_sequence::text AS sequence`);
+    const sequence = revision.rows[0]!.sequence;
+    await c.execute(sql`UPDATE messages SET text='Message deleted',document=NULL,attachments='[]'::jsonb,agent_response=NULL,
+      deleted_at=now(),reaction_sequence=${sequence}::bigint WHERE channel_id=${channelId} AND id=${messageId}`);
+    await eraseMessageReferences(c, workspace, channelId, messageId);
+    await c.execute(sql`UPDATE channel_events e SET payload=deleted_message_payload(e.payload,m.deleted_at)
+      FROM messages m WHERE m.channel_id=${channelId} AND m.id=${messageId} AND e.channel_id=m.channel_id
+        AND e.type IN ('message.created','message.updated') AND e.payload->>'id'=${messageId}`);
+    await c.execute(sql`INSERT INTO channel_events(workspace_id,channel_id,thread_id,sequence,type,payload)
+      SELECT workspace_id,channel_id,thread_id,${sequence}::bigint,'message.updated',chat_message_payload(m)
+      FROM messages m WHERE channel_id=${channelId} AND id=${messageId}`);
+    await c.execute(sql`INSERT INTO chat_delivery_outbox(workspace_id,channel_id,resource_scope)
+      VALUES(${workspace},${channelId},'message'),(${workspace},${channelId},'metadata')`);
+    return this.message(c, messageId, channelId);
+  }
+
   async react(actor: string, channelId: string, messageId: string, input: unknown): Promise<ChatMessage> {
     const { emoji, active } = parseReactionInput(input);
     messageId = uuid(messageId);
@@ -214,7 +269,7 @@ export class ChatStore {
       const channel = await this.lockedChannel(c, channelId);
       await this.authorize(c, actor, channelId);
       const [message] = await c.select().from(s.messages).where(and(eq(s.messages.channel_id, channelId), eq(s.messages.id, messageId)));
-      if (!message) throw notFound();
+      if (!message || message.deleted_at) throw notFound();
       if (channel.archived_at) throw new AppError(409, 'channel_archived');
       const changed = active
         ? await c.execute(sql`INSERT INTO message_reactions(channel_id,message_id,user_id,emoji) VALUES(${channelId},${messageId},${actor},${emoji}) ON CONFLICT DO NOTHING RETURNING emoji`)

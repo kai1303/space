@@ -285,6 +285,23 @@
   color: var(--sp-text-secondary);
   font-size: 10px;
 }
+.sp-rich-composer--send-feedback > :is(.sp-rich-help, .sp-field-error) {
+  position: absolute;
+  bottom: calc(100% + 4px);
+  right: 0;
+  z-index: 2;
+  max-width: min(100%, 32rem);
+  box-sizing: border-box;
+  margin: 0;
+  padding: 6px 10px;
+  border: 1px solid var(--sp-border);
+  border-radius: 6px;
+  background: var(--sp-surface-raised);
+}
+.sp-rich-composer--send-feedback > .sp-rich-help { display: none; }
+.sp-rich-composer--send-feedback:has(.sp-rich-send-group:hover, .sp-rich-send-group:focus-within):not(:has(> .sp-field-error)) > .sp-rich-help { display: flex; }
+.sp-rich-composer--send-feedback > .sp-rich-help > span { display: inline; }
+.sp-rich-composer--send-feedback .sp-rich-send-group[tabindex] > button:disabled { pointer-events: none; }
 .sp-composer-picker {
   position: relative;
 }

@@ -44,3 +44,9 @@ This pass corrects the code-block active state for Quill's truthy language value
 Still absent: heading/divider operations, Slack's adaptive overflow menu and arrow navigation, full searchable emoji and mention suggestions, semantic mentions, creation menu, snippet conversion, platform/preferences/code-context keyboard parity, custom paste processing, composition-aware draft batching, cursor restoration across conversations, scheduling, recording, expand mode and Slack transport. Lato/Phosphor are documented substitutes. The 10,000-character and five-file limits are Space choices. Attachment bytes are neither retained nor uploaded.
 
 This report supersedes the earlier composer overview in [Slack workplace](slack-workplace.md) for the detailed source scope and current limitations. Verification is recorded in [composer QA](../slack-composer-qa.md).
+
+## Failed sends and retry
+
+Static inspection on 2026-11-09 used the captured client bundle identified above. Module `ytHT` appends a pending message with a client message ID to the channel or thread. Module `l4S5` renders the failure actions beneath that message and reconstructs a retry from the stored message. The available actions depend on the error. REA evidence `ev_d8714648402fff8beac6afd9a797a433d69fdf6c82c6bad92a3a8710f49321d9` covers the two extracted modules.
+
+Space uses Retry and Delete for a failed send. Each submission gets its own ID and keeps it through retries in the same tab, including after a reload. A Delete request can refer to that ID even when the sender missed the server acknowledgement.

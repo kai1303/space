@@ -94,3 +94,16 @@ it.each([false,true])('attaches live session references below the root without c
  expect(updated.reply_count).toBe(0);
  expect(mergePage(twice,previous,'older').messages.find(m=>m.id===root.id)?.agent_sessions).toEqual(updated.agent_sessions);
 });
+
+it('keeps tombstones in place through replay and stale pages', () => {
+  const latest = page(51, 54);
+  const deleted = { ...message(52), text: '', deleted_at: '2026-11-09T00:00:00Z' };
+  const oldDeletion = { ...deleted, id: '2', sequence: '2' };
+  const previousReaction = { ...message(52), reaction_sequence: '100' };
+  const updated = appendLive(latest, [previousReaction, deleted, oldDeletion, previousReaction], true);
+  expect(updated.messages.map(m => m.id)).toEqual(latest.messages.map(m => m.id));
+  expect(updated.messages[1]).toMatchObject(deleted);
+  for (const direction of ['older', 'latest'] as const) {
+    expect(mergePage(updated, latest, direction).messages[1]).toMatchObject(deleted);
+  }
+});

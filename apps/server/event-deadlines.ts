@@ -27,7 +27,7 @@ export function registerEventDeadlines(app: FastifyInstance, getEvents: () => Pr
         AND EXISTS(SELECT 1 FROM workspace_members wm WHERE wm.workspace_id=t.workspace_id AND wm.user_id=t.user_id AND wm.active)
         AND (t.message_id IS NULL OR EXISTS(SELECT 1 FROM messages m JOIN channel_members cm
           ON cm.workspace_id=m.workspace_id AND cm.channel_id=m.channel_id AND cm.user_id=t.user_id
-          WHERE m.workspace_id=t.workspace_id AND m.channel_id=t.channel_id AND m.id=t.message_id AND m.agent_session_id IS NULL))`;
+          WHERE m.workspace_id=t.workspace_id AND m.channel_id=t.channel_id AND m.id=t.message_id AND m.deleted_at IS NULL AND m.agent_session_id IS NULL))`;
       // The row change and its realtime outbox notification commit together; duplicate deliveries become no-ops.
       const row = (await tasks.pool.query<{remaining:number}>(`WITH fired AS (
         UPDATE hub_todos t SET reminder_fired_at=clock_timestamp(),updated_at=greatest(clock_timestamp(),t.updated_at+interval '1 microsecond') WHERE ${eligible} AND t.remind_at<=now() RETURNING id

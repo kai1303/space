@@ -1,6 +1,6 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { randomBytes, randomUUID } from 'node:crypto';
+import { createHmac, randomBytes, randomUUID } from 'node:crypto';
 import { Pool } from 'pg';
 import { io } from 'socket.io-client';
 import { migrate } from '@space/postgres/migrate';
@@ -8,12 +8,14 @@ import { PostgresStore } from '@space/postgres/store';
 import { bootstrap } from '@space/postgres/bootstrap';
 import { createAuthentication } from '@space/server/auth';
 import { createApi } from '@space/server/api';
+import { EventBridge } from '@space/event-service/bridge';
 const url = process.env.TEST_DATABASE_URL;
 if (!url) throw new Error('TEST_DATABASE_URL is required');
 const schema = `auth_${randomBytes(8).toString('hex')}`;
 const admin = new Pool({ connectionString: url });
 const pool = new Pool({ connectionString: url, options: `-c search_path=${schema}` });
-const auth = createAuthentication(pool, { secret: 'test-only-auth-secret-at-least-32-characters', baseURL: 'http://space.test' });
+const secret = 'test-only-auth-secret-at-least-32-characters';
+const auth = createAuthentication(pool, { secret, baseURL: 'http://space.test' });
 const app = createApi(new PostgresStore(pool), { auth, realtime: { } });
 let address: string, identity = 0;
 const password = 'Testing-auth-1234!';
@@ -80,7 +82,113 @@ test('cookie-authenticated users retain workspace/channel isolation and cannot u
   } finally { client.disconnect(); }
 });
 
-test('logout disconnects an idle socket and revokes its cookie immediately', { timeout: 5000 }, async () => {
+test('email login issues a persistent JWT that restores only its live session', async () => {
+  const user = await signup();
+  const response = await login(user.email, user.ip);
+  assert.equal(response.statusCode, 200);
+  const cookie = response.cookies.find(cookie => cookie.name === 'better-auth.session_token')!;
+  assert.ok(cookie.httpOnly);
+  assert.equal(cookie.maxAge, 15 * 60);
+  const parts = cookie.value.split('.');
+  assert.equal(parts.length, 3);
+  const [, payload, signature] = parts;
+  assert.ok(payload && signature);
+  const claims = JSON.parse(Buffer.from(payload, 'base64url').toString());
+  assert.equal(claims.iss, 'http://space.test');
+  assert.ok(claims.exp - claims.iat === 15 * 60);
+  const saved = cookies(response);
+  assert.equal((await call(saved, '/auth/get-session')).json().user.id, user.user.id);
+  const altered = saved.replace(signature, (signature[0] === 'A' ? 'B' : 'A') + signature.slice(1));
+  assert.equal((await call(altered, '/auth/get-session')).json(), null);
+  assert.equal((await call(altered, '/me')).statusCode, 401);
+  await assert.rejects(socket(altered), /unauthorized/);
+  assert.equal((await call(saved, '/auth/sign-out', {})).statusCode, 200);
+  assert.equal((await call(saved, '/auth/get-session')).json(), null);
+});
+
+test('refresh-only startup rotates credentials atomically across tabs and preserves the session deadline', async () => {
+  const user = await signup();
+  const initial = user.cookie.split('; ').find(cookie => cookie.startsWith('space.refresh='))!;
+  const check = await call(initial, '/auth/get-session');
+  assert.equal(check.json(), null);
+  assert.equal(check.headers['x-space-refresh-available'], '1');
+  assert.equal((await call(initial, '/me')).statusCode, 401);
+  assert.equal((await call(initial, '/auth/refresh', {}, 'https://other.test')).statusCode, 403);
+  const wrongSession = await app.inject({ method: 'POST', url: '/v1/auth/refresh', headers: {
+    origin: 'http://space.test', cookie: initial, 'x-space-session-id': randomUUID(),
+  }, payload: {} });
+  assert.equal(wrongSession.statusCode, 401);
+  const replies = await Promise.all(Array.from({ length: 4 }, () => call(initial, '/auth/refresh', {})));
+  for (const reply of replies) assert.equal(reply.statusCode, 200, reply.body);
+  const tokens = replies.map(reply => reply.cookies.find(cookie => cookie.name === 'space.refresh')!);
+  const next = 'space.refresh=' + tokens[0]!.value;
+  assert.notEqual(next, initial);
+  assert.ok(tokens.every(token => token.value === tokens[0]!.value && token.httpOnly && token.path === '/v1/auth'));
+  assert.ok(Math.abs(tokens[0]!.maxAge! - 30 * 86400) <= 5);
+  const saved = cookies(replies[0]!);
+  const restored = await call(saved, '/auth/get-session');
+  assert.equal(restored.json().user.id, user.user.id);
+  assert.equal(restored.headers['x-space-session-id'], restored.json().session.id);
+  assert.equal((await call(saved, '/me')).statusCode, 200);
+  const client = await socket(saved); client.disconnect();
+
+  await pool.query("UPDATE auth_session_refresh SET rotated_at=now()-interval '1 minute' WHERE session_id=$1", [restored.json().session.id]);
+  const stale = await call(initial, '/auth/refresh', {});
+  assert.equal(stale.statusCode, 401);
+  assert.equal(stale.headers['set-cookie'], undefined);
+  const renewed = await call(next, '/auth/refresh', {});
+  assert.equal(renewed.statusCode, 200);
+  const latest = renewed.cookies.find(cookie => cookie.name === 'space.refresh')!;
+  assert.notEqual(latest.value, tokens[0]!.value);
+  const loggedOut = await call('space.refresh=' + latest.value, '/auth/sign-out', {});
+  assert.equal(loggedOut.statusCode, 200);
+  assert.ok(loggedOut.cookies.some(cookie => cookie.name === 'space.refresh' && cookie.maxAge === 0));
+  assert.equal((await call(saved, '/me')).statusCode, 401);
+  assert.equal((await call('space.refresh=' + latest.value, '/auth/refresh', {})).statusCode, 401);
+});
+
+test('an expired access JWT requires rotation while the refresh session is live', async t => {
+  const user = await signup();
+  const clock = Date.now();
+  t.mock.timers.enable({ apis: ['Date'], now: clock });
+  t.mock.timers.setTime(clock + 16 * 60_000);
+  assert.equal((await call(user.cookie, '/me')).statusCode, 401);
+  assert.equal((await call(user.cookie, '/auth/get-session')).json(), null);
+  const renewed = await call(user.cookie, '/auth/refresh', {});
+  assert.equal(renewed.statusCode, 200);
+  assert.equal((await call(cookies(renewed), '/me')).json().id, user.user.id);
+});
+
+test('nonpersistent sign-in stays browser-only and refresh cannot outlive the database session', async () => {
+  const user = await signup();
+  const response = await app.inject({ method: 'POST', url: '/v1/auth/sign-in/email', remoteAddress: user.ip,
+    headers: { origin: 'http://space.test' }, payload: { email: user.email, password, rememberMe: false } });
+  const saved = cookies(response);
+  const renewed = await call(saved, '/auth/refresh', {});
+  assert.equal(renewed.statusCode, 200, renewed.body);
+  for (const cookie of renewed.cookies) assert.equal(cookie.maxAge, undefined);
+  await pool.query("UPDATE auth_sessions SET expires_at=now()-interval '1 second' WHERE user_id=$1", [user.user.id]);
+  assert.equal((await call(cookies(renewed), '/auth/refresh', {})).statusCode, 401);
+});
+
+test('pre-upgrade signed cookies restore only a live Better Auth session', async () => {
+  const user = await signup();
+  const { token } = (await pool.query('SELECT token FROM auth_sessions WHERE user_id=$1', [user.user.id])).rows[0];
+  const signature = createHmac('sha256', secret).update(token).digest('base64');
+  const legacy = `better-auth.session_token=${encodeURIComponent(`${token}.${signature}`)}`;
+  assert.equal((await call(legacy, '/auth/get-session')).json().user.id, user.user.id);
+  assert.equal((await call(legacy, '/auth/sign-out', {})).statusCode, 200);
+  assert.equal((await call(legacy, '/me')).statusCode, 401);
+});
+
+test('logout disconnects an idle socket and revokes its cookie immediately', { timeout: 15000 }, async t => {
+  const bridge = new EventBridge({ databaseUrl: url!, schema, natsUrl: process.env.NATS_URL ?? process.env.TEST_NATS_URL ?? 'nats://127.0.0.1:54222' });
+  t.after(async () => {
+    await bridge.close();
+    await admin.query('SELECT pg_drop_replication_slot(slot_name) FROM pg_replication_slots WHERE slot_name=$1', [bridge.slot]);
+    await admin.query(`DROP PUBLICATION IF EXISTS "${bridge.publication}"`);
+  });
+  await bridge.start();
   const user = await signup(), client = await socket(user.cookie);
   try {
     const closed = new Promise(resolve => client.once('disconnect', resolve));
@@ -100,6 +208,7 @@ test('expired and revoked sessions are rejected by HTTP and Socket.IO', async ()
   assert.equal(first.statusCode, 200); assert.equal(second.statusCode, 200);
   const revoked = await call(cookies(first), '/auth/revoke-sessions', {}); assert.equal(revoked.statusCode, 200, revoked.body);
   assert.equal((await call(cookies(second), '/me')).statusCode, 401);
+  assert.equal((await call(cookies(second), '/auth/refresh', {})).statusCode, 401);
 });
 
 test('origin checks reject cross-site cookie writes and WebSocket hijacking', async () => {

@@ -63,7 +63,7 @@ export async function authorize(hostId: string, registration?: Registration, opt
       fail(new Error('OAuth state does not match.'));
       return;
     }
-    response.end('Return to your terminal to finish connecting Space.');
+    response.end('Return to Space to finish connecting.');
     settle(url.searchParams);
   });
   await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', () => { server.removeListener('error', reject); resolve(); }); });

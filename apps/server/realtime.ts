@@ -281,7 +281,7 @@ export function registerRealtime(app: FastifyInstance, authenticate: (headers: I
       typing.set(key,{event,timer});publishTyping(event);return value;
     });
     handle('message.send', async input => {
-      const v = record(input, ['channel_id', 'client_message_id', 'text', 'thread_id', 'document', 'asset_ids', 'broadcast_confirmed', 'receipt_id']);
+      const v = record(input, ['channel_id', 'client_message_id', 'text', 'thread_id', 'document', 'asset_ids', 'asset_descriptions', 'broadcast_confirmed', 'receipt_id']);
       const { channel_id, receipt_id, ...message } = v;
       const channel = uuid(channel_id);
       const sample = receiptSender && receipt_id !== undefined ? receiptSender(uuid(receipt_id)) : undefined;

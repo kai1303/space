@@ -20,6 +20,17 @@ it('fails closed until loaded and refreshes channel and workspace permission cha
   expect(result.current.snapshot).toBeUndefined();
   expect(result.current.error).toBeTruthy();
 });
+it('keeps the current permission during a refresh and applies the new decision when it arrives', async () => {
+  mocks.request.mockResolvedValue(snapshot);
+  const { result } = renderHook(() => useChannelPermissions('channel', 'workspace'));
+  await waitFor(() => expect(result.current.snapshot).toEqual(snapshot));
+  let finish!: (value: unknown) => void;
+  mocks.request.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+  act(() => { void mocks.listeners.get('channel:channel')!.read(); });
+  expect(result.current.snapshot?.capabilities.post).toBe(true);
+  await act(async () => finish({ ...snapshot, capabilities: { post: false, reply: false } }));
+  expect(result.current.snapshot?.capabilities.post).toBe(false);
+});
 it('discards a late response after live revocation and channel replacement', async () => {
   let finish!: (value: unknown) => void;
   mocks.request.mockImplementation(() => new Promise(resolve => { finish = resolve; }));

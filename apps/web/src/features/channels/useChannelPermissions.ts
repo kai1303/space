@@ -15,7 +15,7 @@ export function useChannelPermissions(channel: string | undefined, workspace: st
       if (!active) return;
       const version = ++generation;
       controller?.abort(); controller = new AbortController();
-      setState({ key, error: '' });
+      // Keep the last decision during a refresh. The server checks every post and reply.
       try {
         const snapshot = await request<ChannelPermissionSnapshot>(`/channels/${channel}/permissions`, undefined, undefined, 'POST', controller.signal);
         if (!snapshot?.capabilities || typeof snapshot.capabilities.post !== 'boolean' || typeof snapshot.capabilities.reply !== 'boolean') throw new Error('Invalid channel permissions');

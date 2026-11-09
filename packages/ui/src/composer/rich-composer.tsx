@@ -36,6 +36,9 @@ import {
   type RichDocument,
 } from "../rich-text/rich-text.js";
 
+/** A send failure with a message intended for the person composing the draft. */
+export class ComposerSendError extends Error {}
+
 export function RichComposer({
   channel,
   placeholder,
@@ -54,8 +57,10 @@ export function RichComposer({
   maxLength = 10000,
   attachmentsEnabled = true,
   sendDisabledReason,
+  sendDisabled = false,
   showUnavailableActions = true,
   showKeyboardHint = true,
+  feedbackAtSendButton = false,
   submitLabel,
   autoFocus = false,
 }: {
@@ -81,8 +86,10 @@ export function RichComposer({
   maxLength?: number;
   attachmentsEnabled?: boolean;
   sendDisabledReason?: string;
+  sendDisabled?: boolean;
   showUnavailableActions?: boolean;
   showKeyboardHint?: boolean;
+  feedbackAtSendButton?: boolean;
   submitLabel?: string;
   autoFocus?: boolean;
 }) {
@@ -111,13 +118,6 @@ export function RichComposer({
   const [formats, setFormats] = useState<Record<string, unknown>>({});
   const [showFormats, setShowFormats] = useState(true);
   const [sending, setSending] = useState(false);
-  const [sendingVisible, setSendingVisible] = useState(false);
-  useEffect(() => {
-    if (!sending) { setSendingVisible(false); return; }
-    // Quick acknowledgements should not flash a transient progress label.
-    const timer = setTimeout(() => setSendingVisible(true), 300);
-    return () => clearTimeout(timer);
-  }, [sending]);
   const [error, setError] = useState("");
   const [localFiles, setLocalFiles] = useState<Attachment[]>(attachmentsEnabled ? defaultAttachments : []);
   const files = attachments ?? localFiles;
@@ -130,7 +130,8 @@ export function RichComposer({
   filesRef.current = files;
   const [focused, setFocused] = useState(false);
   const [reply, setReply] = useState<{ source: typeof loadReplySuggestion; text: string }>();
-  const eligible = !!loadReplySuggestion && focused && text === "\n" && !files.length && !sending && !sendDisabledReason;
+  const blocked = sendDisabled || !!sendDisabledReason;
+  const eligible = !!loadReplySuggestion && focused && text === "\n" && !files.length && !sending && !blocked;
   const visibleReply = eligible && reply?.source === loadReplySuggestion ? reply?.text : undefined;
   const replyRef = useRef(visibleReply);
   replyRef.current = visibleReply;
@@ -158,6 +159,7 @@ export function RichComposer({
   const [linkUrl, setLinkUrl] = useState("");
   const [linkError, setLinkError] = useState("");
   const suggestionsId = useId();
+  const feedbackId = useId();
   const [completion, setCompletion] = useState<ReturnType<typeof emojiCompletion>>(null);
   const completionRef = useRef<ReturnType<typeof emojiCompletion>>(null);
   const [emojiIndex, setEmojiIndex] = useState(0);
@@ -199,7 +201,7 @@ export function RichComposer({
   const sendRef = useRef<() => void>(() => {});
   async function send(confirmed = false) {
     const q = editor.current;
-    if (!q || pending.current || sendDisabledReason || filesRef.current.some(file => file.status === "uploading" || file.status === "error")) return;
+    if (!q || pending.current || blocked || filesRef.current.some(file => file.status === "uploading" || file.status === "error")) return;
     const raw = q.getText();
     const plain = raw.trim();
     if (!plain && !filesRef.current.length) return;
@@ -233,7 +235,7 @@ export function RichComposer({
     } catch (reason) {
       if (reason instanceof Error && reason.message === 'broadcast_confirmation_required') setBroadcastWarning(true);
       else if (editor.current === q)
-        setError("Could not send. Your draft is still here. Try again.");
+        setError(reason instanceof ComposerSendError ? reason.message : "Could not send. Your draft is still here. Try again.");
     } finally {
       if (editor.current === q) {
         pending.current = false;
@@ -438,7 +440,7 @@ export function RichComposer({
     </IconButton>
   ); });
   return (
-    <div className="sp-rich-composer" aria-busy={sending || undefined}>
+    <div className={feedbackAtSendButton ? "sp-rich-composer sp-rich-composer--send-feedback" : "sp-rich-composer"} aria-busy={sending || undefined}>
       {mentionsUI.suggestions}
       <Dialog open={broadcastWarning} title="Notify the channel?" onClose={() => setBroadcastWarning(false)}><p>This message can notify {mentionsUI.memberCount || 'all eligible'} channel members. Use channel-wide mentions sparingly.</p><div className="sp-mention-confirm"><Button onClick={() => setBroadcastWarning(false)}>Keep editing</Button><Button variant="primary" onClick={() => { setBroadcastWarning(false); void send(true); }}>Send and notify</Button></div></Dialog>
       {completion && <div className="sp-emoji-suggestions" id={suggestionsId} role="listbox" aria-label="Emoji suggestions">
@@ -579,12 +581,16 @@ export function RichComposer({
           <IconButton label="Run shortcut unavailable in this preview" className="sp-unavailable-action" size="sm" disabled>
             <Lightning size={18} />
           </IconButton></>}
-          <div className="sp-rich-send-group">
+          <div className="sp-rich-send-group"
+            tabIndex={feedbackAtSendButton && sendDisabledReason ? 0 : undefined}
+            role={feedbackAtSendButton && sendDisabledReason ? "group" : undefined}
+            aria-label={feedbackAtSendButton && sendDisabledReason ? "Send unavailable" : undefined}
+            aria-describedby={feedbackAtSendButton && sendDisabledReason ? feedbackId : undefined}>
           <IconButton
             label={submitLabel ?? "Send now"}
             size="sm"
             className="sp-send-rich"
-            disabled={!ready || sending || !!sendDisabledReason || filesPending || (!text.trim() && !files.length)}
+            disabled={!ready || sending || blocked || filesPending || (!text.trim() && !files.length)}
             data-send-disabled={sending && ready && !filesPending && Boolean(text.trim() || files.length) || undefined}
             onClick={() => void send()}
           >
@@ -593,13 +599,11 @@ export function RichComposer({
           </div>
         </div>
       </div>
-      {(showKeyboardHint || sendDisabledReason || sendingVisible || text.length > 9000 || (!plainText && attachmentsEnabled && attachments === undefined)) && <div className="sp-rich-help">
+      {(showKeyboardHint || sendDisabledReason || text.length > 9000 || (!plainText && attachmentsEnabled && attachments === undefined)) && <div className="sp-rich-help" id={feedbackId}>
         <span role={sendDisabledReason ? "status" : undefined}>
-          {sendDisabledReason ?? (sendingVisible
-            ? "Sending…"
-            : text.length > 9000
-              ? `${text.trim().length}/10,000 characters`
-              : showKeyboardHint ? "Enter to send · Shift + Enter to add a new line" : null)}
+          {sendDisabledReason ?? (text.length > 9000
+            ? `${text.trim().length}/10,000 characters`
+            : showKeyboardHint ? "Enter to send · Shift + Enter to add a new line" : null)}
         </span>
         {!plainText && attachmentsEnabled && attachments === undefined && <span>Files stay local in this preview</span>}
       </div>}

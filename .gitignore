@@ -12,3 +12,7 @@ dist/
 
 # Browser E2E artifacts
 tests/test-results/
+
+# Local macOS installers staged by desktop:make
+/apps/web/public/downloads/Space-*.dmg*
+/apps/web/public/downloads/macos.json*

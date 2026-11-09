@@ -56,7 +56,7 @@ export class DirectMessageStore {
         AND (${cursor?.id ?? null}::uuid IS NULL OR (v.last_activity_at,ch.id)<(${cursor?.at ?? null}::timestamptz,${cursor?.id ?? null}::uuid))
         AND position(lower(${q}) IN lower(peer.display_name||' '||peer.full_name))>0
         AND (${unread}=false OR EXISTS(SELECT 1 FROM messages um JOIN channel_reads cr ON cr.channel_id=um.channel_id AND cr.user_id=${actor}
-          WHERE um.workspace_id=ch.workspace_id AND um.channel_id=ch.id AND um.user_id IS DISTINCT FROM ${actor}::uuid AND um.sequence>cr.last_read_sequence
+          WHERE um.workspace_id=ch.workspace_id AND um.channel_id=ch.id AND um.user_id IS DISTINCT FROM ${actor}::uuid AND um.deleted_at IS NULL AND um.sequence>cr.last_read_sequence
             AND NOT EXISTS(SELECT 1 FROM messages earlier WHERE earlier.workspace_id=um.workspace_id AND earlier.channel_id=um.channel_id AND earlier.thread_id=um.thread_id AND earlier.sequence<um.sequence)))
       ORDER BY v.last_activity_at DESC,ch.id DESC LIMIT ${limit + 1}`);
     return rows.rows;

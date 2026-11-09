@@ -38,8 +38,18 @@ add your user to an existing one. Existing workspace APIs remain authoritative.
 
 - Passwords are hashed by Better Auth. Password length is 12–128 characters. The app
   never implements its own password hashing or stores passwords in frontend storage.
-- A session lasts seven days with a fixed expiry. Cookie caching and sliding refresh
-  are disabled, so API/socket checks read current server-side session state.
+- Email sign-in issues a 15-minute access JWT and a rotating refresh token. A
+  remembered session has a fixed 30-day deadline. A nonpersistent sign-in uses
+  browser-session cookies and Better Auth's one-day server deadline.
+- The access JWT authenticates HTTP and Socket.IO through the live PostgreSQL
+  session. The refresh cookie is scoped to `/v1/auth`. Only a trusted-origin
+  POST to `/v1/auth/refresh` can exchange it for a fresh pair. PostgreSQL stores
+  hashes of refresh tokens. Simultaneous requests with the same token receive
+  the same successor for ten seconds. Older tokens are rejected.
+- A visible app renews before its access deadline and reconnects its socket.
+  Reopening with only the refresh cookie restores the session. Revoking the
+  database session also removes its refresh credentials. Previously issued
+  cookies keep their original expiry. The next sign-in enables rotation.
 - Cookies are HttpOnly and SameSite=Lax, with Secure enabled for HTTPS. Production
   configuration rejects an HTTP base URL. Local Docker Compose explicitly selects
   development mode for its localhost HTTP setup; the image itself defaults to production.
@@ -98,6 +108,7 @@ auth requests. Notable endpoints:
 | `POST /v1/auth/sign-up/email` | `{name, email, password}`; registers and signs in |
 | `POST /v1/auth/sign-in/email` | `{email, password}`; returns session cookie |
 | `GET /v1/auth/get-session` | Current session/user or null |
+| `POST /v1/auth/refresh` | Rotates refresh and access cookies within the original session lifetime |
 | `POST /v1/auth/sign-out` | Revokes the current session |
 | `GET /v1/auth/list-sessions` | Current user's sessions |
 | `POST /v1/auth/revoke-session` | `{token}`; revokes an owned session |

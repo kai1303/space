@@ -2,7 +2,9 @@
 
 This local connector pairs Codex, Kiro or Claude on one computer with a Space workspace, reports provider readiness, and executes approved chat tasks. A paired agent inherits its owner’s current conversation access; no separate channel grant is required. Project file tools are an explicit local opt-in with `--project`.
 
-Requirements: Node.js 24+, pnpm, and the selected provider CLI installed on `PATH`. Claude uses the installed `claude` executable. Codex is the default; Kiro requires `kiro-cli` with ACP v3 support.
+On macOS, [Space Desktop](../desktop/README.md) bundles the runner and can pair directly from the workspace. Install the selected provider CLI on the Mac.
+
+For the standalone repository command, requirements are Node.js 24+, pnpm, and the selected provider CLI installed on `PATH`. Claude uses the installed `claude` executable. Codex is the default; Kiro requires `kiro-cli` with ACP v3 support.
 
 For Codex, from this repository:
 
@@ -13,6 +15,8 @@ pnpm --filter @space/connector start --url http://localhost:3000 --pair YOUR_32_
 ```
 
 Use the origin and pairing code shown by your Space setup screen. HTTP is allowed only on loopback; other servers require HTTPS. Use `--connect` instead of `--pair` to enter the code at an interactive prompt, including when a platform connection is already saved. After pairing, open the printed **Continue with ChatGPT** URL and authorize in your own browser. Keep the connector terminal running.
+
+The connector terminal logs connection changes with a UTC timestamp, provider, and Space origin. If a thread cannot reach its agent, check that the origin matches the thread and look for `Space confirmed provider status: ready.` After a disconnect, that line shows when Space has acknowledged readiness again.
 
 On subsequent launches:
 

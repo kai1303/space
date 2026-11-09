@@ -193,3 +193,57 @@ it('preselects a registered cloud connector and gives remote instructions throug
   expect(screen.getByText(/Start your cloud runner/)).toBeTruthy();
   expect(screen.queryByLabelText('Pairing code')).toBeNull();
 });
+
+it('hands a local pairing directly to Desktop and shows the confirmed workspace status', async () => {
+  const pair = vi.fn().mockResolvedValue(undefined);
+  vi.stubGlobal('spaceDesktop', { pair });
+  try {
+    api.listAll.mockResolvedValue(humans);
+    api.request.mockImplementation(async (path: string) => path === '/agents/connectors' ? defaultPairedConnectors
+      : path.endsWith('agent-pairings') ? { id: 'mac', code: 'd'.repeat(32), expires_at: new Date(Date.now()+600000).toISOString() }
+      : { status: 'claimed', installation_id: 'installed' });
+    render(<WorkspaceMembers {...props} initialConnector="claude.local"/>);
+    await userEvent.click(await screen.findByRole('button', { name: 'Connect on this Mac' }));
+    expect(pair).toHaveBeenCalledWith('claude', 'd'.repeat(32));
+    expect(await screen.findByText('Claude paired with this workspace')).toBeTruthy();
+    expect(screen.queryByLabelText('Pairing code')).toBeNull();
+  } finally { vi.unstubAllGlobals(); }
+});
+
+it('cancels an unclaimed desktop pairing and lets the user retry a missing CLI', async () => {
+  vi.stubGlobal('spaceDesktop', { pair: vi.fn().mockRejectedValue(new Error('Install codex on this Mac.')) });
+  try {
+    api.listAll.mockResolvedValue(humans);
+    api.request.mockImplementation(async (path: string) => path === '/agents/connectors' ? defaultPairedConnectors
+      : path.endsWith('agent-pairings') ? { id: 'mac', code: 'd'.repeat(32), expires_at: new Date(Date.now()+600000).toISOString() }
+      : { status: 'cancelled' });
+    render(<WorkspaceMembers {...props}/>);
+    await userEvent.click(await screen.findByRole('button', { name: 'Connect on this Mac' }));
+    expect((await screen.findByRole('alert')).textContent).toContain('Install codex');
+    expect(api.request).toHaveBeenCalledWith('/agent-pairings/mac/cancel', {});
+    expect(screen.getByRole('button', { name: 'Connect on this Mac' })).toBeTruthy();
+  } finally { vi.unstubAllGlobals(); }
+});
+
+it('opens the selected workspace in Desktop from a Mac browser without issuing a pairing code', async () => {
+  const platform = vi.spyOn(navigator, 'platform', 'get').mockReturnValue('MacIntel');
+  const touches = Object.getOwnPropertyDescriptor(navigator, 'maxTouchPoints');
+  Object.defineProperty(navigator, 'maxTouchPoints', { configurable: true, value: 0 });
+  vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => ['arm64'] }));
+  try {
+    api.listAll.mockResolvedValue(humans);
+    api.request.mockResolvedValue(defaultPairedConnectors);
+    render(<WorkspaceMembers {...props} initialConnector="kiro.local"/>);
+    const link = new URL((await screen.findByRole('link', { name: 'Open Space Desktop' })).getAttribute('href')!);
+    expect(link.host).toBe('connect');
+    expect(Object.fromEntries(link.searchParams)).toEqual({origin:window.location.origin, workspace:'workspace', provider:'kiro'});
+    expect((await screen.findByRole('link', {name:'Download for Apple silicon'})).getAttribute('href')).toBe('/downloads/Space-arm64.dmg');
+    expect(screen.getByRole('button', {name:'Use the CLI'})).toBeTruthy();
+    expect(api.request).not.toHaveBeenCalledWith('/workspaces/workspace/agent-pairings', expect.anything());
+  } finally {
+    platform.mockRestore();
+    if (touches) Object.defineProperty(navigator, 'maxTouchPoints', touches);
+    else Reflect.deleteProperty(navigator, 'maxTouchPoints');
+    vi.unstubAllGlobals();
+  }
+});

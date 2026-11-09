@@ -82,3 +82,30 @@ it('ignores late send acknowledgments after history is cleared or unmounted',asy
   result.current.sent(page('3').messages[0] as any);
   expect(fetch).toHaveBeenCalledOnce();
 });
+
+it('replays a deletion received while its thread page is being fetched', async () => {
+  let finish!: (value: unknown) => void;
+  vi.stubGlobal('fetch', vi.fn(() => new Promise(resolve => { finish = resolve; })));
+  const { result } = renderHook(() => useMessageHistory('/threads/one/history', vi.fn()));
+  let pending: Promise<unknown>;
+  act(() => { pending = result.current.load('latest'); });
+  const deleted = { ...page('1').messages[0], text: '', deleted_at: '2026-11-09T00:00:00Z' };
+  act(() => result.current.receive([deleted] as any, false));
+  await act(async () => { finish({ ok: true, json: async () => page('1') }); await pending; });
+  expect(result.current.page?.messages).toEqual([deleted]);
+});
+
+it('refreshes a page snapshot if bounded buffering drops a deletion before the response', async () => {
+  let finish!: (value: unknown) => void;
+  const deleted = { ...page('1').messages[0], text: '', deleted_at: '2026-11-09T00:00:00Z' };
+  const fetch = vi.fn().mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }))
+    .mockImplementationOnce(async () => ({ ok: true, json: async () => ({ ...page('1'), messages: [deleted], event_cursor: '600' }) }));
+  vi.stubGlobal('fetch', fetch);
+  const { result } = renderHook(() => useMessageHistory('/threads/one/history', vi.fn()));
+  let pending: Promise<unknown>;
+  act(() => { pending = result.current.load('latest'); });
+  act(() => result.current.receive([deleted, ...Array.from({ length: 500 }, (_, index) => page(String(index + 2)).messages[0])] as any, false));
+  await act(async () => { finish({ ok: true, json: async () => page('1') }); await pending; });
+  expect(result.current.page?.messages[0]).toEqual(deleted);
+  expect(fetch).toHaveBeenCalledTimes(2);
+});

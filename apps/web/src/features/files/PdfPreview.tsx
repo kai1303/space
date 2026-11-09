@@ -1,3 +1,4 @@
+import { sessionFetch } from '../../shared/api/session-fetch.js';
 import { useEffect, useRef, useState } from 'react';
 import { Button, IconButton } from '@space/ui/primitives';
 import { ArrowLeft, ArrowRight, MagnifyingGlassMinus, MagnifyingGlassPlus } from '@phosphor-icons/react';
@@ -31,7 +32,7 @@ export function PdfPreview({ assetId, size }: { assetId: string; size: number })
       if (controller.signal.aborted) return;
       const limit = Math.min(end, size);
       if (!Number.isSafeInteger(begin) || !Number.isSafeInteger(end) || begin < 0 || limit <= begin) { fail(); return; }
-      void fetch(`/v1/assets/${encodeURIComponent(assetId)}/content`, {
+      void sessionFetch(`/v1/assets/${encodeURIComponent(assetId)}/content`, {
         credentials: 'same-origin', signal: controller.signal, headers: { Range: `bytes=${begin}-${limit - 1}` },
       }).then(async response => {
         if (controller.signal.aborted) return;

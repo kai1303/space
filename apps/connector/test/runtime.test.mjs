@@ -80,7 +80,8 @@ test('Socket.IO carries only platform credential and auth status; revoked creden
   } finally { connection.close(); await new Promise(resolve => io.close(resolve)); }
 });
 
-test('graceful server disconnect reconnects and resumes heartbeats', async () => {
+test('graceful server disconnect reconnects and resumes heartbeats', async t => {
+  const logs = t.mock.method(console, 'info', () => {});
   const http = createServer();
   const io = new Server(http);
   await new Promise(resolve => http.listen(0, '127.0.0.1', resolve));
@@ -102,10 +103,15 @@ test('graceful server disconnect reconnects and resumes heartbeats', async () =>
     assert.deepEqual(await Promise.race([heartbeat, new Promise((_, reject) => { timeout = setTimeout(() => reject(new Error('connector did not reconnect')), 3000); })]), { auth_status: 'ready' });
     assert.equal(connections, 2);
     assert.equal(rejections, 0);
+    const lines = logs.mock.calls.map(call => call.arguments.join(' '));
+    assert.equal(lines.filter(line => line.endsWith('Connected to Space.')).length, 2);
+    assert.ok(lines.some(line => line.endsWith('Space closed the connection. Reconnecting.')));
+    assert.ok(lines.every(line => line.includes(`[codex http://127.0.0.1:${http.address().port}]`)));
   } finally { clearTimeout(timeout); connection.close(); await new Promise(resolve => io.close(resolve)); }
 });
 
-test('a rejected reconnect handshake stops after server disconnect', async () => {
+test('a rejected reconnect handshake stops after server disconnect', async t => {
+  const logs = t.mock.method(console, 'info', () => {});
   const http = createServer();
   const io = new Server(http);
   await new Promise(resolve => http.listen(0, '127.0.0.1', resolve));
@@ -114,7 +120,7 @@ test('a rejected reconnect handshake stops after server disconnect', async () =>
   const stopped = new Promise(resolve => { rejected = resolve; });
   io.of('/agents').use((_socket, next) => {
     attempts++;
-    next(attempts === 1 ? undefined : new Error('unauthorized'));
+    next(attempts === 1 ? undefined : new Error('unauthorized private-server-detail'));
   });
   io.of('/agents').on('connection', socket => socket.disconnect(true));
   const connection = connectPlatform({ origin: `http://127.0.0.1:${http.address().port}`, credential: 'credential', installation_id: 'i', workspace_id: 'w' }, () => 'required', rejected);
@@ -122,6 +128,9 @@ test('a rejected reconnect handshake stops after server disconnect', async () =>
   try {
     await Promise.race([stopped, new Promise((_, reject) => { timeout = setTimeout(() => reject(new Error('connector did not reject invalid credential')), 3000); })]);
     assert.equal(attempts, 2);
+    const lines = logs.mock.calls.map(call => call.arguments.join(' '));
+    assert.ok(lines.some(line => line.endsWith('Space rejected the pairing.')));
+    assert.ok(lines.every(line => !line.includes('private-server-detail') && !line.includes('credential')));
     await new Promise(resolve => setTimeout(resolve, 1100));
     assert.equal(attempts, 2);
   } finally { clearTimeout(timeout); connection.close(); await new Promise(resolve => io.close(resolve)); }

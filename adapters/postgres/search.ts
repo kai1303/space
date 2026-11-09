@@ -14,7 +14,7 @@ export class SearchStore {
   async document(id:string,channel:string):Promise<SearchDocument|null> {
     const {rows}=await this.pool.query(`SELECT m.id AS message_id,m.workspace_id,m.channel_id,coalesce(m.user_id,m.installation_id) AS author_id,
       m.text, m.document,m.search_order::float8 AS search_order, (extract(epoch FROM m.created_at)*1000)::float8 AS created_at,m.search_revision::float8 AS revision
-      FROM messages m WHERE m.channel_id=$1 AND m.id=$2 AND m.agent_session_id IS NULL`,[uuid(channel),uuid(id)]);
+      FROM messages m WHERE m.channel_id=$1 AND m.id=$2 AND m.agent_session_id IS NULL AND m.deleted_at IS NULL`,[uuid(channel),uuid(id)]);
     const row=rows[0];if(!row)return null;
     const links=(row.document?.ops??[]).flatMap((op:{attributes?:{link?:string}})=>op.attributes?.link?[op.attributes.link]:[]);
     const text=[row.text,...links].join(' ').slice(0,32000);
@@ -48,7 +48,7 @@ export class SearchStore {
       JOIN workspace_members wm ON wm.workspace_id=m.workspace_id AND wm.user_id=$1 AND wm.active
       LEFT JOIN users peer ON c.kind='direct' AND peer.id=CASE WHEN c.direct_user_low=$1::uuid THEN c.direct_user_high ELSE c.direct_user_low END
       LEFT JOIN users u ON u.id=m.user_id LEFT JOIN agent_installations i ON i.id=m.installation_id LEFT JOIN agent_definitions d ON d.id=i.definition_id
-      WHERE m.workspace_id=$2 AND m.channel_id=ANY($3::uuid[]) AND m.id=ANY($4::uuid[]) AND m.agent_session_id IS NULL`,[uuid(actor),uuid(workspace),candidates.map(d=>uuid(d.channel_id)),candidates.map(d=>uuid(d.message_id))]);
+      WHERE m.workspace_id=$2 AND m.channel_id=ANY($3::uuid[]) AND m.id=ANY($4::uuid[]) AND m.agent_session_id IS NULL AND m.deleted_at IS NULL`,[uuid(actor),uuid(workspace),candidates.map(d=>uuid(d.channel_id)),candidates.map(d=>uuid(d.message_id))]);
     const current=new Map(rows.map(row=>[row.id,row]));
     return candidates.flatMap(candidate=>{
       const row=current.get(candidate.message_id);

@@ -1,3 +1,4 @@
+import { sessionFetch } from '../../shared/api/session-fetch.js';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { Select, Badge, Button, Dialog } from '@space/ui/primitives';
 import { Reveal } from '@space/ui/motion';
@@ -149,7 +150,7 @@ function MemoryDialog({ channel, name, message, onClose }: Props) {
 }
 
 async function requestDelete<T = unknown>(path: string): Promise<T> {
-  const response = await fetch(`/v1${path}`, { method: 'DELETE', credentials: 'same-origin' });
+  const response = await sessionFetch(`/v1${path}`, { method: 'DELETE', credentials: 'same-origin' });
   const result = await response.json();
   if (!response.ok) {
     if (response.status === 401) window.dispatchEvent(new Event('space:session-expired'));

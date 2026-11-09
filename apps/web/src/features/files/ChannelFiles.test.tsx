@@ -139,3 +139,20 @@ it('defers incoming-attachment refresh while reading a file and refreshes after 
   await waitFor(() => expect(vi.mocked(fetch)).toHaveBeenCalledTimes(3));
   expect(document.activeElement).toBe(screen.getByRole('searchbox'));
 });
+
+it('closes a loaded attachment preview when its message is deleted', async () => {
+  let deleted = false;
+  vi.stubGlobal('fetch', vi.fn(async (url: string) => url.endsWith('/preview')
+    ? { ok: true, json: async () => ({ kind: 'text', text: 'Private document contents', truncated: false }) }
+    : response(deleted ? [] : [file('private', 'text')])));
+  const deletions = { current: null as ((ids: ReadonlySet<string>) => void) | null };
+  const view = render(<ChannelFiles {...props} revision="1" deletions={deletions} />);
+  await userEvent.click(await screen.findByRole('button', { name: 'Preview private.png' }));
+  await screen.findByText('Private document contents');
+  deleted = true;
+  act(() => deletions.current!(new Set(['message-private'])));
+  view.rerender(<ChannelFiles {...props} revision="2" deletions={deletions} />);
+  await screen.findByText('No files shared yet');
+  expect(screen.queryByText('Private document contents')).toBeNull();
+  expect(screen.queryByRole('dialog')).toBeNull();
+});

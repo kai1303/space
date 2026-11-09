@@ -115,9 +115,15 @@ importers:
       '@electron-forge/maker-zip':
         specifier: 8.0.1
         version: 8.0.1
+      '@xterm/xterm':
+        specifier: 6.0.0
+        version: 6.0.0
       electron:
         specifier: 45.2.2
         version: 45.2.2
+      esbuild:
+        specifier: 0.28.2
+        version: 0.28.2
 
   apps/events:
     dependencies:
@@ -228,6 +234,9 @@ importers:
       file-type:
         specifier: ^22.3.0
         version: 22.3.0
+      jose:
+        specifier: 6.2.15
+        version: 6.2.15
       livekit-server-sdk:
         specifier: 2.19.2
         version: 2.19.2
@@ -514,6 +523,9 @@ importers:
       fastify:
         specifier: ^5.12.8
         version: 5.12.8
+      socket.io:
+        specifier: ^4.8.4
+        version: 4.8.4
       tsx:
         specifier: ^4.23.15
         version: 4.23.15
@@ -3315,6 +3327,10 @@ packages:
   /@xmldom/xmldom@0.9.12:
     resolution: {integrity: sha512-5AXjrcMClTryPe9LgZrygpB1lj7s0S9E0+W+AHaVKAVyHanafK86iPSvG5xHVSp/jC+VH1UXu0TAEmY279xH7A==}
     engines: {node: '>=14.6'}
+    dev: true
+
+  /@xterm/xterm@6.0.0:
+    resolution: {integrity: sha512-TQwDdQGtwwDt+2cgKDLn0IRaSxYu1tSUjgKarSDkUM0ZNiSRXFpjxEsvc/Zgc5kq5omJ+V0a8/kIM2WD3sMOYg==}
     dev: true
 
   /abbrev@4.0.0:

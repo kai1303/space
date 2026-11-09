@@ -1,3 +1,4 @@
+import { recoverSocketSession } from '../api/session-fetch.js';
 import { io, type Socket } from 'socket.io-client';
 import { invalidateSocketCommands } from './socket-command.js';
 import { clearLiveReceipts, enableLiveReceipts, finishLiveReceipt } from './live-receipts.js';
@@ -33,13 +34,28 @@ function createTransport() {
     socket.disconnect();
     if (!source) window.dispatchEvent(new Event('space:session-expired'));
   };
+  let restoring = false, triedRefresh = false;
+  const restore = () => {
+    if (closed || terminal || restoring) return;
+    if (triedRefresh) { unauthorized(); return; }
+    restoring = true; triedRefresh = true;
+    void recoverSocketSession().then(ok => { if (!ok) unauthorized(); })
+      .catch(() => { triedRefresh = false; if (!closed && !terminal) { socket.disconnect(); reconnect(); } })
+      .finally(() => { restoring = false; });
+  };
+  const renewed = () => {
+    if (closed || terminal) return;
+    clearTimeout(retry); retry = undefined;
+    socket.disconnect(); connect();
+  };
+  window.addEventListener('space:access-renewed', renewed);
   const bind = (event: string, handler: (...args: any[]) => void) => { bindings.set(event, handler); socket.on(event, handler); };
   bind('chat.receipts.enabled', () => enableLiveReceipts(socket));
   bind('chat.receipt.confirmed', (id: string, ack: (ms: number | null) => void) => ack(finishLiveReceipt(socket, id)));
-  bind('connect', () => { clearTimeout(retry); retry = undefined; delay = 1000; dispatch('connect'); });
+  bind('connect', () => { triedRefresh = false; clearTimeout(retry); retry = undefined; delay = 1000; dispatch('connect'); });
   bind('disconnect', reason => { clearLiveReceipts(socket); invalidateSocketCommands(socket); dispatch('disconnect', reason); if (reason === 'io server disconnect') reconnect(); });
-  bind('connect_error', error => { if (error.message === 'unauthorized') unauthorized(); else { dispatch('connect_error', error); reconnect(); } });
-  bind('chat.error', error => { if (error.error === 'unauthorized') unauthorized(); else dispatch('chat.error', error); });
+  bind('connect_error', error => { if (error.message === 'unauthorized') restore(); else { dispatch('connect_error', error); reconnect(); } });
+  bind('chat.error', error => { if (error.error === 'unauthorized') restore(); else dispatch('chat.error', error); });
   const focus = () => { if (!closed && !terminal && !document.hidden) { dispatch('focus'); connect(); } };
   window.addEventListener('focus', focus); document.addEventListener('visibilitychange', focus);
   window.addEventListener('space:session-expired', unauthorized);
@@ -48,6 +64,7 @@ function createTransport() {
     closed = true; clearLiveReceipts(socket); clearTimeout(retry); invalidateSocketCommands(socket);
     for (const [event, handler] of bindings) socket.off(event, handler);
     listeners.clear(); socket.disconnect();
+    window.removeEventListener('space:access-renewed', renewed);
     window.removeEventListener('focus', focus); document.removeEventListener('visibilitychange', focus);
     window.removeEventListener('space:session-expired', unauthorized);
     if (current === transport) current = undefined;
@@ -58,7 +75,7 @@ function createTransport() {
       references++;
       let released = false;
       const cleanups = new Set<() => void>();
-      return { socket, connect, recover, expire: () => unauthorized(),
+      return { socket, connect, recover, expire: restore,
         on(event: string, handler: Handler) {
           let callbacks = listeners.get(event);
           if (!callbacks) {

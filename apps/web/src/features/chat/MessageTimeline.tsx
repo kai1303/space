@@ -6,11 +6,11 @@ import type { ChatEvent, MessagePage } from '@space/contracts';
 import type { HistoryDirection } from './history-window.js';
 
 export type TimelineHandle = { reveal: (id: string) => void };
-export function MessageTimeline({ label, items, page, loading, latestVersion, load, pinned, handle, render, children, header, footer, busy, onAtEndChange, role, hidden }: {
+export function MessageTimeline({ label, items, page, loading, latestVersion, load, pinned, handle, render, children, header, trailing, footer, busy, onAtEndChange, role, hidden }: {
   label: string; items: ChatEvent[]; page: Pick<MessagePage,'has_older'|'has_newer'> | null; loading: HistoryDirection | null;
   latestVersion: number; load: (direction: HistoryDirection) => unknown;
   pinned: RefObject<boolean>; handle?: RefObject<TimelineHandle | null>;
-  render: (event: ChatEvent, index: number) => ReactNode; children?: ReactNode; header?: ReactNode; footer?: ReactNode; busy?: boolean;
+  render: (event: ChatEvent, index: number) => ReactNode; children?: ReactNode; header?: ReactNode; trailing?: ReactNode; footer?: ReactNode; busy?: boolean;
   onAtEndChange?: (atEnd: boolean) => void; role?: 'log'; hidden?: boolean;
 }) {
   const element = useRef<HTMLDivElement>(null), lastOffset = useRef(0);
@@ -96,6 +96,7 @@ export function MessageTimeline({ label, items, page, loading, latestVersion, lo
         {virtualizer.getVirtualItems().map(item => <div key={item.key} data-index={item.index} ref={virtualizer.measureElement} style={{ position: 'absolute', top: 0, left: 0, width: '100%', transform: `translateY(${item.start}px)` }}>{headerCount && item.index === 0 ? header : render(items[item.index - headerCount]!, item.index - headerCount)}</div>)}
         {page?.has_newer && <div className="chat-history-edge chat-history-edge--newer"><Button variant="ghost" size="sm" disabled={!!loading} onClick={() => void load('newer')}>{loading === 'newer' ? 'Loading newer messages…' : 'Load newer messages'}</Button></div>}
       </div>}
+      {trailing}
       {footer && <div className="chat-timeline-footer" aria-hidden={busy || undefined} inert={busy}>{footer}</div>}
     </div>
     <div className="chat-jump-latest" data-visible={showJump} aria-hidden={!showJump} inert={!showJump}><Button size="sm" disabled={!!loading} onClick={() => void jumpToLatest()}>Jump to latest</Button></div>

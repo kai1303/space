@@ -37,7 +37,16 @@ function unauthorized(error: unknown): boolean {
   return [value.code, value.data?.code, value.message].some(item => typeof item === 'string' && /unauthorized|unauthenticated|revoked|invalid.token/i.test(item));
 }
 export function connectPlatform(connection: Connection, status: () => AuthStatus, onUnauthorized: () => void, invoke?: InvokeAgent) {
-  const socket = io(`${platformOrigin(connection.origin)}/agents`, {
+  const origin = platformOrigin(connection.origin);
+  const provider = parseLocalProvider(connection.provider);
+  let lastMessage: string | undefined;
+  function logChange(message: string) {
+    if (message === lastMessage) return;
+    lastMessage = message;
+    console.info(`${new Date().toISOString()} [${provider} ${origin}] ${message}`);
+  }
+  logChange('Connecting to Space.');
+  const socket = io(`${origin}/agents`, {
     transports: ['websocket'], auth: { token: connection.credential },
     reconnection: true, reconnectionAttempts: Infinity, reconnectionDelay: 1_000,
     reconnectionDelayMax: 30_000, randomizationFactor: 0.5, timeout: 15_000,
@@ -176,8 +185,14 @@ export function connectPlatform(connection: Connection, status: () => AuthStatus
       }
     })();
   });
-  const close = () => { for(const item of direct.values())item.controller.abort(); closed = true; active?.abort(); approvals.close(); clearInterval(heartbeat); clearTimeout(reconnect); socket.disconnect(); };
-  const rejected = () => { if (!closed) { close(); onUnauthorized(); } };
+  const close = () => {
+    if (closed) return;
+    closed = true;
+    for (const item of direct.values()) item.controller.abort();
+    active?.abort(); approvals.close(); clearInterval(heartbeat); clearTimeout(reconnect); socket.disconnect();
+    logChange('Connector stopped.');
+  };
+  const rejected = () => { if (!closed) { logChange('Space rejected the pairing.'); close(); onUnauthorized(); } };
   const publish = () => {
     if (!socket.connected || closed) return;
     const wasReady = readyToClaim;
@@ -185,27 +200,41 @@ export function connectPlatform(connection: Connection, status: () => AuthStatus
     const authStatus = halted ? 'error' : status();
     const revision = ++heartbeatRevision, currentGeneration = generation;
     socket.timeout(8_000).emit('agent.heartbeat', { auth_status: authStatus }, (error: Error | null, ack?: { data?: { installation_id?: string }; error?: unknown }) => {
-      if (closed || currentGeneration !== generation || revision !== heartbeatRevision || error) return;
+      if (closed || currentGeneration !== generation || revision !== heartbeatRevision) return;
+      if (error) { logChange('Space did not confirm connector status.'); return; }
       if (ack?.error && unauthorized(ack.error)) { rejected(); return; }
       if (ack?.data?.installation_id && ack.data.installation_id !== connection.installation_id) { rejected(); return; }
-      if (!ack?.error && ack?.data?.installation_id === connection.installation_id && authStatus === 'ready' && status() === 'ready' && !halted) {
+      if (ack?.error || ack?.data?.installation_id !== connection.installation_id) {
+        logChange('Space did not confirm connector status.');
+        return;
+      }
+      logChange(halted ? 'Work interrupted. Restart the connector to accept new work.' : `Space confirmed provider status: ${authStatus}.`);
+      if (authStatus === 'ready' && status() === 'ready' && !halted) {
         readyToClaim = true;
         if (!wasReady || claimPending) void claim();
       }
     });
   };
   const heartbeat = setInterval(publish, 10_000);
-  socket.on('connect', () => { generation++; readyToClaim = false; reconnectDelay = 1_000; publish(); });
+  socket.on('connect', () => { generation++; readyToClaim = false; reconnectDelay = 1_000; logChange('Connected to Space.'); publish(); });
   socket.on('disconnect', reason => {
     generation++; readyToClaim = false;
     for(const item of direct.values())item.controller.abort();
     if (active || claiming || direct.size) { halted = true; active?.abort(); }
+    if (!closed) {
+      logChange(reason === 'io server disconnect' ? 'Space closed the connection. Reconnecting.'
+        : reason === 'ping timeout' ? 'Space heartbeat timed out. Reconnecting.' : 'Connection to Space lost. Reconnecting.');
+    }
     // A graceful API restart also disconnects the namespace; recheck credentials on reconnect.
     if (reason !== 'io server disconnect' || closed) return;
     clearTimeout(reconnect);
     reconnect = setTimeout(() => { if (!closed) socket.connect(); }, reconnectDelay);
     reconnectDelay = Math.min(reconnectDelay * 2, 30_000);
   });
-  socket.on('connect_error', error => { if (unauthorized(error)) rejected(); });
+  socket.on('connect_error', error => {
+    if (closed) return;
+    if (unauthorized(error)) rejected();
+    else logChange(socket.active ? 'Could not connect to Space. Retrying.' : 'Space refused the connection. Check the server and restart the connector.');
+  });
   return { close, publish };
 }

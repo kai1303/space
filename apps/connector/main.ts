@@ -35,7 +35,15 @@ export function credentialRenewalDelay(expiresAt: number, now = Date.now()) {
   return Math.max(1000, remaining > 60_000 ? remaining - 60_000 : Math.floor(remaining * 0.8));
 }
 
-export async function runConnector(args = process.argv.slice(2)) {
+interface ConnectorHost {
+  directory: string;
+  paired(): void;
+  revoked(): void;
+  announce(url: string): Promise<void>;
+  login(provider: 'kiro' | 'claude', directory: string, signal: AbortSignal): Promise<void>;
+}
+
+export async function runConnector(args = process.argv.slice(2), host?: ConnectorHost) {
   const options = parseOptions(args);
   if (options.help) {
     console.log('Space Connector\n\n  --provider <codex|kiro|claude>     Select the local agent (default: codex)\n  --url <origin> --pair <code>  Pair this computer with Space\n  --project <absolute-path>   Enable file tools within this project folder\n  --coding                    Enable native coding tools with owner approvals (requires --project)\n  --connect                   Prompt for a new pairing code\n  --login                     Sign in to the selected provider\n  --logout                    Sign out of the selected provider\n\nRun without arguments to reconnect. Pairing codes are prompted when omitted.\nKeep this terminal running. The selected provider CLI must be installed on PATH. Kiro requires ACP v3. Claude opens its native local login flow.');
@@ -43,7 +51,7 @@ export async function runConnector(args = process.argv.slice(2)) {
   }
   const project = await resolveProject(options.project);
   const provider = parseLocalProvider(options.provider);
-  const store = new ConnectorStore(connectorDirectory(provider));
+  const store = new ConnectorStore(host?.directory ?? connectorDirectory(provider));
   const unlock = await store.lock();
   const controller = new AbortController();
   let runtime: AgentRuntime | undefined;
@@ -84,6 +92,7 @@ export async function runConnector(args = process.argv.slice(2)) {
       await claimPairing(store, origin, code, undefined, provider);
       state = await store.load();
       paired = true;
+      host?.paired();
       console.log('This computer is paired with Space. Provider credentials stay on this computer.');
     } else if (options.url && options.url !== state.connection.origin) {
       throw new Error('The saved connector uses a different platform. Provide a new --pair code to change it.');
@@ -94,6 +103,7 @@ export async function runConnector(args = process.argv.slice(2)) {
       if (status === 'ready' && (!runtime?.alive() || (provider === 'codex' && (!state.credentials || state.credentials.expires_at <= Date.now())))) return 'error';
       return status;
     }, () => {
+      host?.revoked();
       console.error('Space rejected this connector credential. Create a new pairing code and run with --pair.');
       process.exitCode = 1;
       stop();
@@ -114,17 +124,20 @@ export async function runConnector(args = process.argv.slice(2)) {
       if (controller.signal.aborted) { runtime.stop(); return; }
       status = runtime.alive() ? 'ready' : 'error';
       platform?.publish();
-      if (status === 'ready') console.log('Connected: ChatGPT authorization and Codex initialization are ready.');
+      if (status === 'ready') console.log('ChatGPT authorization and Codex initialization are ready.');
     }
+    const signIn = (agent: 'kiro' | 'claude') => host
+      ? host.login(agent, store.directory, controller.signal)
+      : (agent === 'kiro' ? kiroLogin : claudeLogin)(store.directory, controller.signal);
     try {
       if (provider === 'kiro') {
-        if (options.login) await kiroLogin(store.directory, controller.signal);
+        if (options.login) await signIn('kiro');
         let identity;
         try { identity = await kiroIdentity(store.directory, controller.signal); }
         catch (error) {
-          if (!paired || options.login || controller.signal.aborted) throw error;
+          if ((!paired && !host) || options.login || controller.signal.aborted) throw error;
           console.log('Sign in to Kiro for Space. This uses separate local credentials.');
-          await kiroLogin(store.directory, controller.signal);
+          await signIn('kiro');
           identity = await kiroIdentity(store.directory, controller.signal);
         }
         if (!controller.signal.aborted) {
@@ -132,16 +145,16 @@ export async function runConnector(args = process.argv.slice(2)) {
             status = 'error'; platform?.publish(); console.error('Kiro stopped. Restart the connector to retry.');
           });
           if (controller.signal.aborted) runtime.stop();
-          else { status = runtime.alive() ? 'ready' : 'error'; platform.publish(); console.log('Connected: Kiro authorization and chat mode are ready.'); }
+          else { status = runtime.alive() ? 'ready' : 'error'; platform.publish(); console.log('Kiro authorization and chat mode are ready.'); }
         }
       } else if (provider === 'claude') {
-        if (options.login) await claudeLogin(store.directory, controller.signal);
+        if (options.login) await signIn('claude');
         let auth;
         try { auth = await claudeIdentity(store.directory, controller.signal); }
         catch (error) {
-          if (!paired || options.login || controller.signal.aborted) throw error;
+          if ((!paired && !host) || options.login || controller.signal.aborted) throw error;
           console.log('Sign in to Claude for Space using Claude Code’s local login.');
-          await claudeLogin(store.directory, controller.signal);
+          await signIn('claude');
           auth = await claudeIdentity(store.directory, controller.signal);
         }
         if (!controller.signal.aborted) {
@@ -150,10 +163,10 @@ export async function runConnector(args = process.argv.slice(2)) {
             status = 'error'; platform?.publish(); console.error('Claude stopped. Check your local sign-in and restart the connector.');
           });
           if (controller.signal.aborted) runtime.stop();
-          else { status = 'ready'; platform.publish(); console.log('Connected: Claude local sign-in and runtime are ready.'); }
+          else { status = 'ready'; platform.publish(); console.log('Claude local sign-in and runtime are ready.'); }
         }
-      } else if (options.login || (paired && !state.credentials)) {
-        const credentials = await authorize(state.host_id, state.registration, { signal: controller.signal });
+      } else if (options.login || (host && paired) || ((paired || host) && !state.credentials)) {
+        const credentials = await authorize(state.host_id, state.registration, { signal: controller.signal, announce: host?.announce });
         state.registration = { client_id: credentials.client_id, subject: credentials.subject, issuer: credentials.issuer };
         state.credentials = credentials;
         await store.save(state);
@@ -167,6 +180,7 @@ export async function runConnector(args = process.argv.slice(2)) {
       if (!controller.signal.aborted) {
         status = 'error';
         platform.publish();
+        if (host) throw error;
         console.error(error instanceof Error ? error.message : 'Local ChatGPT authorization failed. Run with --login to retry.');
       }
     }

@@ -23,7 +23,7 @@ export class UnreadStore {
         LEFT JOIN channel_reads r ON r.channel_id=cm.channel_id AND r.user_id=cm.user_id
         LEFT JOIN LATERAL (
           SELECT count(*) FILTER (WHERE m.user_id IS DISTINCT FROM ${actor}::uuid) AS unread_count
-          FROM messages m WHERE m.workspace_id=${workspace} AND m.channel_id=ch.id AND m.sequence>coalesce(r.last_read_sequence,0) AND ${root}
+          FROM messages m WHERE m.workspace_id=${workspace} AND m.channel_id=ch.id AND m.deleted_at IS NULL AND m.sequence>coalesce(r.last_read_sequence,0) AND ${root}
         ) m ON true
         WHERE cm.workspace_id=${workspace} AND cm.user_id=${actor} ORDER BY ch.id`);
       return { workspace_id: workspace, channels: result.rows };

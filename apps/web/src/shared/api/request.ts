@@ -1,10 +1,11 @@
+import { sessionFetch } from './session-fetch.js';
 import type { Page } from '@space/contracts';
 
-export async function request<T>(path: string, body?: object, key?: string, method: 'POST' | 'PATCH' | 'PUT' | 'DELETE' = 'POST', signal?: AbortSignal): Promise<T> {
-  const response = await fetch(`/v1${path}`, {
+export async function request<T>(path: string, body?: object, key?: string, method: 'POST' | 'PATCH' | 'PUT' | 'DELETE' = 'POST', signal?: AbortSignal, expectedActor?: string): Promise<T> {
+  const response = await sessionFetch(`/v1${path}`, {
     method: method === 'DELETE' ? 'DELETE' : body ? method : 'GET',
     credentials: 'same-origin', signal,
-    headers: { ...(body ? { 'content-type': 'application/json' } : {}), ...(key ? { 'idempotency-key': key } : {}) },
+    headers: { ...(expectedActor ? { 'X-Expected-Actor': expectedActor } : {}), ...(body ? { 'content-type': 'application/json' } : {}), ...(key ? { 'idempotency-key': key } : {}) },
     ...(body ? { body: JSON.stringify(body) } : {}),
   });
   const result = response.status === 204 ? undefined : await response.json();

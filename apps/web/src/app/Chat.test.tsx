@@ -596,14 +596,14 @@ it('keeps uploads with their channel and thread drafts across navigation, retrie
   await waitFor(() => expect(latestChatSocket().requests.some((r: any) => r.name === 'message.send' && r.data.thread_id === 'thread' && r.data.asset_ids[0] === 'thread-asset')).toBe(true));
   mocks.sendFailures = 1;
   await userEvent.click(buttons[0]!);
-  await screen.findByText('Could not send. Your draft is still here. Try again.');
+  await within(screen.getByLabelText('Messages in first')).findByRole('button', { name: 'Retry' });
   expect(screen.getByText('report.txt')).toBeTruthy();
   const firstReportAttempt = latestChatSocket().requests.filter((r: any) => r.name === 'message.send' && !r.data.thread_id)[0];
   await userEvent.click(screen.getByRole('button', { name: 'second', exact: true }));
   await screen.findByRole('textbox', { name: 'Message second' });
   await userEvent.click(screen.getByRole('button', { name: 'first', exact: true }));
   await screen.findByRole('textbox', { name: 'Message first' });
-  await userEvent.click(within(screen.getByRole('textbox', { name: 'Message first' }).closest('.chat-compose') as HTMLElement).getByRole('button', { name: 'Send now' }));
+  await userEvent.click(await within(screen.getByLabelText('Messages in first')).findByRole('button', { name: 'Retry' }));
   const reportAttempts = latestChatSocket().requests.filter((r: any) => r.name === 'message.send' && !r.data.thread_id);
   expect(reportAttempts[0]).toBe(firstReportAttempt);
   expect(reportAttempts).toHaveLength(2);
@@ -1211,6 +1211,28 @@ it.each([false,true])('clears a text-only acknowledged draft after leaving its c
   else await userEvent.click(screen.getByRole('button',{name:'first',exact:true}));
   expect((await screen.findByRole('textbox',{name:inThread?'Message thread':'Message first'})).textContent?.trim()).toBe('');
 });
+it.each([false, true])('shows a submission immediately and lets the sender discard a failed row: thread=%s', async inThread => {
+  let rejectAttempt!: () => void;
+  mocks.pendingSend = new Promise<void>(resolve => { rejectAttempt = resolve; });
+  mocks.sendFailures = 1;
+  sendReviewChannels();
+  render(<Chat />);
+  await screen.findByRole('textbox', { name: 'Message first' });
+  if (inThread) await userEvent.click(await screen.findByRole('button', { name: 'Reply to Kai' }));
+  const editor = await screen.findByRole('textbox', { name: inThread ? 'Message thread' : 'Message first' });
+  const timeline = within(screen.getByLabelText(inThread ? 'Thread messages' : 'Messages in first'));
+  await userEvent.type(editor, 'Message with a lost acknowledgement{Enter}');
+  await timeline.findByText('Message with a lost acknowledgement');
+  expect(editor.textContent?.trim()).toBe('');
+  expect(timeline.queryByRole('button', { name: 'Retry' })).toBeNull();
+  await userEvent.type(editor, 'My next message');
+  await act(async () => { rejectAttempt(); await mocks.pendingSend; });
+  await timeline.findByRole('button', { name: 'Retry' });
+  await userEvent.click(timeline.getByRole('button', { name: 'Delete', exact: true }));
+  expect(timeline.queryByText('Message with a lost acknowledgement')).toBeNull();
+  expect(editor.textContent).toContain('My next message');
+});
+
 it('keeps thread replies out of the channel and updates the root count on duplicate delivery',async()=>{
   const root = {...paginatedMessage('Thread root only','1'),thread_root_id:'Thread root only',reply_count:3};
   mockPaginatedChat(()=>messagePage([root]),'1');
@@ -1239,10 +1261,10 @@ it.each([false,true])('reveals an acknowledged send from older history even befo
   await userEvent.type(editor,own.text);
   // The acknowledgment includes the saved message, while realtime delivery can arrive later.
   const socket=latestChatSocket(), originalTimeout=socket.timeout;
-  socket.timeout=()=>({emitWithAck:async(name:string,data:any)=>name==='message.send'?(sent=true,{data:own}):originalTimeout().emitWithAck(name,data)});
+  socket.timeout=()=>({emitWithAck:async(name:string,data:any)=>name==='message.send'?(sent=true,{data:{...own,client_message_id:data.client_message_id}}):originalTimeout().emitWithAck(name,data)});
   fireEvent.keyDown(editor,{key:'Enter'});
   const timeline=within(screen.getByLabelText(inThread?'Thread messages':'Messages in first'));
-  await timeline.findByText(own.text);
+  await waitFor(() => expect(timeline.getByText(own.text).closest('.chat-message-anchor')).toBeTruthy());
   await waitFor(()=>expect(editor.textContent?.trim()).toBe(''));
 });
 
@@ -1741,4 +1763,76 @@ it('applies live post and reply capabilities independently without losing either
   await waitFor(() => expect(screen.getAllByText(/Unable to check channel permissions/)).toHaveLength(2));
   expect(draft.textContent).toContain('Keep channel draft');
   expect(reply.textContent).toContain('Keep thread draft');
+});
+
+it('confirms deletion of an owned thread reply, retains it on failure and replaces it on success', async () => {
+  const user = userEvent.setup();
+  const root = { ...paginatedMessage('Original question', '1'), reply_count: 1, author: { kind: 'human' as const, id: 'maya', name: 'Maya' } };
+  const reply = { ...paginatedMessage('My reply', '2'), thread_root_id: root.id };
+  mockPaginatedChat(path => messagePage(path.includes('/threads/') ? [root, reply] : [root]));
+  const fallback = vi.mocked(fetch).getMockImplementation()!;
+  let attempts = 0;
+  vi.mocked(fetch).mockImplementation(async (input, init) => {
+    if (init?.method !== 'DELETE') return fallback(input, init);
+    expect(String(input)).toBe('/v1/channels/first/messages/' + reply.id);
+    attempts++;
+    return attempts === 1 ? { ok: false, json: async () => ({ error: 'temporarily_unavailable' }) } as Response
+      : { ok: true, json: async () => ({ ...reply, text: '', deleted_at: '2026-11-09T00:00:00Z' }) } as Response;
+  });
+  render(<Chat />);
+  await screen.findByText(root.text);
+  await user.click(screen.getByLabelText('More actions'));
+  expect(screen.queryByRole('menuitem', { name: /Delete message/ })).toBeNull();
+  await user.keyboard('{Escape}');
+  await user.click(screen.getByRole('button', { name: /1 reply View thread/ }));
+  const panel = within(await screen.findByRole('region', { name: 'Thread', exact: true }));
+  const row = (await panel.findByText(reply.text)).closest('article')!;
+  const open = async () => {
+    await user.click(within(row).getByLabelText('More actions'));
+    await user.click(screen.getByRole('menuitem', { name: /Delete message/ }));
+    return within(screen.getByRole('dialog', { name: 'Delete message?' }));
+  };
+  await user.click((await open()).getByRole('button', { name: 'Cancel' }));
+  expect(attempts).toBe(0);
+  const dialog = await open();
+  await user.click(dialog.getByRole('button', { name: 'Delete message' }));
+  expect((await dialog.findByRole('alert')).textContent).toContain('temporarily unavailable');
+  expect(within(row).getByText(reply.text)).toBeTruthy();
+  await user.click(dialog.getByRole('button', { name: 'Delete message' }));
+  await panel.findByText('This message was deleted.');
+  expect(panel.queryByText(reply.text)).toBeNull();
+  expect(within(row).queryByLabelText('More actions')).toBeNull();
+  expect(screen.getByRole('button', { name: /1 reply View thread/ })).toBeTruthy();
+});
+
+it('keeps a deleted DM root and its thread link in place after reconnect replay', async () => {
+  const dm = { id: 'self', workspace_id: 'workspace', kind: 'direct', name: 'Kai (you)', private: true, joined: true, participants: [{ id: 'user', name: 'Kai' }], archived_at: null };
+  const root = { ...paginatedMessage('A private note', '1'), id: 'root', channel_id: dm.id, thread_root_id: 'root', reply_count: 1 };
+  const deleted = { ...root, text: 'Message deleted', deleted_at: '2026-11-09T00:00:00Z', reaction_sequence: '3' };
+  const reply = { ...paginatedMessage('A follow-up', '2'), channel_id: dm.id, thread_root_id: 'root' };
+  mockPaginatedChat(path => messagePage(path.includes('/threads/') ? [deleted, reply] : path.includes('/self/') ? [root] : []));
+  const fallback = vi.mocked(fetch).getMockImplementation()!;
+  vi.mocked(fetch).mockImplementation(async (input, init) => {
+    if (String(input).includes('/direct-messages?')) return { ok: true, json: async () => ({ items: [dm], next_cursor: null }) } as Response;
+    if (String(input) === '/v1/channels/self') return { ok: true, json: async () => dm } as Response;
+    return fallback(input, init);
+  });
+  render(<Chat />);
+  await userEvent.click(await screen.findByRole('button', { name: dm.name, exact: true }));
+  const row = (await screen.findByText(root.text)).closest('article')!;
+  await userEvent.click(within(row).getByLabelText('More actions'));
+  await userEvent.click(screen.getByRole('menuitem', { name: /Delete message/ }));
+  expect(screen.getByRole('dialog', { name: 'Delete message?' })).toBeTruthy();
+  const event = (type: string, sequence: string, payload: ChatMessage) => ({ type, sequence, payload, channel_id: dm.id, thread_id: root.thread_id, occurred_at: root.created_at });
+  await act(async () => { latestChatSocket().receive('chat.events', { channel_id: dm.id, cursor: '3', events: [
+    event('message.updated', '3', deleted), event('message.created', '1', root),
+  ] }, vi.fn()); });
+  expect(screen.queryByRole('dialog', { name: 'Delete message?' })).toBeNull();
+  expect(within(row).queryByLabelText('More actions')).toBeNull();
+  expect(within(row).queryByText(root.text)).toBeNull();
+  expect(within(row).getByText('This message was deleted.')).toBeTruthy();
+  await userEvent.click(within(row).getByRole('button', { name: /1 reply View thread/ }));
+  const thread = within(await screen.findByRole('region', { name: 'Thread', exact: true }));
+  await thread.findByText(reply.text);
+  expect(thread.getByText('This message was deleted.')).toBeTruthy();
 });

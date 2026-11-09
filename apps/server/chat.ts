@@ -1,7 +1,13 @@
 import { registerReplySuggestions } from './reply-suggestions.js';
-import type { FastifyInstance } from 'fastify';
-import { record, uuid } from '@space/contracts';
+import type { FastifyInstance, FastifyRequest } from 'fastify';
+import { AppError, record, uuid } from '@space/contracts';
 import type { ChatStore } from '@space/postgres/chat';
+
+function messageActor(request: FastifyRequest) {
+  const expected = request.headers['x-expected-actor'];
+  if (expected !== undefined && uuid(expected) !== request.actorId) throw new AppError(409, 'actor_changed');
+  return request.actorId;
+}
 
 export function registerChatRoutes(app: FastifyInstance, chat: ChatStore) {
   registerReplySuggestions(app, chat);
@@ -37,7 +43,9 @@ export function registerChatRoutes(app: FastifyInstance, chat: ChatStore) {
   app.get<{ Params: { channelId: string } }>('/v1/channels/:channelId/history', r => chat.history(r.actorId, uuid(r.params.channelId), r.query));
   app.get<{ Params: { channelId: string } }>('/v1/channels/:channelId/messages', r => chat.messageHistory(r.actorId, uuid(r.params.channelId), r.query));
   app.get<{ Params: { channelId: string; messageId: string } }>('/v1/channels/:channelId/messages/:messageId', r => chat.sourceMessage(r.actorId, uuid(r.params.channelId), uuid(r.params.messageId)));
-  app.post<{ Params: { channelId: string } }>('/v1/channels/:channelId/messages', { bodyLimit: 131072 }, async (r, reply) => reply.code(201).send(await chat.send(r.actorId, uuid(r.params.channelId), r.body)));
+  app.post<{ Params: { channelId: string } }>('/v1/channels/:channelId/messages', { bodyLimit: 131072 }, async (r, reply) => reply.code(201).send(await chat.send(messageActor(r), uuid(r.params.channelId), r.body)));
+  app.delete<{ Params: { channelId: string; clientId: string } }>('/v1/channels/:channelId/outgoing/:clientId', r => chat.cancelOutgoing(messageActor(r), uuid(r.params.channelId), uuid(r.params.clientId)));
+  app.delete<{ Params: { channelId: string; messageId: string } }>('/v1/channels/:channelId/messages/:messageId', r => chat.deleteMessage(messageActor(r), uuid(r.params.channelId), uuid(r.params.messageId)));
   app.post<{ Params: { channelId: string; messageId: string } }>('/v1/channels/:channelId/messages/:messageId/reactions', r => chat.react(r.actorId, uuid(r.params.channelId), uuid(r.params.messageId), r.body));
   app.post<{ Params: { channelId: string } }>('/v1/channels/:channelId/join', r => {
     record(r.body, []);

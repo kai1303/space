@@ -261,7 +261,8 @@ test('claims wait for a persisted ready heartbeat on startup and reconnect', { t
   finally { clearTimeout(timeout); platform.close(); await new Promise(resolve => io.close(resolve)); }
 });
 
-test('explicit agent_not_ready before claiming a task refreshes readiness without halting', { timeout: 5000 }, async () => {
+test('explicit agent_not_ready before claiming a task refreshes readiness without halting', { timeout: 5000 }, async t => {
+  const logs = t.mock.method(console, 'info', () => {});
   let claims = 0, fails = 0, finished;
   const ready = new Promise(resolve => { finished = resolve; });
   const close = await platformFixture(socket => {
@@ -273,7 +274,12 @@ test('explicit agent_not_ready before claiming a task refreshes readiness withou
     socket.on('agent.task.fail', (_payload, ack) => { fails++; ack({ data: true }); });
   }, async () => assert.fail('no task returned'));
   const timeout = setTimeout(() => finished(), 2000);
-  try { await ready; assert.ok(claims >= 2); assert.equal(fails, 0); }
+  try {
+    await ready;
+    assert.ok(claims >= 2);
+    assert.equal(fails, 0);
+    assert.equal(logs.mock.calls.filter(call => call.arguments[0].endsWith('Space confirmed provider status: ready.')).length, 1);
+  }
   finally { clearTimeout(timeout); await close(); }
 });
 

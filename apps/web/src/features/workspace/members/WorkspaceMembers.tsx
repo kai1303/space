@@ -4,6 +4,7 @@ import { Avatar, Button, Dialog, Select } from '@space/ui/primitives';
 import { ArrowLeft, ArrowRight, CheckCircle, Cloud, Copy, Desktop, Plug, ShieldCheck } from '@phosphor-icons/react';
 import { type PairedConnector, type AgentPairing, type AgentPairingStatus, type WorkspaceParticipant } from '@space/contracts';
 import { listAll, request } from '../../../shared/api/request.js';
+import { MacRunnerLinks } from './MacRunnerLinks.js';
 import './members.css';
 const errorText = (error: unknown) => error instanceof Error ? error.message.replaceAll('_', ' ') : 'Unable to update members';
 const statusText = { online: 'Online', offline: 'Offline', auth_required: 'Sign-in required', error: 'Connection needs attention' };
@@ -51,6 +52,8 @@ function MemberDialog({ initialConnector, agent, workspace, viewer, onClose }: {
     }, Math.max(0, Date.parse(pairing.expires_at) - Date.now()));
     return () => clearTimeout(timer);
   }, [pairing, pairStatus?.status]);
+  const desktop = window.spaceDesktop;
+  const macBrowser = !desktop && /Mac/.test(navigator.platform) && navigator.maxTouchPoints <= 1;
   async function createPairing() {
     if (!selected || busy) return;
     setBusy(true); setError('');
@@ -58,6 +61,17 @@ function MemberDialog({ initialConnector, agent, workspace, viewer, onClose }: {
       const value = await request<AgentPairing>(`/workspaces/${workspace}/agent-pairings`, { connector_id: selected.id });
       if (!active.current) { void request(`/agent-pairings/${value.id}/cancel`, {}).catch(() => {}); return; }
       pending.current = value; status.current = undefined; setPairing(value); setPairStatus(undefined); setCopied(false);
+      if (desktop && selected.provider) {
+        try { await desktop.pair(selected.provider, value.code); }
+        catch (reason) {
+          const result = await request<AgentPairingStatus>(`/agent-pairings/${value.id}/cancel`, {});
+          if (active.current && pending.current?.id === value.id && result.status !== 'claimed') {
+            pending.current = undefined; setPairing(undefined); setPairStatus(undefined);
+          }
+          throw reason;
+        }
+        if (active.current) await refresh();
+      }
     } catch (e) { if (active.current) setError(errorText(e)); }
     finally { if (active.current) setBusy(false); }
   }
@@ -127,14 +141,15 @@ function MemberDialog({ initialConnector, agent, workspace, viewer, onClose }: {
         {mode === 'endpoint' ? <div className="space-agent-explainer"><span className="space-agent-method-icon"><Plug size={24}/></span><div><h3>Connect a hosted HTTP agent</h3><p>Your Space operator can connect an AG-UI endpoint and enable it for your workspace. Endpoint credentials stay on the server.</p><p className="space-members-hint">Hosted endpoints are configured by your operator, not paired with a code.</p></div></div>
           : selected ? <>
             <div className="space-agent-explainer"><span className="space-agent-method-icon">{mode === 'local' ? <Desktop size={24}/> : <Cloud size={24}/>}</span><div><h3>{mode === 'local' ? 'Runs on your computer' : 'Runs in your cloud environment'}</h3><p>{mode === 'local' ? 'Connect your agent, sign in on your computer, and keep the runner open while you work.' : 'Pair a registered runner on your server or container. It connects securely to Space and sends results back to your conversations.'}</p></div></div>
-            <div className="space-agent-setup-action"><span className="space-members-hint">You’ll get a code to pair your runner.</span><Button variant="primary" loading={busy} disabled={!loaded} onClick={() => void createPairing()}>{mode === 'local' ? `Connect Local ${selected.name}` : `Connect ${selected.name}`}<ArrowRight size={17}/></Button></div>
+            {macBrowser && selected.provider && <MacRunnerLinks workspace={workspace} provider={selected.provider}/>}
+            <div className="space-agent-setup-action"><span className="space-members-hint">{desktop && selected.provider ? 'Your provider CLI must be installed on this Mac.' : 'You’ll get a code to pair your runner.'}</span><Button variant="primary" loading={busy} disabled={!loaded} onClick={() => void createPairing()}>{mode === 'local' ? desktop ? 'Connect on this Mac' : macBrowser ? 'Use the CLI' : `Connect Local ${selected.name}` : `Connect ${selected.name}`}<ArrowRight size={17}/></Button></div>
           </> : loaded && <div className="space-agent-explainer"><span className="space-agent-method-icon">{type.icon}</span><div><h3>{mode === 'cloud' ? 'No cloud connectors configured' : 'No local connectors configured'}</h3><p>{mode === 'cloud' ? 'Ask your Space operator to register your cloud runner. It will appear here when it is available.' : 'Ask your Space operator to enable a local provider.'}</p></div></div>}
       </section>}
       {pairing && <section className="space-pairing" aria-label={`Connect ${name}`}>
         {pairStatus?.status === 'claimed' ? <>
           <div className="space-agent-success"><CheckCircle size={30}/><div><strong>{name} paired with this workspace</strong><p role="status">{connected?.status === 'online' ? remote || pairingProvider === 'claude' ? `${name} is connected and ready.` : `Your local ${name} is connected and signed in.` : remote ? 'Start your cloud runner and finish its setup. Its status will update here.' : pairingProvider === 'codex' ? 'Complete Continue with ChatGPT in the local connector. Its status will update here.' : `Sign in to ${name} in its connector. Its status will update here.`}</p></div></div>
           <Button variant="primary" onClick={() => {pending.current = undefined; status.current = undefined; setPairing(undefined); setPairStatus(undefined);}}>Done</Button>
-        </> : expired ? <><strong>This pairing code has expired or was cancelled.</strong><p>Create a new code to continue connecting your agent.</p><Button variant="primary" loading={busy} onClick={() => void createPairing()}>Generate new code</Button><Button size="sm" variant="ghost" disabled={busy} onClick={() => void cancel()}>Back to setup</Button></> : <>
+        </> : expired ? <><strong>This pairing code has expired or was cancelled.</strong><p>Create a new code to continue connecting your agent.</p><Button variant="primary" loading={busy} onClick={() => void createPairing()}>Generate new code</Button><Button size="sm" variant="ghost" disabled={busy} onClick={() => void cancel()}>Back to setup</Button></> : desktop && pairingProvider ? <p role="status">Connecting {name} on this Mac…</p> : <>
           <div className="space-pairing-heading"><span className="space-agent-step-label">PAIR YOUR RUNNER</span><strong>{remote ? `Connect ${name} to your cloud runner` : `Connect ${name} on your computer`}</strong></div>
           <ol className="space-pairing-steps">
             <li><strong>{remote ? 'Open your runner’s connection settings' : 'Start the local runner'}</strong>{remote ? <><p>Use a Space address your runner can reach over HTTPS.</p><label className="space-pairing-code">Space URL<input readOnly value={window.location.origin} onFocus={e => e.target.select()}/></label><p className="space-members-hint">A localhost address is only reachable from this computer. Open your deployed Space address before pairing a cloud runner.</p></> : <><p>{'Run this command from your Space checkout.'}</p><code>{command}</code></>}</li>

@@ -2,7 +2,7 @@ const { BrowserWindow, dialog, shell } = require('electron');
 const { join } = require('node:path');
 const { navigationAction, spaceUrl, isAssetDownload, mediaPermissionAllowed } = require('./policy.cjs');
 
-function createSpaceWindow(configuredUrl, { show = true } = {}) {
+function createSpaceWindow(configuredUrl, { show = true, pair } = {}) {
   const url = spaceUrl(configuredUrl);
   const win = new BrowserWindow({
     title: 'Space', width: 1360, height: 900, minWidth: 800, minHeight: 600,
@@ -10,10 +10,31 @@ function createSpaceWindow(configuredUrl, { show = true } = {}) {
     show: false, backgroundColor: '#19171d',
     webPreferences: {
       partition: 'persist:space',
+      ...(pair && { preload: join(__dirname, 'preload.cjs') }),
       nodeIntegration: false, contextIsolation: true, sandbox: true,
       webSecurity: true, webviewTag: false,
     },
   });
+  if (pair) {
+    const contents = win.webContents;
+    let pending = false;
+    contents.ipc.handle('pair-local-agent', async (event, provider, code) => {
+      const trusted = () => !win.isDestroyed() && event.senderFrame === contents.mainFrame
+        && navigationAction(contents.getURL(), url) === 'internal';
+      if (pending || !trusted()) throw new Error('Desktop pairing is unavailable.');
+      pending = true;
+      try {
+        require('./runners.cjs').validatePair(provider, code);
+        const { response } = await dialog.showMessageBox(win, {
+          type: 'question', message: `Connect local ${provider} to Space?`,
+          detail: `${new URL(url).origin} will use this agent for approved chats while Space Desktop is open.`,
+          buttons: ['Connect', 'Cancel'], defaultId: 0, cancelId: 1,
+        });
+        if (response !== 0 || !trusted()) throw new Error('Pairing cancelled.');
+        await pair(provider, code);
+      } finally { pending = false; }
+    });
+  }
   const approvedMedia = new Set();
   win.webContents.session.setPermissionRequestHandler((contents, permission, callback, details) => {
     const origin = details.requestingUrl;

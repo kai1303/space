@@ -33,3 +33,21 @@ function mediaPermissionAllowed(permission, origin, configuredUrl, mediaTypes = 
     && Array.isArray(mediaTypes) && mediaTypes.every(type => ['audio', 'video'].includes(type));
 }
 module.exports.mediaPermissionAllowed = mediaPermissionAllowed;
+
+function desktopHandoff(value) {
+  try {
+    if (typeof value !== 'string' || value.length > 2048) return;
+    const link = new URL(value);
+    const origin = link.searchParams.get('origin');
+    const workspace = link.searchParams.get('workspace');
+    const provider = link.searchParams.get('provider');
+    if (link.protocol !== 'space-desktop:' || link.host !== 'connect' || link.username || link.password || link.pathname || link.hash
+      || link.searchParams.size !== 3 || !/^[a-zA-Z0-9_-]{1,100}$/.test(workspace || '') || !['codex', 'kiro', 'claude'].includes(provider)) return;
+    const target = new URL(spaceUrl(origin));
+    if (target.origin !== origin) return;
+    target.searchParams.set('workspace', workspace);
+    target.searchParams.set('connectProvider', provider);
+    return target;
+  } catch { return; }
+}
+module.exports.desktopHandoff = desktopHandoff;

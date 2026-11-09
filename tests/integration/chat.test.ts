@@ -9,6 +9,7 @@ import { RedisSocketAdapter } from '@space/redis';
 import { bootstrap } from '@space/postgres/bootstrap';
 import { migrate } from '@space/postgres/migrate';
 import { PostgresStore } from '@space/postgres/store';
+import { SearchStore } from '@space/postgres/search';
 import { ChatStore } from '@space/postgres/chat';
 import { WorkspaceStore } from '@space/postgres/workspace';
 import { createApi } from '@space/server/api';
@@ -572,4 +573,109 @@ test('only a distinct live receiver can confirm a fresh send across API replicas
   assert.equal((await live).receipt_requested, true);
   assert.equal(await confirmed, second.receipt_id);
   assert.deepEqual(confirmations, [second.receipt_id]);
+});
+
+test('an author can delete a delivered message once, redacting history and preserving its thread', async t => {
+  const a = await bootstrap(pool), outsider = await bootstrap(pool), search = new SearchStore(pool);
+  const messages = `/channels/${a.channel_id}/messages`;
+  const asset = randomUUID();
+  await pool.query(`INSERT INTO assets(id,workspace_id,channel_id,uploader_id,name,size,type,staging_key,object_key,status)
+    VALUES($1::uuid,$2,$3,$4,'private.txt',8,'text/plain','staging/'||$1::text,'files/'||$1::text,'ready')`, [asset, a.workspace_id, a.channel_id, a.owner_id]);
+  const input = { client_message_id: randomUUID(), asset_ids: [asset], text: 'Private original', document: { ops: [{ insert: 'Private original' }] } };
+  const root = await api(a.owner_token, 'POST', messages, input, 201);
+  const reply = await api(a.collaborator_token, 'POST', messages, { client_message_id: randomUUID(), thread_id: root.thread_id, text: 'Keep this reply' }, 201);
+  const source = `${messages}/${root.id}`;
+  const hit = await search.document(root.id, a.channel_id);
+  assert.ok(hit);
+  await api(a.collaborator_token, 'POST', source + '/reactions', { emoji: '👍', active: true });
+  await api(a.collaborator_token, 'DELETE', source, undefined, 404);
+  await api(outsider.owner_token, 'DELETE', source, undefined, 404);
+  const viewer = await socket(a.collaborator_token, secondAddress);
+  t.after(() => { viewer.ws.disconnect(); });
+  const { event_cursor } = await api(a.collaborator_token, 'GET', messages);
+  viewer.send({ type: 'subscribe', channel_id: a.channel_id, after: event_cursor });
+  await viewer.wait('subscribed');
+  await pool.query("UPDATE assets SET processing_token=gen_random_uuid(),processing_until=now()+interval '1 minute' WHERE id=$1", [asset]);
+  const busy = await api(a.owner_token, 'DELETE', source, undefined, 409);
+  assert.equal(busy.error, 'asset_processing_busy');
+  await pool.query('UPDATE assets SET processing_token=NULL, processing_until=NULL WHERE id=$1', [asset]);
+  const [deleted, retry] = await Promise.all([api(a.owner_token, 'DELETE', source), api(a.owner_token, 'DELETE', source)]);
+  assert.deepEqual(retry, deleted);
+  const frame = await viewer.wait('events', item => item.events.some((event: any) => event.payload.id === root.id && event.payload.deleted_at));
+  const update = frame.events.find((event: any) => event.payload.id === root.id && event.payload.deleted_at);
+  assert.equal(update.type, 'message.updated');
+  assert.deepEqual(update.payload, deleted);
+  assert.ok(Date.parse(deleted.deleted_at));
+  assert.equal(deleted.client_message_id, input.client_message_id);
+  assert.equal(deleted.sequence, root.sequence);
+  assert.equal(deleted.reply_count, 1);
+  assert.equal(deleted.document, null);
+  assert.equal(deleted.text, 'Message deleted');
+  assert.deepEqual(deleted.attachments, []);
+  assert.deepEqual(deleted.reactions, []);
+  assert.deepEqual(await api(a.owner_token, 'POST', messages, input, 201), deleted);
+  assert.deepEqual(await api(a.collaborator_token, 'GET', source), deleted);
+  await api(a.collaborator_token, 'POST', source + '/reactions', { emoji: '👍', active: true }, 404);
+  assert.equal(await search.document(root.id, a.channel_id), null);
+  assert.deepEqual(await search.hydrate(a.owner_id, a.workspace_id, [hit]), []);
+  const events = (await api(a.owner_token, 'GET', `/channels/${a.channel_id}/history`)).events;
+  const affected = events.filter((event: any) => event.payload.id === root.id);
+  assert.equal((await pool.query('SELECT id FROM assets WHERE id=$1', [asset])).rowCount, 0);
+  assert.equal((await pool.query('SELECT id FROM retention_asset_deletions WHERE id=$1', [asset])).rowCount, 1);
+  assert.ok(affected.every((event: any) => !JSON.stringify(event.payload).includes('private.txt')));
+  assert.equal(affected.length, 3); // create, reaction, delete
+  assert.ok(affected.every((event: any) => event.payload.deleted_at === deleted.deleted_at && !JSON.stringify(event.payload).includes(input.text)));
+  assert.deepEqual(affected.at(-1).payload, deleted);
+  const thread = await api(a.collaborator_token, 'GET', `/threads/${root.thread_id}/history`);
+  assert.deepEqual(thread.messages.map((message: any) => message.id), [root.id, reply.id]);
+  assert.equal(thread.messages[1].text, 'Keep this reply');
+  await pool.query('DELETE FROM channel_members WHERE channel_id=$1 AND user_id=$2', [a.channel_id, a.owner_id]);
+  await api(a.owner_token, 'DELETE', source, undefined, 404);
+});
+
+test('outgoing cancellation is scoped to its sender and wins races with send', async () => {
+  const a = await bootstrap(pool), outsider = await bootstrap(pool);
+  const channel = `/channels/${a.channel_id}`;
+  const makeInput = () => ({ client_message_id: randomUUID(), text: 'Ambiguous submission' });
+  const cancel = (id: string, token = a.owner_token, status = 200) => api(token, 'DELETE', `${channel}/outgoing/${id}`, undefined, status);
+  const switched = makeInput();
+  const switchedHeaders = { authorization: `Bearer ${a.collaborator_token}`, 'x-expected-actor': a.owner_id };
+  const misdirected = await app.inject({ method: 'DELETE', url: `/v1${channel}/outgoing/${switched.client_message_id}`, headers: switchedHeaders });
+  assert.equal(misdirected.statusCode, 409);
+  assert.equal(misdirected.json().error, 'actor_changed');
+  const wrongSend = await app.inject({ method: 'POST', url: '/v1' + channel + '/messages', headers: switchedHeaders, payload: switched });
+  assert.equal(wrongSend.statusCode, 409);
+  assert.equal(wrongSend.json().error, 'actor_changed');
+  const late = makeInput();
+  assert.deepEqual(await cancel(late.client_message_id), { message: null });
+  assert.deepEqual(await cancel(late.client_message_id), { message: null });
+  const refused = await api(a.owner_token, 'POST', channel + '/messages', late, 409);
+  assert.equal(refused.error, 'message_cancelled');
+  // An identical client ID for another sender remains usable.
+  const other = await api(a.collaborator_token, 'POST', channel + '/messages', late, 201);
+  assert.deepEqual(await cancel(late.client_message_id), { message: null });
+  assert.equal((await api(a.owner_token, 'GET', `${channel}/messages/${other.id}`)).text, late.text);
+  await cancel(late.client_message_id, outsider.owner_token, 404);
+
+  const committed = makeInput();
+  const sent = await api(a.owner_token, 'POST', channel + '/messages', committed, 201);
+  const tombstone = (await cancel(committed.client_message_id)).message;
+  assert.equal(tombstone.id, sent.id);
+  assert.ok(tombstone.deleted_at);
+  assert.deepEqual((await cancel(committed.client_message_id)).message, tombstone);
+
+  const racing = makeInput();
+  const [attempt, cancelled] = await Promise.all([
+    app.inject({ method: 'POST', url: '/v1' + channel + '/messages', headers: { authorization: `Bearer ${a.owner_token}` }, payload: racing }),
+    cancel(racing.client_message_id),
+  ]);
+  if (attempt.statusCode === 201) {
+    assert.equal(cancelled.message.id, attempt.json().id);
+    assert.ok(cancelled.message.deleted_at);
+  } else {
+    assert.equal(attempt.statusCode, 409);
+    assert.equal(attempt.json().error, 'message_cancelled');
+    assert.equal(cancelled.message, null);
+  }
+  assert.equal((await pool.query('SELECT 1 FROM messages WHERE user_id=$1 AND client_message_id=$2 AND deleted_at IS NULL', [a.owner_id, racing.client_message_id])).rowCount, 0);
 });

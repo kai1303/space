@@ -57,3 +57,6 @@
   .space-pairing-code-row { align-items: stretch; flex-direction: column; }
   .space-pairing-code-row > .sp-button { align-self: flex-end; }
 }
+
+.space-mac-runner-links { display: flex; flex-wrap: wrap; gap: 16px; align-items: center; }
+.space-mac-runner-links a { color: var(--space-accent, #594593); font-weight: 700; }

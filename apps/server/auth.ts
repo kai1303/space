@@ -8,6 +8,7 @@ import { drizzleAdapter } from '@better-auth/drizzle-adapter';
 import { database } from '@space/postgres/database';
 import { users, authSessions, authAccounts, authVerifications, authRateLimits } from '@space/postgres/schema';
 import { AppError } from '@space/contracts';
+import { browserSessions } from './session-jwt.js';
 
 export interface Authentication {
   handler(request: Request): Promise<Response>;
@@ -25,9 +26,11 @@ export function createAuthentication(pool: Parameters<typeof database>[0], optio
     if (typeof name !== 'string' || !name.trim() || name.length > 100 || name.includes('\0')) throw new APIError('BAD_REQUEST', { message: 'Name must contain 1–100 characters.' });
     return name.trim();
   };
+  const sessions = browserSessions(pool, options.secret, base.origin, origins);
   const auth = betterAuth({
     appName: 'Space', secret: options.secret, baseURL: base.origin, basePath: '/v1/auth',
     trustedOrigins: [...origins],
+    hooks: sessions.hooks, plugins: [sessions.plugin],
     database: drizzleAdapter(database(pool), { provider: 'pg', transaction: true,
       schema: { user: users, session: authSessions, account: authAccounts, verification: authVerifications, rateLimit: authRateLimits } }),
     emailAndPassword: { enabled: true, minPasswordLength: 12, maxPasswordLength: 128 },
@@ -36,7 +39,7 @@ export function createAuthentication(pool: Parameters<typeof database>[0], optio
       await options.sendVerificationEmail(user.email,url);
     } },
     user: { fields: { name: 'display_name', emailVerified: 'email_verified', createdAt: 'created_at', updatedAt: 'updated_at' } },
-    session: { expiresIn: 60 * 60 * 24 * 7, disableSessionRefresh: true, cookieCache: { enabled: false } },
+    session: { expiresIn: 60 * 60 * 24 * 30, disableSessionRefresh: true, cookieCache: { enabled: false } },
     advanced: { database: { generateId: () => randomUUID() }, useSecureCookies: base.protocol === 'https:', ipAddress: { ipAddressHeaders: ['x-space-client-ip'] } },
     rateLimit: { enabled: true, storage: 'database', window: 60, max: 100,
       customRules: { '/sign-in/email': { window: 60, max: 10 }, '/sign-up/email': { window: 60, max: 5 }, '/send-verification-email': {window:60,max:3} } },

@@ -1,3 +1,4 @@
+import { sessionFetch } from '../../shared/api/session-fetch.js';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { ChannelFile, Page } from '@space/contracts';
 import { Select, Button, IconButton, SidePanel } from '@space/ui/primitives';
@@ -5,7 +6,7 @@ import { ArrowClockwise, File, FileCode, FilePdf, MusicNote, VideoCamera, X } fr
 import { AssetViewer } from './AssetAttachments.js';
 import './channel-files.css';
 
-type Props = { direct?: boolean; channel: string; name: string; revision?: string; onClose: () => void; onMessage: (messageId: string) => void; onAccessLost?: () => void };
+type Props = { direct?: boolean; channel: string; name: string; revision?: string; deletions?: { current: ((ids: ReadonlySet<string>) => void) | null }; onClose: () => void; onMessage: (messageId: string) => void; onAccessLost?: () => void };
 const kinds = [['all', 'All files'], ['image', 'Images'], ['pdf', 'PDFs'], ['text', 'Text'], ['audio', 'Audio'], ['video', 'Videos'], ['other', 'Other']] as const;
 const assetUrl = (id: string, action: string) => `/v1/assets/${encodeURIComponent(id)}/${action}`;
 function FileThumbnail({ file }: { file: ChannelFile }) {
@@ -18,7 +19,7 @@ function FileThumbnail({ file }: { file: ChannelFile }) {
 
 // A channel change remounts all private state before another channel can paint.
 export function ChannelFiles(props: Props) { return <ChannelFilesPanel key={props.channel} {...props} />; }
-function ChannelFilesPanel({ direct, channel, name, revision, onClose, onMessage, onAccessLost }: Props) {
+function ChannelFilesPanel({ direct, channel, name, revision, deletions, onClose, onMessage, onAccessLost }: Props) {
   const [search, setSearch] = useState('');
   const [query, setQuery] = useState('');
   const [kind, setKind] = useState('all');
@@ -51,6 +52,17 @@ function ChannelFilesPanel({ direct, channel, name, revision, onClose, onMessage
     return () => document.removeEventListener('keydown', escape);
   }, [onClose]);
 
+  useLayoutEffect(() => {
+    if (!deletions) return;
+    deletions.current = ids => {
+      // An open viewer defers the list refresh; discard any older pagination response.
+      if (selected) { request.current?.abort(); setLoading(false); }
+      if (items.some(file => file.id === selected && ids.has(file.message_id))) setSelected(null);
+      setItems(current => current.filter(file => !ids.has(file.message_id)));
+    };
+    return () => { deletions.current = null; };
+  }, [deletions, items, selected]);
+
   function clearAccess(status: number) {
     request.current?.abort();
     setItems([]); setCursor(null); setSelected(null); setLoading(false);
@@ -70,7 +82,7 @@ function ChannelFilesPanel({ direct, channel, name, revision, onClose, onMessage
     if (!after) { setItems([]); setCursor(null); setSelected(null); }
     const params = new URLSearchParams({ q: query, kind, sort, limit: '24' });
     if (after) params.set('after', after);
-    void fetch(`/v1/channels/${encodeURIComponent(channel)}/assets?${params}`, { credentials: 'same-origin', signal: controller.signal }).then(async response => {
+    void sessionFetch(`/v1/channels/${encodeURIComponent(channel)}/assets?${params}`, { credentials: 'same-origin', signal: controller.signal }).then(async response => {
       if (controller.signal.aborted) return;
       if ([401, 403, 404].includes(response.status)) {
         setItems([]); setCursor(null); setSelected(null);

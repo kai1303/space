@@ -1,3 +1,4 @@
+import { sessionFetch } from '../../shared/api/session-fetch.js';
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import type { AssetAttachment, AssetPreview } from '@space/contracts';
 import { Button, Dialog, IconButton } from '@space/ui/primitives';
@@ -14,7 +15,7 @@ function usePreview(id: string, onAccessLost?: (status: number) => void) {
   useEffect(() => {
     const controller = new AbortController();
     setState({ id });
-    void fetch(assetUrl(id, 'preview'), { credentials: 'same-origin', signal: controller.signal }).then(async response => {
+    void sessionFetch(assetUrl(id, 'preview'), { credentials: 'same-origin', signal: controller.signal }).then(async response => {
       if (controller.signal.aborted) return;
       if (response.status === 401) window.dispatchEvent(new Event('space:session-expired'));
       if ([401, 403, 404].includes(response.status)) accessLost.current?.(response.status);

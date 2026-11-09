@@ -1,6 +1,7 @@
 import { useMemberProfile } from '../profile/MemberProfile.js';
 import {ToolApprovals} from './ToolApprovals.js';
 import { ConversationHeading, ConversationDateDivider, useMessageArrivals } from '@space/ui/conversation';
+import { ComposerSendError } from '@space/ui/composer';
 import { SidekickContextSection } from './SidekickContextSection.js';
 import {useDestinationPresence} from '../../shared/ui/useDestinationPresence.js';
 import {ConversationHeader,ConversationComposer,ConversationMessage,ConversationIntroduction} from '../chat/ThreadConversation.js';
@@ -95,7 +96,7 @@ export function AgentSessions({drafts:externalDrafts,onDraftChange:externalDraft
   catch(reason) { if(denied(reason))revoke(); if(reason instanceof Error && ['agent_busy','session_busy','agent_capacity','agent_unavailable','agent_start_failed'].includes(reason.message)){
     if(state.current===attempt)state.current=undefined;
     const messages:Record<string,string>={session_busy:'This session is already running. Your draft is saved.',agent_busy:'This session is already running. Your draft is saved.',agent_capacity:'The connector is at capacity. Send again when a session finishes.',agent_unavailable:'Your local connector is unavailable. Reconnect it and send again.',agent_start_failed:'Codex could not start this turn. Your draft is saved.'};
-    throw new Error(messages[reason.message]);
+    throw new ComposerSendError(messages[reason.message]);
    } throw reason; }
   if(state.current===attempt)state.current=undefined;
   if(!revokedRef.current&&JSON.stringify(getDraft(id))===JSON.stringify(document))saveDraft(id,{ops:[]});

@@ -9,15 +9,19 @@ export function useMessageHistory(path: string, onError: (reason: unknown) => vo
   const [latestVersion, setLatestVersion] = useState(0);
   const current = useRef(page), epoch = useRef(0), busy = useRef<HistoryDirection | null>(null);
   const error = useRef(onError); error.current = onError;
-  const buffer = useRef<ChatMessage[]>([]), overflow = useRef(false);
+  const buffer = useRef<ChatMessage[]>([]), overflow = useRef<'messages' | 'deletion' | null>(null);
   const mounted = useRef(true);
   const update = (value: MessagePage | null) => { current.current = value; setPage(value); };
-  const clear = useCallback(() => { epoch.current++; busy.current = null; buffer.current = []; overflow.current = false; update(null); setLoading(null); }, []);
+  const clear = useCallback(() => { epoch.current++; busy.current = null; buffer.current = []; overflow.current = null; update(null); setLoading(null); }, []);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; epoch.current++; busy.current = null; }; }, [path]);
   const receive = useCallback((messages: ChatMessage[], pinned: boolean) => {
     if (!current.current || busy.current) {
       buffer.current.push(...messages);
-      if (buffer.current.length > HISTORY_LIMIT) { overflow.current = true; buffer.current = buffer.current.slice(-HISTORY_LIMIT); }
+      if (buffer.current.length > HISTORY_LIMIT) {
+        const dropped = buffer.current.splice(0, buffer.current.length - HISTORY_LIMIT);
+        if (dropped.some(message => message.deleted_at)) overflow.current = 'deletion';
+        else overflow.current ??= 'messages';
+      }
     }
     if (current.current) update(appendLive(current.current, messages, pinned, rootsOnly));
   }, [rootsOnly]);
@@ -32,17 +36,26 @@ export function useMessageHistory(path: string, onError: (reason: unknown) => vo
     busy.current = direction; setLoading(direction);
     const version = epoch.current;
     try {
-      const result = await request<MessagePage>(`${path}${direction === 'latest' ? '' : `?${direction === 'older' ? 'before' : 'after'}=${boundary}`}`);
+      const url = `${path}${direction === 'latest' ? '' : `?${direction === 'older' ? 'before' : 'after'}=${boundary}`}`;
+      let result = await request<MessagePage>(url);
       if (epoch.current !== version) return;
+      if (overflow.current === 'deletion') {
+        // A dropped update could have deleted content in this snapshot. Re-read once.
+        buffer.current = []; overflow.current = null;
+        result = await request<MessagePage>(url);
+        if (epoch.current !== version) return;
+        if (overflow.current === 'deletion') throw new Error('Messages changed while loading. Try again.');
+      }
       let next = mergePage(current.current, result, direction);
       if (direction === 'latest' || direction === 'newer') {
         if (overflow.current) next = { ...next, has_newer: true };
         else next = appendLive(next, buffer.current.filter(message => BigInt(message.reaction_sequence ?? '0') > BigInt(result.event_cursor) || BigInt(message.sequence!) > BigInt(result.event_cursor)), direction === 'latest', rootsOnly);
         if (direction === 'latest') setLatestVersion(value => value + 1);
       }
-      // Replay reaction snapshots over pages fetched while their updates were in flight.
-      next = appendLive(next, buffer.current.filter(message => BigInt(message.reaction_sequence ?? '0') > 0n && next.messages.some(item => item.id === message.id)), false, rootsOnly);
-      buffer.current = []; overflow.current = false;
+      // Updates retain their creation sequence and can overlap any page being fetched.
+      const ids = new Set(next.messages.map(message => message.id));
+      next = appendLive(next, buffer.current.filter(message => (message.deleted_at || BigInt(message.reaction_sequence ?? '0') > 0n) && ids.has(message.id)), false, rootsOnly);
+      buffer.current = []; overflow.current = null;
       update(next);
       return result;
     } catch (reason) { if (epoch.current === version) error.current(reason); }

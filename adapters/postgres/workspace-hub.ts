@@ -33,7 +33,7 @@ const channelName = (actor: string) => sql`CASE WHEN c.kind='direct' THEN coales
   WHERE u.id=CASE WHEN c.direct_user_low=${actor} THEN c.direct_user_high ELSE c.direct_user_low END),'Direct message') ELSE c.name END`;
 
 
-const todoSource=(actor:string,workspace:string,channel:SQL,message:SQL)=>sql`(${channel} IS NULL OR EXISTS(SELECT 1 FROM messages m JOIN channels c ON c.workspace_id=m.workspace_id AND c.id=m.channel_id WHERE m.workspace_id=${workspace} AND m.channel_id=${channel} AND m.id=${message} AND m.agent_session_id IS NULL AND ${channelAccess(actor,workspace)}))`;
+const todoSource=(actor:string,workspace:string,channel:SQL,message:SQL)=>sql`(${channel} IS NULL OR EXISTS(SELECT 1 FROM messages m JOIN channels c ON c.workspace_id=m.workspace_id AND c.id=m.channel_id WHERE m.workspace_id=${workspace} AND m.channel_id=${channel} AND m.id=${message} AND m.deleted_at IS NULL AND m.agent_session_id IS NULL AND ${channelAccess(actor,workspace)}))`;
 const todoOwner=(actor:string,workspace:string)=>sql`t.workspace_id=${workspace} AND t.user_id=${actor} AND ${membership(actor,workspace)} AND ${todoSource(actor,workspace,sql`t.channel_id`,sql`t.message_id`)}`;
 const todoColumns=sql`t.id,t.title,t.completed,t.document,t.archived,t.deleted,t.channel_id,t.message_id,
  (SELECT jsonb_build_object('name',s.name,'external_id',t.external_id,'revision',t.external_revision::text,'url',t.external_url) FROM todo_sync_sources s WHERE s.id=t.external_source_id) AS external,
@@ -100,7 +100,7 @@ export class WorkspaceHubStore {
     return this.db.transaction(async c => {
       await requireWorkspaceAccess(c, actor, workspace);
       let scope: SQL;
-      if (view === 'sent') scope = sql`m.user_id=${actor}`;
+      if (view === 'sent') scope = sql`m.user_id=${actor} AND m.deleted_at IS NULL`;
       else if (view === 'saved') scope = sql`EXISTS(SELECT 1 FROM hub_saved_messages saved
         WHERE saved.workspace_id=${workspace} AND saved.user_id=${actor} AND saved.message_id=m.id AND saved.channel_id=m.channel_id)`;
       else scope = sql`NOT EXISTS(SELECT 1 FROM messages earlier WHERE earlier.workspace_id=m.workspace_id
@@ -262,7 +262,7 @@ export class WorkspaceHubStore {
     // Missing source cleanup authorizes only the personal row. Missing access
     // is not evidence of source deletion, so check existence without membership.
     const owner=v.action==='remove_deleted'
-      ? sql`t.workspace_id=${workspace} AND t.user_id=${actor} AND ${membership(actor,workspace)} AND t.message_id IS NOT NULL AND NOT EXISTS(SELECT 1 FROM messages m WHERE m.workspace_id=t.workspace_id AND m.channel_id=t.channel_id AND m.id=t.message_id)`
+      ? sql`t.workspace_id=${workspace} AND t.user_id=${actor} AND ${membership(actor,workspace)} AND t.message_id IS NOT NULL AND NOT EXISTS(SELECT 1 FROM messages m WHERE m.workspace_id=t.workspace_id AND m.channel_id=t.channel_id AND m.id=t.message_id AND m.deleted_at IS NULL)`
       : todoOwner(actor,workspace);
     const eligible=sql`${owner} AND NOT t.deleted AND NOT t.archived AND NOT t.${sql.identifier(key)} AND ${scope} ${after?sql`AND t.id>${after}::uuid`:sql``}`;
     return this.db.transaction(async c=>{
@@ -281,7 +281,7 @@ export class WorkspaceHubStore {
     actor = uuid(actor); workspace = uuid(workspace); message = uuid(message);
     const v = record(input, ['channel_id', 'active']), channel = uuid(v.channel_id), { active } = parseHubToggle({ active: v.active });
     const visible = sql`SELECT m.id FROM messages m JOIN channels c ON c.id=m.channel_id AND c.workspace_id=m.workspace_id
-      WHERE m.workspace_id=${workspace} AND m.channel_id=${channel} AND m.id=${message} AND m.agent_session_id IS NULL AND ${channelAccess(actor, workspace)}`;
+      WHERE m.workspace_id=${workspace} AND m.channel_id=${channel} AND m.id=${message} AND m.deleted_at IS NULL AND m.agent_session_id IS NULL AND ${channelAccess(actor, workspace)}`;
     const mutation = active
       ? sql`INSERT INTO hub_saved_messages(workspace_id,user_id,channel_id,message_id)
           SELECT ${workspace},${actor},${channel},id FROM visible ON CONFLICT DO NOTHING`

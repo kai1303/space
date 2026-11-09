@@ -1,14 +1,50 @@
 const { app, dialog, Menu } = require('electron');
-const { readFileSync } = require('node:fs');
+const { readFileSync, writeFileSync, renameSync } = require('node:fs');
 const { join } = require('node:path');
-const { spaceUrl } = require('./policy.cjs');
+const { spaceUrl, desktopHandoff } = require('./policy.cjs');
 const { createSpaceWindow } = require('./window.cjs');
 
+const { createRunners } = require('./runners.cjs');
+const { providerLogin } = require('./login.cjs');
+
 app.setName('Space');
+let runners, pendingLink, opening = false, quitting = false;
+function configure(value) {
+  url = spaceUrl(value);
+  runners = createRunners({ origin: new URL(url).origin, userData: app.getPath('userData'),
+    resources: app.isPackaged ? join(process.resourcesPath, 'runner') : join(__dirname, '../dist/runner'),
+    login: providerLogin, notify: (provider, detail) => {
+      if (!quitting) void dialog.showMessageBox({ type: 'error', message: `Local ${provider} needs attention`, detail });
+    },
+  });
+  runners.restore();
+}
+async function handoff(target) {
+  if (opening || quitting) return;
+  opening = true;
+  try {
+    if (new URL(url).origin !== target.origin) {
+      const { response } = await dialog.showMessageBox({ type: 'question', message: 'Switch Space Desktop to this server?',
+        detail: `Open ${target.origin} and sign in there to connect an agent. Running agents on the current server will stop.`,
+        buttons: ['Switch server', 'Cancel'], defaultId: 1, cancelId: 1 });
+      if (response !== 0 || quitting) return;
+      const file = join(app.getPath('userData'), 'desktop.json');
+      writeFileSync(file + '.tmp', JSON.stringify({ url: target.origin }), { mode: 0o600 });
+      renameSync(file + '.tmp', file);
+      if (win && !win.isDestroyed()) win.destroy();
+      await runners.stop();
+      if (quitting) return;
+      configure(target.origin);
+    }
+    if (!win || win.isDestroyed()) win = createSpaceWindow(target.href, { pair: runners.start });
+    else { openWindow(); await win.loadURL(target.href); }
+  } catch (error) { if (!quitting) dialog.showErrorBox('Cannot open Space Desktop', error.message); }
+  finally { opening = false; }
+}
 let win;
 let url;
 function openWindow() {
-  if (!win || win.isDestroyed()) win = createSpaceWindow(url);
+  if (!win || win.isDestroyed()) win = createSpaceWindow(url, { pair: runners.start });
   else {
     if (win.isMinimized()) win.restore();
     win.show();
@@ -19,6 +55,19 @@ function openWindow() {
 if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
+  app.on('open-url', (event, value) => {
+    event.preventDefault();
+    const target = desktopHandoff(value);
+    if (!target) return;
+    if (runners) void handoff(target);
+    else pendingLink = target;
+  });
+  app.on('before-quit', event => {
+    if (!runners || quitting) return;
+    event.preventDefault();
+    quitting = true;
+    void runners.stop().finally(() => app.quit());
+  });
   app.on('second-instance', () => { if (url) openWindow(); });
   app.on('activate', () => { if (url) openWindow(); });
   app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
@@ -30,7 +79,7 @@ if (!app.requestSingleInstanceLock()) {
     } catch (error) {
       if (error.code !== 'ENOENT') throw error;
     }
-    url = spaceUrl(process.env.SPACE_DESKTOP_URL || config.url);
+    configure(process.env.SPACE_DESKTOP_URL || config.url);
     Menu.setApplicationMenu(Menu.buildFromTemplate([
       { role: 'appMenu' },
       { label: 'File', submenu: [{ label: 'Open Space', accelerator: 'CmdOrCtrl+1', click: openWindow }, { role: 'close' }] },
@@ -38,7 +87,8 @@ if (!app.requestSingleInstanceLock()) {
       { label: 'View', submenu: [{ role: 'reload' }, { role: 'toggleDevTools' }, { type: 'separator' }, { role: 'resetZoom' }, { role: 'zoomIn' }, { role: 'zoomOut' }, { role: 'togglefullscreen' }] },
       { role: 'windowMenu' },
     ]));
-    openWindow();
+    if (pendingLink) void handoff(pendingLink).finally(() => { if (!quitting) openWindow(); });
+    else openWindow();
   }).catch(error => {
     dialog.showErrorBox('Space could not start', error.message);
     app.quit();

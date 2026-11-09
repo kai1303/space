@@ -20,7 +20,7 @@ export function ConversationIntroduction({title,icon,children}:{title:string;ico
  return <div className="chat-channel-welcome dm-conversation-intro"><div className="chat-empty-icon">{icon}</div><h2>{title}</h2><p>{children}</p></div>;
 }
 export function ConversationComposer({typingIndicator,onBlurCapture,...props}:ComponentProps<typeof RichComposer>&{typingIndicator?:ReactNode;onBlurCapture?:ComponentProps<'div'>['onBlurCapture']}) {
- return <div className="chat-compose" onBlurCapture={onBlurCapture}>{typingIndicator}<RichComposer showKeyboardHint={false} {...props}/></div>;
+ return <div className="chat-compose" onBlurCapture={onBlurCapture}>{typingIndicator}<RichComposer showKeyboardHint={false} feedbackAtSendButton {...props}/></div>;
 }
 type MessageIdentity = Pick<ChatMessage,'author'|'created_at'>;
 export function continuesMessageGroup(message:MessageIdentity,previous?:MessageIdentity) {
@@ -35,9 +35,10 @@ export function ConversationMessage({message,previous,viewerId,arrival,onReact,o
  actions?:ComponentProps<typeof Message>['actions'];footer?:ReactNode;onMentionClick?:(mention:MentionReference)=>void;streaming?:boolean;body?:ReactNode;children?:ReactNode;
 }) {
  const profiles = useMemberProfile();
+ const deleted = !!message.deleted_at;
  const openMention = (mention:MentionReference) => { if(profiles && mention.kind !== 'broadcast') profiles.open({kind:mention.kind,id:mention.id}); else onMentionClick?.(mention); };
- return <Message onAuthorClick={profiles ? () => profiles.open({kind:message.author.kind === 'agent' ? 'agent' : 'user',id:message.author.id}) : undefined} grouped={continuesMessageGroup(message,previous)} author={message.author.name} initials={message.author.name.slice(0,2).toUpperCase()} agent={message.author.kind==='agent'} tone={message.author.kind==='agent'?'green':message.author.id===viewerId?'blue':'purple'} arrival={arrival} time={new Date(message.created_at).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})} reactions={(message.reactions??[]).map(reaction=>({emoji:reaction.emoji,count:reaction.count,active:reaction.user_ids.includes(viewerId)}))} onReact={onReact} onReply={onReply} replyCount={replyCount??message.reply_count} actions={actions} footer={footer}>
-  {body??<><AgentMessageBody message={message} viewerId={viewerId} onMentionClick={openMention} streaming={streaming}/>{!!message.attachments?.length&&<AssetAttachments assets={message.attachments}/>}</>}{children}
+ return <Message onAuthorClick={profiles ? () => profiles.open({kind:message.author.kind === 'agent' ? 'agent' : 'user',id:message.author.id}) : undefined} grouped={continuesMessageGroup(message,previous)} author={message.author.name} initials={message.author.name.slice(0,2).toUpperCase()} agent={message.author.kind==='agent'} tone={message.author.kind==='agent'?'green':message.author.id===viewerId?'blue':'purple'} arrival={arrival} time={new Date(message.created_at).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})} reactions={deleted ? [] : (message.reactions??[]).map(reaction=>({emoji:reaction.emoji,count:reaction.count,active:reaction.user_ids.includes(viewerId)}))} onReact={deleted ? undefined : onReact} onReply={onReply} replyCount={replyCount??message.reply_count} actions={deleted ? undefined : actions} footer={footer}>
+  {deleted ? <em className="chat-deleted-message">This message was deleted.</em> : <>{body??<><AgentMessageBody message={message} viewerId={viewerId} onMentionClick={openMention} streaming={streaming}/>{!!message.attachments?.length&&<AssetAttachments assets={message.attachments}/>}</>}{children}</>}
  </Message>;
 }
 export function ConversationReplyDivider({count}:{count:number}) {

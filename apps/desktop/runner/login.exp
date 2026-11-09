@@ -1,0 +1,7 @@
+# Finder-launched apps have no controlling terminal. Expect allocates one for the
+# provider and forwards the local sign-in window's pipes without invoking a shell.
+spawn -noecho {*}$argv
+interact
+set result [wait]
+if {[lindex $result 2] != 0 || [llength $result] != 4} { exit 1 }
+exit [lindex $result 3]

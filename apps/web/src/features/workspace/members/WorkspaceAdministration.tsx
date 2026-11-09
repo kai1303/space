@@ -1,3 +1,4 @@
+import { sessionFetch } from '../../../shared/api/session-fetch.js';
 import { WorkspaceInvitations } from '../invitations/WorkspaceInvitations.js';
 import { useEffect, useRef, useState } from 'react';
 import { Select, Avatar, Badge, Button, Dialog, Menu } from '@space/ui/primitives';
@@ -68,7 +69,7 @@ function MemberAdministration({workspace,viewer,onClose}:Props) {
     } catch(reason) {if(alive.current){await refresh();if(alive.current)setError(errorText(reason));}}
     finally {mutation.current=false;if(alive.current)setBusy(false);}
   }
-  async function exportMembers(){setError('');try{const response=await fetch(`/v1/workspaces/${workspace}/members.csv`,{credentials:'same-origin'});if(!response.ok){const result=await response.json();throw new Error(result.error);}const url=URL.createObjectURL(await response.blob());const link=document.createElement('a');link.href=url;link.download='workspace-members.csv';link.click();URL.revokeObjectURL(url);}catch(reason){if(alive.current)setError(errorText(reason));}}
+  async function exportMembers(){setError('');try{const response=await sessionFetch(`/v1/workspaces/${workspace}/members.csv`,{credentials:'same-origin'});if(!response.ok){const result=await response.json();throw new Error(result.error);}const url=URL.createObjectURL(await response.blob());const link=document.createElement('a');link.href=url;link.download='workspace-members.csv';link.click();URL.revokeObjectURL(url);}catch(reason){if(alive.current)setError(errorText(reason));}}
   if(invitations)return <WorkspaceInvitations workspace={workspace} onClose={()=>setInvitations(false)}/>;
   if(agents)return <WorkspaceMembers workspace={workspace} viewer={viewer} open onClose={()=>setAgents(false)}/>;
   return <><Dialog open title="Manage members" description="Manage who belongs to your workspace and what they can do." onClose={onClose} onBeforeClose={()=>!mutation.current}>

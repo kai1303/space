@@ -162,3 +162,12 @@
 .chat-channel-header .sp-icon-button:hover,.chat-header-actions>.sp-menu>summary:hover{background:var(--sp-surface-hover);color:var(--sp-text)}
 .chat-channel-header .sp-conversation-title{padding:3px 6px}
 .chat-channel-header .sp-conversation-title .sp-avatar{width:24px;height:24px;min-width:24px;border-radius:4px;font-size:11px}
+
+.chat-outgoing[data-delivery="sending"] .sp-message-text { color: var(--sp-text-secondary); }
+.chat-delivery-actions { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; margin-top: 4px; font-size: 13px; color: var(--sp-text-secondary); }
+.chat-delivery-actions button { background: none; border: 0; padding: 2px; font: inherit; color: var(--sp-accent); text-decoration: underline; cursor: pointer; }
+.chat-delivery-actions button:disabled { color: var(--sp-text-secondary); cursor: default; }
+
+.chat-deleted-message { color: var(--sp-text-secondary); }
+
+.chat-cancel-outgoing { margin: 4px 20px 8px; }

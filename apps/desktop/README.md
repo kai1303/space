@@ -1,6 +1,10 @@
 # Space for macOS
 
-Electron shell for the existing Space web application. This initial package loads a configured web URL; it does not bundle the React build, start backend services, or embed the local agent connector. Cookies, API calls, and Socket.IO keep the web application's existing origin.
+Space Desktop loads your Space web deployment and includes the local agent connector. Install the app and your provider CLI on the Mac. In the workspace’s agent setup, select **Local runner**, choose a provider, then **Connect on this Mac**. Confirm the server in the native dialog. Codex opens ChatGPT authorization in your browser. Kiro and Claude display their own sign-in prompts in a local window when needed.
+
+The app keeps each paired provider running when you close the workspace window. Quitting stops the runners. Opening Space restores them for the configured server. Desktop pairings use separate private profiles under the Space application data directory. Pairing grants chat access. Project folders and coding mode still require the connector CLI.
+
+In a Mac browser, **Open Space Desktop** carries the workspace and selected provider into the app. Sign in to Space Desktop if prompted and confirm pairing there. Opening a different server requires native confirmation. Switching servers stops the previous server’s runners.
 
 ## Run locally
 
@@ -56,10 +60,10 @@ Edit `desktop.config.json` before packaging to set the default deployment. A loc
 - Command-Q quits; closing the window keeps the application running on macOS. Clicking its Dock icon or choosing File → Open Space reopens the window.
 - Sessions persist in Electron's `persist:space` partition in the Space application-data directory. Sign-in is independent of browser sessions.
 - Standard Edit, View, and Window menus provide copy/paste, reload, zoom, and fullscreen controls.
-- Same-origin links stay inside Space; other HTTP(S) and mail links open in the default application. Other protocols and cross-origin redirects are blocked. Browser-based OAuth callbacks and custom deep links are not implemented.
+- Same-origin links stay inside Space; other HTTP(S) and mail links open in the default application. Other protocols and cross-origin redirects are blocked. The registered space-desktop scheme accepts workspace and provider selections for pairing.
 - Space attachment downloads use the authenticated desktop session and follow signed storage redirects through Electron's downloader, keeping the chat window on Space.
 - Failed page loads offer a manual Retry action. There is no background resource polling.
-- Renderer sandboxing, context isolation, and web security are enabled. The renderer has no Node access, preload bridge, or IPC capabilities. Web permission requests are denied for this first version.
+- Renderer sandboxing, context isolation, and web security are enabled. The sandboxed workspace renderer can request a chat pairing through a single preload method. The main process checks the originating frame and deployment, validates the request and asks for native confirmation. Provider sign-in runs outside the workspace renderer.
 
 ## Verify
 
@@ -67,6 +71,8 @@ Edit `desktop.config.json` before packaging to set the default deployment. A loc
 pnpm --filter @space/desktop build
 pnpm --filter @space/desktop test
 pnpm --filter @space/desktop test:smoke
+pnpm desktop:package
+node --test tests/e2e/desktop-pairing.test.mjs
 ```
 
 `build` checks the main-process JavaScript syntax. Unit tests cover URL and navigation policy. The smoke test launches real Electron against a temporary local fixture, checks renderer isolation, navigation and popup restrictions, authenticated downloads through storage redirects, and cookie persistence across a full application restart. It cleans up its isolated profile. Run it in a graphical macOS session; it does not authenticate to your actual Space deployment.
@@ -83,4 +89,6 @@ See the [verification record](../../docs/superpowers/plans/2026-11-04-macos-desk
 
 ## Release scope
 
-The generated artifacts are development builds, without Developer ID signing or notarization. Distribution to other users needs signing credentials, notarization, and testing on clean machines. No publishing or automatic updates are configured. Notifications, Dock unread badges, window-position persistence, locally bundled UI, desktop-controlled agents, and connector lifecycle management are follow-up work.
+Set `SPACE_SIGN_IDENTITY` to the Developer ID Application identity and `SPACE_NOTARY_PROFILE` to an Apple notarytool keychain profile when preparing a signed and notarized application. Builds without these credentials are development artifacts.
+
+`pnpm desktop:make` stages the architecture-specific DMG and download manifest in `apps/web/public/downloads/`. Build the web frontend after making the installer, or serve those files under `/downloads/` on the deployment. To use a separately hosted download page, set `VITE_SPACE_MAC_DOWNLOAD_URL` when building the web app.

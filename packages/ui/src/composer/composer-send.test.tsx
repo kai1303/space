@@ -17,6 +17,19 @@ it('hides the idle hint without hiding a disabled-send status', async()=>{
  rerender(<RichComposer channel="agent session" showKeyboardHint={false} attachmentsEnabled={false} sendDisabledReason="Waiting for approval" onSend={vi.fn()}/>);
  expect(screen.getByRole('status').textContent).toBe('Waiting for approval');
 });
+it('keeps Enter and Send disabled silently while channel permissions load', async () => {
+  const send = vi.fn();
+  const props = { channel: 'general', showKeyboardHint: false, attachmentsEnabled: false, onSend: send };
+  const view = render(<RichComposer {...props} sendDisabled />);
+  const editor = await screen.findByRole('textbox', { name: 'Message general' });
+  await userEvent.type(editor, 'Keep my draft{Enter}');
+  expect(send).not.toHaveBeenCalled();
+  expect(screen.getByRole('button', { name: 'Send now' })).toHaveProperty('disabled', true);
+  expect(view.container.querySelector('.sp-rich-help')).toBeNull();
+  view.rerender(<RichComposer {...props}/>);
+  fireEvent.keyDown(editor, { key: 'Enter' });
+  await waitFor(() => expect(send).toHaveBeenCalledOnce());
+});
 afterAll(() => { Reflect.deleteProperty(Range.prototype, 'getBoundingClientRect'); Reflect.deleteProperty(Range.prototype, 'getClientRects'); });
 it('keeps the mounted composer visually stable during a quick send without allowing a duplicate', async () => {
   let finish!: () => void;

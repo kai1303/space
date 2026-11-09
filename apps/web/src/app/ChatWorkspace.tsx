@@ -15,6 +15,7 @@ import { AccessFrame, AccessLoading } from '../features/auth/AccessFrame.js';
 import { WorkspaceSetup } from '../features/workspace/onboarding/WorkspaceSetup.js';
 import type { DirectMessageSummary } from '@space/contracts';
 import { Button } from '@space/ui/primitives';
+import { acquireRealtime } from '../shared/realtime/socket-session.js';
 import { listAll, request } from '../shared/api/request.js';
 import { ChatShell, WorkspacePicker } from './shell/ChatShell.js';
 import type { Workspace } from '../features/workspace/workspace-types.js';
@@ -26,6 +27,7 @@ import { ChannelRoom } from '../features/chat/ChannelRoom.js';
 import { MessageSearch } from '../features/search/MessageSearch.js';
 import { useNavigation } from './navigation/useNavigation.js';
 import { useSidebarWidth } from './shell/useSidebarWidth.js';
+import { getMessageOutbox } from '../features/composer/message-outbox.js';
 import { useAttachmentUploads } from '../features/composer/useAttachmentUploads.js';
 import { ProfileProvider } from '../features/profile/MemberProfile.js';
 import { profileMessageDraft } from '../features/profile/profile-message.js';
@@ -37,11 +39,31 @@ export function ChatWorkspace({ profile: initialProfile }: { profile: Profile })
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]), [workspace, setWorkspace] = useState('');
   const [error, setError] = useState('');
   const [agentSetup, setAgentSetup] = useState<{workspace:string;connector?:string}>();
-  useEffect(() => { setAgentSetup(undefined); }, [workspace]);
+  useEffect(() => {
+    const query = new URLSearchParams(window.location.search);
+    const provider = query.get('connectProvider');
+    if (window.spaceDesktop && workspace && workspace === query.get('workspace') && provider && ['codex', 'kiro', 'claude'].includes(provider)) {
+      setAgentSetup({ workspace, connector: `${provider}.local` });
+      const url = new URL(window.location.href);
+      url.searchParams.delete('connectProvider');
+      window.history.replaceState(window.history.state, '', url);
+    } else setAgentSetup(undefined);
+  }, [workspace]);
   const { mentionTarget, setMentionTarget, membersOpen, setMembersOpen, connection, setConnection, pageViews, viewForChannel, hubView, setHubView, settingsOpen, setSettingsOpen, navigateHub, openChannel, openCollection, activityOpen, setActivityOpen, directOpen, directId, directCompose, lastHomeChannel, navigationError, mentionNavigation, openMention, openDirect, newDirect, openHome, searchOpen, setSearchOpen, setCanSearch, requestedChannel, setRequestedChannel, navigation, changeWorkspace, visit, travel, destination } = useNavigation(workspaces, workspace, setWorkspace);
   const { sidebarWidth, setSidebarWidth } = useSidebarWidth();
   const { draftState, saveDraft, uploads, forgetChannelDrafts } = useAttachmentUploads(profile.id);
-  function forgetChannel(id: string) { pageViews.rooms.delete(id); forgetChannelDrafts(id); }
+  useEffect(() => {
+    if (!workspace) return;
+    const outbox = getMessageOutbox(profile.id, workspace);
+    const realtime = acquireRealtime();
+    const resume = () => outbox.resumeDeletes();
+    resume();
+    realtime.on('connect', resume);
+    realtime.on('focus', resume);
+    window.addEventListener('online', resume);
+    return () => { window.removeEventListener('online', resume); realtime.release(); };
+  }, [profile.id, workspace]);
+  function forgetChannel(id: string) { pageViews.rooms.delete(id); forgetChannelDrafts(id); getMessageOutbox(profile.id, workspace).purgeChannel(id); }
   const [loaded, setLoaded] = useState(false), [loadAttempt, setLoadAttempt] = useState(0);
   async function addWorkspace(name: string) {
     const created = await request<Workspace>('/workspaces', { name: name.trim() });

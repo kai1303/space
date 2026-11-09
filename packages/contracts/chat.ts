@@ -8,6 +8,7 @@ export interface MessageAgentSession { id: string; title: string; agent_name: st
 export interface ChatMessage {
   agent_sessions?: MessageAgentSession[];
   agent_session_id?: string | null;
+  deleted_at?: string | null;
   reactions?: MessageReaction[];
   reaction_sequence?: string;
   id: string; channel_id: string; thread_id: string; task_id: string | null;

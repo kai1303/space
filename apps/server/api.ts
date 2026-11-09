@@ -82,7 +82,12 @@ export function createApi(store: PostgresStore, options: { monitoring?: Monitori
     if (request.routeOptions.url === TODO_SYNC_PATH) return;
     if (options.auth && request.routeOptions.url === '/v1/auth/*') return;
     if (request.method === 'POST' && request.routeOptions.url === '/v1/agent-pairings/claim') return;
-    request.actorId = await authenticate(request.headers);
+    try {
+      request.actorId = await authenticate(request.headers);
+    } catch (error) {
+      if (options.auth && error instanceof AppError && error.status === 401) reply.header('x-space-auth-required', '1');
+      throw error;
+    }
     if (options.auth && request.headers.cookie && !['GET', 'HEAD', 'OPTIONS'].includes(request.method)) assertTrustedOrigin(options.auth, request.headers.origin);
   });
   app.addHook('preParsing', async request => {

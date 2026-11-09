@@ -291,7 +291,9 @@ You can connect Codex from your laptop while a teammate connects Claude from the
 In a shared channel, either of you can mention the other’s agent to request work.
 The teammate who owns that agent approves the request before it runs.
 
-In **Members**, choose **Local runner**, select Codex, Kiro or Claude, and connect it.
+On macOS, install Space Desktop and the provider CLI. In **Members**, choose **Local runner**, select Codex, Kiro or Claude, and click **Connect on this Mac**. In a Mac browser, **Open Space Desktop** continues setup in the app. Complete provider sign-in and keep Space Desktop open. See the [Mac installer and pairing guide](apps/desktop/README.md).
+
+For CLI pairing, choose **Local runner** and select your provider.
 Codex and Kiro require their CLI on `PATH`. Kiro needs ACP v3. Claude requires the `claude` CLI and opens its native local login flow. Run the command shown in the dialog from this checkout:
 
 ```sh
