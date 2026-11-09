@@ -564,7 +564,7 @@ it('keeps uploads with their channel and thread drafts across navigation, retrie
   await screen.findByRole('textbox', { name: 'Message first' });
   expect((await screen.findByRole('link', { name: /download.html/ })).getAttribute('href')).toBe('/v1/assets/saved-asset/download');
   expect(view.container.querySelector('iframe, img[src*="asset"], object')).toBeNull();
-  expect(await screen.findByRole('button', { name: 'Preview download.html' })).toBeTruthy();
+  expect(await screen.findByRole('button', { name: 'Open preview of download.html' })).toBeTruthy();
   expect(await screen.findByText('<script>alert(1)</script>')).toBeTruthy();
   expect(view.container.querySelector('script')).toBeNull();
   await waitFor(() => expect((screen.getByRole('button', { name: 'Attach files' }) as HTMLButtonElement).disabled).toBe(false));
