@@ -3,6 +3,7 @@ import type {Pool} from 'pg';
 import {AppError,parseLocalToolApproval,parseToolApprovalDecision,uuid,type LocalToolApproval} from '@space/contracts';
 import {database,type DbSession} from './database.js';
 import {hasThreadAccess} from './access.js';
+import {traceTurn} from './turn-trace.js';
 import {sessionTransaction} from './session-concurrency.js';
 
 type Execution = {session_id:string;origin_thread_id:string;owner_id:string;requester_id:string};
@@ -47,6 +48,7 @@ export class ToolApprovalStore {
    if(Number(count.rows[0]?.count)>=200||Number(count.rows[0]?.pending)>=8)throw new AppError(429,'too_many_tool_approvals');
    await c.execute(sql`INSERT INTO agent_tool_approvals(id,session_id,task_id,execution_id,installation_id,connection_id,kind,title,details)
     VALUES(${input.id},${run.session_id},${task},${execution},${installation},${connection},${input.kind},${input.title},${input.details})`);
+   traceTurn(c,task,'approval','requested');
    return {id:input.id,status:'pending' as const};
   });
  }
@@ -59,7 +61,8 @@ export class ToolApprovalStore {
    if(row.owner_id!==actor)throw new AppError(403,'tool_approval_owner_required');
    await this.execution(c,String(row.installation_id),String(row.connection_id),String(row.task_id),String(row.execution_id));
    if(row.status!=='pending' && row.status!==decision)throw new AppError(409,'tool_approval_resolved');
-   await c.execute(sql`UPDATE agent_tool_approvals SET status=${decision},decided_by=${actor},resolved_at=now() WHERE id=${id} AND status='pending'`);
+   const changed=await c.execute(sql`UPDATE agent_tool_approvals SET status=${decision},decided_by=${actor},resolved_at=now() WHERE id=${id} AND status='pending' RETURNING task_id`);
+   if(changed.rows[0])traceTurn(c,String(changed.rows[0].task_id),'approval',decision==='allow'?'allowed':'denied');
    return {id,status:decision};
   });
  }

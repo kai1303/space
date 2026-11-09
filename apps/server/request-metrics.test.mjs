@@ -88,3 +88,15 @@ for (const enabled of [false, true]) {
     }
   });
 }
+
+test('private monitoring exposes the live confirmed receipt histogram', async t => {
+  const port = await occupyPort();
+  await port.close();
+  const app = buildApi({ host, port: port.port });
+  t.after(() => app.close());
+  await app.ready();
+  const body = await (await fetch('http://' + host + ':' + port.port + '/metrics')).text();
+  assert.match(body, /# TYPE space_chat_live_confirmed_receipt_seconds histogram/);
+  assert.match(body, /# TYPE space_chat_live_receipt_samples_total counter/);
+  assert.match(body, /space_chat_live_receipt_samples_total\{outcome="confirmed"\} 0\n/);
+});

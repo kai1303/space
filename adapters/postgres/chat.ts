@@ -158,7 +158,7 @@ export class ChatStore {
       await c.delete(s.channelMembers).where(and(eq(s.channelMembers.channel_id, id), eq(s.channelMembers.user_id, user)));
     });
   }
-  async send(actor: string, channelId: string, input: unknown): Promise<ChatMessage> {
+  async send(actor: string, channelId: string, input: unknown, newMessageId?: string): Promise<ChatMessage> {
     const request = parseMessageInput(input);
     const hash = createHash('sha256').update(JSON.stringify({ channel_id: channelId, thread_id: request.thread_id, text: request.text, ...(request.document ? { document: request.document } : {}), ...(request.asset_ids?.length ? { asset_ids: request.asset_ids } : {}), ...(request.asset_descriptions ? { asset_descriptions: request.asset_descriptions } : {}) })).digest('hex');
     return sessionTransaction(this.db, async c => {
@@ -183,7 +183,7 @@ export class ChatStore {
       if (request.thread_id) {
         if (!(await c.select({ id: s.threads.id }).from(s.threads).where(and(eq(s.threads.id, threadId), eq(s.threads.channel_id, channelId)))).length) throw notFound();
       } else await c.insert(s.threads).values({ id: threadId, workspace_id: channel.workspace_id, channel_id: channelId });
-      const id = randomUUID();
+      const id = newMessageId ?? randomUUID();
       const fileQuery = request.asset_ids?.length ? c.select().from(s.assets).where(inArray(s.assets.id, request.asset_ids)).orderBy(s.assets.id) : null;
       const files = fileQuery ? await fileQuery : [];
       if (files.length !== (request.asset_ids?.length ?? 0) || files.some(file => file.channel_id !== channelId || file.uploader_id !== actor || file.status !== 'ready' || file.message_id || file.expires_at <= new Date())) throw new AppError(409, 'asset_unavailable');

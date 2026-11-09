@@ -2,11 +2,12 @@ import { once } from 'node:events';
 import { createServer } from 'node:http';
 import type { FastifyInstance } from 'fastify';
 import { Counter, Histogram, Registry } from '@prometheus-io/client';
+import { receiptOutcomes, type ReceiptMetrics } from './live-receipts.js';
 
 const methods = new Set(['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS']);
 export interface MonitoringListener { host: string; port: number }
 
-export function registerRequestMetrics(app: FastifyInstance, address: MonitoringListener) {
+export function registerRequestMetrics(app: FastifyInstance, address: MonitoringListener): ReceiptMetrics {
   const registry = new Registry();
   const requests = new Counter({
     name: 'space_api_http_requests_total',
@@ -21,6 +22,20 @@ export function registerRequestMetrics(app: FastifyInstance, address: Monitoring
     buckets: [0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30],
     registers: [registry],
   });
+  const confirmedReceipt = new Histogram({
+    name: 'space_chat_live_confirmed_receipt_seconds',
+    help: 'Seconds on the sending browser from message.send submission to first confirmed live receipt by another user.',
+    buckets: [0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 15],
+    registers: [registry],
+  });
+  const receiptSamples = new Counter({
+    name: 'space_chat_live_receipt_samples_total',
+    help: 'Terminal outcomes for live receipt measurement attempts.',
+    labelNames: ['outcome'],
+    registers: [registry],
+  });
+  // Give the first observed outcome a zero baseline for Prometheus increase().
+  for (const outcome of receiptOutcomes) receiptSamples.inc({ outcome }, 0);
   app.addHook('onResponse', (request, reply, done) => {
     const method = methods.has(request.method) ? request.method : 'OTHER';
     const route = request.routeOptions.url ?? 'unmatched';
@@ -65,4 +80,5 @@ export function registerRequestMetrics(app: FastifyInstance, address: Monitoring
       listener.closeAllConnections();
     });
   });
+  return { duration: seconds => confirmedReceipt.observe(seconds), outcome: outcome => receiptSamples.inc({ outcome }) };
 }

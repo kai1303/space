@@ -537,9 +537,22 @@ worker, CDC bridge, database, NATS JetStream, Redis, and file storage. It does n
 create accounts automatically. The quick start above runs the API on the host
 instead; choose one setup to avoid port conflicts.
 
-Self-hosters can enable Prometheus metrics and Loki logs for the whole installation
-with an optional Compose override. Grafana includes a Space operations dashboard.
-See [enable, verify and disable monitoring](docs/operations/monitoring.md).
+### Optional monitoring
+
+Monitoring is off by default. Self-hosters can enable Prometheus metrics and Loki
+logs for the installation with a Compose override. Grafana includes a **Space
+operations** dashboard. See [setup, verification and shutdown](docs/operations/monitoring.md).
+
+| Dashboard signal | What it measures |
+| --- | --- |
+| Chat messages per second | Newly committed messages, counted as the CDC bridge publishes them. The five-minute rate includes channel posts, DMs, thread replies and agent messages. Retries and fanout to multiple recipients count once. |
+| Time to first confirmed receipt | The sending browser times its Send action until another account confirms live receipt, including time in the local send queue. Grafana shows p50, p95 and p99 for confirmed sends, plus sample outcomes so you can see how many sends contributed. |
+| Agent turn phases | In Grafana Explore, filter Loki by a turn’s trace ID to follow dispatch, execution, reported tool activity, approval waits and the terminal outcome. Phase records omit prompts, arguments and outputs. |
+
+For queries, sampling boundaries and a two-user verification, see
+[application signals](docs/operations/monitoring.md#application-signals).
+
+### Event delivery
 
 The CDC service retains its PostgreSQL replication slot across restarts and reads
 committed WAL with `pgoutput`. It publishes each event to JetStream before keyed

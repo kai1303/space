@@ -66,7 +66,7 @@ export function createApi(store: PostgresStore, options: { monitoring?: Monitori
     bodyLimit: 32768,
     requestTimeout: 15_000,
   });
-  if (options.monitoring) registerRequestMetrics(app, options.monitoring);
+  const receiptMetrics = options.monitoring && registerRequestMetrics(app, options.monitoring);
   app.server.headersTimeout = 10_000;
   app.server.maxHeadersCount = 50;
   app.decorateRequest('actorId', '');
@@ -157,7 +157,7 @@ export function createApi(store: PostgresStore, options: { monitoring?: Monitori
   registerAssetRoutes(app, assets, options.storage);
   const connections = new AgentConnectionStore(store.pool, { connectors: options.pairedConnectors });
   registerAgentConnectionRoutes(app, connections);
-  const { io, onOutbox, getEvents, work, health, invalidate } = registerRealtime(app, authenticate, chat, { ...options.realtime, ...(options.auth ? { allowedOrigins: [...options.auth.origins], strictOrigins: true } : {}) });
+  const { io, onOutbox, getEvents, work, health, invalidate } = registerRealtime(app, authenticate, chat, { ...options.realtime, receiptMetrics, ...(options.auth ? { allowedOrigins: [...options.auth.origins], strictOrigins: true } : {}) });
   const immediate = directTurns(app,io,store,invalidate);
   registerAgentSessionRoutes(app,new AgentSessionStore(store.pool,store),immediate.accepted,immediate.stop);
   app.get('/readyz', async (_request, reply) => {

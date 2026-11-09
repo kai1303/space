@@ -8,8 +8,9 @@ import type { RedisSocketAdapter } from '@space/redis';
 import { parseResourceSubscription, resourceRevision, type ResourceSubscription } from './resource-updates.js';
 import { RealtimeWork, SubscriptionIndex } from './realtime-work.js';
 import { deliveryHealth } from './realtime-health.js';
+import { liveReceipts, type ReceiptMetrics } from './live-receipts.js';
 
-export interface RealtimeOptions { adapter?: RedisSocketAdapter; allowedOrigins?: string[]; strictOrigins?: boolean; events?: EventBus; eventUrl?: string; maxConnections?: number; maxActorConnections?: number; workConcurrency?: number; workQueue?: number }
+export interface RealtimeOptions { receiptMetrics?: ReceiptMetrics; adapter?: RedisSocketAdapter; allowedOrigins?: string[]; strictOrigins?: boolean; events?: EventBus; eventUrl?: string; maxConnections?: number; maxActorConnections?: number; workConcurrency?: number; workQueue?: number }
 const failure = (error: unknown) => ({ error: error instanceof AppError ? error.code : 'internal_error' });
 
 export function registerRealtime(app: FastifyInstance, authenticate: (headers: IncomingHttpHeaders, socketToken?: unknown) => Promise<string>, chat: ChatStore, options: RealtimeOptions = {}) {
@@ -63,7 +64,10 @@ export function registerRealtime(app: FastifyInstance, authenticate: (headers: I
   const receiveTyping=(event:TypingEvent)=>{for(const listener of typingListeners.get(event.channel_id)??[])listener(event);};
   io.on('space.typing',receiveTyping);
   const publishTyping=(event:TypingEvent)=>{receiveTyping(event);if(options.adapter?.isReady)io.serverSideEmit('space.typing',event);};
+  const receipts = options.receiptMetrics && liveReceipts(io, options.receiptMetrics, () => !!options.adapter?.isReady);
   io.on('connection', socket => {
+    const receiptSender = socket.handshake.auth.live_receipts === 1 ? receipts?.sender(socket) : undefined;
+    if (receiptSender) socket.emit('chat.receipts.enabled');
     type Resource = ResourceSubscription & { wake: () => void; stop: () => void };
     type Channel = { channel: string; cursor: string; wake: () => void; stop: () => void };
     type Workspace = { id: string; snapshot?: string; wake: () => void; stop: () => void };
@@ -122,7 +126,7 @@ export function registerRealtime(app: FastifyInstance, authenticate: (headers: I
       return wake;
     };
     const emit = async (event: string, value: unknown) => {
-      try { await socket.timeout(5000).emitWithAck(event, value); }
+      try { return await socket.timeout(5000).emitWithAck(event, value); }
       catch { ackTimeouts++; throw new AppError(408, 'ack_timeout'); }
     };
     const authPump = boundedPump(() => true, async () => {});
@@ -225,9 +229,10 @@ export function registerRealtime(app: FastifyInstance, authenticate: (headers: I
       const v = record(input, ['channel_id', 'after']);
       const channel = uuid(v.channel_id), cursor = chatCursor(v.after);
       await chat.events(socket.data.actor, channel, cursor);
-      const ref = (await chat.pool.query<{workspace_id:string}>('SELECT workspace_id FROM channels WHERE id=$1',[channel])).rows[0];
+      const ref = (await chat.pool.query<{workspace_id:string; event_sequence:string}>('SELECT workspace_id, event_sequence::text FROM channels WHERE id=$1',[channel])).rows[0];
       if (!ref) throw new AppError(404, 'not_found');
       if (!socket.connected) return;
+      const liveAfter = receiptSender ? BigInt(ref.event_sequence) : 0n;
       const current: Channel = { channel, cursor, wake: () => {}, stop: () => {} };
       const active = () => subscription === current;
       current.wake = boundedPump(active, async () => {
@@ -235,8 +240,10 @@ export function registerRealtime(app: FastifyInstance, authenticate: (headers: I
         if (!active() || !socket.connected || !events.length) return;
         const next = events.at(-1)!.sequence;
         return async () => {
-          await emit('chat.events', { channel_id: channel, events, cursor: next });
+          const ids = receiptSender ? receipts!.candidates(events, socket.data.actor, liveAfter) : [];
+          const accepted = await emit('chat.events', { channel_id: channel, events, cursor: next, ...(ids.length ? { receipt_requested: true } : {}) });
           if (!active()) return;
+          if (ids.length && accepted === true) receipts!.received(ids);
           current.cursor = next;
           if (events.length === 100) current.wake();
         };
@@ -274,10 +281,19 @@ export function registerRealtime(app: FastifyInstance, authenticate: (headers: I
       typing.set(key,{event,timer});publishTyping(event);return value;
     });
     handle('message.send', async input => {
-      const v = record(input, ['channel_id', 'client_message_id', 'text', 'thread_id', 'document', 'asset_ids', 'broadcast_confirmed']);
-      const { channel_id, ...message } = v;
-      const saved=await chat.send(socket.data.actor, uuid(channel_id), message);
-      stopTyping(typeof message.thread_id==='string'?message.thread_id:null);return saved;
+      const v = record(input, ['channel_id', 'client_message_id', 'text', 'thread_id', 'document', 'asset_ids', 'broadcast_confirmed', 'receipt_id']);
+      const { channel_id, receipt_id, ...message } = v;
+      const channel = uuid(channel_id);
+      const sample = receiptSender && receipt_id !== undefined ? receiptSender(uuid(receipt_id)) : undefined;
+      try {
+        const saved = await chat.send(socket.data.actor, channel, message, sample?.id);
+        if (sample && saved.id !== sample.id) sample.finish('duplicate');
+        stopTyping(typeof message.thread_id === 'string' ? message.thread_id : null);
+        return saved;
+      } catch (error) {
+        sample?.finish('send_failed');
+        throw error;
+      }
     });
   });
   let stopEvents: (() => Promise<void>) | undefined, stopReconnect: (() => void) | undefined;

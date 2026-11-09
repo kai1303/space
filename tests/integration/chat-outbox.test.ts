@@ -7,6 +7,10 @@ import { ChatStore } from '@space/postgres/chat';
 import { migrate } from '@space/postgres/migrate';
 import { EventBus, streamName, type DomainEvent } from '@space/events';
 import { EventBridge } from '@space/event-service/bridge';
+import { startMessageMetrics } from '../../apps/events/dist/message-metrics.js';
+import { once } from 'node:events';
+import type { AddressInfo } from 'node:net';
+import { PostgresStore } from '@space/postgres/store';
 import { connect } from 'nats';
 
 const url = process.env.TEST_DATABASE_URL;
@@ -70,4 +74,63 @@ test('membership and credential changes publish authorization invalidations thro
   const afterMembership = events.length;
   await pool.query('DELETE FROM human_credentials WHERE user_id=$1',[a.collaborator_id]);
   await received(event=>events.indexOf(event)>=afterMembership && event.data.channel_id===null);
+});
+
+test('private throughput counter counts committed message inserts once across bootstrap and WAL replay', async t => {
+  const address = { host: '127.0.0.1', port: 0 };
+  assert.equal(startMessageMetrics(bridge, address), undefined);
+  const resumed = new EventBridge({ databaseUrl: databaseUrl.toString(), natsUrl, schema, monitorMessages: true });
+  t.after(() => resumed.close());
+  const listener = startMessageMetrics(resumed, address)!;
+  t.after(() => { listener.close(); listener.closeAllConnections(); });
+  await once(listener, 'listening');
+  const url = `http://127.0.0.1:${(listener.address() as AddressInfo).port}`;
+  const scrape = async () => (await fetch(url + '/metrics')).text();
+  assert.match(await scrape(), /^space_chat_messages_created_total 0$/m);
+  assert.equal((await fetch(url + '/other')).status, 404);
+
+  async function fence() {
+    const id = randomUUID();
+    await pool.query("INSERT INTO event_outbox(id,kind,aggregate_id,payload) VALUES($1,'chat.changed','fence','{}')", [id]);
+    await received(event => event.id === id);
+  }
+  await fence();
+  await bridge.close();
+  const seed = await bootstrap(pool);
+  const chat = new ChatStore(pool);
+  const input = { client_message_id: randomUUID(), text: 'Private message' };
+  const [first] = await Promise.all([chat.send(seed.owner_id, seed.channel_id, input), chat.send(seed.owner_id, seed.channel_id, input)]);
+  await chat.send(seed.collaborator_id, seed.channel_id, { ...input, client_message_id: randomUUID(), thread_id: first.thread_id });
+  const task = await new PostgresStore(pool).createTask(seed.owner_id, { workspace_id: seed.workspace_id, thread_id: seed.thread_id,
+    installation_id: seed.installation_id, goal: 'Reply', skill: 'demo.echo' }, randomUUID());
+  const agentId = randomUUID();
+  await pool.query('INSERT INTO messages(id,workspace_id,channel_id,thread_id,task_id,installation_id,text) VALUES($1,$2,$3,$4,$5,$6,$7)',
+    [agentId, seed.workspace_id, seed.channel_id, seed.thread_id, task.id, seed.installation_id, 'Agent reply']);
+  await pool.query('UPDATE messages SET text=$2 WHERE id=$1', [agentId, 'Edited']);
+  await pool.query('DELETE FROM messages WHERE id=$1', [agentId]);
+  // Retention publishes a message-scoped realtime invalidation, and search backfills emit an unmarked invalidation.
+  await pool.query("INSERT INTO chat_delivery_outbox(workspace_id,channel_id,resource_scope) VALUES($1,$2,'message')", [seed.workspace_id, seed.channel_id]);
+  await pool.query("INSERT INTO event_outbox(kind,aggregate_id,payload) VALUES('search.message',$1,'{}')", [first.id]);
+  const tx = await pool.connect();
+  try {
+    await tx.query('BEGIN');
+    await tx.query("INSERT INTO messages(id,workspace_id,channel_id,thread_id,author_type,user_id,client_message_id,request_hash,text) VALUES(gen_random_uuid(),$1,$2,$3,'human',$4,gen_random_uuid(),'test','Rolled back')",
+      [seed.workspace_id, seed.channel_id, seed.thread_id, seed.owner_id]);
+    await tx.query('ROLLBACK');
+  } finally { tx.release(); }
+
+  await resumed.start();
+  assert.match(await scrape(), /^space_chat_messages_created_total 3$/m);
+  const dm = await chat.directMessages.open(seed.owner_id, seed.workspace_id, { user_id: seed.collaborator_id });
+  await chat.send(seed.owner_id, dm.id, { ...input, client_message_id: randomUUID() });
+  await fence(); // The live insert follows the bootstrap snapshot's overlapping WAL.
+  const body = await scrape();
+  assert.match(body, /# TYPE space_chat_messages_created_total counter\nspace_chat_messages_created_total 4\n$/);
+  assert.ok(!body.includes(first.id) && !body.includes(input.text));
+
+  // Race a second cleanup against WAL delivery of the same committed insert.
+  const last = await chat.send(seed.owner_id, dm.id, { ...input, client_message_id: randomUUID() });
+  const competing = await pool.query("DELETE FROM event_outbox WHERE kind='search.message' AND aggregate_id=$1 AND payload->>'operation'='INSERT'", [last.id]);
+  await fence();
+  assert.equal(resumed.messagesCreated! + competing.rowCount!, 5);
 });

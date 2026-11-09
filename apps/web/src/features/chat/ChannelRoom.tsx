@@ -190,6 +190,7 @@ export function ChannelRoom({ viewState, requestedThread, onCloseDirect, readSta
         if (attachment) setAttachmentRevision(attachment.sequence!);
         setEvents(old => recentTasks(mergeEvents(old, batch.events.filter(event => event.type === 'task.event'))));
         cursor.current = batch.cursor;
+        return true;
       }
     });
     connection.on('connect', () => { void subscribe(); });

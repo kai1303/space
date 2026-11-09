@@ -13,6 +13,155 @@
   },
   "panels": [
     {
+      "id": 7,
+      "title": "Chat messages per second",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "space-prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 8,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(space_chat_messages_created_total[5m]))",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "space-prometheus"
+          },
+          "legendFormat": "Messages/s"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "suffix: msg/s"
+        },
+        "overrides": []
+      },
+      "description": "Newly committed messages observed by the CDC bridge, averaged over five minutes. A delayed bridge reports the backlog as it catches up."
+    },
+    {
+      "id": 8,
+      "title": "Time to first confirmed receipt",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "space-prometheus"
+      },
+      "gridPos": {
+        "x": 8,
+        "y": 0,
+        "w": 8,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.5, sum by (le) (rate(space_chat_live_confirmed_receipt_seconds_bucket[5m])))",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "space-prometheus"
+          },
+          "legendFormat": "p50"
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(space_chat_live_confirmed_receipt_seconds_bucket[5m])))",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "space-prometheus"
+          },
+          "legendFormat": "p95"
+        },
+        {
+          "refId": "C",
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(space_chat_live_confirmed_receipt_seconds_bucket[5m])))",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "space-prometheus"
+          },
+          "legendFormat": "p99"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "description": "From the sender submitting a send, including time in its local queue, until a different account confirms live receipt. Only confirmed samples contribute."
+    },
+    {
+      "id": 9,
+      "title": "Receipt sample outcomes",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "space-prometheus"
+      },
+      "gridPos": {
+        "x": 16,
+        "y": 0,
+        "w": 8,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (outcome) (increase(space_chat_live_receipt_samples_total[5m]))",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "space-prometheus"
+          },
+          "legendFormat": "{{outcome}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "description": "Estimated number of samples by outcome in the last five minutes. Timeouts include sends without a live recipient."
+    },
+    {
+      "id": 10,
+      "title": "Agent turn phases",
+      "type": "logs",
+      "datasource": {
+        "type": "loki",
+        "uid": "space-loki"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 8,
+        "w": 24,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "{service_name=~\"space-(server|worker)\"} | json | msg=\"agent_turn_phase\"",
+          "datasource": {
+            "type": "loki",
+            "uid": "space-loki"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "description": "Use Explore to filter by traceId and follow one turn through dispatch, execution and outcome."
+    },
+    {
       "id": 1,
       "title": "API readiness",
       "type": "timeseries",
@@ -22,7 +171,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 0,
+        "y": 16,
         "w": 8,
         "h": 8
       },
@@ -54,7 +203,7 @@
       },
       "gridPos": {
         "x": 8,
-        "y": 0,
+        "y": 16,
         "w": 8,
         "h": 8
       },
@@ -86,7 +235,7 @@
       },
       "gridPos": {
         "x": 16,
-        "y": 0,
+        "y": 16,
         "w": 8,
         "h": 8
       },
@@ -118,7 +267,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 8,
+        "y": 24,
         "w": 12,
         "h": 8
       },
@@ -150,7 +299,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 8,
+        "y": 24,
         "w": 12,
         "h": 8
       },
@@ -182,7 +331,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 16,
+        "y": 32,
         "w": 24,
         "h": 8
       },

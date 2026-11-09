@@ -13,9 +13,9 @@ processors:
       - context: log
         statements:
           - set(log.cache["service"], log.attributes["fluent.tag"]) where IsString(log.attributes["fluent.tag"]) and IsMatch(log.attributes["fluent.tag"], "^space-(server|events|worker)$")
-          - set(log.cache["pino"], ParseJSON(log.body)) where log.cache["service"] == "space-server" and IsString(log.body) and IsMatch(log.body, "^[{]")
-          - set(log.cache["event"], "server_ready") where IsString(log.cache["pino"]["msg"]) and IsMatch(log.cache["pino"]["msg"], "^Server listening at ")
-          - set(log.cache["event"], log.cache["pino"]["msg"]) where IsString(log.cache["pino"]["msg"]) and IsMatch(log.cache["pino"]["msg"], "^(api_request_failed|startup_failed|shutdown_failed|huddle_media_retry_exhausted|metrics_listener_unavailable)$")
+          - set(log.cache["fields"], ParseJSON(log.body)) where (log.cache["service"] == "space-server" or log.cache["service"] == "space-worker") and IsString(log.body) and IsMatch(log.body, "^[{]")
+          - set(log.cache["event"], "server_ready") where log.cache["service"] == "space-server" and IsString(log.cache["fields"]["msg"]) and IsMatch(log.cache["fields"]["msg"], "^Server listening at ")
+          - set(log.cache["event"], log.cache["fields"]["msg"]) where log.cache["service"] == "space-server" and IsString(log.cache["fields"]["msg"]) and IsMatch(log.cache["fields"]["msg"], "^(api_request_failed|startup_failed|shutdown_failed|huddle_media_retry_exhausted|metrics_listener_unavailable)$")
           - set(log.cache["event"], "typing_transport_unavailable") where log.cache["service"] == "space-server" and log.body == "typing_transport_unavailable"
           - set(log.cache["event"], "worker_ready") where log.cache["service"] == "space-worker" and log.body == "Worker ready"
           - set(log.cache["event"], log.body) where log.cache["service"] == "space-worker" and IsMatch(log.body, "^(worker_operation_failed|worker_progress_failed)$")
@@ -23,21 +23,40 @@ processors:
           - set(log.cache["event"], "cdc_interrupted") where log.cache["service"] == "space-events" and IsMatch(log.body, "^CDC interrupted; retained WAL will replay( |$)")
           - >-
             set(log.cache["access"], Format("{\"msg\":\"http_request_completed\",\"httpMethod\":\"%s\",\"statusCode\":%d,\"durationMs\":%d}",
-            [log.cache["pino"]["httpMethod"], Int(log.cache["pino"]["statusCode"]), Int(log.cache["pino"]["durationMs"])]))
-            where log.cache["pino"]["msg"] == "http_request_completed"
-            and IsString(log.cache["pino"]["httpMethod"])
-            and IsMatch(log.cache["pino"]["httpMethod"], "^(GET|HEAD|POST|PUT|PATCH|DELETE|OPTIONS|OTHER)$")
-            and IsDouble(log.cache["pino"]["statusCode"]) and Double(Int(log.cache["pino"]["statusCode"])) == log.cache["pino"]["statusCode"] and log.cache["pino"]["statusCode"] >= 100 and log.cache["pino"]["statusCode"] <= 599
-            and IsDouble(log.cache["pino"]["durationMs"]) and Double(Int(log.cache["pino"]["durationMs"])) == log.cache["pino"]["durationMs"] and log.cache["pino"]["durationMs"] >= 0 and log.cache["pino"]["durationMs"] <= 9007199254740991
+            [log.cache["fields"]["httpMethod"], Int(log.cache["fields"]["statusCode"]), Int(log.cache["fields"]["durationMs"])]))
+            where log.cache["service"] == "space-server" and log.cache["fields"]["msg"] == "http_request_completed"
+            and IsString(log.cache["fields"]["httpMethod"])
+            and IsMatch(log.cache["fields"]["httpMethod"], "^(GET|HEAD|POST|PUT|PATCH|DELETE|OPTIONS|OTHER)$")
+            and IsDouble(log.cache["fields"]["statusCode"]) and Double(Int(log.cache["fields"]["statusCode"])) == log.cache["fields"]["statusCode"] and log.cache["fields"]["statusCode"] >= 100 and log.cache["fields"]["statusCode"] <= 599
+            and IsDouble(log.cache["fields"]["durationMs"]) and Double(Int(log.cache["fields"]["durationMs"])) == log.cache["fields"]["durationMs"] and log.cache["fields"]["durationMs"] >= 0 and log.cache["fields"]["durationMs"] <= 9007199254740991
+          - >-
+            set(log.cache["turn"], true)
+            where log.cache["fields"]["msg"] == "agent_turn_phase"
+            and IsString(log.cache["fields"]["traceId"])
+            and IsMatch(log.cache["fields"]["traceId"], "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
+            and IsString(log.cache["fields"]["phase"]) and IsString(log.cache["fields"]["status"])
+          - >-
+            set(log.cache["trace"], Format("{\"msg\":\"agent_turn_phase\",\"traceId\":\"%s\",\"phase\":\"%s\",\"status\":\"%s\"}",
+            [log.cache["fields"]["traceId"], log.cache["fields"]["phase"], log.cache["fields"]["status"]]))
+            where log.cache["turn"] == true
+            and IsMatch(Format("%s/%s", [log.cache["fields"]["phase"], log.cache["fields"]["status"]]),
+            "^(dispatch/(direct|queued)|execution/started|approval/(proposed|approved|rejected|requested|allowed|denied)|outcome/(completed|failed|stopped|rejected))$")
+          - >-
+            set(log.cache["trace"], Format("{\"msg\":\"agent_turn_phase\",\"traceId\":\"%s\",\"phase\":\"tool\",\"status\":\"%s\",\"toolId\":\"%s\"}",
+            [log.cache["fields"]["traceId"], log.cache["fields"]["status"], log.cache["fields"]["toolId"]]))
+            where log.cache["turn"] == true and log.cache["fields"]["phase"] == "tool"
+            and IsMatch(log.cache["fields"]["status"], "^(calling|running|completed|interrupted)$")
+            and IsString(log.cache["fields"]["toolId"]) and IsMatch(log.cache["fields"]["toolId"], "^[0-9a-f]{32}$")
           # Only a recognized event can survive the next filter. Clear the source fields first.
           - set(log.body, "")
           - set(log.body, log.cache["event"]) where log.cache["event"] != nil
           - set(log.body, log.cache["access"]) where log.cache["access"] != nil
+          - set(log.body, log.cache["trace"]) where log.cache["trace"] != nil
           - keep_keys(log.attributes, [])
           - set(log.attributes["service.name"], log.cache["service"]) where log.cache["service"] != nil
           - set(log.severity_text, "error")
           - set(log.severity_text, "warn") where log.body == "metrics_listener_unavailable"
-          - set(log.severity_text, "info") where IsMatch(log.body, "_ready$") or log.cache["access"] != nil
+          - set(log.severity_text, "info") where IsMatch(log.body, "_ready$") or log.cache["access"] != nil or log.cache["trace"] != nil
   filter/unknown:
     logs:
       log_record:

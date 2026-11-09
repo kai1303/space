@@ -1,6 +1,6 @@
 import {test,before,after} from 'node:test';
 import assert from 'node:assert/strict';
-import {randomBytes,randomUUID} from 'node:crypto';
+import {createHash,randomBytes,randomUUID} from 'node:crypto';
 import {Pool} from 'pg';
 import {migrate} from '@space/postgres/migrate';
 import {bootstrap} from '@space/postgres/bootstrap';
@@ -16,14 +16,14 @@ const tasks=new PostgresStore(pool),sessions=new AgentSessionStore(pool,tasks);
 const approvals=new ToolApprovalStore(pool);
 before(async()=>{await admin.query(`CREATE SCHEMA ${schema}`);await migrate(pool);});
 after(async()=>{await pool.end();await admin.query(`DROP SCHEMA ${schema} CASCADE`);await admin.end();});
-async function fixture(){
+async function fixture(direct = false){
  const a=await bootstrap(pool),connection=randomUUID();
  await pool.query('UPDATE agent_definitions SET capabilities=$2 WHERE id=$1',[a.definition_id,{skills:['codex.run'],controls:{},persistent_sessions:true}]);
- await pool.query("UPDATE agent_installations SET connector_id='codex.legacy-test' WHERE id=$1",[a.installation_id]);
+ await pool.query('UPDATE agent_installations SET connector_id=$2 WHERE id=$1',[a.installation_id,direct ? 'codex.local' : 'codex.legacy-test']);
  await pool.query("INSERT INTO agent_connections(installation_id,name,connection_id,auth_status,last_seen_at) VALUES($1,'Coding agent',$2,'ready',now())",[a.installation_id,connection]);
  const session=await sessions.create(a.owner_id,a.thread_id,{client_session_id:randomUUID(),installation_id:a.installation_id,title:'Coding test',skill:'codex.run'});
  const task=await sessions.send(a.owner_id,session.id,{text:'Update README'},randomUUID());
- const delivery=(await tasks.claimDelivery(a.installation_id))!;
+ const delivery=(direct ? await tasks.directDelivery(task.id) : await tasks.claimDelivery(a.installation_id))!;
  await tasks.prepareDelivery(delivery,connection);
  await pool.query("UPDATE tasks SET status='running' WHERE id=$1",[task.id]);
  return {...a,connection,session,task,delivery};
@@ -60,4 +60,59 @@ test('conflicting decisions have one winner and stopping cancels pending approva
  await sessions.control(a.owner_id,a.session.id,'stop');
  await assert.rejects(approvals.decide(a.owner_id,a.session.id,pending.id,{decision:'allow'}),/stale_execution/);
  assert.equal((await sessions.read(a.owner_id,a.session.id)).tool_approvals?.find(p=>p.id===pending.id)?.status,'cancelled');
+});
+
+test('opted-in traces correlate committed direct and queued turn phases without private content', async t => {
+ const previous = process.env.SPACE_MONITORING_ENABLED;
+ t.after(() => {
+   if (previous === undefined) delete process.env.SPACE_MONITORING_ENABLED;
+   else process.env.SPACE_MONITORING_ENABLED = previous;
+ });
+ const logs: string[] = [];
+ t.mock.method(console, 'info', (line: string) => logs.push(line));
+ delete process.env.SPACE_MONITORING_ENABLED;
+ await fixture();
+ assert.deepEqual(logs, []);
+
+ process.env.SPACE_MONITORING_ENABLED = 'true';
+ for (const direct of [true, false]) {
+   const a = await fixture(direct);
+   const event = (sequence: number, type: string, statuses: string[] = []) => ({
+     id: randomUUID(), schema_version: '1.0', execution_id: a.delivery.execution_id, sequence, type,
+     occurred_at: new Date().toISOString(), payload: { text: 'private prompt and output',
+       response: {messages: [], components: [], tools: statuses.map((status, i) => ({id:'secret-'+i, name:'private-name', arguments:'private-args', result:'private-result', status}))} },
+   });
+   const started = event(1, 'execution.started');
+   await tasks.acceptEvent(a.installation_id, started, a.delivery, a.connection);
+   await tasks.acceptEvent(a.installation_id, started, a.delivery, a.connection);
+   const input = {id:randomUUID(), kind:'command', title:'private command', details:'secret'};
+   await approvals.request(a.installation_id, a.connection, a.task.id, a.delivery.execution_id, input);
+   await approvals.request(a.installation_id, a.connection, a.task.id, a.delivery.execution_id, input);
+   await assert.rejects(approvals.decide(a.collaborator_id,a.session.id,input.id,{decision:'allow'}));
+   await approvals.decide(a.owner_id,a.session.id,input.id,{decision:'allow'});
+   await approvals.decide(a.owner_id,a.session.id,input.id,{decision:'allow'});
+   const publish = (sequence: number, type: string, statuses: string[]) =>
+     tasks.acceptEvent(a.installation_id, event(sequence,type,statuses), a.delivery, a.connection);
+   await publish(2, 'execution.progress', ['running','calling']);
+   await publish(3, 'execution.progress', ['running','calling']);
+   await publish(4, 'execution.progress', ['completed','running']);
+   if (direct) await sessions.control(a.owner_id, a.session.id, 'stop');
+   else await publish(5, 'execution.completed', ['completed','completed']);
+   const record = (phase:string, status:string) => ({msg:'agent_turn_phase',traceId:a.task.id,phase,status});
+   const tool = (index:number, status:string) => ({...record('tool',status),
+     toolId:createHash('sha256').update(a.task.id + ':secret-' + index).digest('hex').slice(0,32)});
+   assert.deepEqual(logs.splice(0).map(line => JSON.parse(line)), [
+     record('approval','proposed'), record('approval','approved'), record('dispatch', direct ? 'direct' : 'queued'),
+     record('execution','started'), record('approval','requested'), record('approval','allowed'),
+     tool(0,'running'), tool(1,'calling'), tool(0,'completed'), tool(1,'running'),
+     tool(1, direct ? 'interrupted' : 'completed'), record('outcome', direct ? 'stopped' : 'completed'),
+   ]);
+   if (direct) {
+     // Admission happens after task proposal inside the same transaction. A rollback must emit neither.
+     tasks.admitLocalTurn = async () => { throw new Error('admission failed'); };
+     await assert.rejects(sessions.send(a.owner_id,a.session.id,{text:'private retry'},randomUUID()), /admission failed/);
+     delete tasks.admitLocalTurn;
+     assert.deepEqual(logs, []);
+   }
+ }
 });

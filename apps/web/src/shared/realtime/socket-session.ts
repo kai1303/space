@@ -1,20 +1,23 @@
 import { io, type Socket } from 'socket.io-client';
 import { invalidateSocketCommands } from './socket-command.js';
+import { clearLiveReceipts, enableLiveReceipts, finishLiveReceipt } from './live-receipts.js';
 
-type Handler = (value: any) => void;
+type Handler = (value: any) => unknown;
 export type RealtimeLease = { socket: Socket; connect: () => void; recover: () => void; expire: () => void; on: (event: string, handler: Handler) => () => void; release: () => void };
 type Transport = ReturnType<typeof createTransport>;
 let current: Transport | undefined;
 
 function createTransport() {
-  const socket = io({ transports: ['websocket'], withCredentials: true, autoConnect: false,
+  const socket = io({ transports: ['websocket'], withCredentials: true, autoConnect: false, auth: { live_receipts: 1 },
     reconnectionDelay: 1000, reconnectionDelayMax: 30_000, randomizationFactor: 0.5 });
   const listeners = new Map<string, Set<Handler>>();
   const bindings = new Map<string, (...args: any[]) => void>();
   let references = 0, closed = false, terminal = false, delay = 1000;
   let retry: ReturnType<typeof setTimeout> | undefined;
   const dispatch = (event: string, value?: unknown) => {
-    for (const handler of [...(listeners.get(event) ?? [])]) handler(value);
+    let accepted = false;
+    for (const handler of [...(listeners.get(event) ?? [])]) if (handler(value) === true) accepted = true;
+    return accepted;
   };
   const connect = () => { if (!closed && !terminal && !socket.connected && !socket.active) socket.connect(); };
   const reconnect = () => {
@@ -31,8 +34,10 @@ function createTransport() {
     if (!source) window.dispatchEvent(new Event('space:session-expired'));
   };
   const bind = (event: string, handler: (...args: any[]) => void) => { bindings.set(event, handler); socket.on(event, handler); };
+  bind('chat.receipts.enabled', () => enableLiveReceipts(socket));
+  bind('chat.receipt.confirmed', (id: string, ack: (ms: number | null) => void) => ack(finishLiveReceipt(socket, id)));
   bind('connect', () => { clearTimeout(retry); retry = undefined; delay = 1000; dispatch('connect'); });
-  bind('disconnect', reason => { invalidateSocketCommands(socket); dispatch('disconnect', reason); if (reason === 'io server disconnect') reconnect(); });
+  bind('disconnect', reason => { clearLiveReceipts(socket); invalidateSocketCommands(socket); dispatch('disconnect', reason); if (reason === 'io server disconnect') reconnect(); });
   bind('connect_error', error => { if (error.message === 'unauthorized') unauthorized(); else { dispatch('connect_error', error); reconnect(); } });
   bind('chat.error', error => { if (error.error === 'unauthorized') unauthorized(); else dispatch('chat.error', error); });
   const focus = () => { if (!closed && !terminal && !document.hidden) { dispatch('focus'); connect(); } };
@@ -40,7 +45,7 @@ function createTransport() {
   window.addEventListener('space:session-expired', unauthorized);
   const close = () => {
     if (closed) return;
-    closed = true; clearTimeout(retry); invalidateSocketCommands(socket);
+    closed = true; clearLiveReceipts(socket); clearTimeout(retry); invalidateSocketCommands(socket);
     for (const [event, handler] of bindings) socket.off(event, handler);
     listeners.clear(); socket.disconnect();
     window.removeEventListener('focus', focus); document.removeEventListener('visibilitychange', focus);
@@ -59,7 +64,11 @@ function createTransport() {
           if (!callbacks) {
             callbacks = new Set(); listeners.set(event, callbacks);
             if (!bindings.has(event) && event !== 'focus' && event !== 'session.revoked') {
-              bind(event, (value: unknown, ack?: () => void) => { try { dispatch(event, value); } finally { ack?.(); } });
+              bind(event, (value, ack?: (accepted?: boolean) => void) => {
+                let accepted = false;
+                try { accepted = dispatch(event, value); }
+                finally { if (accepted && event === 'chat.events' && value?.receipt_requested === true) ack?.(true); else ack?.(); }
+              });
             }
           }
           callbacks.add(handler);

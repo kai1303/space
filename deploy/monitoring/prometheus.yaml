@@ -13,6 +13,10 @@ scrape_configs:
     sample_limit: 100000
     static_configs:
       - targets: [server:9464]
+  - job_name: space-events
+    sample_limit: 10
+    static_configs:
+      - targets: [events:9464]
   - job_name: space-infra
     scrape_interval: 5s
     scrape_timeout: 4s

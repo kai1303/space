@@ -51,14 +51,24 @@ def main():
             access = {"msg": "http_request_completed", "httpMethod": "POST", "statusCode": 503, "durationMs": 42}
             malformed = [{"httpMethod": CANARY}, {"httpMethod": ["POST"]}, {"statusCode": 600},
                          {"statusCode": "503"}, {"durationMs": 3.5}, {"durationMs": -1}, {"durationMs": CANARY}]
+            trace_id = str(uuid4())
+            trace = {"msg": "agent_turn_phase", "traceId": trace_id, "phase": "execution", "status": "started"}
+            tool_id = uuid4().hex
+            tool = {**trace, "phase": "tool", "status": "completed", "toolId": tool_id}
+            invalid_traces = [{"traceId": CANARY}, {"traceId": trace_id + CANARY}, {"traceId": None},
+                              {"phase": CANARY}, {"status": CANARY}, {"phase": ["execution"]}, {"status": "allowed"}]
             inputs = {
                 "server": [json.dumps({"msg": "api_request_failed", "req": {"url": "/?q=" + CANARY},
                                        "requestId": CANARY, "authorization": CANARY}),
                            json.dumps({**access, "user": CANARY, "route": CANARY, "reqId": CANARY}),
                            *(json.dumps({**access, **fields}) for fields in malformed),
+                           json.dumps({**trace, "prompt": CANARY, "args": CANARY}),
+                           *(json.dumps({**trace, **fields}) for fields in invalid_traces),
                            json.dumps({"msg": "metrics_listener_unavailable"}), json.dumps({"msg": CANARY}), "{invalid-json-" + CANARY],
-                "events": ["CDC interrupted; retained WAL will replay Error: " + CANARY, CANARY],
-                "worker": ["Worker ready", "worker_operation_failed " + CANARY],
+                "events": ["CDC interrupted; retained WAL will replay Error: " + CANARY, CANARY, json.dumps(trace)],
+                "worker": ["Worker ready", "worker_operation_failed " + CANARY,
+                           json.dumps({**tool, "tool": CANARY, "result": CANARY}),
+                           json.dumps({**tool, "toolId": CANARY}), json.dumps(access)],
             }
 
             def emit(service, *lines):
@@ -71,6 +81,7 @@ def main():
                     try:
                         with urlopen(f"{endpoint}/loki/api/v1/query_range?{query}", timeout=3) as response:
                             streams = json.load(response)["data"]["result"]
+                        assert all(value not in json.dumps(s["stream"]) for s in streams for value in (trace_id,tool_id)), "Trace ID became a label"
                         assert CANARY not in json.dumps(streams), "Private data reached Loki"
                         actual = {(s["stream"]["service_name"], value[1]) for s in streams for value in s["values"]}
                         assert actual <= expected, f"Unexpected log events: {actual - expected}"
@@ -93,7 +104,9 @@ def main():
                 conn.sendall(b"\xc1" + canary)
             expected = {("space-server", "api_request_failed"), ("space-events", "cdc_interrupted"),
                         ("space-worker", "worker_ready"), ("space-server", "metrics_listener_unavailable"),
-                        ("space-server", json.dumps(access, separators=(",", ":")))}
+                        ("space-server", json.dumps(access, separators=(",", ":"))),
+                        ("space-worker", json.dumps(tool, separators=(",", ":"))),
+                        ("space-server", json.dumps(trace, separators=(",", ":")))}
             await_events(expected)
 
             # A persistent source and one restarted offline must both deliver again after recovery.
@@ -111,6 +124,10 @@ def main():
             with urlopen(f"{endpoint}/loki/api/v1/query_range?" + urlencode({"query": selector}), timeout=5) as response:
                 [match] = json.load(response)["data"]["result"]
                 assert [json.loads(row[1]) for row in match["values"]] == [access]
+            trace_selector = '{service_name=~"space-(worker|server)"} | json | msg="agent_turn_phase" | traceId="' + trace_id + '"'
+            with urlopen(f"{endpoint}/loki/api/v1/query_range?" + urlencode({"query": trace_selector}), timeout=5) as response:
+                streams = json.load(response)["data"]["result"]
+                assert sorted(json.loads(row[1])["phase"] for stream in streams for row in stream["values"]) == ["execution", "tool"]
             assert CANARY not in run("logs", "log-collector"), "Private data reached collector diagnostics"
             print("Verified all three services, collector restart recovery, projected event bodies and private-field exclusion.")
         finally:

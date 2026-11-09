@@ -526,3 +526,50 @@ test('channel message pages contain roots with complete reply counts while threa
   assert.ok(event?.type==='message.created');
   assert.equal(event.payload.thread_root_id,root.id);
 });
+
+test('only a distinct live receiver can confirm a fresh send across API replicas', { timeout: 20_000 }, async t => {
+  const a = await bootstrap(pool);
+  async function replica() {
+    const transport = new RedisSocketAdapter(process.env.TEST_REDIS_URL, schema + ':receipt-test');
+    await transport.connect();
+    const api = createApi(store, { allowDevelopmentTokens: true, monitoring: { host: '127.0.0.1', port: 0 }, realtime: { adapter: transport } });
+    t.after(() => api.close());
+    return api.listen({ host: '127.0.0.1', port: 0 });
+  }
+  const [source, target] = await Promise.all([replica(), replica()]);
+  async function client(token: string, base: string) {
+    const ws = io(base, { transports: ['websocket'], auth: { token, live_receipts: 1 }, reconnection: false, autoConnect: false });
+    t.after(() => { ws.disconnect(); });
+    const ready = new Promise<void>((resolve, reject) => { ws.once('chat.receipts.enabled', resolve); ws.once('connect_error', reject); });
+    ws.connect(); await ready;
+    return ws;
+  }
+  const sender = await client(a.owner_token, source), self = await client(a.owner_token, target);
+  const other = await client(a.collaborator_token, target);
+  const command = (ws: typeof sender, name: string, data: object) => ws.timeout(4000).emitWithAck(name, data);
+  const subscribe = (ws: typeof sender) => command(ws, 'channel.subscribe', { channel_id: a.channel_id, after: '0' });
+  const batch = (ws: typeof sender) => new Promise<any>(resolve => ws.once('chat.events', (frame, ack) => { ack(true); resolve(frame); }));
+  const confirmations: string[] = [];
+  sender.on('chat.receipt.confirmed', (id, ack) => { confirmations.push(id); ack(140); });
+  await subscribe(self);
+  const input = { channel_id: a.channel_id, client_message_id: randomUUID(), receipt_id: randomUUID(), text: 'First send' };
+  const ownBatch = batch(self);
+  const first = await command(sender, 'message.send', input);
+  assert.ok(first.data.id);
+  assert.equal((await ownBatch).receipt_requested, undefined);
+  const replay = batch(other);
+  await subscribe(other);
+  assert.equal((await replay).receipt_requested, undefined);
+  const duplicate = await command(sender, 'message.send', { ...input, receipt_id: randomUUID() });
+  assert.equal(duplicate.data.id, first.data.id);
+
+  const second = { ...input, client_message_id: randomUUID(), receipt_id: randomUUID(), text: 'Second send' };
+  const ownSecond = batch(self), live = batch(other);
+  const confirmed = new Promise<string>(resolve => sender.once('chat.receipt.confirmed', resolve));
+  const saved = await command(sender, 'message.send', second);
+  assert.ok(saved.data.id);
+  assert.equal((await ownSecond).receipt_requested, undefined);
+  assert.equal((await live).receipt_requested, true);
+  assert.equal(await confirmed, second.receipt_id);
+  assert.deepEqual(confirmations, [second.receipt_id]);
+});

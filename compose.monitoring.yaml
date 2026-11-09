@@ -20,12 +20,16 @@ services:
         <<: *space-log-options
         tag: space-server
   events:
+    environment:
+      SPACE_MONITORING_ENABLED: "true"
     logging:
       driver: fluentd
       options:
         <<: *space-log-options
         tag: space-events
   worker:
+    environment:
+      SPACE_MONITORING_ENABLED: "true"
     logging:
       driver: fluentd
       options:

@@ -10,6 +10,7 @@ import { tokenHash } from './bootstrap.js';
 import { hasThreadAccess } from './access.js';
 import { readThreadContext } from './thread-context.js';
 import { sessionTransaction, SessionConflict } from './session-concurrency.js';
+import { traceTool, traceToolChanges, traceTurn } from './turn-trace.js';
 import { FoundationStore } from './foundation.js';
 const notFound = () => new AppError(404, 'not_found');
 const now = sql`now()`;
@@ -17,6 +18,20 @@ function mergeOutputPaths<T extends { path: string }>(existing: T[], incoming: T
   const paths = new Map(existing.map(item => [item.path, item]));
   for (const item of incoming) { paths.delete(item.path); paths.set(item.path, item); }
   return [...paths.values()].slice(-20);
+}
+function interruptResponse(c: DbSession, taskId: string, snapshot: unknown) {
+  if (!snapshot) return;
+  const response = parseAgentResponse(snapshot);
+  response.messages.forEach(message => { message.status = 'complete'; });
+  for (const tool of response.tools) {
+    if (tool.status === 'calling' || tool.status === 'running') {
+      tool.status = 'interrupted';
+      traceTool(c, taskId, tool.id, tool.status);
+    }
+  }
+  delete response.step;
+  delete response.activity;
+  return response;
 }
 async function navigatorPresent(c: DbSession) { return Boolean((await c.execute<{present:boolean}>(sql`SELECT to_regclass('navigator_decisions') IS NOT NULL AS present`)).rows[0]?.present); }
 export class PostgresStore implements DeliveryStore {
@@ -110,6 +125,7 @@ export class PostgresStore implements DeliveryStore {
       }
       const [task] = await c.insert(s.tasks).values({ id: randomUUID(), ...input, ...(managedSessionId ? { session_id: managedSessionId } : {}), requester_id: actor, status: 'awaiting_approval', idempotency_key: key, request_hash: hash }).returning();
       await this.append(c, task!, 'task.proposed', actor, { goal: task!.goal });
+      traceTurn(c, task!.id, 'approval', 'proposed');
       return task!;
   }
   async approveTask(actor: string, id: string): Promise<Task> {
@@ -144,6 +160,8 @@ export class PostgresStore implements DeliveryStore {
       // Direct attempts have a fixed deadline and are never renewed or reclaimed.
       if(direct) await c.execute(sql`SELECT pg_notify('space_direct_turn',${JSON.stringify({task_id:task.id})})`);
       await this.append(c, result!, 'task.approved', actor, { execution_id: executionId });
+      traceTurn(c, task.id, 'approval', 'approved');
+      traceTurn(c, task.id, 'dispatch', direct ? 'direct' : 'queued');
       if(await navigatorPresent(c))await c.execute(sql`UPDATE agent_thread_subscriptions SET session_id=${sessionId},approved_by=${actor} WHERE task_id=${id} AND status='active'`);
       return result!;
   }
@@ -155,6 +173,8 @@ export class PostgresStore implements DeliveryStore {
       const [result] = await c.update(s.tasks).set({ status: 'rejected', revision: sql`${s.tasks.revision}+1`, updated_at: now }).where(and(eq(s.tasks.id, id), eq(s.tasks.revision, task.revision))).returning();
       if (!result) throw new SessionConflict();
       await this.append(c, result!, 'task.rejected', actor, {});
+      traceTurn(c, task.id, 'approval', 'rejected');
+      traceTurn(c, task.id, 'outcome', 'rejected');
       if(await navigatorPresent(c))await c.execute(sql`UPDATE agent_thread_subscriptions SET status='closed' WHERE task_id=${id}`);
       return result!;
     });
@@ -290,7 +310,10 @@ export class PostgresStore implements DeliveryStore {
       const changedExecution = await c.update(s.executions).set({ status: next, last_sequence: event.sequence }).where(and(eq(s.executions.id, event.execution_id), eq(s.executions.last_sequence, execution.last_sequence), eq(s.executions.status, execution.status))).returning({ id: s.executions.id });
       const changedTask = await c.update(s.tasks).set({ status: next, result: next === 'completed' ? event.payload.text : null, revision: sql`${s.tasks.revision}+1`, updated_at: now }).where(and(eq(s.tasks.id, task.id), eq(s.tasks.revision, task.revision))).returning({ id: s.tasks.id });
       if (!changedExecution.length || !changedTask.length) throw new SessionConflict();
+      if (event.type === 'execution.started') traceTurn(c, task.id, 'execution', 'started');
+      await traceToolChanges(c, task.id, event.payload.response?.tools);
       await this.append(c, task, event.type, installationId, { ...event.payload, agent_event_id: event.id, agent_sequence: event.sequence, agent_occurred_at: event.occurred_at }, event.id);
+      if (next === 'completed' || next === 'failed') traceTurn(c, task.id, 'outcome', next);
       const session = task.session_id ? (await c.select().from(s.agentSessions).where(eq(s.agentSessions.id, task.session_id)))[0] : undefined;
       const managed = session?.managed;
       const incomingOutputs = event.payload.response?.outputs;
@@ -332,18 +355,13 @@ export class PostgresStore implements DeliveryStore {
     if (!['awaiting_approval', 'queued', 'running'].includes(task.status)) return;
     const [latest] = await c.select({ payload: s.taskEvents.payload }).from(s.taskEvents)
       .where(and(eq(s.taskEvents.correlation_id, task.id), sql`${s.taskEvents.payload} ? 'response'`)).orderBy(sql`${s.taskEvents.sequence} DESC`).limit(1);
-    const response = latest?.payload.response ? parseAgentResponse(latest.payload.response) : undefined;
-    if (response) {
-      response.messages.forEach(message => { message.status = 'complete'; });
-      response.tools.forEach(tool => { if (tool.status !== 'completed') tool.status = 'interrupted'; });
-      delete response.step;
-      delete response.activity;
-    }
+    const response = interruptResponse(c, task.id, latest?.payload.response);
     if (task.active_execution_id) await c.update(s.executions).set({ status: 'failed' }).where(eq(s.executions.id, task.active_execution_id));
     await c.update(s.outbox).set({ state: 'dead', lease_token: randomUUID(), lease_until: null, last_error: 'session_stopped' }).where(eq(s.outbox.task_id, task.id));
     const changedTask = await c.update(s.tasks).set({ status: 'failed', revision: sql`${s.tasks.revision}+1`, updated_at: now }).where(and(eq(s.tasks.id, task.id), eq(s.tasks.revision, task.revision))).returning({ id: s.tasks.id });
     if (!changedTask.length) throw new SessionConflict();
     await this.append(c, task, 'task.failed', actor, { code: 'session_stopped', ...(response ? { response } : {}) });
+    traceTurn(c, task.id, 'outcome', 'stopped');
   }
   // Legacy lease columns now hold an attempt fence and an execution deadline, not ownership.
   private attemptFence(delivery: Delivery) {
@@ -397,15 +415,10 @@ export class PostgresStore implements DeliveryStore {
       if (!changedTask.length) throw new SessionConflict();
       const [latest] = await c.select({ payload: s.taskEvents.payload }).from(s.taskEvents)
         .where(and(eq(s.taskEvents.correlation_id, task.id), sql`${s.taskEvents.payload} ? 'response'`)).orderBy(sql`${s.taskEvents.sequence} DESC`).limit(1);
-      const response = latest?.payload.response ? parseAgentResponse(latest.payload.response) : undefined;
-      if (response) {
-        response.messages.forEach(message => { message.status = 'complete'; });
-        response.tools.forEach(tool => { if (tool.status !== 'completed') tool.status = 'interrupted'; });
-        delete response.step;
-        delete response.activity;
-      }
+      const response = interruptResponse(c, task.id, latest?.payload.response);
       const payload = { code, ...(response ? { response } : {}) };
       await this.append(c, task, 'execution.failed', task.installation_id, payload);
       await this.append(c, task, 'task.failed', task.installation_id, payload);
+      traceTurn(c, task.id, 'outcome', 'failed');
   }
 }

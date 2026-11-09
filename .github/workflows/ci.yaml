@@ -40,6 +40,13 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Build and typecheck
         run: pnpm exec turbo run build typecheck --concurrency=2
+      - name: Check optional monitoring
+        run: |
+          docker compose -f compose.yaml config --quiet
+          docker compose -f compose.yaml -f compose.monitoring.yaml config --quiet
+          node --test deploy/monitoring/infra-metrics.test.cjs
+          docker run --rm -v "$PWD/deploy/monitoring:/cfg:ro" -w /cfg --entrypoint /bin/promtool prom/prometheus:v3.16.0 test rules rules.test.yaml
+          python3 deploy/monitoring/log-privacy.test.py
       - name: Start durable event infrastructure
         env:
           POSTGRES_CONTAINER: ${{ job.services.postgres.id }}

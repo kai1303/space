@@ -9,7 +9,7 @@ vi.mock('socket.io-client',()=>({io:()=>{
   on:vi.fn((name:string,handler:(...args:any[])=>void)=>{handlers.set(name,handler);}),
   off:vi.fn((name:string,handler:(...args:any[])=>void)=>{if(handlers.get(name)===handler)handlers.delete(name);}),
   connect:vi.fn(()=>{socket.connected=true;socket.active=true;handlers.get('connect')?.();}),
-  disconnect:vi.fn(()=>{socket.connected=false;socket.active=false;}),
+  disconnect:vi.fn(()=>{socket.connected=false;socket.active=false;handlers.get('disconnect')?.('io client disconnect');}),
   receive:(name:string,...args:any[])=>handlers.get(name)?.(...args),
  };
  clients.push(socket);return socket;
@@ -56,4 +56,64 @@ it('serializes subscription and send commands without replaying queued work on a
  invalidateSocketCommands(socket);finish({data:'subscribed'});
  await Promise.all([first,second]);expect(rpc).toHaveBeenCalledTimes(1);
  await expect(socketCommand(socket,'channel.subscribe',{channel_id:'b'})).resolves.toBe('sent');
+});
+it('acknowledges a requested receipt only after a view accepts the live batch', () => {
+ const lease = acquireRealtime(); releases.add(lease.release);
+ const frame = { channel_id: 'current', receipt_requested: true };
+ const off = lease.on('chat.events', () => false), ack = vi.fn();
+ clients[0].receive('chat.events', frame, ack);
+ expect(ack).not.toHaveBeenCalledWith(true);
+ off(); lease.on('chat.events', () => true);
+ clients[0].receive('chat.events', frame, ack);
+ expect(ack).toHaveBeenLastCalledWith(true);
+ clients[0].receive('chat.events', { channel_id: 'current' }, ack);
+ expect(ack).toHaveBeenLastCalledWith();
+});
+it('times message submission through confirmation on the sending browser and expires the clock on disconnect', async () => {
+ const lease = acquireRealtime(); releases.add(lease.release);
+ const socket = clients[0]; lease.connect();
+ const emit = vi.fn().mockResolvedValue({ data: {} });
+ socket.timeout = () => ({ emitWithAck: emit });
+ await socketCommand(socket, 'message.send', { text: 'old API' });
+ expect(emit.mock.calls[0]?.[1]).toEqual({ text: 'old API' });
+ const clock = vi.spyOn(performance, 'now').mockReturnValue(100);
+ try {
+   socket.receive('chat.receipts.enabled');
+   await socketCommand(socket, 'message.send', { text: 'measured' });
+   const id = emit.mock.calls[1]?.[1].receipt_id;
+   expect(id).toEqual(expect.any(String));
+   clock.mockReturnValue(280);
+   const ack = vi.fn();
+   socket.receive('chat.receipt.confirmed', id, ack);
+   expect(ack).toHaveBeenLastCalledWith(180);
+   socket.receive('chat.receipt.confirmed', id, ack);
+   expect(ack).toHaveBeenLastCalledWith(null);
+   await socketCommand(socket, 'message.send', { text: 'interrupted' });
+   socket.disconnect();
+   socket.receive('chat.receipt.confirmed', emit.mock.calls[2]?.[1].receipt_id, ack);
+   expect(ack).toHaveBeenLastCalledWith(null);
+ } finally { clock.mockRestore(); }
+});
+it('includes local command queue time and sends normally when queued beyond the receipt deadline', async () => {
+ const lease = acquireRealtime(); releases.add(lease.release);
+ const socket = clients[0]; lease.connect(); socket.receive('chat.receipts.enabled');
+ const clock = vi.spyOn(performance, 'now').mockReturnValue(100);
+ let unblock!: (result: unknown) => void;
+ const emit = vi.fn().mockImplementation((name: string) => name === 'updates.subscribe'
+   ? new Promise(resolve => { unblock = resolve; }) : Promise.resolve({ data: {} }));
+ socket.timeout = () => ({ emitWithAck: emit });
+ async function waitInQueue(ms: number) {
+   const subscription = socketCommand(socket, 'updates.subscribe', {});
+   const message = socketCommand(socket, 'message.send', { text: 'queued' });
+   await Promise.resolve(); clock.mockReturnValue(ms); unblock({ data: {} });
+   await Promise.all([subscription, message]);
+   return (emit.mock.lastCall as unknown as [string, { receipt_id?: string }])[1];
+ }
+ try {
+   const sent = await waitInQueue(500);
+   const ack = vi.fn(); clock.mockReturnValue(625);
+   socket.receive('chat.receipt.confirmed', sent.receipt_id, ack);
+   expect(ack).toHaveBeenCalledWith(525);
+   expect(await waitInQueue(17000)).toEqual({ text: 'queued' });
+ } finally { clock.mockRestore(); }
 });

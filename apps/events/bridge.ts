@@ -7,7 +7,7 @@ import { Pool } from 'pg';
 import { LogicalReplicationService, PgoutputPlugin, type Pgoutput } from 'pg-logical-replication';
 import { EventBus, streamName, type DomainEvent } from '@space/events';
 
-type Options = { databaseUrl: string; natsUrl: string; schema?: string; maxTransactionBytes?: number; onError?: (error: unknown) => void };
+type Options = { databaseUrl: string; natsUrl: string; schema?: string; maxTransactionBytes?: number; onError?: (error: unknown) => void; monitorMessages?: boolean };
 export class EventBridge {
   private readonly pool: Pool;
   private readonly bus: EventBus;
@@ -18,6 +18,8 @@ export class EventBridge {
   private directory?: string;
   private spool?: FileHandle;
   private bytes = 0;
+  private createdMessages?: number;
+  get messagesCreated() { return this.createdMessages; }
   private checkpoint = '0/0';
   private handling: Promise<void> = Promise.resolve();
   private closing?: Promise<void>;
@@ -25,6 +27,7 @@ export class EventBridge {
   readonly slot: string;
   readonly publication: string;
   constructor(private readonly options: Options) {
+    if (options.monitorMessages) this.createdMessages = 0;
     this.schema = options.schema ?? '*';
     if (this.schema !== '*' && !/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(this.schema)) throw new Error('invalid CDC schema');
     const scope = streamName(this.schema).toLowerCase();
@@ -63,8 +66,13 @@ export class EventBridge {
   private async publish(event: DomainEvent): Promise<void> {
     await this.bus.publish(event);
     // Broker ACK is the durability boundary. Keyed cleanup can safely repeat after a crash.
-    try { await this.pool.query(`DELETE FROM "${event.schema}".event_outbox WHERE id=$1`, [event.id]); }
-    catch (error) { if ((error as { code?: string }).code !== '42P01') throw error; }
+    try {
+      const removed = await this.pool.query(`DELETE FROM "${event.schema}".event_outbox WHERE id=$1`, [event.id]);
+      // A bootstrap/WAL replay or competing cleanup cannot delete the same event twice.
+      if (this.createdMessages !== undefined && removed.rowCount === 1 && event.kind === 'search.message' && event.data?.operation === 'INSERT') {
+        this.createdMessages++;
+      }
+    } catch (error) { if ((error as { code?: string }).code !== '42P01') throw error; }
     if (event.kind === 'chat.changed' && typeof event.data.chat_delivery_id === 'string') {
       try { await this.pool.query(`DELETE FROM "${event.schema}".chat_delivery_outbox WHERE id=$1`, [event.data.chat_delivery_id]); }
       catch (error) { if ((error as { code?: string }).code !== '42P01') throw error; }
