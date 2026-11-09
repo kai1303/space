@@ -47,11 +47,15 @@ export class HuddleStore {
    const joined=await client.query('UPDATE channel_members SET user_id=user_id WHERE channel_id=$1 AND user_id=$2 RETURNING user_id',[channel,actor]);
    const open=await client.query('UPDATE channels SET archived_at=archived_at WHERE id=$1 AND archived_at IS NULL RETURNING id',[channel]);
    if(!member.rowCount||!joined.rowCount||!open.rowCount) throw new AppError(404,'not_found');
-   const id=randomUUID();
-   await client.query(`INSERT INTO channel_huddles(id,workspace_id,channel_id) VALUES($1,$2,$3)
-    ON CONFLICT(channel_id) WHERE state<>'ended' DO NOTHING`,[id,c.workspace_id,channel]);
-   const row=(await client.query(`SELECT ${projection} FROM channel_huddles h JOIN channels c ON c.id=h.channel_id WHERE h.channel_id=$1 AND h.state<>'ended'`,[channel])).rows[0];
-   await client.query('COMMIT');return dto(row);
+   // The channel update above serializes starts. An insert against an already-open
+   // room can otherwise wait on activation while holding its revision updates.
+   const fields='id,channel_id,workspace_id,state,created_at';
+   const existing=await client.query(`SELECT ${fields} FROM channel_huddles WHERE channel_id=$1 AND state<>'ended'`,[channel]);
+   const row=existing.rows[0] ?? (await client.query(
+    `INSERT INTO channel_huddles(id,workspace_id,channel_id) VALUES($1,$2,$3) RETURNING ${fields}`,
+    [randomUUID(),c.workspace_id,channel]
+   )).rows[0];
+   await client.query('COMMIT');return dto({...row,channel_name:c.name});
   } catch(error) {await client.query('ROLLBACK');throw error;} finally {client.release();}
  }
  async raw(id:string):Promise<Huddle|null> {
