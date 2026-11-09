@@ -108,11 +108,28 @@ test('opted-in traces correlate committed direct and queued turn phases without 
      tool(1, direct ? 'interrupted' : 'completed'), record('outcome', direct ? 'stopped' : 'completed'),
    ]);
    if (direct) {
-     // Admission happens after task proposal inside the same transaction. A rollback must emit neither.
+     // Rejected admission must leave no proposed task or committed trace.
      tasks.admitLocalTurn = async () => { throw new Error('admission failed'); };
      await assert.rejects(sessions.send(a.owner_id,a.session.id,{text:'private retry'},randomUUID()), /admission failed/);
      delete tasks.admitLocalTurn;
      assert.deepEqual(logs, []);
    }
  }
+});
+
+test('capacity checks release the transaction and fence a replacement connector', async () => {
+ const a = await fixture(true);
+ await sessions.control(a.owner_id, a.session.id, 'stop');
+ const single = new Pool({connectionString:url, options:`-c search_path=${schema}`, max:1, connectionTimeoutMillis:500});
+ const store = new PostgresStore(single), turns = new AgentSessionStore(single, store);
+ try {
+   store.admitLocalTurn = async () => {
+     await single.query('UPDATE agent_connections SET connection_id=$2 WHERE installation_id=$1', [a.installation_id, randomUUID()]);
+   };
+   await assert.rejects(turns.send(a.owner_id, a.session.id, {text:'A new turn'}, randomUUID()), /agent_unavailable/);
+   const proposal = await turns.send(a.collaborator_id, a.session.id, {text:'A proposed turn'}, randomUUID());
+   await assert.rejects(store.approveTask(a.owner_id, proposal.id), /agent_unavailable/);
+   assert.equal((await store.readTask(a.owner_id, proposal.id)).status, 'awaiting_approval');
+   assert.equal((await turns.read(a.owner_id, a.session.id)).turns.length, 2);
+ } finally { await single.end(); }
 });

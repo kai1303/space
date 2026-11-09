@@ -68,6 +68,20 @@ export class ChatStore {
       return {user,archived:!!channel.archived_at};
     }, {accessMode:'read only'});
   }
+  async conversationLocation(actor: string, channel: string, thread?: string) {
+    const result = await this.db.execute<{workspace_id: string}>(sql`
+      SELECT ch.workspace_id FROM channels ch
+      JOIN workspace_members wm ON wm.workspace_id = ch.workspace_id AND wm.user_id = ${actor} AND wm.active
+      LEFT JOIN channel_members cm ON cm.channel_id = ch.id AND cm.user_id = wm.user_id
+      WHERE ch.id = ${channel}
+        AND (cm.user_id IS NOT NULL OR (ch.kind = 'channel' AND NOT ch.private AND wm.guest_type = 'none'))
+        ${thread ? sql`AND cm.user_id IS NOT NULL AND EXISTS (
+          SELECT 1 FROM threads t WHERE t.channel_id = ch.id AND t.id = ${thread}
+        )` : sql``}
+    `);
+    if (!result.rows[0]) throw notFound();
+    return { workspace_id: result.rows[0].workspace_id };
+  }
   async details(actor: string, id: string): Promise<ChannelDetails> {
     return this.db.transaction(async c => this.detail(c, actor, await this.authorize(c, actor, id)));
   }

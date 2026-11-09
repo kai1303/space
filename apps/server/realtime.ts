@@ -8,6 +8,7 @@ import type { RedisSocketAdapter } from '@space/redis';
 import { parseResourceSubscription, resourceRevision, type ResourceSubscription } from './resource-updates.js';
 import { RealtimeWork, SubscriptionIndex } from './realtime-work.js';
 import { deliveryHealth } from './realtime-health.js';
+import { TypingListeners } from './realtime-typing.js';
 import { liveReceipts, type ReceiptMetrics } from './live-receipts.js';
 
 export interface RealtimeOptions { receiptMetrics?: ReceiptMetrics; adapter?: RedisSocketAdapter; allowedOrigins?: string[]; strictOrigins?: boolean; events?: EventBus; eventUrl?: string; maxConnections?: number; maxActorConnections?: number; workConcurrency?: number; workQueue?: number }
@@ -60,8 +61,8 @@ export function registerRealtime(app: FastifyInstance, authenticate: (headers: I
     } catch (error) { next(new Error(failure(error).error)); }
   });
   // Transient fanout uses the existing Redis adapter; no message history or replay.
-  const typingListeners=new Map<string,Set<(event:TypingEvent)=>void>>();
-  const receiveTyping=(event:TypingEvent)=>{for(const listener of typingListeners.get(event.channel_id)??[])listener(event);};
+  const typingListeners = new TypingListeners();
+  const receiveTyping = (event: TypingEvent) => typingListeners.publish(event);
   io.on('space.typing',receiveTyping);
   const publishTyping=(event:TypingEvent)=>{receiveTyping(event);if(options.adapter?.isReady)io.serverSideEmit('space.typing',event);};
   const receipts = options.receiptMetrics && liveReceipts(io, options.receiptMetrics, () => !!options.adapter?.isReady);
@@ -87,7 +88,6 @@ export function registerRealtime(app: FastifyInstance, authenticate: (headers: I
       socket.disconnect(true);
     };
     const typing=new Map<string,{event:TypingEvent;timer:NodeJS.Timeout}>();
-    const typingPending=new Map<string,TypingEvent>();
     let stopTypingListener:(()=>void)|undefined;
     const stopTyping=(thread?:string|null)=>{
       for(const [key,entry] of typing){
@@ -95,7 +95,7 @@ export function registerRealtime(app: FastifyInstance, authenticate: (headers: I
         clearTimeout(entry.timer);typing.delete(key);publishTyping({...entry.event,active:false,expires_at:Date.now()});
       }
     };
-    const leaveTyping=()=>{stopTyping();stopTypingListener?.();stopTypingListener=undefined;typingPending.clear();};
+    const leaveTyping=()=>{stopTyping();stopTypingListener?.();stopTypingListener=undefined;};
     // Each stream keeps one in-flight page and one coalesced wake, so a slow ACK cannot stall other streams.
     const boundedPump = (active: () => boolean, read: () => Promise<void | (() => Promise<void>)>, revoke?: (error: unknown) => void) => {
       let running = false, pending = false;
@@ -131,19 +131,6 @@ export function registerRealtime(app: FastifyInstance, authenticate: (headers: I
     };
     const authPump = boundedPump(() => true, async () => {});
     const stopAuth = subscriptions.add(['global', `actor:${socket.data.actor}`], authPump);
-    const typingPump=boundedPump(()=>!!subscription,async()=>{
-      const current=subscription!;
-      const pending=[...typingPending.values()];typingPending.clear();
-      const access=await chat.typingActor(socket.data.actor,current.channel);
-      if(subscription!==current||!socket.connected)return;
-      for(const event of pending){if(!event.active||event.expires_at>Date.now())socket.volatile.emit('chat.typing',access.archived?{...event,active:false}:event);}
-    },error=>{leaveTyping();const channel=subscription?.channel;subscription?.stop();subscription=undefined;socket.emit('channel.revoked',{channel_id:channel,...failure(error)});});
-    const typingListener=(event:TypingEvent)=>{
-      if(event.channel_id!==subscription?.channel||event.source_id===socket.id)return;
-      const key=`${event.source_id}:${event.thread_id??''}`;
-      if(!typingPending.has(key)&&typingPending.size>=64)typingPending.delete(typingPending.keys().next().value!);
-      typingPending.set(key,event);typingPump();
-    };
     socket.on('disconnect', () => { leaveTyping(); stopAuth(); for (const resource of resources.values()) resource.stop(); resources.clear(); subscription?.stop(); subscription = undefined; workspace?.stop(); workspace = undefined; work.cancel(socket.id); });
     const handle = (name: string, action: (input: unknown) => Promise<unknown>) => {
       socket.on(name, async (input: unknown, ack: unknown) => {
@@ -235,6 +222,11 @@ export function registerRealtime(app: FastifyInstance, authenticate: (headers: I
       const liveAfter = receiptSender ? BigInt(ref.event_sequence) : 0n;
       const current: Channel = { channel, cursor, wake: () => {}, stop: () => {} };
       const active = () => subscription === current;
+      const revoke = (error: unknown) => {
+        current.stop();
+        leaveTyping(); subscription = undefined;
+        socket.emit('channel.revoked', { channel_id: channel, ...failure(error) });
+      };
       current.wake = boundedPump(active, async () => {
         const events = await chat.events(socket.data.actor, channel, current.cursor);
         if (!active() || !socket.connected || !events.length) return;
@@ -247,15 +239,14 @@ export function registerRealtime(app: FastifyInstance, authenticate: (headers: I
           current.cursor = next;
           if (events.length === 100) current.wake();
         };
-      }, error => {
-        current.stop();
-        leaveTyping(); subscription = undefined;
-        socket.emit('channel.revoked', { channel_id: channel, ...failure(error) });
-      });
+      }, revoke);
       leaveTyping();subscription?.stop();subscription = current;
       current.stop = subscriptions.add(['global', `actor:${socket.data.actor}`, `workspace:${ref.workspace_id}`, `channel:${channel}`, `channel-events:${channel}`], current.wake);
-      const listeners=typingListeners.get(channel)??new Set();listeners.add(typingListener);typingListeners.set(channel,listeners);
-      stopTypingListener=()=>{listeners.delete(typingListener);if(!listeners.size)typingListeners.delete(channel);};
+      stopTypingListener = typingListeners.subscribe({
+        channel, socketId: socket.id, pump: boundedPump, active, revoke,
+        readAccess: () => chat.typingActor(socket.data.actor, channel),
+        emit: event => socket.volatile.emit('chat.typing', event),
+      });
       setImmediate(current.wake);
       return { channel_id: channel, cursor };
     });

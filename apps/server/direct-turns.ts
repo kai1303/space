@@ -12,11 +12,9 @@ export function directTurns(app:FastifyInstance,io:Server,tasks:PostgresStore,in
     const replies=await agents.to(`connection:${connection}`).timeout(2500).emitWithAck(name,input).catch(()=>[]);
     if(replies.length!==1 || replies[0]?.data!==true)throw new AppError(409,replies[0]?.error==='agent_busy'?'agent_busy':replies[0]?.error==='agent_capacity'?'agent_capacity':'agent_unavailable');
   }
-  tasks.admitLocalTurn=async(installation,session)=>{
+  tasks.admitLocalTurn=async(connection,session)=>{
     if(!listener)throw new AppError(503,'agent_unavailable');
-    const {rows}=await tasks.pool.query('SELECT connection_id FROM agent_connections WHERE installation_id=$1',[installation]);
-    if(!rows[0]?.connection_id)throw new AppError(409,'agent_unavailable');
-    await ask(rows[0].connection_id,'agent.turn.capacity',{session_id:session});
+    await ask(connection,'agent.turn.capacity',{session_id:session});
   };
   const dispatch=(id:string):Promise<void>=>{
     if(starting.has(id))return starting.get(id)!;

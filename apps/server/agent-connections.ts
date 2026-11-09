@@ -54,9 +54,8 @@ export function registerAgentConnections(app: FastifyInstance, io: Server, store
   const stopWakes = onOutbox(keys => checks.wake(keys));
   agents.on('connection', socket => {
     registerDirectTurns(socket,store,tasks,work);
-    const delivery = tasks.pool.query('SELECT connector_id FROM agent_installations WHERE id=$1',[socket.data.agent.id]).then(result=>result.rows[0]?.connector_id==='codex.local'
-      ? registerLocalCodexTasks(socket,store,tasks,getEvents,work,true) : registerLocalCodexTasks(socket, store, tasks, getEvents, work));
-    const identity = socket.data.agent as { id: string; connection_id: string; workspace_id: string; owner_id: string };
+    const identity = socket.data.agent as Awaited<ReturnType<AgentConnectionStore['connect']>>;
+    const delivery = registerLocalCodexTasks(socket, store, tasks, getEvents, work, identity.connector_id === 'codex.local');
     let checking = false, dirty = false;
     const stopCheck = checks.add(['global', `workspace:${identity.workspace_id}`, `actor:${identity.owner_id}`], () => {
       dirty = true;
@@ -77,9 +76,9 @@ export function registerAgentConnections(app: FastifyInstance, io: Server, store
       if (working || ++count > 5) { ack({ error: 'busy' }); return; }
       working = true;
       try {
-        const currentDelivery=await delivery;await currentDelivery.ready;
+        await delivery.ready;
         ack({ data: await work.run(socket.id, () => store.heartbeat(socket.data.token, identity.connection_id, input)) });
-        currentDelivery.notifyReady();
+        delivery.notifyReady();
       }
       catch (e) {
         const code = e instanceof AppError ? e.code : 'internal_error'; ack({ error: code });

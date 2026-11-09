@@ -80,6 +80,25 @@ test('channel discovery respects public/private membership and management', asyn
   await api(a.collaborator_token, 'POST', `/channels/${privateChannel.id}/members`, { user_id: outsider.owner_id }, 403);
 });
 
+test('compact link lookup enforces workspace membership, channel discovery and thread ownership', async () => {
+  const a = await bootstrap(pool), outsider = await bootstrap(pool);
+  const create = (name: string, privateChannel: boolean) => api(a.owner_token, 'POST',
+    `/workspaces/${a.workspace_id}/channels`, { name, private: privateChannel }, 201);
+  const publicRoom = await create('discoverable', false), privateRoom = await create('restricted', true);
+  const dm = await api(a.owner_token, 'POST', `/workspaces/${a.workspace_id}/direct-messages`, { user_id: a.owner_id });
+  const location = (actor: string, id: string, status: number, thread?: string) => api(actor, 'GET',
+    `/channels/${id}/location${thread ? `?thread=${thread}` : ''}`, undefined, status);
+  assert.deepEqual(await location(a.owner_token, a.channel_id, 200, a.thread_id), { workspace_id: a.workspace_id });
+  await location(a.owner_token, privateRoom.id, 404, a.thread_id);
+  await location(a.collaborator_token, publicRoom.id, 200);
+  await location(a.collaborator_token, privateRoom.id, 404);
+  await location(a.owner_token, dm.id, 200);
+  await location(a.collaborator_token, dm.id, 404);
+  await location(outsider.owner_token, publicRoom.id, 404);
+  await pool.query("UPDATE workspace_members SET active=false WHERE workspace_id=$1 AND user_id=$2", [a.workspace_id,a.collaborator_id]);
+  await location(a.collaborator_token, a.channel_id, 404);
+});
+
 test('human messages and replies persist, reject spoofed identity and deduplicate conflicting retries', async () => {
   const a = await bootstrap(pool), b = await bootstrap(pool);
   const input = { client_message_id: randomUUID(), text: 'Hello team' };

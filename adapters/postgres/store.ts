@@ -11,6 +11,7 @@ import { hasThreadAccess } from './access.js';
 import { readThreadContext } from './thread-context.js';
 import { sessionTransaction, SessionConflict } from './session-concurrency.js';
 import { traceTool, traceToolChanges, traceTurn } from './turn-trace.js';
+import { directTurnTarget, runTurn, type AdmitLocalTurn, type TurnPlan } from './direct-turn-admission.js';
 import { FoundationStore } from './foundation.js';
 const notFound = () => new AppError(404, 'not_found');
 const now = sql`now()`;
@@ -36,7 +37,7 @@ function interruptResponse(c: DbSession, taskId: string, snapshot: unknown) {
 async function navigatorPresent(c: DbSession) { return Boolean((await c.execute<{present:boolean}>(sql`SELECT to_regclass('navigator_decisions') IS NOT NULL AS present`)).rows[0]?.present); }
 export class PostgresStore implements DeliveryStore {
   readonly db;
-  admitLocalTurn?: (installation: string, session: string) => Promise<void>;
+  admitLocalTurn?: AdmitLocalTurn;
   outboundAccess?: (execution:string,installation:string) => Promise<import('@space/contracts').OutboundAccess|undefined>;
   memoryReader?: (task: Pick<Task, 'installation_id' | 'requester_id' | 'thread_id'>) => Promise<import('@space/contracts').AgentMemoryContext | undefined>;
   constructor(readonly pool: Pool) { this.db = database(pool); }
@@ -129,25 +130,24 @@ export class PostgresStore implements DeliveryStore {
       return task!;
   }
   async approveTask(actor: string, id: string): Promise<Task> {
-    return this.taskTransaction(id, c => this.approveTaskIn(c, actor, id));
+    return runTurn(this.db, c => this.prepareApproval(c, actor, id), this.admitLocalTurn);
   }
   async approveTaskIn(c: DbSession, actor: string, id: string, reuseSession?: string): Promise<Task> {
-      const task = await this.visibleTask(c, actor, id);
-      const installation = await this.eligible(c, task);
-      assertApprover(actor, task, installation);
-      if (task.status === 'queued' || task.status==='running') return task;
-      assertTransition(task.status, 'queued');
-      const managed = task.session_id ? (await c.select().from(s.agentSessions).where(eq(s.agentSessions.id, task.session_id)))[0] : undefined;
-      if (managed?.managed && managed.state === 'ended') throw new AppError(409, 'session_ended');
-      reuseSession ??= managed?.managed ? managed.id : undefined;
-      let directConnection: string | undefined;
-      const direct = !!managed?.managed && installation.connector_id === 'codex.local';
-      if (direct) {
-        const [connection] = await c.select().from(s.agentConnections).where(eq(s.agentConnections.installation_id,installation.id));
-        if (!connection?.connection_id || connection.auth_status !== 'ready' || !connection.last_seen_at || Date.now()-connection.last_seen_at.getTime()>45000) throw new AppError(409,'agent_unavailable');
-        directConnection=connection.connection_id;
-        await this.admitLocalTurn?.(installation.id,managed!.id);
-      }
+    const plan = await this.prepareApproval(c, actor, id, reuseSession);
+    return 'existing' in plan ? plan.existing : plan.commit();
+  }
+  private async prepareApproval(c: DbSession, actor: string, id: string, reuseSession?: string): Promise<TurnPlan> {
+    const task = await this.visibleTask(c, actor, id);
+    const installation = await this.eligible(c, task);
+    assertApprover(actor, task, installation);
+    if (task.status === 'queued' || task.status==='running') return { existing:task };
+    assertTransition(task.status, 'queued');
+    const managed = task.session_id ? (await c.select().from(s.agentSessions).where(eq(s.agentSessions.id, task.session_id)))[0] : undefined;
+    if (managed?.managed && managed.state === 'ended') throw new AppError(409, 'session_ended');
+    reuseSession ??= managed?.managed ? managed.id : undefined;
+    const target = await directTurnTarget(c, installation, managed, task.revision);
+    const commit = async () => {
+      const direct = !!target;
       const sessionId = reuseSession ?? randomUUID(), executionId = randomUUID();
       if (reuseSession) {
         const found = await c.select().from(s.agentSessions).where(and(eq(s.agentSessions.id, reuseSession), eq(s.agentSessions.origin_thread_id, task.thread_id), eq(s.agentSessions.installation_id, task.installation_id)));
@@ -156,7 +156,7 @@ export class PostgresStore implements DeliveryStore {
       await c.insert(s.executions).values({ id: executionId, workspace_id: task.workspace_id, task_id: task.id, installation_id: task.installation_id, session_id: sessionId, status: 'queued' });
       const [result] = await c.update(s.tasks).set({ status: direct ? 'running' : 'queued', approved_by: actor, session_id: sessionId, active_execution_id: executionId, revision: sql`${s.tasks.revision}+1`, updated_at: now }).where(and(eq(s.tasks.id, id), eq(s.tasks.revision, task.revision))).returning();
       if (!result) throw new SessionConflict();
-      await c.insert(s.outbox).values({ id: randomUUID(), task_id: task.id, execution_id: executionId, ...(direct ? {direct:true,direct_connection:directConnection,state:'delivering' as const,attempts:1,lease_token:randomUUID(),lease_until:sql`now()+interval '31 minutes'`} : {}) });
+      await c.insert(s.outbox).values({ id: randomUUID(), task_id: task.id, execution_id: executionId, ...(direct ? {direct:true,direct_connection:target.connection,state:'delivering' as const,attempts:1,lease_token:randomUUID(),lease_until:sql`now()+interval '31 minutes'`} : {}) });
       // Direct attempts have a fixed deadline and are never renewed or reclaimed.
       if(direct) await c.execute(sql`SELECT pg_notify('space_direct_turn',${JSON.stringify({task_id:task.id})})`);
       await this.append(c, result!, 'task.approved', actor, { execution_id: executionId });
@@ -164,6 +164,8 @@ export class PostgresStore implements DeliveryStore {
       traceTurn(c, task.id, 'dispatch', direct ? 'direct' : 'queued');
       if(await navigatorPresent(c))await c.execute(sql`UPDATE agent_thread_subscriptions SET session_id=${sessionId},approved_by=${actor} WHERE task_id=${id} AND status='active'`);
       return result!;
+    };
+    return { target, commit };
   }
   async rejectTask(actor: string, id: string): Promise<Task> {
     return this.taskTransaction(id, async c => {

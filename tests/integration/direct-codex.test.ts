@@ -28,6 +28,7 @@ test('direct sessions reject offline/busy/capacity, start independently without 
  viewer.on('updates.changed',(_input,ack)=>{updates++;ack?.(true);});
  const viewerReady=new Promise<void>((resolve,reject)=>{viewer.once('connect',resolve);viewer.once('connect_error',reject);});viewer.connect();await viewerReady;
  assert.ok((await viewer.timeout(3000).emitWithAck('updates.subscribe',{scope:'thread',id:s.thread_id})).data);
+ const startEvents = new Map<string, ReturnType<typeof command>>();
  const running=new Map<string,any>();let launches=0,rejectStart=false,loseStartAck=false;
  socket=io(`${origin}/agents`,{transports:['websocket'],auth:{token:credential},autoConnect:false,reconnection:false});
  socket.on('agent.turn.capacity',(input,ack)=>ack(running.has(input.session_id)?{error:'agent_busy'}:running.size>=2?{error:'agent_capacity'}:{data:true}));
@@ -35,11 +36,15 @@ test('direct sessions reject offline/busy/capacity, start independently without 
    if(rejectStart){ack({error:'agent_unavailable'});return;}
    if([...running.values()].some(r=>r.execution_id===request.execution_id)){ack({data:true});return;}
    launches++;running.set(request.session_id,request);if(!loseStartAck)ack({data:true});
-   const started=command('agent.turn.event',{task_id:request.task_id,event:{id:randomUUID(),schema_version:'1.0',execution_id:request.execution_id,sequence:1,type:'execution.started',occurred_at:new Date().toISOString(),payload:{text:'Working'}}});if(loseStartAck){await started;ack({error:'agent_unavailable'});}else void started.catch(()=>{});
+   const started=command('agent.turn.event',{task_id:request.task_id,event:{id:randomUUID(),schema_version:'1.0',execution_id:request.execution_id,sequence:1,type:'execution.started',occurred_at:new Date().toISOString(),payload:{text:'Working'}}});
+   startEvents.set(request.task_id, started);
+   if(loseStartAck){await started;ack({error:'agent_unavailable'});}else void started.catch(()=>{});
  });
  const ready=new Promise<void>((resolve,reject)=>{socket.once('connect',resolve);socket.once('connect_error',reject);});socket.connect();await ready;
  assert.ok((await command('agent.heartbeat',{auth_status:'ready'})).data);
  const key=randomUUID();const [ta,tb]=await Promise.all([send(a.id,key),send(b.id)]);
+ // The connector waits for each event's ACK before it emits the next sequence.
+ for (const task of [ta, tb]) assert.deepEqual(await startEvents.get(task.id), {data:true});
  assert.equal(ta.status,'running');assert.equal(tb.status,'running');assert.equal(running.size,2);
  assert.equal((await pool.query("SELECT count(*)::int AS n FROM outbox WHERE state='pending' AND task_id IN ($1,$2)",[ta.id,tb.id])).rows[0].n,0);
  await send(a.id,undefined,409);await send(c.id,undefined,409);

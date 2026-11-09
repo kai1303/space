@@ -6,6 +6,8 @@ import { Pool } from 'pg';
 import { io, type Socket } from 'socket.io-client';
 import { migrate } from '@space/postgres/migrate';
 import { bootstrap } from '@space/postgres/bootstrap';
+import { EventBus } from '@space/events';
+import { AgentConnectionStore } from '@space/postgres/agent-connections';
 import { PostgresStore } from '@space/postgres/store';
 import { createApi } from '@space/server/api';
 const url = process.env.TEST_DATABASE_URL;
@@ -192,4 +194,38 @@ for (const provider of ['kiro', 'claude'] as const) test(`${provider} mentions s
   assert.deepEqual((await command('agent.task.claim')).data.persistent_session, { resume: true });
   await sessions.control(owner.owner_id, request.session_id, 'stop');
   assert.equal((await command('agent.task.renew')).error, 'agent_session_stopped');
+});
+
+test('delivery setup uses the handshake identity and cleans up when the socket leaves during subscription', {timeout:5000}, async t => {
+  const owner = await bootstrap(pool);
+  const {credential, connection} = await pair(owner);
+  const connectAgent = AgentConnectionStore.prototype.connect;
+  const handshake = t.mock.method(AgentConnectionStore.prototype, 'connect', connectAgent);
+  let started!: () => void, release!: () => void, stopped!: () => void;
+  const starting = new Promise<void>(resolve => { started = resolve; });
+  const ready = new Promise<void>(resolve => { release = resolve; });
+  const cleanup = new Promise<void>(resolve => { stopped = resolve; });
+  let left!: () => void;
+  const disconnected = new Promise<void>(resolve => { left = resolve; });
+  const disconnect = AgentConnectionStore.prototype.disconnect;
+  t.mock.method(AgentConnectionStore.prototype, 'disconnect', async function(this: AgentConnectionStore, ...args: Parameters<typeof disconnect>) {
+    await disconnect.apply(this, args);
+    if (args[0] === connection.installation_id) left();
+  });
+  const subscribe = EventBus.prototype.subscribe;
+  t.mock.method(EventBus.prototype, 'subscribe', async function(this: EventBus, ...args: Parameters<typeof subscribe>) {
+    if (args[0] !== 'task.local.ready.' + connection.installation_id) return subscribe.apply(this, args);
+    started();
+    await ready;
+    return async () => { stopped(); };
+  });
+  const socket = await connect(credential);
+  try {
+    await starting;
+    const identity = await handshake.mock.calls[0]!.result;
+    assert.equal(identity?.connector_id, 'codex.local');
+    socket.disconnect();
+    await disconnected;
+  } finally { release(); socket.disconnect(); }
+  await cleanup;
 });

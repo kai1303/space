@@ -4,6 +4,8 @@ import {randomBytes} from 'node:crypto';
 import {setTimeout as delay} from 'node:timers/promises';
 import {Pool} from 'pg';
 import {io,type Socket} from 'socket.io-client';
+import {AppError} from '@space/contracts';
+import {ChatStore} from '@space/postgres/chat';
 import {RedisSocketAdapter} from '@space/redis';
 import {bootstrap} from '@space/postgres/bootstrap';
 import {migrate} from '@space/postgres/migrate';
@@ -89,4 +91,32 @@ test('abandoned typing expires on a one-shot deadline and archived channels cann
   await pool.query('UPDATE channels SET archived_at=now() WHERE id=$1',[a.channel_id]);
   assert.equal((await command(sender,{channel_id:a.channel_id,active:true})).error,'channel_archived');
  }finally{sender.disconnect();viewer.disconnect();}
+});
+
+test('a replacement channel subscription survives an old typing check', {timeout:8000}, async t => {
+ const a = await bootstrap(pool);
+ const sender = await connect(a.owner_token, a.channel_id), viewer = await connect(a.collaborator_token, a.channel_id);
+ let markEntered!: () => void, release!: () => void;
+ const entered = new Promise<void>(resolve => { markEntered = resolve; });
+ const released = new Promise<void>(resolve => { release = resolve; });
+ const original = ChatStore.prototype.typingActor;
+ let held = false;
+ t.mock.method(ChatStore.prototype, 'typingActor', async function(this:ChatStore, ...args: Parameters<typeof original>) {
+   if (args[0] === a.collaborator_id && !held) {
+     held = true;
+     markEntered();
+     await released;
+     throw new AppError(404, 'not_found');
+   }
+   return original.apply(this,args);
+ });
+ try {
+   await command(sender, {channel_id:a.channel_id,active:true});
+   await entered;
+   assert.ok((await viewer.timeout(2000).emitWithAck('channel.subscribe',{channel_id:a.channel_id,after:'0'})).data);
+   const delivered = next(viewer, event => !event.active);
+   await command(sender, {channel_id:a.channel_id,active:false});
+   release();
+   await delivered;
+ } finally { release(); viewer.disconnect(); sender.disconnect(); }
 });

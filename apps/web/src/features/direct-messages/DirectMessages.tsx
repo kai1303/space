@@ -1,3 +1,4 @@
+import { useConversationLocation } from '../../shared/ui/conversation-location.js';
 import {useDestinationPresence} from '../../shared/ui/useDestinationPresence.js';
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode, type CSSProperties } from 'react';
 import type { ChannelMember, ChannelUnread, DirectMessageSummary, Page } from '@space/contracts';
@@ -110,6 +111,7 @@ export function DirectMessages({ workspace, viewer, requestedId, compose = 0, wi
   const list = useDirectMessageList(workspace, search, after, unreads), unread = useWorkspaceUnread(workspace);
   useLayoutEffect(()=>{if(list.loaded&&sidebar.current)sidebar.current.scrollTop=view.current.scroll;},[list.loaded,view]);
   const active = useRef(true), selectedId = useRef<string | undefined>(undefined); selectedId.current = selected?.id;
+  useConversationLocation(newOpen || (!selected && !requestedId) ? null : undefined);
   const visit = useRef(onVisit); visit.current = onVisit;
   useEffect(() => { active.current = true; return () => { active.current = false; }; }, []);
   useEffect(() => { if (compose) setNewOpen(true); }, [compose]);

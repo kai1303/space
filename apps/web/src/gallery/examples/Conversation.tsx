@@ -292,7 +292,7 @@ export function Conversation() {
             </div>
             <div className="preview-rich-composer"><RichComposer
               key={`thread:${channel}`}
-              channel="thread"
+              channel="thread" scope="thread"
               defaultValue={drafts[`thread:${channel}`]}
               defaultAttachments={attachmentDrafts[`thread:${channel}`]}
               onDraftChange={(document) => setDrafts((old) => ({ ...old, [`thread:${channel}`]: document }))}

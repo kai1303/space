@@ -97,7 +97,7 @@ export class AgentConnectionStore {
   }
   async authenticate(token: unknown) {
     try { connectionSecret(token, 43); } catch { throw unauthorized(); }
-    const [row] = await this.db.select({ id: s.agentConnections.installation_id, owner_id: s.agentInstallations.owner_id, workspace_id: s.agentInstallations.workspace_id })
+    const [row] = await this.db.select({ id: s.agentConnections.installation_id, owner_id: s.agentInstallations.owner_id, workspace_id: s.agentInstallations.workspace_id, connector_id: s.agentInstallations.connector_id })
       .from(s.agentConnections).innerJoin(s.agentInstallations, eq(s.agentInstallations.id, s.agentConnections.installation_id))
       .where(and(eq(s.agentConnections.token_hash, hash(token as string)), isNull(s.agentConnections.revoked_at), eq(s.agentInstallations.enabled, true)));
     if (!row || !await hasWorkspaceAccess(this.db, row.owner_id, row.workspace_id)) throw unauthorized();

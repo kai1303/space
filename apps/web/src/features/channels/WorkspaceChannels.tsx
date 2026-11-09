@@ -1,3 +1,4 @@
+import { useConversationLocation } from '../../shared/ui/conversation-location.js';
 import { AgentSessions } from '../agents/AgentSessions.js';
 import { useAgentSessionList } from '../agents/useAgentSessionList.js';
 import type { Snapshot } from '../../shared/ui/view-state.js';
@@ -129,6 +130,7 @@ export function WorkspaceChannels({ viewForChannel, onRequestedChannelConsumed, 
     finally { if (version === scope.current) setBusy(false); }
   }
   const channel = homeDirect ?? channels.find(c => c.id === selected);
+  useConversationLocation(content || requestedChannel || !loaded ? undefined : agentSession ? null : !channel?.joined ? channel?.id ?? null : undefined);
   function forgetDirect(id: string, reason?: string) {
     if (currentHomeDirect.current?.id !== id) return;
     updateView(view => view.direct?.id === id ? { ...view, direct: undefined, error: reason ?? '' } : view);

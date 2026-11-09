@@ -4,6 +4,8 @@ import userEvent from '@testing-library/user-event';
 import { RichComposer } from './rich-composer.js';
 
 beforeAll(() => {
+  HTMLDialogElement.prototype.showModal = function () { this.open = true; };
+  HTMLDialogElement.prototype.close = function () { this.open = false; this.dispatchEvent(new Event('close')); };
   Object.defineProperties(Range.prototype, {
     getBoundingClientRect: { configurable: true, value: () => new DOMRect() },
     getClientRects: { configurable: true, value: () => [] },
@@ -207,4 +209,20 @@ it('discards a late suggestion after a newer reply or typing', async () => {
   await act(async () => finishNew('Late'));
   expect(screen.queryByText('Tab to accept')).toBeNull();
   expect(editor.textContent).toBe('My reply');
+});
+
+it.each(['channel', 'thread'] as const)('uses %s scope for broadcasts regardless of the editor label', async scope => {
+  const send = vi.fn();
+  const find = async () => ({ items: [{kind:'broadcast' as const, id:'channel', label:'channel', detail:'Everyone'}], member_count:6 });
+  render(<RichComposer channel="thread" scope={scope} findMentions={find} onSend={send}/>);
+  const editor = await screen.findByRole('textbox', {name:'Message thread'});
+  await userEvent.click(screen.getByRole('button', {name:'Mention someone'}));
+  await userEvent.click(await screen.findByRole('option', {name:/channel/i}));
+  fireEvent.keyDown(editor, {key:'Enter'});
+  if (scope === 'channel') {
+    expect(send).not.toHaveBeenCalled();
+    await userEvent.click(await screen.findByRole('button', {name:'Send and notify'}));
+    expect(send.mock.calls[0]?.[3]).toEqual({broadcast_confirmed:true});
+  }
+  expect(send).toHaveBeenCalledOnce();
 });

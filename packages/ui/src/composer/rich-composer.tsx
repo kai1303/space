@@ -41,6 +41,7 @@ export class ComposerSendError extends Error {}
 
 export function RichComposer({
   channel,
+  scope = "channel",
   placeholder,
   loadReplySuggestion,
   defaultValue,
@@ -65,6 +66,7 @@ export function RichComposer({
   autoFocus = false,
 }: {
   channel: string;
+  scope?: "channel" | "thread";
   placeholder?: string;
   loadReplySuggestion?: (signal: AbortSignal) => Promise<string | null>;
   defaultValue?: RichDocument;
@@ -218,7 +220,7 @@ export function RichComposer({
     }
     // Keep stored drafts identical to the submitted document while navigating during send.
     if (JSON.stringify(normalizeDocument(q.getContents())) !== JSON.stringify(document)) q.setContents(document.ops, "user");
-    if (!confirmed && mentionsUI.memberCount >= 6 && findMentions && documentMentions(document).some(ref => ref.kind === 'broadcast') && channel !== 'thread') { setBroadcastWarning(true); return; }
+    if (!confirmed && mentionsUI.memberCount >= 6 && findMentions && documentMentions(document).some(ref => ref.kind === 'broadcast') && scope === 'channel') { setBroadcastWarning(true); return; }
     pending.current = true;
     setSending(true);
     setError("");

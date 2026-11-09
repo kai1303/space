@@ -1,3 +1,4 @@
+import { directTurnTarget, runTurn, type TurnPlan } from './direct-turn-admission.js';
 import { SidekickStore } from './sidekick.js';
 import { createHash } from 'node:crypto';
 import type { Pool } from 'pg';
@@ -109,28 +110,36 @@ export class AgentSessionStore {
     }, { isolationLevel: 'repeatable read', accessMode: 'read only' });
   }
   async send(actor: string, id: string, raw: unknown, key: string): Promise<Task> {
-    return sessionTransaction(this.db, c => this.sendIn(c, actor, id, raw, key));
+    return runTurn(this.db, c => this.prepareSend(c, actor, id, raw, key), this.tasks.admitLocalTurn);
   }
   async sendIn(c: DbSession, actor: string, id: string, raw: unknown, key: string): Promise<Task> {
+    const plan = await this.prepareSend(c, actor, id, raw, key);
+    return 'existing' in plan ? plan.existing : plan.commit();
+  }
+  private async prepareSend(c: DbSession, actor: string, id: string, raw: unknown, key: string): Promise<TurnPlan> {
     const input = parseAgentSessionMessage(raw); key = text(key, 128);
-      const session = await this.visible(c, actor, id);
-      if (!session.managed) throw new AppError(409, 'session_unmanaged');
-      if (session.state === 'ended') throw new AppError(409, 'session_ended');
-      const taskInput = { workspace_id: session.workspace_id, thread_id: session.origin_thread_id, installation_id: session.installation_id, goal: input.text, skill: session.skill, ...(input.document ? { request_document: input.document } : {}) };
-      const installation = await this.tasks.eligible(c, { ...taskInput, requester_id: actor, session_id: session.id }, true);
-      const hash = createHash('sha256').update(JSON.stringify({ ...taskInput, agent_session_id: id })).digest('hex');
-      const [existing] = await c.select().from(s.tasks).where(and(eq(s.tasks.workspace_id, session.workspace_id), eq(s.tasks.requester_id, actor), eq(s.tasks.idempotency_key, key)));
-      if (existing) {
-        if (existing.request_hash !== hash) throw new AppError(409, 'idempotency_conflict');
-        return existing;
-      }
-      const busy = await c.execute(sql`SELECT 1 FROM tasks WHERE session_id=${id} AND status IN ('awaiting_approval','queued','running') LIMIT 1`);
-      if (busy.rows.length) throw new AppError(409, 'session_busy');
+    const session = await this.visible(c, actor, id);
+    if (!session.managed) throw new AppError(409, 'session_unmanaged');
+    if (session.state === 'ended') throw new AppError(409, 'session_ended');
+    const taskInput = { workspace_id: session.workspace_id, thread_id: session.origin_thread_id, installation_id: session.installation_id, goal: input.text, skill: session.skill, ...(input.document ? { request_document: input.document } : {}) };
+    const installation = await this.tasks.eligible(c, { ...taskInput, requester_id: actor, session_id: session.id }, true);
+    const hash = createHash('sha256').update(JSON.stringify({ ...taskInput, agent_session_id: id })).digest('hex');
+    const [existing] = await c.select().from(s.tasks).where(and(eq(s.tasks.workspace_id, session.workspace_id), eq(s.tasks.requester_id, actor), eq(s.tasks.idempotency_key, key)));
+    if (existing) {
+      if (existing.request_hash !== hash) throw new AppError(409, 'idempotency_conflict');
+      return { existing };
+    }
+    const busy = await c.execute(sql`SELECT 1 FROM tasks WHERE session_id=${id} AND status IN ('awaiting_approval','queued','running') LIMIT 1`);
+    if (busy.rows.length) throw new AppError(409, 'session_busy');
+    const target = installation.owner_id === actor && this.tasks.admitLocalTurn ? await directTurnTarget(c, installation, session) : undefined;
+    const commit = async () => {
       const task = await this.tasks.createTaskIn(c, actor, taskInput, key, hash, session.id);
       const result = installation.owner_id === actor ? await this.tasks.approveTaskIn(c, actor, task.id, session.id) : task;
       const changed = await c.update(s.agentSessions).set({ revision: session.revision + 1 }).where(and(eq(s.agentSessions.id, id), eq(s.agentSessions.revision, session.revision), eq(s.agentSessions.state, 'active'))).returning({ id: s.agentSessions.id });
       if (!changed.length) throw new SessionConflict();
       return result;
+    };
+    return { target, commit };
   }
   async control(actor: string, id: string, operation: 'stop' | 'end'): Promise<AgentSessionSummary> {
     return sessionTransaction(this.db, c => this.controlIn(c, actor, id, operation));

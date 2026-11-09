@@ -95,7 +95,7 @@ vi.mock('socket.io-client', () => ({ io: () => {
   };
   mocks.sockets.push(client); return client;
 } }));
-afterEach(() => { localStorage.removeItem('space:composer-drafts:user'); cleanup(); localStorage.clear(); vi.unstubAllGlobals(); mocks.sockets.length = 0; mocks.upload.mockReset(); mocks.sendFailures = 0; mocks.pendingSend = undefined; mocks.badgeOverride = false; mocks.setBadge = undefined; mocks.authPending = false; mocks.channelPost = true; mocks.channelReply = true; mocks.permissionsError = false; });
+afterEach(() => { localStorage.removeItem('space:composer-drafts:user'); cleanup(); window.history.replaceState(null, '', '/chat'); localStorage.clear(); vi.unstubAllGlobals(); mocks.sockets.length = 0; mocks.upload.mockReset(); mocks.sendFailures = 0; mocks.pendingSend = undefined; mocks.badgeOverride = false; mocks.setBadge = undefined; mocks.authPending = false; mocks.channelPost = true; mocks.channelReply = true; mocks.permissionsError = false; });
 beforeAll(() => {
   Object.defineProperties(Range.prototype, {
     getBoundingClientRect: { configurable: true, value: () => new DOMRect() },
@@ -375,6 +375,41 @@ it('shows loading instead of empty states and clears the old workspace before th
   expect(screen.queryByRole('status', { name: 'Loading messages' })).toBeNull();
   expect(screen.queryByText('History first')).toBeNull();
 });
+it('opens a copied thread in its workspace and restores the channel on browser Back', async () => {
+  const channel = '550e8400-e29b-41d4-a716-446655440000';
+  const thread = '00000000-0000-4000-8000-000000000001';
+  const path = '/c/VQ6EAOKbQdSnFkRmVUQAAA';
+  const threadPath = path + '/thread/AAAAAAAAQACAAAAAAAAAAQ';
+  const root = { ...paginatedMessage('Shared discussion', '1', thread), channel_id: channel };
+  const requests: string[] = [];
+  vi.stubGlobal('fetch', vi.fn(async (url: string) => ({ ok: true, json: async () => {
+    requests.push(url);
+    if (url === '/v1/me') return { id: 'user', display_name: 'Kai' };
+    if (url.startsWith('/v1/workspaces?')) return { items: [{ id: 'first', name: 'Other' }, { id: 'target', name: 'Team' }], next_cursor: null };
+    if (url.startsWith(`/v1/channels/${channel}/location`)) return { workspace_id: 'target' };
+    if (url.includes('/target/channels?')) return { items: [{ id: channel, name: 'design', workspace_id: 'target', joined: true }], next_cursor: null };
+    if (isMessageHistory(url)) return messagePage([root]);
+    if (url.includes('/history')) return { events: [], cursor: '0', has_more: false };
+    return [];
+  } })));
+  window.history.replaceState(null, '', path);
+  const sender = render(<Chat />);
+  await userEvent.click(await screen.findByRole('button', { name: 'Reply to Kai' }));
+  expect(location.pathname).toBe(threadPath);
+  const back = new Promise(resolve => window.addEventListener('popstate', resolve, { once: true }));
+  await act(async () => { window.history.back(); await back; });
+  await screen.findByRole('button', { name: 'Channel details for #design' });
+  expect(screen.queryByRole('region', { name: 'Thread', exact: true })).toBeNull();
+  expect(location.pathname).toBe(path);
+  sender.unmount();
+  window.history.replaceState(null, '', threadPath);
+  render(<Chat />);
+  const panel = await screen.findByRole('region', { name: 'Thread', exact: true });
+  await within(panel).findByText('Shared discussion');
+  expect(requests).toContain(`/v1/channels/${channel}/location?thread=${thread}`);
+  expect(requests.some(url => url.includes('/first/channels'))).toBe(false);
+});
+
 it('opens memory from message actions and follows source links to the authorized original message', async () => {
   const original = window.location.href;
   window.history.replaceState({}, '', '/chat?workspace=target&channel=source&message=source-message');
@@ -1655,6 +1690,8 @@ it('selects multiple messages and opens a private sidekick handoff without posti
  const fallback=vi.mocked(fetch).getMockImplementation()!;
  vi.mocked(fetch).mockImplementation(async(input,init)=>{
   const path=String(input);
+  if(path.endsWith('/messages/'+encodeURIComponent(rows[1]!.id)))return Response.json(rows[1]);
+  if(path.includes('/search?'))return Response.json({items:[{...rows[1],channel_name:'first',channel_kind:'channel',is_reply:true}],next_cursor:null});
   if(path.endsWith('/sidekick-agents'))return {ok:true,json:async()=>[{id:'mine',name:'My Codex',owner_id:'user',enabled:true,capabilities:{skills:['codex.run'],persistent_sessions:true}}]} as Response;
   if(path.endsWith('/sidekick-sessions'))return {ok:true,json:async()=>init?.method==='POST'?session:{items:[],next_cursor:null}} as Response;
   if(path==='/v1/agent-sessions/private-session')return {ok:true,json:async()=>({session,context,turns:[],next_cursor:null})} as Response;
@@ -1689,7 +1726,12 @@ it('selects multiple messages and opens a private sidekick handoff without posti
  expect(JSON.parse(String(creates[0]![1]?.body))).toMatchObject({installation_id:'mine',source:{channel_id:'first',message_ids:rows.map(row=>row.id)}});
  expect(vi.mocked(fetch).mock.calls.some(([path,init])=>String(path).endsWith('/messages')&&init?.method==='POST')).toBe(false);
  expect(latestChatSocket().requests.some((request:any)=>request.name==='message.send')).toBe(false);
- await user.click(within(panel).getByRole('button',{name:'Close agent session'}));
+ await user.click(screen.getByRole('button',{name:'Search in first'}));
+ await user.type(screen.getByRole('searchbox',{name:'Search messages'}),'selected{Enter}');
+ await user.click(await screen.findByRole('button',{name:/Second selected message.*Thread reply/}));
+ await user.click(within(await screen.findByRole('dialog',{name:'Original message in #first'})).getByRole('button',{name:'Close dialog'}));
+ expect(screen.queryByRole('region',{name:'My sidekick'})).toBeNull();
+ expect(screen.getByRole('region',{name:'Thread'})).toBeTruthy();
  expect(screen.queryByRole('checkbox')).toBeNull();
 });
 

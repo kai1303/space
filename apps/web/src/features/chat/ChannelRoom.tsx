@@ -1,3 +1,4 @@
+import { useConversationLocation } from '../../shared/ui/conversation-location.js';
 import { useMemberProfile } from '../profile/MemberProfile.js';
 import { HuddleButton } from '../huddles/Huddles.js';
 import { Sidekick } from '../agents/Sidekick.js';
@@ -15,13 +16,14 @@ import { MentionDetails, useMentionSearch } from "../mentions/Mentions.js";
 import { NavigatorSettings, NavigatorSuggestions, agentMention } from '../agents/Navigator.js';
 import { MessageTimeline, type TimelineHandle } from './MessageTimeline.js';
 import { useMessageHistory } from './useMessageHistory.js';
+import { useConversationPanels } from './useConversationPanels.js';
 import { useChannelRead } from './useChannelRead.js';
 import { ChannelFiles } from '../files/ChannelFiles.js';
 import { ChannelMemory } from '../memory/ChannelMemory.js';
 import { SourceMessage } from './SourceMessage.js';
 import { useChannelPermissions } from '../channels/useChannelPermissions.js';
 import { ChannelDetails } from '../channels/ChannelDetails.js';
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Socket } from 'socket.io-client';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import type { ChannelUnread, MentionReference, NavigatorCandidate, ChatEvent, ChatHistory, ChatMessage, DirectMessageSummary } from '@space/contracts';
@@ -49,9 +51,10 @@ import { type UploadDrafts } from '../composer/useAttachmentUploads.js';
 export function ChannelRoom({ viewState, requestedThread, onCloseDirect, readState, uploads, profile, channel, onChannelChange, onLeft, drafts, onDraftChange, onAccessLost, searchOpen, onSearchClose, composeRequest, mentionTarget, onMentionOpened }: { viewState?:Snapshot<ConversationView>; requestedThread?: string; onCloseDirect?: () => void; readState?: ChannelUnread; uploads: UploadDrafts; profile: Profile; channel: Channel; onChannelChange: (channel: Channel) => void; onLeft: () => void; drafts: Record<string, RichDocument>; onDraftChange: (key: string, document: RichDocument) => void; onAccessLost: () => void; searchOpen: boolean; onSearchClose: () => void; composeRequest: number; mentionTarget?: string; onMentionOpened: () => void }) {
   const profiles = useMemberProfile();
   const [selection,setSelection]=useState<string[]|undefined>();
-  const [sidekick,setSidekick]=useState<{source?:SidekickSource}|undefined>();
-  useEffect(()=>{setSelection(undefined);setSidekick(undefined);},[channel.id]);
-  function discuss(source:SidekickSource){rememberPanelTrigger();setThread(undefined);setSessionOpen(false);setFilesOpen(false);setSidekick({source});setSelection(undefined);}
+  const panels = useConversationPanels(viewState, requestedThread, mentionTarget);
+  const {sidekick, thread, sessionView, sessionOpen, filesOpen, threadPanel, sessionPanel, sidekickPanel, openThread, openSessions} = panels;
+  useEffect(()=>setSelection(undefined),[channel.id]);
+  function discuss(source:SidekickSource){panels.openSidekick(source);setSelection(undefined);}
   const selectionBar=selection&&<div className="sidekick-selection" role="region" aria-label="Selected messages"><strong>{selection.length} selected</strong><span className="sidekick-selection-hint">Click messages to select</span><Button size="sm" disabled={!selection.length} onClick={()=>discuss({channel_id:channel.id,message_ids:selection})}>Discuss with agent</Button><Button size="sm" variant="ghost" onClick={()=>setSelection(undefined)}>Cancel selection</Button></div>;
   const direct = channel.kind === 'direct' ? channel as DirectMessageSummary : undefined;
   const permissions = useChannelPermissions(direct ? undefined : channel.id, channel.workspace_id);
@@ -78,45 +81,15 @@ export function ChannelRoom({ viewState, requestedThread, onCloseDirect, readSta
   const [events, setEvents] = useState<ChatEvent[]>([]), [status, setStatus] = useState('Connecting'), [error, setError] = useState('');
   const [ready, setReady] = useState(false);
   const [attachmentRevision, setAttachmentRevision] = useState('0');
-  const [thread, setThread] = useState<string|undefined>(requestedThread??(!mentionTarget?viewState?.current.thread:undefined)), [socket, setSocket] = useState<Socket>();
+  const [socket, setSocket] = useState<Socket>();
   const [navCandidates,setNavCandidates]=useState<NavigatorCandidate[]>([]);
   const agentTags=[...new Set(navCandidates.map(c=>agentMention(c,navCandidates)))];
   const [channelSearchOpen, setChannelSearchOpen] = useState(false), [detailsOpen, setDetailsOpen] = useState(false);
   const [detailsTab, setDetailsTab] = useState('about');
   const showDetails = (tab = 'about') => { setDetailsTab(tab); setDetailsOpen(true); };
-  const [filesOpen, setFilesOpen] = useState(false);
   const filesButton = useRef<HTMLButtonElement>(null);
-  const [sessionView, setSessionView] = useState<{ thread: string; selected: string }|undefined>(!requestedThread&&!mentionTarget?viewState?.current.sessionView:undefined);
-  const [sessionOpen, setSessionOpen] = useState(!requestedThread&&!mentionTarget&&!!viewState?.current.sessionOpen);
-  useLayoutEffect(()=>{if(viewState)viewState.current={thread,sessionView,sessionOpen};},[viewState,thread,sessionView,sessionOpen]);
-  const sidekickPanel=useRef<HTMLElement>(null);
-  const threadPanel = useRef<HTMLElement>(null), sessionPanel = useRef<HTMLElement>(null);
-  const panelTrigger = useRef<HTMLElement | null>(null), focusedPanel = useRef<HTMLElement | null>(null);
-  function rememberPanelTrigger() {
-    const source = document.activeElement;
-    if (source instanceof HTMLElement && !source.closest('.chat-thread')) panelTrigger.current = source;
-  }
-  useLayoutEffect(() => {
-    const panel = sidekick ? sidekickPanel.current : sessionOpen ? sessionPanel.current : thread ? threadPanel.current : null;
-    if (panel) panel.focus({ preventScroll: true });
-    else if (focusedPanel.current && (document.activeElement === document.body || focusedPanel.current.contains(document.activeElement))) {
-      const trigger = panelTrigger.current;
-      const target = trigger?.isConnected && !trigger.closest('[inert], [hidden], [aria-hidden="true"]') ? trigger : document.getElementById('chat-messages');
-      target?.focus({ preventScroll: true });
-    }
-    focusedPanel.current = panel;
-  }, [thread, sessionOpen, sessionView?.selected, sidekick]);
   const channelTyping=useTypingPublisher(socket,channel.id,undefined,ready&&!channel.archived_at&&!sessionOpen&&!(compact&&thread));
-  function openThread(id: string) {
-    rememberPanelTrigger();
-    setSidekick(undefined); setSessionOpen(false); setThread(id); setFilesOpen(false);
-  }
   useEffect(() => { if (requestedThread) { openThread(requestedThread); onMentionOpened(); } }, [requestedThread]);
-  function openSessions(threadId: string, selected: string) {
-    rememberPanelTrigger();
-    setSidekick(undefined);setThread(undefined); setFilesOpen(false);
-    setSessionView({ thread: threadId, selected }); setSessionOpen(true);
-  }
   function openAgentSession(event: { payload: { task_id: string; owner_id: string } }) {
     const version = accessVersion.current;
     void request<import('@space/contracts').Task>(`/tasks/${event.payload.task_id}`).then(task => {
@@ -133,11 +106,11 @@ export function ChannelRoom({ viewState, requestedThread, onCloseDirect, readSta
   useEffect(() => { if (mentionTarget) { setSourceId(mentionTarget); onMentionOpened(); } }, [mentionTarget, onMentionOpened]);
   useEffect(() => {
     if (!composeRequest) return;
-    setThread(undefined); setSessionOpen(false); setFilesOpen(false);
+    panels.close();
     const frame = requestAnimationFrame(() => document.querySelector<HTMLElement>('#chat-messages .ql-editor')?.focus());
     return () => cancelAnimationFrame(frame);
   }, [composeRequest]);
-  useEffect(() => { if (searchOpen || channelSearchOpen) { setFilesOpen(false); setSessionOpen(false); } }, [searchOpen, channelSearchOpen]);
+  useEffect(() => { if ((searchOpen || channelSearchOpen) && (filesOpen || sessionOpen)) panels.close(); }, [searchOpen, channelSearchOpen]);
   const accessLost = useRef(onAccessLost); accessLost.current = onAccessLost;
   const revokeAccess = useRef<(reason: unknown) => void>(() => {});
   const cursor = useRef('0'), accessVersion = useRef(0);
@@ -161,8 +134,8 @@ export function ChannelRoom({ viewState, requestedThread, onCloseDirect, readSta
       terminal = true; accessVersion.current++; outbox.purgeChannel(channel.id);
       if (active) {
         accessLost.current(); setError(errorText(reason)); setReady(false); history.clear(); setEvents([]);
-        setThread(undefined); setSessionView(undefined); setSessionOpen(false); setFilesOpen(false); setSourceId(null); setSelectedMention(undefined);
-        setSelection(undefined);setSidekick(undefined);setMemoryOpen(false); setMemoryMessage(undefined); setStatus('Disconnected');
+        panels.clear(); setSourceId(null); setSelectedMention(undefined);
+        setSelection(undefined);setMemoryOpen(false); setMemoryMessage(undefined); setStatus('Disconnected');
       }
       if (client.connected) void command(client, 'channel.unsubscribe', { channel_id: channel.id }).catch(() => {});
       connection.release();
@@ -240,16 +213,14 @@ export function ChannelRoom({ viewState, requestedThread, onCloseDirect, readSta
     entries.push(message); conversations.set(message.thread_id, entries);
   }
   function reveal(id: string) {
-    setThread(undefined);
-    setSessionOpen(false);
-    setFilesOpen(false);
+    panels.close();
 
     requestAnimationFrame(() => timeline.current?.reveal(id));
   }
-  function closeFiles() { setFilesOpen(false); requestAnimationFrame(() => filesButton.current?.focus()); }
+  function closeFiles() { panels.close(); requestAnimationFrame(() => filesButton.current?.focus()); }
   function toggleFiles() {
     if (filesOpen) { closeFiles(); return; }
-    setSidekick(undefined);setThread(undefined); setSessionOpen(false); setFilesOpen(true);
+    panels.openFiles();
   }
   function fileMessage(id: string) {
     if (messages.some(message => message.id === id)) reveal(id);
@@ -357,6 +328,7 @@ export function ChannelRoom({ viewState, requestedThread, onCloseDirect, readSta
       />}
       <div inert={!!selection}><ConversationMessage message={m} previous={previous} viewerId={profile.id} arrival={arriving} onReact={channel.archived_at ? undefined : emoji => { void react(m, emoji); }} actions={{ delete: m.author.kind === 'human' && m.author.id === profile.id ? () => setDeleteId(m.id) : undefined, selectMessage:()=>setSelection(current=>[...new Set([...(current??[]),m.id])].slice(0,50)), discussWithAgent:()=>discuss({channel_id:channel.id,message_ids:[m.id]}), save: () => request(`/workspaces/${channel.workspace_id}/hub/saved/${m.id}`, { channel_id: channel.id, active: true }).then(() => {}), copyMessage: () => navigator.clipboard.writeText(m.text), ...(!direct ? { saveMemory: () => { setMemoryMessage({ id: m.id, text: m.text }); setMemoryOpen(true); } } : {}) }} onReply={inThread ? undefined : () => openThread(m.thread_id)} replyCount={!inThread ? m.reply_count ?? (replies[0]?.id === m.id ? replies.length - 1 : 0) : 0} onMentionClick={setSelectedMention} footer={!inThread && m.agent_sessions?.map(session => <button key={session.id} type="button" className="sp-thread-link chat-session-link" aria-label={`Agent session: ${session.title}`} title={session.title} onClick={() => openSessions(m.thread_id, session.id)}><Robot size={14} aria-hidden="true" />Agent session<span>{session.title}</span></button>)}/></div></div>;
   }
+  useConversationLocation(channel.id, requestedThread ?? thread);
   const showDirectIntro = !!direct && ready && historyLoaded && history.page?.has_older === false;
   const introduction = direct ? <ConversationIntroduction title={ready ? channel.name : status === 'Disconnected' ? 'This conversation is unavailable' : `Opening ${channel.name}`} icon={<Avatar name={channel.name} initials={channel.name.slice(0, 2).toUpperCase()} image={(direct.participants.find(person => person.id !== profile.id) ?? direct.participants[0])?.image} size="lg" tone="blue" />}>{ready ? direct.participants.length === 1 ? 'Your space for notes, links, and files.' : `This is the beginning of your conversation with ${channel.name}.` : status === 'Disconnected' ? 'Your access may have changed. Select another conversation to continue.' : 'Getting your conversation ready…'}</ConversationIntroduction> : <div className="chat-channel-welcome"><div className="chat-empty-icon"><Hash size={38}/></div><h2>{ready ? `This is the beginning of #${channel.name}` : status === 'Disconnected' ? 'This conversation is unavailable' : `Opening #${channel.name}`}</h2><p>{ready ? 'A shared space for your team’s ideas, questions, and progress. Send the first message.' : status === 'Disconnected' ? 'Your access may have changed. Select another conversation to continue.' : 'Getting your conversation ready…'}</p></div>;
   return <motion.div initial={false} animate={{ opacity: reduced || historyLoaded || status === 'Disconnected' ? 1 : .65 }} transition={motionTransition(reduced)} className={`chat-conversation ${thread ? 'chat-conversation--thread' : ''} ${filesOpen ? 'chat-conversation--files' : ''}`}><main className={`chat-channel${direct ? ' chat-channel--direct' : ''}`} id="chat-messages" tabIndex={-1} aria-hidden={compact && (thread || sessionOpen || sidekick) ? true : undefined} inert={compact && !!(thread || sessionOpen || sidekick)}><header className="chat-channel-header"><ConversationHeading title={channel.name} label={direct ? `Conversation details for ${channel.name}` : `Channel details for #${channel.name}`} onClick={() => { const person = direct && (direct.participants.find(person => person.id !== profile.id) ?? direct.participants[0]); if (person && profiles) profiles.open({kind:'user',id:person.id}); else showDetails(); }} leading={<IconButton label={starred.active ? 'Unstar conversation' : 'Star conversation'} aria-pressed={starred.active} aria-disabled={starred.busy || undefined} onClick={() => void starred.toggle(channel.id, { id: channel.id, name: channel.name, kind: channel.kind ?? 'channel', private: channel.private }).catch(reason => setError(errorText(reason)))}><Star size={19} weight={starred.active ? 'fill' : 'regular'}/></IconButton>} icon={direct ? <Avatar name={channel.name} initials={channel.name.slice(0, 2).toUpperCase()} image={(direct.participants.find(person => person.id !== profile.id) ?? direct.participants[0])?.image} /> : channel.private ? <Lock size={20} weight="bold" /> : <Hash size={22} weight="bold" />} />{channel.topic && <button className="chat-channel-topic" title={channel.topic} onClick={() => showDetails()}>{channel.topic}</button>}<div className="chat-header-actions">{direct && !selfDirect && <CallButtons channel={channel.id}/>} {!direct && <HuddleButton channel={channel.id} name={channel.name} disabled={!!channel.archived_at}/>}{!direct && <button className="chat-channel-member-button" aria-label="View channel members" onClick={() => showDetails('members')}><Users size={18} /> Members</button>}<IconButton label={`Search in ${channel.name}`} onClick={() => setChannelSearchOpen(true)}><MagnifyingGlass size={20} /></IconButton>{direct && <Menu label="More conversation actions" floating trigger={<DotsThree size={22} weight="bold" />} items={[{ label: 'Conversation details', onSelect: () => showDetails() }, ...(profiles && direct.participants[0] ? [{label:'View full profile',onSelect:() => profiles.open({kind:'user',id:(direct.participants.find(person=>person.id!==profile.id)??direct.participants[0]!).id})}] : []), { label: 'Browse files', onSelect: () => { if (!filesOpen) toggleFiles(); } }, ...(onCloseDirect ? [{ label: 'Close direct message', separatorBefore: true, onSelect: onCloseDirect }] : [])]} />}{direct && onCloseDirect && <IconButton label="Close direct message" onClick={onCloseDirect}><X size={20} /></IconButton>}</div></header>
@@ -368,19 +340,19 @@ export function ChannelRoom({ viewState, requestedThread, onCloseDirect, readSta
     <MessageTimeline trailing={historyLoaded && status !== 'Disconnected' && outgoing(messages)} header={showDirectIntro ? introduction : undefined} onAtEndChange={setAtEnd} label={`Messages in ${channel.name}`} items={visibleEvents} page={history.page} loading={history.loading} latestVersion={history.latestVersion} load={history.load} pinned={stickToBottom} handle={timeline} busy={!historyLoaded && status !== 'Disconnected'} render={(event, index) => <><ConversationDateDivider date={event.occurred_at} previous={visibleEvents[index - 1]?.occurred_at}/>{event.type === 'message.created' && event.payload.id === firstUnread && <div className="chat-unread-divider" role="separator" aria-label="New messages"><span>New messages</span></div>}{event.type === 'message.created' ? message(event.payload, false, arrivals.has(event.payload.id), event.payload.id !== firstUnread && visibleEvents[index-1]?.type === 'message.created' ? (visibleEvents[index-1] as Extract<ChatEvent,{type:'message.created'}>).payload : undefined) : event.type === 'task.event' ? <TaskActivity event={event} profile={profile} onOpenWorkspace={() => openAgentSession(event)} onThread={() => openThread(event.thread_id)} /> : null}</>}>
       {!historyLoaded && status !== 'Disconnected' ? <><p className="sp-sr-only" role="status" aria-label="Loading messages">Loading messages…</p><ConversationSkeleton /></> : !messages.length && !showDirectIntro && introduction}
     </MessageTimeline>{!direct&&!thread&&!sessionOpen&&!channel.archived_at&&status!=='Disconnected'&&<NavigatorSuggestions channel={channel.id} onThread={openThread} />}{channel.archived_at ? <div className="chat-channel-archived"><strong>This channel is archived</strong>Its messages are available to read.<br /><Button size="sm" onClick={() => showDetails('settings')}>View channel settings</Button></div> : status !== 'Disconnected' && <ConversationComposer sendDisabled={checkingPermissions || !historyLoaded} sendDisabledReason={postDisabledReason} onBlurCapture={channelTyping.blur} typingIndicator={<TypingIndicator channel={channel.id} viewerId={profile.id} enabled={ready}/>} showUnavailableActions={!direct} findMentions={findMentions} mentions={agentTags} attachmentsEnabled={uploads.enabled} attachments={uploads.drafts[channel.id] ?? []} onAttachmentsChange={files => uploads.change(channel.id, channel.id, files)} onRetryAttachment={id => uploads.retry(channel.id, channel.id, id)} channel={channel.name} placeholder={selfDirect ? 'Jot something down' : direct ? `Message ${channel.name}` : undefined} defaultValue={drafts[channel.id]} onDraftChange={document => {onDraftChange(channel.id, document);channelTyping.change(document);}} onSend={(text, document, files, options) => { submit(undefined, text, document, files, options?.broadcast_confirmed); channelTyping.stop(); }} />}</main>
-    {status !== 'Disconnected' && <AnimatePresence>{thread && <SidePanel ref={threadPanel} key="thread" role="region" className="chat-thread" aria-label="Thread"><ConversationHeader title="Thread" actions={<ThreadNotificationToggle key={thread} thread={thread}/>} channel={direct ? undefined : channel.name} status={direct ? channel.name : undefined} onClose={() => setThread(undefined)} />
+    {status !== 'Disconnected' && <AnimatePresence>{thread && <SidePanel ref={threadPanel} key="thread" role="region" className="chat-thread" aria-label="Thread"><ConversationHeader title="Thread" actions={<ThreadNotificationToggle key={thread} thread={thread}/>} channel={direct ? undefined : channel.name} status={direct ? channel.name : undefined} onClose={panels.close} />
       {selectionBar}
       <ThreadHistory renderOutgoing={loaded => outgoing(loaded, thread)} key={thread} thread={thread} channel={channel.id} live={threadLive} renderMessage={(m, arriving) => message(m, true, arriving)} activity={[...activity.values()].filter(event => event.thread_id === thread && !event.payload.data.session_managed)} profile={profile} onOpenWorkspace={openAgentSession} onAccessLost={reason => revokeAccess.current(reason)} footer={<>
       {!direct && <NavigatorSuggestions channel={channel.id} thread={thread} />}
       {socket && !channel.archived_at && <ThreadComposer sendDisabled={checkingPermissions} sendDisabledReason={replyDisabledReason} suggestionRevision={ready ? replyRevision : undefined} showUnavailableActions={!direct} viewerId={profile.id} key={`reply:${thread}`} onSend={(text, document, files, options) => submit(thread, text, document, files, options?.broadcast_confirmed)} mentions={agentTags} uploads={uploads} socket={socket} channel={channel.id} thread={thread} draft={drafts[`thread:${channel.id}:${thread}`]} onDraftChange={document => onDraftChange(`thread:${channel.id}:${thread}`, document)} />}
       </>} />
     </SidePanel>}</AnimatePresence>}
-    {status !== 'Disconnected' && sidekick && <SidePanel ref={sidekickPanel} role="region" className="chat-thread chat-agent-sessions" aria-label="My sidekick"><Sidekick drafts={drafts} onDraftChange={onDraftChange} attempt={uploads.attempt} acknowledged={uploads.acknowledged} onAccepted={(key,document)=>uploads.sent(key,document,[])} key={channel.workspace_id} workspace={channel.workspace_id} viewerId={profile.id} source={sidekick.source} onClose={()=>{setSidekick(undefined);requestAnimationFrame(()=>panelTrigger.current?.focus());}}/></SidePanel>}
+    {status !== 'Disconnected' && sidekick && <SidePanel ref={sidekickPanel} role="region" className="chat-thread chat-agent-sessions" aria-label="My sidekick"><Sidekick drafts={drafts} onDraftChange={onDraftChange} attempt={uploads.attempt} acknowledged={uploads.acknowledged} onAccepted={(key,document)=>uploads.sent(key,document,[])} key={channel.workspace_id} workspace={channel.workspace_id} viewerId={profile.id} source={sidekick.source} onClose={panels.close}/></SidePanel>}
     {status !== 'Disconnected' && sessionView && <SidePanel ref={sessionPanel} key={`sessions:${sessionView.thread}`} role="region" hidden={!sessionOpen} className="chat-thread chat-agent-sessions" aria-label="Agent session">
-      <AgentSessions acknowledged={uploads.acknowledged} onAccepted={(key,document)=>uploads.sent(key,document,[])} drafts={drafts} onDraftChange={onDraftChange} attempt={uploads.attempt} thread={sessionView.thread} channel={channel.id} viewerId={profile.id} initialSessionId={sessionView.selected} archived={!!channel.archived_at} channelName={channel.name} onBack={() => openThread(sessionView.thread)} onClose={() => setSessionOpen(false)} onAccessLost={() => revokeAccess.current(new Error('not_found'))} />
+      <AgentSessions acknowledged={uploads.acknowledged} onAccepted={(key,document)=>uploads.sent(key,document,[])} drafts={drafts} onDraftChange={onDraftChange} attempt={uploads.attempt} thread={sessionView.thread} channel={channel.id} viewerId={profile.id} initialSessionId={sessionView.selected} archived={!!channel.archived_at} channelName={channel.name} onBack={() => openThread(sessionView.thread)} onClose={panels.close} onAccessLost={() => revokeAccess.current(new Error('not_found'))} />
     </SidePanel>}
     {status !== 'Disconnected' && <AnimatePresence>{filesOpen && <ChannelFiles direct={!!direct} key={channel.id} channel={channel.id} name={channel.name} revision={fileRevision} deletions={filesDeleted} onClose={closeFiles} onMessage={fileMessage} onAccessLost={() => revokeAccess.current(new Error('not_found'))} />}</AnimatePresence>}
-    {status !== 'Disconnected' && <MessageSearch workspace={channel.workspace_id} channel={{id:channel.id,name:channel.name}} open={channelSearchOpen} onClose={() => { setChannelSearchOpen(false); onSearchClose(); }} onSelect={result => { setThread(result.is_reply ? result.thread_id : undefined); setSessionOpen(false); setFilesOpen(false); setSourceId(result.id); }} />}
+    {status !== 'Disconnected' && <MessageSearch workspace={channel.workspace_id} channel={{id:channel.id,name:channel.name}} open={channelSearchOpen} onClose={() => { setChannelSearchOpen(false); onSearchClose(); }} onSelect={result => { if (result.is_reply) openThread(result.thread_id); else panels.close(); setSourceId(result.id); }} />}
     {deleteId && status !== 'Disconnected' && <DeleteMessageDialog key={deleteId} onClose={() => setDeleteId(undefined)} onConfirm={() => deleteMessage(deleteId)} />}
     {direct ? <Dialog open={detailsOpen} title={channel.name} onClose={() => setDetailsOpen(false)}><p>Only the participants in this conversation can read and send messages.</p><ul className="dm-details-members">{direct.participants?.map(person => <li key={person.id}><button type="button" className="space-profile-trigger" aria-label={`View ${person.name}’s profile`} onClick={() => {setDetailsOpen(false); profiles?.open({kind:'user',id:person.id});}}><Avatar name={person.name} initials={person.name.slice(0, 2).toUpperCase()} size="sm" /><strong>{person.name}{person.id === profile.id ? ' (you)' : ''}</strong></button></li>)}</ul><Button onClick={onCloseDirect}>Close direct message</Button></Dialog> : <ChannelDetails permissions={permissions.snapshot} permissionsPending={!permissions.snapshot} channel={channel} viewer={profile.id} open={detailsOpen} initialTab={detailsTab} onClose={() => setDetailsOpen(false)} onChange={onChannelChange} onLeft={onLeft} />}
     {!direct && status !== 'Disconnected' && <ChannelMemory channel={channel.id} name={channel.name} open={memoryOpen} message={memoryMessage} onClose={() => { setMemoryOpen(false); setMemoryMessage(undefined); }} />}

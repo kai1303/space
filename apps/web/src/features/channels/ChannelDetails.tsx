@@ -50,7 +50,7 @@ function DetailsDialog({ channel, viewer, initialTab = 'about', permissions, per
         <Tabs label="Channel details" value={tab} onChange={setTab} items={[{ id: 'about', label: 'About', panelId: `${id}-about` }, { id: 'members', label: `Members${details ? ` ${details.member_count}` : ''}`, panelId: `${id}-members` }, { id: 'settings', label: 'Settings', panelId: `${id}-settings` }]} />
         {error && <div className="space-channel-error" role="alert">{error} <Button size="sm" onClick={() => { setError(''); void refresh().catch(e => setError(errorText(e))); }}>Retry</Button></div>}
         {!details && !error && <p className="space-channel-loading" role="status">Loading channel details…</p>}
-        {details && <div id={`${id}-${tab}`} role="tabpanel" aria-label={tab === 'members' ? 'Members' : tab === 'settings' ? 'Settings' : 'About'} className="space-channel-body">
+        {details && <div key={tab} id={`${id}-${tab}`} role="tabpanel" aria-label={tab === 'members' ? 'Members' : tab === 'settings' ? 'Settings' : 'About'} className={tab === 'members' ? 'space-channel-body space-channel-body--members' : 'space-channel-body'}>
           {tab === 'about' && <>
             <div className="space-channel-card">
               {(['name', 'topic', 'description'] as const).map(key => <section key={key} aria-label={key === 'name' ? 'Channel name' : key === 'topic' ? 'Topic' : 'Description'}>
