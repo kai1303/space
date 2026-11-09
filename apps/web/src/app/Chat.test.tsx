@@ -891,7 +891,8 @@ it('updates the Starred sidebar immediately after starring and unstarring withou
   expect(screen.getByRole('textbox', { name: 'Message first' })).toBe(editor);
 });
 function mockUnreadChat() {
-  const root = { ...paginatedMessage('Unread hello', '1'), author: { kind: 'human' as const, id: 'other', name: 'Teammate' } };
+  const session = { id: 'session-one', title: 'Research', agent_name: 'Codex' };
+  const root = { ...paginatedMessage('Unread hello', '1'), author: { kind: 'human' as const, id: 'other', name: 'Teammate' }, agent_sessions: [session] };
   const snapshot = { workspace_id: 'workspace', channels: [
     { channel_id: 'first', last_read_sequence: '0', latest_sequence: '1', unread_count: 1 },
     { channel_id: 'second', last_read_sequence: '0', latest_sequence: '3', unread_count: 3 },
@@ -901,6 +902,8 @@ function mockUnreadChat() {
     if (path.startsWith('/v1/workspaces?')) return { items: [{ id: 'workspace', name: 'Team' }], next_cursor: null };
     if (path.includes('/channels?')) return { items: ['first', 'second'].map(id => ({ id, name: id, workspace_id: 'workspace', joined: true })), next_cursor: null };
     if (path.endsWith('/unread')) return snapshot;
+    if (path.endsWith('/agent-sessions/session-one')) return { session, turns: [], next_cursor: null };
+    if (path.endsWith('/navigator')) return { candidates: [] };
     if (isMessageHistory(path)) return messagePage([root]);
     if (path.includes('/history')) return { events: [], cursor: '1', has_more: false };
     return [];
@@ -921,6 +924,30 @@ it('updates unopened channel badges from authoritative realtime snapshots withou
   expect(screen.queryByLabelText('3 unread')).toBeNull();
   await act(async () => { socket.receive('workspace.unread', { workspace_id: 'elsewhere', channels: [] }, vi.fn()); });
   expect(screen.getByLabelText('4 unread')).toBeTruthy();
+});
+it.each([false, true])('marks a channel read beside an agent session only when visible (compact=%s)', async compact => {
+  vi.stubGlobal('matchMedia', (media: string) => ({
+    media, matches: compact && media === '(max-width: 1150px)',
+    addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {},
+  }));
+  const focus = vi.spyOn(document, 'hasFocus').mockReturnValue(false);
+  try {
+    const { fetch, snapshot } = mockUnreadChat();
+    render(<Chat />);
+    await userEvent.click(await screen.findByRole('button', { name: 'Agent session: Research' }));
+    await screen.findByRole('region', { name: 'Agent session', exact: true });
+    const socket = mocks.sockets.find(s => s.requests.some((r: any) => r.name === 'workspace.subscribe'));
+    await act(async () => { socket.receive('workspace.unread', snapshot, vi.fn()); });
+    focus.mockReturnValue(true);
+    fireEvent.focus(window);
+    const reads = () => fetch.mock.calls.filter(([path]) => path === '/v1/channels/first/read');
+    if (compact) {
+      await act(async () => { await new Promise(resolve => setTimeout(resolve, 350)); });
+      expect(reads()).toHaveLength(0);
+      await userEvent.click(screen.getByRole('button', { name: 'Close agent session' }));
+    }
+    await waitFor(() => expect(reads()).toHaveLength(1));
+  } finally { focus.mockRestore(); }
 });
 it('marks only the visible latest messages read in a focused window and preserves the new-message divider', async () => {
   let focused = false;

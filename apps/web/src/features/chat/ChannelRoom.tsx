@@ -204,7 +204,7 @@ export function ChannelRoom({ viewState, requestedThread, onCloseDirect, readSta
   if (entryRead.current === undefined && readState) entryRead.current = readState.last_read_sequence;
   const messages = history.page?.messages ?? [];
   const readError = useChannelRead(channel.id, history.page?.newer_cursor ?? '0', readState?.last_read_sequence,
-    historyLoaded && ready && !history.loading && !history.page?.has_newer && atEnd && !searchOpen && !channelSearchOpen && !filesOpen && !sourceId && !detailsOpen && !memoryOpen && !selectedMention && !profiles?.selected && !sessionOpen && !sidekick);
+    historyLoaded && ready && !history.loading && !history.page?.has_newer && atEnd && !searchOpen && !channelSearchOpen && !filesOpen && !sourceId && !detailsOpen && !memoryOpen && !selectedMention && !profiles?.selected && !(compact && sessionOpen) && !sidekick);
   const firstUnread = entryRead.current === undefined ? undefined : messages.find(message => message.author.id !== profile.id && BigInt(message.sequence ?? '0') > BigInt(entryRead.current!))?.id;
   const arrivals = useMessageArrivals(messages, historyLoaded && !history.loading ? channel.id : null);
   const conversations = new Map<string, ChatMessage[]>();
