@@ -7,6 +7,10 @@ import { Conversation } from "./Conversation.js";
 afterEach(cleanup);
 // JSDOM has no layout; Quill queries these browser Range geometry methods during focus.
 beforeAll(() => {
+  vi.stubGlobal('URL', class extends URL {
+    static createObjectURL = () => 'blob:gallery-image';
+    static revokeObjectURL = vi.fn();
+  });
   Object.defineProperties(Range.prototype, {
     getBoundingClientRect: { configurable: true, value: () => new DOMRect() },
     getClientRects: { configurable: true, value: () => [] },
@@ -15,6 +19,7 @@ beforeAll(() => {
   HTMLDialogElement.prototype.close = function () { this.open = false; this.dispatchEvent(new Event('close')); };
 });
 afterAll(() => {
+  vi.unstubAllGlobals();
   Reflect.deleteProperty(Range.prototype, "getBoundingClientRect");
   Reflect.deleteProperty(Range.prototype, "getClientRects");
 });
@@ -64,9 +69,10 @@ it("does not send one channel’s draft to a newly selected channel", async () =
   await userEvent.click(
     screen.getByRole("button", { name: "engineering 3 unread" }),
   );
-  expect((await screen.findByRole("textbox", { name: "Message engineering" })).textContent?.trim()).toBe("");
+  const engineering = await screen.findByRole("textbox", { name: "Message engineering" });
+  expect(engineering.textContent?.trim()).toBe("");
   expect(
-    (screen.getByRole("button", { name: "Send now" }) as HTMLButtonElement)
+    (within(engineering.closest<HTMLElement>("#chat-composer")!).getByRole("button", { name: "Send now" }) as HTMLButtonElement)
       .disabled,
   ).toBe(true);
   await userEvent.click(screen.getByRole("button", { name: "design-system" }));
@@ -76,9 +82,10 @@ it("does not send one channel’s draft to a newly selected channel", async () =
 it("sends formatted rich text from the gallery composer", async () => {
   render(<Conversation />);
   const editor = await screen.findByRole("textbox", { name: "Message design-system" });
-  await userEvent.click(screen.getByRole("button", { name: "Bold", exact: true }));
+  const composer = within(editor.closest<HTMLElement>("#chat-composer")!);
+  await userEvent.click(composer.getByRole("button", { name: "Bold", exact: true }));
   await userEvent.type(editor, "Formatted message");
-  await userEvent.click(screen.getByRole("button", { name: "Send now", exact: true }));
+  await userEvent.click(composer.getByRole("button", { name: "Send now", exact: true }));
   expect((await screen.findByText("Formatted message", { exact: true })).tagName).toBe("STRONG");
 });
 it("closes the origin thread when switching channels", async () => {
