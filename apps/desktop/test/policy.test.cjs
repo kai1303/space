@@ -62,3 +62,24 @@ test('desktop accepts only built-in chat providers and fixed-size pairing codes'
     assert.throws(() => validatePair(provider, code));
   }
 });
+
+test('desktop recovery only removes locks of exited workers in its own profile', async () => {
+  const { recoverStoppedWorker } = require('../src/runners.cjs');
+  const { mkdtempSync, rmSync, writeFileSync, existsSync } = require('node:fs');
+  const { spawn } = require('node:child_process');
+  const { once } = require('node:events');
+  const { tmpdir } = require('node:os');
+  const { join } = require('node:path');
+  const dir = mkdtempSync(join(tmpdir(), 'space-runner-lock-'));
+  const lock = join(dir, 'connector.lock');
+  try {
+    writeFileSync(lock, String(process.pid));
+    recoverStoppedWorker(dir);
+    assert.equal(existsSync(lock), true);
+    const child = spawn(process.execPath, ['-e', '']);
+    await once(child, 'close');
+    writeFileSync(lock, String(child.pid));
+    recoverStoppedWorker(dir);
+    assert.equal(existsSync(lock), false);
+  } finally { rmSync(dir, { recursive: true }); }
+});
