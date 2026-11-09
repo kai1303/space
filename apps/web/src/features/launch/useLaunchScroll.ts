@@ -82,17 +82,6 @@ export function useLaunchScroll() {
       gsap.from('.launch-intro h1, .launch-intro > p, .launch-intro .launch-actions', {
         y: 18, opacity: 0, stagger: .11, duration: .7, ease: 'power2.out',
       });
-      gsap.to('.launch-orbits', {
-        y: desktop ? 100 : 32, ease: 'none',
-        scrollTrigger: { trigger: page.querySelector('.launch-sky'), start: 'top top', end: 'bottom top', scrub: true },
-      });
-
-      // Measure the stationary section, so the frame's own transform cannot move its trigger.
-      gsap.from('.launch-frame', {
-        y: desktop ? 40 : 18,
-        transformPerspective: 1100, transformOrigin: '50% 0%', ease: 'none',
-        scrollTrigger: { trigger: page.querySelector('.launch-tour'), start: 'clamp(top bottom)', end: 'clamp(top 15%)', scrub: true },
-      });
 
       page.querySelectorAll<HTMLElement>('[data-scroll-example]').forEach(example => {
         gsap.from(example, {

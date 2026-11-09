@@ -1,3 +1,4 @@
+import { ConversationLinkLoading } from './shell/ConversationLinkLoading.js';
 import { lazy, Suspense } from 'react';
 const LaunchPage = lazy(() => import('../features/launch/LaunchPage.js').then(module => ({ default: module.LaunchPage })));
 
@@ -12,7 +13,7 @@ export function App() {
   const landingAnchor = ['', '#workspace', '#agents', '#connections', '#workflows', '#setup', '#toolkit', '#start', '#faq', '#launch-main'].includes(hash);
   const landing = pathname === '/' && !chatLink && landingAnchor;
   const chat = pathname === '/chat' || pathname.startsWith('/c/') || pathname.startsWith('/w/') || (pathname === '/' && chatLink);
-  return <Suspense fallback={<p role="status" className="sp-sr-only">Loading Space…</p>}>
+  return <Suspense fallback={pathname.startsWith('/c/') ? <ConversationLinkLoading /> : <p role="status" className="sp-sr-only">Loading Space…</p>}>
     {landing ? <LaunchPage /> : chat ? <Chat /> : pathname === '/workspace' ? <Preview /> : <Gallery />}
   </Suspense>;
 }

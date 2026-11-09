@@ -11,7 +11,7 @@ import { readWorkspacePreferences, joinDefaultChannels } from './workspace-setti
 import { database, type DbSession } from './database.js';
 import { requireWorkspaceAccess } from './access.js';
 import { page, canManage } from './membership.js';
-import { users as u, workspaces as w, workspaceMembers as m, channelMembers, agentInstallations, workspaceEvents } from './schema.js';
+import { users as u, workspaces as w, workspaceMembers as m, channels, channelMembers, agentInstallations, workspaceEvents } from './schema.js';
 
 const memberKey = (workspace: string, user: string) => and(eq(m.workspace_id, workspace), eq(m.user_id, user));
 const notFound = () => new AppError(404, 'not_found');
@@ -25,6 +25,14 @@ export class WorkspaceStore {
       if (!(await c.select({ id: u.id }).from(u).where(eq(u.id, uuid(actor)))).length) throw notFound();
       const [workspace] = await c.insert(w).values({ id: randomUUID(), ...request }).returning();
       await c.insert(m).values({ workspace_id: workspace!.id, user_id: actor, role: 'owner' });
+      const starterChannels = ['general', 'public'].map(name => ({
+        id: randomUUID(), workspace_id: workspace!.id, name, private: false, created_by: actor,
+      }));
+      await c.insert(channels).values(starterChannels);
+      const defaultIds = starterChannels.map(channel => channel.id);
+      await c.execute(sql`INSERT INTO workspace_preferences(workspace_id, default_channel_ids)
+        VALUES (${workspace!.id}, ${sql.param(defaultIds)}::uuid[])`);
+      await joinDefaultChannels(c, actor, workspace!.id);
       await this.audit(c, actor, workspace!.id, 'workspace.created', request);
       return { ...workspace!, primary_owner_id: actor, role: 'owner' as const };
     });

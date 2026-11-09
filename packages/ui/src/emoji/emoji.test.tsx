@@ -67,3 +67,18 @@ it('does not open a disabled picker and closes when it becomes disabled',async()
  rerender(<EmojiPicker disabled onSelect={()=>{}}/>);
  expect(screen.queryByRole('dialog',{name:'Choose emoji'})).toBeNull();
 });
+
+it('keeps keyboard focus on the selected category while switching tabs', async () => {
+  render(<EmojiPicker onSelect={() => {}} />);
+  await userEvent.click(screen.getByRole('button', { name: 'Choose emoji' }));
+  const flags = screen.getByRole('tab', { name: 'Flags' });
+  await userEvent.click(flags);
+  await userEvent.keyboard('{ArrowRight}');
+  const frequent = screen.getByRole('tab', { name: 'Frequently Used' });
+  expect(document.activeElement).toBe(frequent);
+  expect(frequent.getAttribute('aria-selected')).toBe('true');
+  expect(flags.tabIndex).toBe(-1);
+  await userEvent.keyboard('{End}');
+  expect(document.activeElement).toBe(flags);
+  expect(screen.getByRole('tabpanel', { name: 'Flags' })).toBeTruthy();
+});

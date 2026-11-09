@@ -1,3 +1,4 @@
+import { ConversationLinkLoading } from './shell/ConversationLinkLoading.js';
 import { HuddleProvider } from '../features/huddles/Huddles.js';
 import { CallingProvider } from '../features/calling/Calling.js';
 import { InviteAcceptance } from '../features/workspace/invitations/InviteAcceptance.js';
@@ -20,7 +21,7 @@ export function Chat() {
     window.addEventListener('space:session-expired', expired);
     return () => window.removeEventListener('space:session-expired', expired);
   }, [refetch]);
-  if (isPending) return <AccessLoading />;
+  if (isPending) return location.pathname.startsWith('/c/') ? <ConversationLinkLoading /> : <AccessLoading />;
   if (error) return <AccessFrame screen="session-error" title="Let’s try that again."><p role="alert">Cannot check your session. Please try again.</p><Button onClick={() => void refetch()}>Try again</Button></AccessFrame>;
   if (!session) return <AuthScreen />;
   const invitation = new URLSearchParams(window.location.search).get('invite');

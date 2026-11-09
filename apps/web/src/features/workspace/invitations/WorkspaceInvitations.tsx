@@ -1,9 +1,10 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { Tabs, Select, Button, Dialog, Badge } from '@space/ui/primitives';
 import type { InvitationList, InvitationResult, WorkspaceInvitation, ChannelSummary, InvitationGuestType } from '@space/contracts';
 import { request } from '../../../shared/api/request.js';
 import { subscribeUpdates } from '../../../shared/realtime/live-updates.js';
 import './workspace-invitations.css';
+import '../workspace-dialog-tabs.css';
 
 const messages:Record<string,string>={invitation_already_pending:'This email already has a pending invitation. Resend it from the list.',invitation_forbidden:'You do not have permission to manage this invitation.',invitation_channel_forbidden:'A selected channel is unavailable or you do not have permission to invite people to it.',invitation_unavailable:'This invitation is no longer available.',invitation_not_pending:'This invitation has already been accepted or revoked.',guest_channels_required:'Choose one channel for a single-channel guest, or at least one for a multi-channel guest.',idempotency_conflict:'This request has changed. Close this form and try again.'};
 export const invitationError=(error:unknown)=>error instanceof Error?messages[error.message]??error.message.replaceAll('_',' '):'Unable to update invitations. Try again.';
@@ -37,17 +38,20 @@ function InvitationManager({workspace,onClose}:Props){
   setNotice(result.invitation.delivery_status==='queued'?'Invitation created. Email delivery is queued.':result.invitation.delivery_status==='unavailable'?'Invitation created. Email delivery is not configured; share the link below with the intended recipient.':'Invitation link created.');
  });}
  async function resend(row:WorkspaceInvitation){await mutate(async()=>{const id=resends.current[row.id]??=crypto.randomUUID();const result=await request<InvitationResult>(`/workspaces/${workspace}/invitations/${row.id}/resend`,{request_id:id});if(!alive.current)return;delete resends.current[row.id];if(result.token){setTokens(old=>({...old,[row.id]:result.token!}));setLastLink({id:row.id,token:result.token});await copy(result.token);}setNotice(result.invitation.delivery_status==='queued'?'New invitation queued for email delivery. The previous link no longer works.':'Invitation renewed. Email delivery is unavailable; share the new link.');});}
+ const panelId=useId();
  const manager=data?.role==='owner'||data?.role==='admin';
  return <><Dialog open title="Invitations" description="Invite people to your workspace and manage pending invitations." onClose={onClose} onBeforeClose={()=>!mutation.current}>
-  <section className="workspace-invitations">
+  <section className="workspace-invitations workspace-dialog-tabs">
+   <Tabs label="Invitation views" value={tab} onChange={value=>{setTab(value as typeof tab);setCursor(undefined);setHistory([]);}} items={[{id:'pending',label:'Pending',panelId},{id:'accepted',label:'Accepted',panelId},{id:'links',label:'Invite links',panelId}]}/>
+   <div key={tab} id={panelId} role="tabpanel" aria-label={tab==='links'?'Invite links':tab==='accepted'?'Accepted':'Pending'} className="invitation-panel">
    <div className="invitation-toolbar"><Button variant="primary" disabled={busy||!data} onClick={()=>void openForm('email')}>Invite by email</Button><Button disabled={busy||!data} onClick={()=>void openForm('link')}>Create invite link</Button></div>
    {data&&!data.email_available&&<p className="invitation-note">Email delivery is not configured. You can create and share invitation links. Email invitations still require a verified account with the matching email address.</p>}
-   <Tabs label="Invitation views" value={tab} onChange={value=>{setTab(value as typeof tab);setCursor(undefined);setHistory([]);}} items={[{id:'pending',label:'Pending'},{id:'accepted',label:'Accepted'},{id:'links',label:'Invite links'}]}/>
    {tab==='pending'&&<label className="invitation-status-filter">Status<Select aria-label="Status" value={status} onChange={e=>{setStatus(e.target.value);setCursor(undefined);setHistory([]);}}><option value="pending">Pending</option><option value="expired">Expired</option><option value="revoked">Revoked</option></Select></label>}
    {error&&<p role="alert">{error} <Button size="sm" onClick={()=>void refresh()}>Retry</Button></p>}{notice&&<p role="status">{notice}</p>}
    {lastLink&&<label className="invitation-saved-link">Save this invitation link<input readOnly aria-label="New invitation link" value={`${window.location.origin}/chat?invite=${lastLink.token}`} onFocus={e=>e.target.select()}/><Button size="sm" onClick={()=>void copy(lastLink.token)}>Copy saved link</Button></label>}
    {loading&&<p role="status">Loading invitations…</p>}
    {!loading&&data&&<><div className="invitation-table"><table aria-label="Workspace invitations"><thead><tr><th>{tab==='links'?'Invite link':'Email address'}</th><th>Account type</th><th>Status</th><th>Expires</th><th>Actions</th></tr></thead><tbody>{data.items.map(row=><tr key={row.id}><td>{row.email??`Invite link · ${row.use_count}/${row.use_limit} used`}{row.kind==='email'&&<small>Email: {row.delivery_status==='unavailable'?'not configured':row.delivery_status}</small>}</td><td>{row.guest_type==='single'?'Single-channel guest':row.guest_type==='multi'?'Multi-channel guest':row.role==='admin'?'Admin':'Member'}</td><td><Badge tone={row.status==='accepted'?'success':'neutral'}>{row.status}</Badge></td><td>{new Date(row.expires_at).toLocaleDateString()}</td><td><div className="invitation-actions">{tokens[row.id]&&row.status==='pending'&&<Button size="sm" onClick={()=>void copy(tokens[row.id]!)}>Copy link</Button>}{row.kind==='email'&&['pending','expired'].includes(row.status)&&<Button size="sm" disabled={busy} onClick={()=>void resend(row)}>Resend</Button>}{row.status==='pending'&&<Button size="sm" disabled={busy} onClick={()=>setRevoke(row)}>Revoke</Button>}</div>{tokens[row.id]&&row.status==='pending'&&<input readOnly aria-label={`Invitation URL for ${row.email??row.id}`} value={`${window.location.origin}/chat?invite=${tokens[row.id]}`} onFocus={e=>e.target.select()}/>}</td></tr>)}</tbody></table></div>{!data.items.length&&<p className="invitation-empty">No {tab==='links'?'invite links':tab==='accepted'?'accepted invitations':`${status} invitations`}.</p>}<footer><Button size="sm" disabled={!history.length} onClick={()=>{setCursor(history.at(-1));setHistory(old=>old.slice(0,-1));}}>Previous</Button><Button size="sm" disabled={!data.next_cursor} onClick={()=>{setHistory(old=>[...old,cursor]);setCursor(data.next_cursor!);}}>Next</Button></footer></>}
+   </div>
   </section>
  </Dialog>
  {form&&<Dialog open title={kind==='email'?'Invite by email':'Create invite link'} onClose={()=>setForm(false)} onBeforeClose={()=>!mutation.current}><form className="invitation-form" onSubmit={e=>{e.preventDefault();void create();}}>

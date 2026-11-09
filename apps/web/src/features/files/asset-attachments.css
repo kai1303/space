@@ -8,9 +8,9 @@
 .asset-snippet{max-height:none;background:var(--sp-surface)}
 .asset-snippet pre{margin:0;padding:4px 12px 10px;font-family:var(--sp-font-mono,monospace);font-size:12px;line-height:1.5;white-space:pre-wrap;overflow-wrap:anywhere;display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;overflow:hidden;max-height:6em}
 .asset-open-preview{display:flex;align-items:center;justify-content:space-between;gap:8px;width:100%;border:0;border-top:1px solid var(--sp-border);padding:8px 12px;background:var(--sp-surface-raised);color:var(--sp-text-secondary);font:inherit;font-size:12px;cursor:pointer}.asset-open-preview:hover{color:var(--sp-text);background:var(--sp-surface)}.asset-open-preview:focus-visible{outline:2px solid var(--sp-accent);outline-offset:-2px}
-.sp-dialog[open]:has(.asset-text-preview),.sp-dialog[open]:has(.asset-viewer-fallback){width:min(920px,calc(100vw - 32px));height:fit-content;max-height:calc(100dvh - 32px)}
-.asset-viewer-content:has(.asset-text-preview){flex:0 1 auto;max-height:calc(100dvh - 240px)}
-.asset-viewer-content:has(.asset-viewer-fallback){min-height:200px}
-@media(max-width:600px){.sp-dialog[open]:has(.asset-text-preview),.sp-dialog[open]:has(.asset-viewer-fallback){width:calc(100vw - 16px);max-height:calc(100dvh - 16px);border-radius:8px}.asset-viewer-content:has(.asset-text-preview){max-height:calc(100dvh - 220px)}}
+.sp-dialog[open]:has(> .asset-viewer--single :is(.asset-text-preview, .asset-viewer-fallback)){width:min(920px,calc(100vw - 32px));height:fit-content;max-height:calc(100dvh - 32px)}
+.asset-viewer--single > .asset-viewer-content:has(.asset-text-preview){flex:0 1 auto;max-height:calc(100dvh - 240px)}
+.asset-viewer--single > .asset-viewer-content:has(.asset-viewer-fallback){min-height:200px}
+@media(max-width:600px){.sp-dialog[open]:has(> .asset-viewer--single :is(.asset-text-preview, .asset-viewer-fallback)){width:calc(100vw - 16px);max-height:calc(100dvh - 16px);border-radius:8px}.asset-viewer--single > .asset-viewer-content:has(.asset-text-preview){max-height:calc(100dvh - 220px)}}
 
-.sp-dialog:has(.asset-text-preview)>.asset-viewer,.sp-dialog:has(.asset-viewer-fallback)>.asset-viewer{flex:0 1 auto}
+.asset-viewer--single:has(.asset-text-preview, .asset-viewer-fallback){flex:0 1 auto}

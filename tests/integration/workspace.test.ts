@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import { Pool } from 'pg';
+import type { ChannelSummary } from '@space/contracts';
 import { migrate } from '@space/postgres/migrate';
 import { bootstrap } from '@space/postgres/bootstrap';
 import { PostgresStore } from '@space/postgres/store';
@@ -83,6 +84,22 @@ test('create/list/read/rename workspaces with cursor pagination and tenant isola
   assert.equal(second.next_cursor, null);
   await api(a.token, 'GET', '/workspaces?limit=101', undefined, 400);
   await api(a.token, 'GET', '/workspaces?after=bad', undefined, 400);
+});
+
+test('new workspaces start with public general and public channels for the owner and new full members', async () => {
+  const a = await fixture();
+  const workspace = await api(a.token, 'POST', '/workspaces', { name: 'New team' }, 201);
+  const path = `/workspaces/${workspace.id}`;
+  const { items }: { items: ChannelSummary[] } = await api(a.token, 'GET', `${path}/channels`);
+  assert.deepEqual(items.map(channel => channel.name).sort(), ['general', 'public']);
+  assert.ok(items.every(channel => channel.joined && !channel.private && channel.created_by === a.owner_id));
+
+  const settings = await api(a.token, 'GET', `${path}/settings`);
+  assert.deepEqual(new Set(settings.default_channel_ids), new Set(items.map(channel => channel.id)));
+  await api(a.token, 'POST', `${path}/members`, { user_id: a.collaborator_id, role: 'member' }, 201);
+  const memberChannels = await api(a.collaborator_token, 'GET', `${path}/channels`);
+  assert.deepEqual(memberChannels.items, items);
+  assert.deepEqual((await api(a.token, 'GET', `${a.path}/settings`)).default_channel_ids, []);
 });
 
 test('roles restrict member management; outsiders cannot read directory or add themselves', async () => {

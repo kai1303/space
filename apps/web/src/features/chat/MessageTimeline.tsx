@@ -6,11 +6,12 @@ import type { ChatEvent, MessagePage } from '@space/contracts';
 import type { HistoryDirection } from './history-window.js';
 
 export type TimelineHandle = { reveal: (id: string) => void };
-export function MessageTimeline({ label, items, page, loading, latestVersion, load, pinned, handle, render, children, header, trailing, footer, busy, onAtEndChange, role, hidden }: {
-  label: string; items: ChatEvent[]; page: Pick<MessagePage,'has_older'|'has_newer'> | null; loading: HistoryDirection | null;
+type TimelineItem = ChatEvent | { id: string; messageId?: string };
+export function MessageTimeline<T extends TimelineItem>({ label, items, page, loading, latestVersion, load, pinned, handle, render, children, header, trailing, footer, busy, onAtEndChange, role, hidden }: {
+  label: string; items: T[]; page: Pick<MessagePage,'has_older'|'has_newer'> | null; loading: HistoryDirection | null;
   latestVersion: number; load: (direction: HistoryDirection) => unknown;
   pinned: RefObject<boolean>; handle?: RefObject<TimelineHandle | null>;
-  render: (event: ChatEvent, index: number) => ReactNode; children?: ReactNode; header?: ReactNode; trailing?: ReactNode; footer?: ReactNode; busy?: boolean;
+  render: (event: T, index: number) => ReactNode; children?: ReactNode; header?: ReactNode; trailing?: ReactNode; footer?: ReactNode; busy?: boolean;
   onAtEndChange?: (atEnd: boolean) => void; role?: 'log'; hidden?: boolean;
 }) {
   const element = useRef<HTMLDivElement>(null), lastOffset = useRef(0);
@@ -27,6 +28,7 @@ export function MessageTimeline({ label, items, page, loading, latestVersion, lo
     getItemKey: index => {
       if (headerCount && index === 0) return 'header';
       const item = items[index - headerCount]!;
+      if ('id' in item) return item.id;
       return item.type === 'message.created' ? `message:${item.payload.id}` : `event:${item.sequence}`;
     },
     estimateSize: () => 100, overscan: 6, paddingStart: page?.has_older ? 44 : footer ? 16 : 10, paddingEnd: page?.has_newer ? 44 : 16,
@@ -64,7 +66,7 @@ export function MessageTimeline({ label, items, page, loading, latestVersion, lo
   useLayoutEffect(() => {
     if (!handle) return;
     handle.current = { reveal: id => {
-      const index = items.findIndex(event => event.type === 'message.created' && event.payload.id === id);
+      const index = items.findIndex(item => 'id' in item ? item.messageId === id : item.type === 'message.created' && item.payload.id === id);
       if (index < 0) return;
       virtualizer.scrollToIndex(index + headerCount, { align: 'center' });
       requestAnimationFrame(() => document.getElementById(`chat-message-${id}`)?.focus({ preventScroll: true }));

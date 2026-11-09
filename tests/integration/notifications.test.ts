@@ -114,12 +114,33 @@ test('reactions notify the original human once per reactor and emoji despite ret
  const result=await activity(a,a.owner_token);assert.equal(result.items.length,1);assert.equal(result.items[0].kind,'reaction');assert.equal(result.items[0].emoji,'👍');assert.equal(result.items[0].author_name,'Demo collaborator');
 });
 test('preferences default safely, share legacy pause, retain paused unread and all-mode root activity',async()=>{
- const a=await bootstrap(pool);assert.deepEqual(await api(a.collaborator_token,'GET',`/workspaces/${a.workspace_id}/notification-settings`),{mode:'mentions',desktop_enabled:false,preview_enabled:false,thread_replies:true,paused_until:null});
+ const a=await bootstrap(pool);assert.deepEqual(await api(a.collaborator_token,'GET',`/workspaces/${a.workspace_id}/notification-settings`),{mode:'mentions',desktop_enabled:false,sound_enabled:false,preview_enabled:false,thread_replies:true,paused_until:null});
  const pause=new Date(Date.now()+3600000).toISOString();await settings(a,{mode:'all',desktop_enabled:true,paused_until:pause});
  await send(a);const result=await activity(a);assert.equal(result.items[0].kind,'channel_message');assert.equal(result.items[0].silent,true);assert.equal(result.unread_count,1);assert.equal((await claim(a,result.items[0].id)).deliver,false);
  assert.equal(new Date((await api(a.collaborator_token,'GET',`/workspaces/${a.workspace_id}/mention-settings`)).paused_until).toISOString(),pause);
  await settings(a,{paused_until:null,mode:'none'});await send(a,'@Demo collaborator hello',{document:mention(a.collaborator_id)});assert.equal((await activity(a)).items[0].silent,true);
 });
+test('sound claims are opt-in, independent of banners, and deduplicated across clients', async () => {
+ const a = await bootstrap(pool);
+ const sound = (id:string) => api(a.collaborator_token,'POST',`/workspaces/${a.workspace_id}/notifications/${id}/claim`,{ channel:'sound' });
+ await settings(a, {mode:'all', sound_enabled:true});
+ await send(a);
+ let page = await activity(a);
+ assert.equal(page.sound_enabled, true);
+ const id = page.items[0].id;
+ assert.equal((await claim(a,id)).deliver, false);
+ const results = await Promise.all([sound(id), sound(id), sound(id)]);
+ assert.equal(results.filter(r => r.deliver).length, 1);
+ await settings(a, {desktop_enabled:true});
+ assert.equal((await claim(a,id)).deliver, true);
+ await send(a);
+ page = await activity(a);
+ await settings(a,{sound_enabled:false});
+ assert.equal((await sound(page.items[0].id)).deliver,false);
+ assert.equal((await activity(a)).sound_enabled,false);
+ assert.equal((await claim(a,page.items[0].id)).deliver,true);
+});
+
 test('read watermark excludes a later arrival; unread filters retain the global count and watermark',async()=>{
  const a=await bootstrap(pool);await settings(a,{mode:'all'});await send(a,'First');const first=await activity(a);await send(a,'Second');
  await api(a.collaborator_token,'POST',`/workspaces/${a.workspace_id}/notifications/read`,{through:first.latest_id});

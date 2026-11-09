@@ -8,7 +8,7 @@ import { sessionTransaction } from './session-concurrency.js';
 type Channel = { id: string; workspace_id: string; kind: 'channel' | 'direct' };
 async function rows<T>(c: DbSession, query: Parameters<DbSession['execute']>[0]): Promise<T[]> { return (await c.execute(query)).rows as T[]; }
 const missing = () => new AppError(404, 'not_found');
-const defaults: NotificationSettings = { mode: 'mentions', desktop_enabled: false, preview_enabled: false, thread_replies: true, paused_until: null };
+const defaults: NotificationSettings = { mode: 'mentions', desktop_enabled: false, sound_enabled: false, preview_enabled: false, thread_replies: true, paused_until: null };
 function booleanInput(input: unknown, key: string) {
   const value = record(input, [key])[key];
   if (typeof value !== 'boolean') throw new AppError(400, 'invalid_boolean');
@@ -72,7 +72,8 @@ export class NotificationStore {
       const items = await rows<NotificationItem>(c, sql`SELECT ${selection} FROM ${sources}
         WHERE ${scope(actor, workspace)} AND (${before}::bigint IS NULL OR n.id<${before}::bigint) AND (${filter}) AND (${v.unread === 'true'}=false OR n.read_at IS NULL)
         ORDER BY n.id DESC LIMIT 51`);
-      const [totals] = await rows<{ unread_count: number; latest_id: string }>(c, sql`SELECT count(*) FILTER(WHERE n.read_at IS NULL)::int AS unread_count,coalesce(max(n.id),0)::text AS latest_id
+      const [totals] = await rows<Pick<NotificationActivity, 'unread_count' | 'latest_id' | 'sound_enabled'>>(c, sql`SELECT count(*) FILTER(WHERE n.read_at IS NULL)::int AS unread_count,coalesce(max(n.id),0)::text AS latest_id,
+        coalesce((SELECT sound_enabled FROM mention_preferences WHERE user_id=${actor}),false) AS sound_enabled
         FROM notifications n WHERE ${scope(actor, workspace)}`);
       return { items: items.slice(0, 50), ...totals!, next_cursor: items.length > 50 ? items[49]!.id : null };
     }, { isolationLevel: 'repeatable read', accessMode: 'read only' });
@@ -101,7 +102,7 @@ export class NotificationStore {
   }
 
   private async preferences(c: DbSession, actor: string): Promise<NotificationSettings> {
-    return (await rows<NotificationSettings>(c, sql`SELECT mode,desktop_enabled,preview_enabled,thread_replies,paused_until FROM mention_preferences WHERE user_id=${actor}`))[0] ?? { ...defaults };
+    return (await rows<NotificationSettings>(c, sql`SELECT mode,desktop_enabled,sound_enabled,preview_enabled,thread_replies,paused_until FROM mention_preferences WHERE user_id=${actor}`))[0] ?? { ...defaults };
   }
   async settings(actor: string, workspace: string): Promise<NotificationSettings> {
     return this.db.transaction(async c => {
@@ -110,33 +111,38 @@ export class NotificationStore {
     }, { isolationLevel: 'repeatable read', accessMode: 'read only' });
   }
   async updateSettings(actor: string, workspace: string, input: unknown) {
-    const v = record(input, ['mode', 'desktop_enabled', 'preview_enabled', 'thread_replies', 'paused_until']);
+    const v = record(input, ['mode', 'desktop_enabled', 'sound_enabled', 'preview_enabled', 'thread_replies', 'paused_until']);
     if (!Object.keys(v).length) throw new AppError(400, 'empty_update');
     if ('mode' in v && (typeof v.mode !== 'string' || !['mentions', 'all', 'none'].includes(v.mode))) throw new AppError(400, 'invalid_mode');
-    for (const key of ['desktop_enabled', 'preview_enabled', 'thread_replies']) if (key in v && typeof v[key] !== 'boolean') throw new AppError(400, 'invalid_boolean');
+    for (const key of ['desktop_enabled', 'sound_enabled', 'preview_enabled', 'thread_replies']) if (key in v && typeof v[key] !== 'boolean') throw new AppError(400, 'invalid_boolean');
     if ('paused_until' in v && v.paused_until !== null && (typeof v.paused_until !== 'string' || !Number.isFinite(Date.parse(v.paused_until)) || Date.parse(v.paused_until) <= Date.now() || Date.parse(v.paused_until) > Date.now() + 7 * 86400000)) throw new AppError(400, 'invalid_pause');
     return sessionTransaction(this.db, async c => {
       await requireWorkspaceAccess(c, actor, uuid(workspace));
       const next = { ...await this.preferences(c, actor), ...v } as NotificationSettings;
-      await c.execute(sql`INSERT INTO mention_preferences(user_id,mode,desktop_enabled,preview_enabled,thread_replies,paused_until)
-        VALUES(${actor},${next.mode},${next.desktop_enabled},${next.preview_enabled},${next.thread_replies},${next.paused_until}::timestamptz)
-        ON CONFLICT(user_id) DO UPDATE SET mode=EXCLUDED.mode,desktop_enabled=EXCLUDED.desktop_enabled,preview_enabled=EXCLUDED.preview_enabled,thread_replies=EXCLUDED.thread_replies,paused_until=EXCLUDED.paused_until`);
+      await c.execute(sql`INSERT INTO mention_preferences(user_id,mode,desktop_enabled,sound_enabled,preview_enabled,thread_replies,paused_until)
+        VALUES(${actor},${next.mode},${next.desktop_enabled},${next.sound_enabled},${next.preview_enabled},${next.thread_replies},${next.paused_until}::timestamptz)
+        ON CONFLICT(user_id) DO UPDATE SET mode=EXCLUDED.mode,desktop_enabled=EXCLUDED.desktop_enabled,sound_enabled=EXCLUDED.sound_enabled,preview_enabled=EXCLUDED.preview_enabled,thread_replies=EXCLUDED.thread_replies,paused_until=EXCLUDED.paused_until`);
       return this.preferences(c, actor);
     });
   }
 
   async claim(actor: string, workspace: string, id: string, input: unknown): Promise<{ deliver: boolean; notification?: NotificationItem; preview_enabled?: boolean }> {
-    record(input, []); id = chatCursor(id);
+    const { channel = 'desktop' } = record(input, ['channel']);
+    if (channel !== 'desktop' && channel !== 'sound') throw new AppError(400, 'invalid_channel');
+    const claimedAt = channel === 'sound' ? sql`sound_claimed_at` : sql`claimed_at`;
+    const enabled = channel === 'sound' ? sql`p.sound_enabled` : sql`p.desktop_enabled`;
+    id = chatCursor(id);
     return sessionTransaction(this.db, async c => {
       await requireWorkspaceAccess(c, actor, uuid(workspace));
-      const result = await c.execute(sql`UPDATE notifications n SET claimed_at=now() FROM mention_preferences p
+      const result = await c.execute(sql`UPDATE notifications n SET ${claimedAt}=now() FROM mention_preferences p
         WHERE n.id=${id}::bigint AND ${scope(actor, workspace)} AND p.user_id=n.user_id
           AND EXISTS(SELECT 1 FROM channel_members cm WHERE cm.channel_id=n.channel_id AND cm.user_id=n.user_id)
-          AND n.claimed_at IS NULL AND n.read_at IS NULL AND NOT n.silent AND n.created_at>=now()-interval '2 minutes'
-          AND p.desktop_enabled AND p.mode<>'none' AND (p.paused_until IS NULL OR p.paused_until<=now())
+          AND ${claimedAt} IS NULL AND n.read_at IS NULL AND NOT n.silent AND n.created_at>=now()-interval '2 minutes'
+          AND ${enabled} AND p.mode<>'none' AND (p.paused_until IS NULL OR p.paused_until<=now())
           AND (n.kind<>'thread_reply' OR p.thread_replies) AND (n.kind<>'channel_message' OR p.mode='all')
         RETURNING n.id`);
       if (!result.rows.length) return { deliver: false };
+      if (channel === 'sound') return { deliver: true };
       const [notification] = await rows<NotificationItem>(c, sql`SELECT ${selection} FROM ${sources} WHERE n.id=${id}::bigint AND ${scope(actor, workspace)}`);
       return { deliver: true, notification: notification!, preview_enabled: (await this.preferences(c, actor)).preview_enabled };
     });

@@ -1,0 +1,25 @@
+.sp-dialog[open]:has(> .workspace-dialog-tabs) {
+  display: flex;
+  flex-direction: column;
+  height: min(85dvh, 820px);
+  max-height: calc(100dvh - 32px);
+}
+
+.workspace-dialog-tabs {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.workspace-dialog-tabs > .sp-tabs {
+  flex: none;
+}
+
+.workspace-dialog-tabs > [role="tabpanel"] {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}

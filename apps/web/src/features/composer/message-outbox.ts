@@ -108,7 +108,7 @@ export class MessageOutbox {
     return entry;
   }
 
-  async send(id: string, socket: Socket | undefined, broadcastConfirmed = false): Promise<ChatMessage | undefined> {
+  async send(id: string, socket: Socket | undefined, broadcastConfirmed = false, onDelivered?: (message: ChatMessage) => void): Promise<ChatMessage | undefined> {
     const entry = this.entries.find(row => row.id === id);
     if (!entry || cancelling(entry) || this.sending.has(id) || (entry.error === confirmationRequired && !broadcastConfirmed)) return;
     this.sending.add(id);
@@ -121,7 +121,9 @@ export class MessageOutbox {
       const saved = await sendMessage(socket, attempt.channelId, attempt.threadId, id, content, attempt.broadcastConfirmed);
       if (!this.entries.includes(attempt)) return;
       if (!this.matches(attempt, saved)) throw new Error(unconfirmed);
-      this.remove(row => row === attempt);
+      // Hand off to history before notifying subscribers that the pending row is gone.
+      try { onDelivered?.(saved); }
+      finally { this.remove(row => row === attempt); }
       return saved;
     } catch (reason) {
       if (this.entries.includes(attempt)) {

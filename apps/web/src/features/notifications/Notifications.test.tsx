@@ -75,3 +75,26 @@ it('uses arrow Home and End keys with a single Activity tab stop',async()=>{
  await userEvent.keyboard('{End}');expect(document.activeElement).toBe(screen.getByRole('tab',{name:'Reactions',exact:true}));
  await userEvent.keyboard('{Home}');expect(document.activeElement).toBe(all);
 });
+
+it('saves the sound toggle independently of desktop alerts and restores it when reopened', async () => {
+ let sound = false;
+ fake((_path, init) => {
+   if (init?.method === 'PATCH') {
+     const patch = JSON.parse(String(init.body));
+     expect(patch).toEqual({ sound_enabled: !sound });
+     sound = patch.sound_enabled;
+   }
+   return { ...settings, sound_enabled: sound };
+ });
+ const open = () => render(<NotificationPreferences workspace="workspace" onClose={() => {}}/>);
+ const checkbox = () => screen.findByRole<HTMLInputElement>('checkbox', { name: 'Play a sound for notifications' });
+ const first = open();
+ expect((await checkbox()).checked).toBe(false);
+ await userEvent.click(await checkbox());
+ await waitFor(() => expect(sound).toBe(true));
+ first.unmount();
+ open();
+ expect((await checkbox()).checked).toBe(true);
+ await userEvent.click(await checkbox());
+ await waitFor(() => expect(sound).toBe(false));
+});

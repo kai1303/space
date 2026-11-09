@@ -1,6 +1,7 @@
+import { readChatTheme } from './chat-theme.js';
 import {useNotificationDelivery} from '../../features/notifications/Notifications.js';
 import type {NotificationItem} from '@space/contracts';
-import { useEffect, useId, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useId, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { AnimatePresence, LayoutGroup, motion, useReducedMotion } from 'motion/react';
 import { IconButton, Menu } from '@space/ui/primitives';
 import { NavigationIcon } from '@space/ui/navigation';
@@ -52,11 +53,8 @@ export function ChatShell({ notificationDelivery, onNavigate, activeDestination,
   useEffect(() => { setSidebarOpen(false); }, [activeDestination, activityActive, directMessagesActive]);
   const menu = useRef<HTMLDivElement>(null);
   function openSearch() { setSidebarOpen(false); onSearch?.(); }
-  const [theme, setTheme] = useState(() => {
-    try { return window.localStorage.getItem('space-theme') === 'light' ? 'light' : 'dark'; }
-    catch { return 'dark'; }
-  });
-  useEffect(() => {
+  const [theme, setTheme] = useState(readChatTheme);
+  useLayoutEffect(() => {
     document.documentElement.dataset.theme = theme;
     try { window.localStorage.setItem('space-theme', theme); } catch {}
   }, [theme]);

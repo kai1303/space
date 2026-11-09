@@ -7,6 +7,7 @@ import { ChatCircle, MagnifyingGlass, PencilSimple } from '@phosphor-icons/react
 import { request } from '../../shared/api/request.js';
 import { subscribeUpdates } from '../../shared/realtime/live-updates.js';
 import { useWorkspaceUnread } from '../notifications/useWorkspaceUnread.js';
+import { ConversationLoading } from '../chat/ConversationLoading.js';
 import { ConversationComposer, ConversationHeader } from '../chat/ThreadConversation.js';
 import type { RichDocument } from '@space/ui/rich-text';
 import type { DirectView } from './view-state.js';
@@ -94,6 +95,8 @@ export function DirectMessages({ workspace, viewer, requestedId, compose = 0, wi
   const [unreads, setUnreads] = useState(view.current.unreads), [selected, setSelected] = useState<DirectMessageSummary>();
   const [newOpen, setNewOpen] = useState(Boolean(compose)), [error, setError] = useState('');
   const [mobileConversation, setMobileConversation] = useState(false);
+  const [openingId, setOpeningId] = useState(requestedId);
+  const openingConversation = !!requestedId && openingId === requestedId;
   useLayoutEffect(()=>{view.current={...view.current,query,after,unreads};},[view,query,after,unreads]);
   const composeKey = `new-direct:${workspace}`, localDraft = useRef<RichDocument>(drafts[composeKey] ?? { ops: [] });
   function saveNewDraft(document: RichDocument) { localDraft.current = document; onDraftChange?.(composeKey, document); }
@@ -118,11 +121,13 @@ export function DirectMessages({ workspace, viewer, requestedId, compose = 0, wi
   useEffect(() => { onSearchAvailabilityChange?.(!!selected && !newOpen); return () => onSearchAvailabilityChange?.(false); }, [selected?.id, newOpen, onSearchAvailabilityChange]);
   function choose(dm: DirectMessageSummary, focusComposer = false) { selectedId.current = dm.id; setSelected(dm); setError(''); setNewOpen(false); setMobileConversation(true); visit.current(dm); requestAnimationFrame(() => (focusComposer ? document.querySelector<HTMLElement>('#chat-messages .ql-editor[contenteditable=true]') ?? document.querySelector<HTMLElement>('#chat-messages') : document.querySelector<HTMLElement>('#chat-messages'))?.focus()); }
   useEffect(() => {
-    if (!requestedId || requestedId === selectedId.current) return;
+    if (!requestedId || requestedId === selectedId.current) { setOpeningId(undefined); return; }
+    setOpeningId(requestedId);
     let current = true;
     void request<DirectMessageSummary>(`/channels/${requestedId}`).then(dm => {
       if (current && dm.kind === 'direct') choose(dm);
-    }).catch(reason => { if (current) setError(errorText(reason)); });
+    }).catch(reason => { if (current) setError(errorText(reason)); })
+      .finally(() => { if (current) setOpeningId(undefined); });
     return () => { current = false; };
   }, [requestedId]);
   // Authorization and profile changes are rechecked even when the selected DM is off the current inbox page.
@@ -150,7 +155,7 @@ export function DirectMessages({ workspace, viewer, requestedId, compose = 0, wi
     } catch (reason) { if (active.current) setError(errorText(reason)); }
   }
   const items = list.items.filter(dm => !unreads || (unread.channels.find(item => item.channel_id === dm.id)?.unread_count ?? 0) > 0);
-  return <div className={`chat-layout dm-layout${newOpen || (mobileConversation && selected) ? ' dm-layout--conversation' : ''}`} style={{ '--chat-sidebar-width': `${width}px` } as CSSProperties}>
+  return <div className={`chat-layout dm-layout${newOpen || openingConversation || (mobileConversation && selected) ? ' dm-layout--conversation' : ''}`} style={{ '--chat-sidebar-width': `${width}px` } as CSSProperties}>
     <aside ref={sidebar} onScroll={event=>{view.current.scroll=event.currentTarget.scrollTop;}} id="chat-conversations" className="chat-sidebar dm-inbox" aria-label="Direct messages">
       <header className="dm-heading"><h2>Direct messages</h2><label className="dm-unreads">Unreads<input type="checkbox" role="switch" checked={unreads} onChange={event => { setUnreads(event.target.checked); setAfter(''); }} /></label><IconButton label="New message" onClick={() => setNewOpen(true)}><PencilSimple size={20} /></IconButton></header>
       <div className="dm-filter"><MagnifyingGlass size={17} /><input type="search" aria-label="Find a DM" placeholder="Find a DM…" maxLength={100} value={query} onChange={event => { setQuery(event.target.value); setAfter(''); }} /></div>
@@ -165,7 +170,7 @@ export function DirectMessages({ workspace, viewer, requestedId, compose = 0, wi
       <div className="dm-pages">{after && <Button size="sm" onClick={() => setAfter('')}>Back to newest</Button>}{list.next && <Button size="sm" onClick={() => setAfter(list.next!)}>More conversations</Button>}</div>
     </aside>
     <div className="dm-room">{(selected || newOpen) && <button className="dm-back" onClick={cancelNewMessage}>← All direct messages</button>}{error && <p role="alert" className="dm-error">{error}</p>}
-      {newOpen ? <NewDirectMessage workspace={workspace} viewer={viewer} defaultValue={localDraft.current} onDraftChange={saveNewDraft} onClose={cancelNewMessage} onOpen={openNewMessage} /> : selected ? renderConversation(selected, { close, change: setSelected, readState: unread.channels.find(item => item.channel_id === selected.id) }) : <main id="chat-messages" className="chat-empty" tabIndex={-1}><div className="chat-empty-icon"><ChatCircle size={36} /></div><h1>A conversation starts here</h1><p>Choose a direct message or start a new one.</p><Button variant="primary" onClick={() => setNewOpen(true)}>New message</Button></main>}
+      {newOpen ? <NewDirectMessage workspace={workspace} viewer={viewer} defaultValue={localDraft.current} onDraftChange={saveNewDraft} onClose={cancelNewMessage} onOpen={openNewMessage} /> : openingConversation ? <ConversationLoading /> : selected ? renderConversation(selected, { close, change: setSelected, readState: unread.channels.find(item => item.channel_id === selected.id) }) : <main id="chat-messages" className="chat-empty" tabIndex={-1}><div className="chat-empty-icon"><ChatCircle size={36} /></div><h1>A conversation starts here</h1><p>Choose a direct message or start a new one.</p><Button variant="primary" onClick={() => setNewOpen(true)}>New message</Button></main>}
     </div>
   </div>;
 }

@@ -22,7 +22,7 @@ export function AgentMarkdown({ text }: { text: string }) {
   return <div className="sp-agent-markdown"><Markdown remarkPlugins={[remarkGfm]} skipHtml urlTransform={url => safeLink(url) ?? ''} components={markdownComponents}>{text}</Markdown></div>;
 }
 
-export function AgentResponse({ response, streaming = false, fallback }: { response: Response; streaming?: boolean; fallback?: string }) {
+export function AgentResponse({ response, streaming = false, showActivity = true, fallback }: { response: Response; streaming?: boolean; showActivity?: boolean; fallback?: string }) {
   const messages = new Map(response.messages.map(message => [message.id, message]));
   const tools = new Map(response.tools.map(tool => [tool.id, tool]));
   const items = response.items ?? [...response.tools.map(tool => ({ type: 'tool' as const, id: tool.id })), ...response.messages.map(message => ({ type: 'message' as const, id: message.id }))];
@@ -58,6 +58,6 @@ export function AgentResponse({ response, streaming = false, fallback }: { respo
         <caption>{component.title}</caption><thead><tr>{component.columns.map((column, index) => <th key={index} scope="col">{column}</th>)}</tr></thead>
         <tbody>{component.rows.map((row, index) => <tr key={index}>{row.map((cell, column) => <td key={column}>{cell}</td>)}</tr>)}</tbody>
       </table></div>)}
-    {streaming && <p className="sp-agent-streaming" role="status">{response.step ?? ({working:'Working…',thinking:'Thinking…',responding:'Responding…',using_tools:'Using tools…'}[response.activity ?? 'responding'])}</p>}
+    {streaming && showActivity && <p className="sp-agent-streaming" role="status">{response.step ?? ({working:'Working…',thinking:'Thinking…',responding:'Responding…',using_tools:'Using tools…'}[response.activity ?? 'responding'])}</p>}
   </div>;
 }

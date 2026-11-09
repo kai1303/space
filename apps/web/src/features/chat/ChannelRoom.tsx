@@ -8,7 +8,7 @@ import type { Snapshot } from '../../shared/ui/view-state.js';
 import type { ConversationView } from './view-state.js';
 import { useStarredChannels } from '../channels/useStarredChannels.js';
 import { ThreadNotificationToggle } from '../notifications/Notifications.js';
-import { ConversationHeader, ConversationComposer, ConversationMessage, ConversationNavigation, ConversationIntroduction } from './ThreadConversation.js';
+import { ConversationHeader, ConversationComposer, ConversationMessage, continuesMessageGroup, ConversationNavigation, ConversationIntroduction } from './ThreadConversation.js';
 import { AgentSessions } from '../agents/AgentSessions.js';
 import { TypingIndicator, useTypingPublisher } from './typing.js';
 import { acquireRealtime } from '../../shared/realtime/socket-session.js';
@@ -16,6 +16,7 @@ import { MentionDetails, useMentionSearch } from "../mentions/Mentions.js";
 import { NavigatorSettings, NavigatorSuggestions, agentMention } from '../agents/Navigator.js';
 import { MessageTimeline, type TimelineHandle } from './MessageTimeline.js';
 import { useMessageHistory } from './useMessageHistory.js';
+import { ConversationPanelDivider } from './ConversationPanelDivider.js';
 import { useConversationPanels } from './useConversationPanels.js';
 import { useChannelRead } from './useChannelRead.js';
 import { ChannelFiles } from '../files/ChannelFiles.js';
@@ -28,7 +29,7 @@ import type { Socket } from 'socket.io-client';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import type { ChannelUnread, MentionReference, NavigatorCandidate, ChatEvent, ChatHistory, ChatMessage, DirectMessageSummary } from '@space/contracts';
 import { Avatar, Button, Dialog, IconButton, Menu, SidePanel } from '@space/ui/primitives';
-import { Message, ConversationHeading, ConversationDateDivider, useMessageArrivals } from '@space/ui/conversation';
+import { ConversationHeading, ConversationDateDivider, useMessageArrivals } from '@space/ui/conversation';
 import { MessageSearch } from '../search/MessageSearch.js';
 import { motionTransition } from '@space/ui/motion';
 import { type RichDocument } from '@space/ui/rich-text';
@@ -36,16 +37,16 @@ import { Archive, BookOpen, ChatCircle, DotsThree, Hash, Lock, MagnifyingGlass, 
 import { socketCommand as command } from '../../shared/realtime/socket-command.js';
 import { mergeEvents } from './merge-events.js';
 import { getMessageOutbox, type OutboxEntry } from '../composer/message-outbox.js';
-import { OutgoingMessages } from '../composer/OutgoingMessages.js';
+import { OutgoingMessage, OutgoingMessages, useOutgoingMessages } from '../composer/OutgoingMessages.js';
 import type { Attachment } from '@space/ui/rich-text';
 import { request } from '../../shared/api/request.js';
 import type { ChannelSummary as Channel } from '@space/contracts';
 import type { Profile } from '../profile/profile-types.js';
 import { errorText } from '../../shared/api/error-text.js';
+import { ConversationLoadingStatus } from './ConversationLoading.js';
 import { ConversationSkeleton } from './ConversationSkeleton.js';
 import { ThreadHistory } from './ThreadHistory.js';
 import { ThreadComposer } from '../composer/ThreadComposer.js';
-import { TaskActivity } from '../agents/TaskActivity.js';
 import { type UploadDrafts } from '../composer/useAttachmentUploads.js';
 
 export function ChannelRoom({ viewState, requestedThread, onCloseDirect, readState, uploads, profile, channel, onChannelChange, onLeft, drafts, onDraftChange, onAccessLost, searchOpen, onSearchClose, composeRequest, mentionTarget, onMentionOpened }: { viewState?:Snapshot<ConversationView>; requestedThread?: string; onCloseDirect?: () => void; readState?: ChannelUnread; uploads: UploadDrafts; profile: Profile; channel: Channel; onChannelChange: (channel: Channel) => void; onLeft: () => void; drafts: Record<string, RichDocument>; onDraftChange: (key: string, document: RichDocument) => void; onAccessLost: () => void; searchOpen: boolean; onSearchClose: () => void; composeRequest: number; mentionTarget?: string; onMentionOpened: () => void }) {
@@ -206,7 +207,21 @@ export function ChannelRoom({ viewState, requestedThread, onCloseDirect, readSta
   const readError = useChannelRead(channel.id, history.page?.newer_cursor ?? '0', readState?.last_read_sequence,
     historyLoaded && ready && !history.loading && !history.page?.has_newer && atEnd && !searchOpen && !channelSearchOpen && !filesOpen && !sourceId && !detailsOpen && !memoryOpen && !selectedMention && !profiles?.selected && !(compact && sessionOpen) && !sidekick);
   const firstUnread = entryRead.current === undefined ? undefined : messages.find(message => message.author.id !== profile.id && BigInt(message.sequence ?? '0') > BigInt(entryRead.current!))?.id;
-  const arrivals = useMessageArrivals(messages, historyLoaded && !history.loading ? channel.id : null);
+  const [sendVersion, setSendVersion] = useState(0);
+  const pending = useOutgoingMessages({ outbox, profile, channel: channel.id, history: messages });
+  const ownAuthor = { kind: 'human' as const, id: profile.id, name: profile.display_name };
+  const rows = [
+    ...messages.map(message => ({
+      id: message.author.kind === 'human' && message.author.id === profile.id && message.client_message_id
+        ? `outgoing:${message.client_message_id}` : `message:${message.id}`,
+      messageId: message.id, message, author: message.author, created_at: message.created_at,
+    })),
+    ...(historyLoaded && status !== 'Disconnected' ? pending : []).map(entry => ({
+      id: `${entry.status === 'deleting' || entry.status === 'delete_failed' ? 'cancel' : 'outgoing'}:${entry.id}`,
+      entry, author: ownAuthor, created_at: entry.createdAt,
+    })),
+  ];
+  const arrivals = useMessageArrivals(rows, historyLoaded && !history.loading ? channel.id : null);
   const conversations = new Map<string, ChatMessage[]>();
   for (const message of messages) {
     const entries = conversations.get(message.thread_id) ?? [];
@@ -236,8 +251,6 @@ export function ChannelRoom({ viewState, requestedThread, onCloseDirect, readSta
   const fileRevision = attachmentRevision;
   const activity = new Map<string, ChatEvent & { type: 'task.event' }>();
   for (const event of events) if (event.type === 'task.event') activity.set(event.payload.task_id, event);
-  const messageEvents: ChatEvent[] = messages.map(message => ({ type: 'message.created', channel_id: channel.id, thread_id: message.thread_id, sequence: message.sequence!, occurred_at: message.created_at, payload: message }));
-  const visibleEvents = messageEvents;
   function acceptDelivery(saved: ChatMessage, threadReply: boolean) {
     if (threadReply) {
       history.receive([saved], stickToBottom.current);
@@ -247,8 +260,8 @@ export function ChannelRoom({ viewState, requestedThread, onCloseDirect, readSta
   }
   function deliver(entry: OutboxEntry, confirmBroadcast = false) {
     const version = accessVersion.current;
-    void outbox.send(entry.id, socket, confirmBroadcast || entry.broadcastConfirmed).then(saved => {
-      if (!saved || version !== accessVersion.current) return;
+    void outbox.send(entry.id, socket, confirmBroadcast || entry.broadcastConfirmed, saved => {
+      if (version !== accessVersion.current) return;
       acceptDelivery(saved, !!entry.threadId);
     });
   }
@@ -256,6 +269,7 @@ export function ChannelRoom({ viewState, requestedThread, onCloseDirect, readSta
     const disabled = threadId ? replyDisabledReason : postDisabledReason;
     if (checkingPermissions || disabled || channel.archived_at) throw new Error(disabled || 'Posting unavailable');
     const entry = outbox.enqueue({ channelId: channel.id, threadId, text, document, attachments, broadcastConfirmed });
+    if (!threadId) setSendVersion(value => value + 1);
     deliver(entry);
   }
   function outgoing(loaded: ChatMessage[], threadId?: string) {
@@ -312,7 +326,7 @@ export function ChannelRoom({ viewState, requestedThread, onCloseDirect, readSta
       else setError(errorText(reason));
     }
   }
-  function message(m: ChatMessage, inThread = false, arriving = !inThread && arrivals.has(m.id), previous?:ChatMessage) {
+  function message(m: ChatMessage, inThread = false, arriving = false, previous?: Pick<ChatMessage, 'author' | 'created_at'>) {
     const replies = conversations.get(m.thread_id) ?? [];
     return <div key={m.id} id={`${inThread ? 'thread' : 'chat'}-message-${m.id}`} tabIndex={-1} className={`chat-message-anchor${selection ? ' sidekick-selectable' : ''}`}
       onClick={event => {
@@ -330,6 +344,10 @@ export function ChannelRoom({ viewState, requestedThread, onCloseDirect, readSta
   }
   useConversationLocation(channel.id, requestedThread ?? thread);
   const showDirectIntro = !!direct && ready && historyLoaded && history.page?.has_older === false;
+  const loadingMessages = direct ? <ConversationLoadingStatus label="Loading messages" /> : <>
+    <p className="sp-sr-only" role="status" aria-label="Loading messages">Loading messages…</p>
+    <ConversationSkeleton />
+  </>;
   const introduction = direct ? <ConversationIntroduction title={ready ? channel.name : status === 'Disconnected' ? 'This conversation is unavailable' : `Opening ${channel.name}`} icon={<Avatar name={channel.name} initials={channel.name.slice(0, 2).toUpperCase()} image={(direct.participants.find(person => person.id !== profile.id) ?? direct.participants[0])?.image} size="lg" tone="blue" />}>{ready ? direct.participants.length === 1 ? 'Your space for notes, links, and files.' : `This is the beginning of your conversation with ${channel.name}.` : status === 'Disconnected' ? 'Your access may have changed. Select another conversation to continue.' : 'Getting your conversation ready…'}</ConversationIntroduction> : <div className="chat-channel-welcome"><div className="chat-empty-icon"><Hash size={38}/></div><h2>{ready ? `This is the beginning of #${channel.name}` : status === 'Disconnected' ? 'This conversation is unavailable' : `Opening #${channel.name}`}</h2><p>{ready ? 'A shared space for your team’s ideas, questions, and progress. Send the first message.' : status === 'Disconnected' ? 'Your access may have changed. Select another conversation to continue.' : 'Getting your conversation ready…'}</p></div>;
   return <motion.div initial={false} animate={{ opacity: reduced || historyLoaded || status === 'Disconnected' ? 1 : .65 }} transition={motionTransition(reduced)} className={`chat-conversation ${thread ? 'chat-conversation--thread' : ''} ${filesOpen ? 'chat-conversation--files' : ''}`}><main className={`chat-channel${direct ? ' chat-channel--direct' : ''}`} id="chat-messages" tabIndex={-1} aria-hidden={compact && (thread || sessionOpen || sidekick) ? true : undefined} inert={compact && !!(thread || sessionOpen || sidekick)}><header className="chat-channel-header"><ConversationHeading title={channel.name} label={direct ? `Conversation details for ${channel.name}` : `Channel details for #${channel.name}`} onClick={() => { const person = direct && (direct.participants.find(person => person.id !== profile.id) ?? direct.participants[0]); if (person && profiles) profiles.open({kind:'user',id:person.id}); else showDetails(); }} leading={<IconButton label={starred.active ? 'Unstar conversation' : 'Star conversation'} aria-pressed={starred.active} aria-disabled={starred.busy || undefined} onClick={() => void starred.toggle(channel.id, { id: channel.id, name: channel.name, kind: channel.kind ?? 'channel', private: channel.private }).catch(reason => setError(errorText(reason)))}><Star size={19} weight={starred.active ? 'fill' : 'regular'}/></IconButton>} icon={direct ? <Avatar name={channel.name} initials={channel.name.slice(0, 2).toUpperCase()} image={(direct.participants.find(person => person.id !== profile.id) ?? direct.participants[0])?.image} /> : channel.private ? <Lock size={20} weight="bold" /> : <Hash size={22} weight="bold" />} />{channel.topic && <button className="chat-channel-topic" title={channel.topic} onClick={() => showDetails()}>{channel.topic}</button>}<div className="chat-header-actions">{direct && !selfDirect && <CallButtons channel={channel.id}/>} {!direct && <HuddleButton channel={channel.id} name={channel.name} disabled={!!channel.archived_at}/>}{!direct && <button className="chat-channel-member-button" aria-label="View channel members" onClick={() => showDetails('members')}><Users size={18} /> Members</button>}<IconButton label={`Search in ${channel.name}`} onClick={() => setChannelSearchOpen(true)}><MagnifyingGlass size={20} /></IconButton>{direct && <Menu label="More conversation actions" floating trigger={<DotsThree size={22} weight="bold" />} items={[{ label: 'Conversation details', onSelect: () => showDetails() }, ...(profiles && direct.participants[0] ? [{label:'View full profile',onSelect:() => profiles.open({kind:'user',id:(direct.participants.find(person=>person.id!==profile.id)??direct.participants[0]!).id})}] : []), { label: 'Browse files', onSelect: () => { if (!filesOpen) toggleFiles(); } }, ...(onCloseDirect ? [{ label: 'Close direct message', separatorBefore: true, onSelect: onCloseDirect }] : [])]} />}{direct && onCloseDirect && <IconButton label="Close direct message" onClick={onCloseDirect}><X size={20} /></IconButton>}</div></header>
     <ConversationNavigation><button ref={filesButton} className="chat-files-tab" aria-expanded={filesOpen} disabled={!historyLoaded || status === 'Disconnected'} onClick={toggleFiles}><Paperclip size={15} /> Files</button>{!direct && <><button disabled={status === 'Disconnected'} onClick={() => { setMemoryMessage(undefined); setMemoryOpen(true); }}><BookOpen size={15} /> Memory</button><NavigatorSettings channel={channel.id} onCandidates={setNavCandidates} /></>}{channel.archived_at && <span className="chat-channel-privacy"><Archive size={14} /> Archived</span>}</ConversationNavigation>
@@ -337,9 +355,19 @@ export function ChannelRoom({ viewState, requestedThread, onCloseDirect, readSta
     {error && <p className="chat-error" role="alert">{error}{!historyLoaded && status !== 'Disconnected' && <Button size="sm" disabled={!!history.loading} onClick={() => { setError(''); history.clear(); setHistoryAttempt(value => value + 1); }}>Retry loading messages</Button>}</p>}
     {readError && <p role="status">{readError}</p>}
     {selectionBar}
-    <MessageTimeline trailing={historyLoaded && status !== 'Disconnected' && outgoing(messages)} header={showDirectIntro ? introduction : undefined} onAtEndChange={setAtEnd} label={`Messages in ${channel.name}`} items={visibleEvents} page={history.page} loading={history.loading} latestVersion={history.latestVersion} load={history.load} pinned={stickToBottom} handle={timeline} busy={!historyLoaded && status !== 'Disconnected'} render={(event, index) => <><ConversationDateDivider date={event.occurred_at} previous={visibleEvents[index - 1]?.occurred_at}/>{event.type === 'message.created' && event.payload.id === firstUnread && <div className="chat-unread-divider" role="separator" aria-label="New messages"><span>New messages</span></div>}{event.type === 'message.created' ? message(event.payload, false, arrivals.has(event.payload.id), event.payload.id !== firstUnread && visibleEvents[index-1]?.type === 'message.created' ? (visibleEvents[index-1] as Extract<ChatEvent,{type:'message.created'}>).payload : undefined) : event.type === 'task.event' ? <TaskActivity event={event} profile={profile} onOpenWorkspace={() => openAgentSession(event)} onThread={() => openThread(event.thread_id)} /> : null}</>}>
-      {!historyLoaded && status !== 'Disconnected' ? <><p className="sp-sr-only" role="status" aria-label="Loading messages">Loading messages…</p><ConversationSkeleton /></> : !messages.length && !showDirectIntro && introduction}
+    <MessageTimeline header={showDirectIntro ? introduction : undefined} onAtEndChange={setAtEnd} label={`Messages in ${channel.name}`} items={rows} page={history.page} loading={history.loading} latestVersion={history.latestVersion + sendVersion} load={history.load} pinned={stickToBottom} handle={timeline} busy={!historyLoaded && status !== 'Disconnected'} render={(row, index) => {
+      const previous = rows[index - 1];
+      const unread = 'message' in row && row.message.id === firstUnread;
+      return <><ConversationDateDivider date={row.created_at} previous={previous?.created_at}/>
+        {unread && <div className="chat-unread-divider" role="separator" aria-label="New messages"><span>New messages</span></div>}
+        {'entry' in row
+          ? <OutgoingMessage entry={row.entry} grouped={continuesMessageGroup(row, previous)} profile={profile} retryDisabled={!ready || !!channel.archived_at || checkingPermissions || !!postDisabledReason} onRetry={deliver} onDelete={discardOutgoing}/>
+          : message(row.message, false, arrivals.has(row.id), unread ? undefined : previous)}
+      </>;
+    }}>
+      {!historyLoaded && status !== 'Disconnected' ? loadingMessages : !rows.length && !showDirectIntro && introduction}
     </MessageTimeline>{!direct&&!thread&&!sessionOpen&&!channel.archived_at&&status!=='Disconnected'&&<NavigatorSuggestions channel={channel.id} onThread={openThread} />}{channel.archived_at ? <div className="chat-channel-archived"><strong>This channel is archived</strong>Its messages are available to read.<br /><Button size="sm" onClick={() => showDetails('settings')}>View channel settings</Button></div> : status !== 'Disconnected' && <ConversationComposer sendDisabled={checkingPermissions || !historyLoaded} sendDisabledReason={postDisabledReason} onBlurCapture={channelTyping.blur} typingIndicator={<TypingIndicator channel={channel.id} viewerId={profile.id} enabled={ready}/>} showUnavailableActions={!direct} findMentions={findMentions} mentions={agentTags} attachmentsEnabled={uploads.enabled} attachments={uploads.drafts[channel.id] ?? []} onAttachmentsChange={files => uploads.change(channel.id, channel.id, files)} onRetryAttachment={id => uploads.retry(channel.id, channel.id, id)} channel={channel.name} placeholder={selfDirect ? 'Jot something down' : direct ? `Message ${channel.name}` : undefined} defaultValue={drafts[channel.id]} onDraftChange={document => {onDraftChange(channel.id, document);channelTyping.change(document);}} onSend={(text, document, files, options) => { submit(undefined, text, document, files, options?.broadcast_confirmed); channelTyping.stop(); }} />}</main>
+    {!compact && status !== 'Disconnected' && (thread || sessionOpen || sidekick || filesOpen) && <ConversationPanelDivider files={filesOpen} />}
     {status !== 'Disconnected' && <AnimatePresence>{thread && <SidePanel ref={threadPanel} key="thread" role="region" className="chat-thread" aria-label="Thread"><ConversationHeader title="Thread" actions={<ThreadNotificationToggle key={thread} thread={thread}/>} channel={direct ? undefined : channel.name} status={direct ? channel.name : undefined} onClose={panels.close} />
       {selectionBar}
       <ThreadHistory renderOutgoing={loaded => outgoing(loaded, thread)} key={thread} thread={thread} channel={channel.id} live={threadLive} renderMessage={(m, arriving) => message(m, true, arriving)} activity={[...activity.values()].filter(event => event.thread_id === thread && !event.payload.data.session_managed)} profile={profile} onOpenWorkspace={openAgentSession} onAccessLost={reason => revokeAccess.current(reason)} footer={<>

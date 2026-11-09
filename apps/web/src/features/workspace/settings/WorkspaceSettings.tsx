@@ -1,10 +1,11 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { Select, Button, Dialog, Tabs } from '@space/ui/primitives';
 import { workspacePreferenceDefaults, workspaceLanguages, type WorkspaceSettings as Settings, type WorkspaceSettingsUpdate } from '@space/contracts';
 import { request } from '../../../shared/api/request.js';
 import { subscribeUpdates } from '../../../shared/realtime/live-updates.js';
 import '../members/workspace-administration.css';
 import './workspace-settings.css';
+import '../workspace-dialog-tabs.css';
 type Props = {workspace:string;open:boolean;onClose:()=>void;onRenamed:(name:string)=>void;onManageMembers?:()=>void};
 type Channel = {id:string;name:string;private:boolean;archived_at:string|null;kind?:string};
 const languageNames:Record<string,string> = {en:'English',vi:'Tiếng Việt',fr:'Français',de:'Deutsch',es:'Español',pt:'Português',ja:'日本語',ko:'한국어',zh:'中文'};
@@ -17,6 +18,9 @@ function SettingsDialog({workspace,onClose,onRenamed,onManageMembers}:Props) {
   const [domains,setDomains] = useState('');
   const [pendingRetention,setPendingRetention] = useState<WorkspaceSettingsUpdate>();
   const active = useRef(true), generation = useRef(0), saving = useRef(false), dirty = useRef(false);
+  const panelId = useId();
+  const nameInput = useRef<HTMLInputElement>(null);
+  useEffect(() => { if (editing) nameInput.current?.focus(); }, [editing]);
   const manager = settings?.role === 'owner' || settings?.role === 'admin';
   function resetDraft(item:Settings) {setDraft(item);setDomains(item.approved_email_domains.join(', '));setPendingRetention(undefined);dirty.current=false;}
   async function refresh(discard=false) {
@@ -69,15 +73,16 @@ function SettingsDialog({workspace,onClose,onRenamed,onManageMembers}:Props) {
     void save(update);
   }
   return <><Dialog open title="Workspace settings" onClose={onClose} onBeforeClose={()=>!saving.current&&!pendingRetention}>
-    <section className="workspace-settings">
-      <Tabs label="Workspace settings sections" value={tab} onChange={setTab} items={[{id:'settings',label:'Settings'},{id:'permissions',label:'Permissions'}]}/>
+    <section className="workspace-settings workspace-dialog-tabs">
+      <Tabs label="Workspace settings sections" value={tab} onChange={setTab} items={[{id:'settings',label:'Settings',panelId},{id:'permissions',label:'Permissions',panelId}]}/>
+      <div key={tab} id={panelId} role="tabpanel" aria-label={tab==='settings'?'Settings':'Permissions'}>
       {error&&<p role="alert">{error} <Button size="sm" disabled={busy} onClick={()=>void refresh(true)}>Reload settings</Button></p>}
       {notice&&<p role="status">{notice}</p>}
       {!settings&&!error&&<p role="status">Loading workspace settings…</p>}
-      {settings&&draft&&<div role="tabpanel" aria-label={tab==='settings'?'Settings':'Permissions'}>
+      {settings&&draft&&<>
         {!manager&&<p>Only workspace owners and admins can change these settings.</p>}
         {tab==='settings'&&<section className="workspace-settings-row"><header><div><h3>Workspace name</h3><p>Your workspace is called <strong>{settings.name}</strong>.</p></div>{manager&&!editing&&<Button size="sm" aria-label="Edit workspace name" disabled={busy||dirty.current} onClick={()=>{setName(settings.name);setEditing(true);setNotice('');}}>Edit</Button>}</header>
-          {editing&&manager&&<form onSubmit={event=>{event.preventDefault();void save({revision:settings.revision,name:name.trim()},true);}}><label>Workspace name<input autoFocus required maxLength={100} value={name} onChange={event=>setName(event.target.value)} disabled={busy}/></label><div><Button type="submit" variant="primary" loading={busy} disabled={!name.trim()||name.trim()===settings.name}>Save changes</Button><Button disabled={busy} onClick={()=>setEditing(false)}>Cancel</Button></div></form>}
+          {editing&&manager&&<form onSubmit={event=>{event.preventDefault();void save({revision:settings.revision,name:name.trim()},true);}}><label>Workspace name<input ref={nameInput} required maxLength={100} value={name} onChange={event=>setName(event.target.value)} disabled={busy}/></label><div><Button type="submit" variant="primary" loading={busy} disabled={!name.trim()||name.trim()===settings.name}>Save changes</Button><Button disabled={busy} onClick={()=>setEditing(false)}>Cancel</Button></div></form>}
         </section>}
         <form className="workspace-preferences-form" onSubmit={event=>{event.preventDefault();savePreferences();}}>
           <fieldset disabled={!manager||busy}>
@@ -102,7 +107,8 @@ function SettingsDialog({workspace,onClose,onRenamed,onManageMembers}:Props) {
           {manager&&<div className="workspace-settings-actions"><Button type="submit" variant="primary" loading={busy} disabled={!dirty.current||editing}>Save settings</Button><Button disabled={busy||!dirty.current} onClick={()=>{resetDraft(settings);setError('');}}>Discard changes</Button></div>}
         </form>
         {tab==='settings'&&<section className="workspace-settings-row"><header><div><h3>Workspace members</h3><p>View people, account types and membership status.</p></div>{onManageMembers&&<Button size="sm" onClick={onManageMembers}>Manage members</Button>}</header></section>}
-      </div>}
+      </>}
+      </div>
     </section>
   </Dialog>
   {pendingRetention&&<Dialog open title="Apply retention policy?" onClose={()=>setPendingRetention(undefined)}>

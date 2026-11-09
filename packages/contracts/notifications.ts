@@ -14,10 +14,11 @@ export type NotificationItem = {
   read_at: string | null;
   silent: boolean;
 };
-export type NotificationActivity = { items: NotificationItem[]; unread_count: number; next_cursor: string | null; latest_id: string };
+export type NotificationActivity = { sound_enabled: boolean; items: NotificationItem[]; unread_count: number; next_cursor: string | null; latest_id: string };
 export type NotificationSettings = {
   mode: 'mentions' | 'all' | 'none';
   desktop_enabled: boolean;
+  sound_enabled: boolean;
   preview_enabled: boolean;
   thread_replies: boolean;
   paused_until: string | null;

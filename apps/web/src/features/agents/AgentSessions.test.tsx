@@ -179,6 +179,31 @@ it('stops work without losing a prepared draft and makes ended sessions read-onl
  await screen.findByText('This session has ended. Its conversation and outputs are saved.');expect(screen.queryByRole('textbox',{name:'Message agent session'})).toBeNull();
 });
 
+it('shows one waiting indicator for Kiro and adds the reply when it arrives',async()=>{
+ const fetch=setup(),original=fetch.getMockImplementation()!;
+ const answered=turn('Check my session');
+ const waiting={...answered,task:{...answered.task,status:'queued',result:null},detail:'',response:null};
+ const thinking={...waiting,task:{...waiting.task,status:'running'},detail:'Kiro session is ready.',response:{activity:'thinking',messages:[],tools:[],components:[]}};
+ let current:typeof waiting | typeof thinking | typeof answered=waiting;
+ fetch.mockImplementation(async(path,init)=>path==='/v1/agent-sessions/one'?{ok:true,json:async()=>({
+  session:{...session('one','Research'),agent_name:'Local Kiro'},turns:[current],next_cursor:null,
+ })}:original(path,init));
+ render(<AgentSessions thread="thread" channel="channel" viewerId="user" initialSessionId="one" onAccessLost={()=>{}}/>);
+ const log=await screen.findByRole('log',{name:'Session conversation'});
+ await within(log).findByText('Check my session');
+ expect(screen.queryAllByText(/queued/i)).toHaveLength(0);
+ expect(within(log).getAllByRole('article')).toHaveLength(1);
+ expect(screen.getByText('Waiting for',{exact:false}).textContent).toContain('Waiting for Local Kiro');
+ expect((screen.getByRole('button',{name:'Send now'}) as HTMLButtonElement).disabled).toBe(true);
+ expect(screen.queryByText(/You can draft your next message/)).toBeNull();
+ current=thinking;await act(async()=>{await mocks.refresh?.();});
+ await screen.findByText('is thinking…');
+ expect(within(log).getAllByRole('article')).toHaveLength(1);
+ current=answered;await act(async()=>{await mocks.refresh?.();});
+ await within(log).findByText('Result: Check my session');
+ expect(within(log).getAllByRole('article')).toHaveLength(2);
+ expect(screen.queryByText(/Waiting for Local Kiro/)).toBeNull();
+});
 it('allows drafting but blocks Enter and Send while a session turn is running, then enables the same draft',async()=>{
  const fetch=setup(),original=fetch.getMockImplementation()!;let running=true;
  fetch.mockImplementation(async(path,init)=>path==='/v1/agent-sessions/one'?{ok:true,json:async()=>({session:session('one','Research'),turns:[{...turn('Research prompt'),task:{...turn('Research prompt').task,status:running?'running':'completed'}}],next_cursor:null})}:original(path,init));
@@ -188,7 +213,7 @@ it('allows drafting but blocks Enter and Send while a session turn is running, t
  expect(fetch.mock.calls.filter(([path])=>path.endsWith('/messages'))).toHaveLength(0);
  expect((screen.getByRole('button',{name:'Send now'}) as HTMLButtonElement).disabled).toBe(true);
  expect(editor.textContent).toContain('My next instruction');
- expect(screen.getByText(/You can draft your next message/)).toBeTruthy();
+ expect(screen.getByText('is working…')).toBeTruthy();
  running=false;await act(async()=>{await mocks.refresh?.();});
  await waitFor(()=>expect((screen.getByRole('button',{name:'Send now'}) as HTMLButtonElement).disabled).toBe(false));
  await userEvent.click(screen.getByRole('button',{name:'Send now'}));
@@ -318,6 +343,7 @@ it('shows agent activity above the shared composer, reuses the tool timeline and
  const indicator=compose.querySelector('.chat-typing')!;expect(indicator.compareDocumentPosition(compose.querySelector('.sp-rich-composer')!)&Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
  phase='using_tools';await act(async()=>{await mocks.refresh?.();});
  expect(await within(compose as HTMLElement).findByText('is using tools…')).toBeTruthy();expect(await screen.findByText('read_text_file · Running')).toBeTruthy();
+ expect(within(screen.getByRole('log',{name:'Session conversation'})).queryByText('Using tools…')).toBeNull();
  phase='responding';await act(async()=>{await mocks.refresh?.();});expect(await within(compose as HTMLElement).findByText('is responding…')).toBeTruthy();
  running=false;await act(async()=>{await mocks.refresh?.();});await waitFor(()=>expect(indicator.textContent).toBe(''));
  expect(screen.getByRole('textbox',{name:'Message agent session'})).toBe(editor);

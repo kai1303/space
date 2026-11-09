@@ -43,6 +43,17 @@ function EmojiOptions({ label, onSelect, disabled }: { label: string; onSelect: 
       const skin = event.key === 'Home' ? 1 : event.key === 'End' ? 6 : (prefs.skin - 1 + (['ArrowLeft', 'ArrowUp'].includes(event.key) ? -1 : 1) + 6) % 6 + 1;
       setSkin(skin, false); return;
     }
+    const tab = (event.target as Element).closest<HTMLButtonElement>('[role="tab"]');
+    if (tab && ['Home', 'End', 'ArrowLeft', 'ArrowRight'].includes(event.key)) {
+      event.preventDefault(); event.stopPropagation();
+      const tabs = Array.from(tab.parentElement!.querySelectorAll<HTMLButtonElement>('[role="tab"]'));
+      const offset = event.key === 'ArrowLeft' ? -1 : 1;
+      const next = event.key === 'Home' ? tabs[0] : event.key === 'End' ? tabs.at(-1)
+        : tabs[(tabs.indexOf(tab) + offset + tabs.length) % tabs.length];
+      next?.focus();
+      next?.click();
+      return;
+    }
     const search = event.target instanceof HTMLInputElement;
     if (search && event.key !== 'ArrowDown') { event.stopPropagation(); return; }
     if (!['ArrowDown', 'ArrowUp', 'ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
@@ -55,7 +66,7 @@ function EmojiOptions({ label, onSelect, disabled }: { label: string; onSelect: 
   }}>
     <header><strong>Emoji</strong><label className="sp-emoji-search"><span className="sp-sr-only">Search emoji</span><input autoFocus type="search" placeholder="Search all emoji" value={query} onChange={event => { setQuery(event.target.value); grid.current?.scrollTo?.(0, 0); }} /></label></header>
     <div role="tablist" aria-label="Emoji categories" className="sp-emoji-categories">
-      {[['frequent', 'Frequently Used'], ...emojiCategories].map(([id, name], index) => { const Icon = icons[index]!; return <button key={id} type="button" id={`${resultsId}-${id}`} role="tab" aria-controls={resultsId} aria-label={name} title={name} aria-selected={category === id && !query} onClick={() => { setCategory(id!); setQuery(''); grid.current?.scrollTo?.(0, 0); }}><Icon size={18} /></button>; })}
+      {[['frequent', 'Frequently Used'], ...emojiCategories].map(([id, name], index) => { const Icon = icons[index]!; return <button key={id} type="button" id={`${resultsId}-${id}`} role="tab" tabIndex={category === id ? 0 : -1} aria-controls={resultsId} aria-label={name} title={name} aria-selected={category === id && !query} onClick={() => { setCategory(id!); setQuery(''); grid.current?.scrollTo?.(0, 0); }}><Icon size={18} /></button>; })}
     </div>
     <div ref={grid} id={resultsId} role="tabpanel" aria-label={query ? "Search results" : groups[0]?.name} className="sp-emoji-results">
       {groups.map(group => <section key={group.id} aria-label={group.name}><h3>{group.name}</h3><div className="sp-emoji-grid">

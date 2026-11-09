@@ -363,9 +363,9 @@ it('shows loading instead of empty states and clears the old workspace before th
   expect(mocks.sockets).toHaveLength(1);
   expect(screen.queryByRole('heading', { name: 'A place for every conversation' })).toBeNull();
   expect(screen.queryByText('No conversations found.')).toBeNull();
-  expect(screen.getByRole('status', { name: 'Loading workspace' }).classList.contains('sp-sr-only')).toBe(true);
+  expect(screen.getByRole('status', { name: 'Loading workspace' })).toBeTruthy();
   expect(screen.getByText('Loading conversations…').classList.contains('sp-sr-only')).toBe(true);
-  expect(document.querySelector('.chat-conversation-skeleton')).toBeTruthy();
+  expect(document.querySelector('.chat-conversation-skeleton')).toBeNull();
   await act(async () => { finishChannels({ items: [{ id: 'second', name: 'second', workspace_id: 'b', joined: true }], next_cursor: null }); });
   expect(screen.getByRole('status', { name: 'Loading messages' }).classList.contains('sp-sr-only')).toBe(true);
   expect(screen.queryByRole('heading', { name: 'Opening #second' })).toBeNull();
@@ -375,6 +375,47 @@ it('shows loading instead of empty states and clears the old workspace before th
   expect(screen.queryByRole('status', { name: 'Loading messages' })).toBeNull();
   expect(screen.queryByText('History first')).toBeNull();
 });
+it.each(['Home', 'DMs'])('keeps the conversation layout while a shared self DM opens in %s', async destination => {
+  const channel = '550e8400-e29b-41d4-a716-446655440000';
+  const dm = { id: channel, workspace_id: 'team', kind: 'direct', joined: true, name: 'Kai (you)', participants: [{ id: 'user', name: 'Kai' }] };
+  let finishLocation!: (value: unknown) => void, finishMetadata!: (value: unknown) => void, finishHistory!: (value: unknown) => void;
+  vi.stubGlobal('fetch', vi.fn(async (url: string) => ({ ok: true, json: async () => {
+    if (url.startsWith('/v1/workspaces?')) return { items: [{ id: 'team', name: 'Team' }], next_cursor: null };
+    if (url.endsWith('/location')) return new Promise(resolve => { finishLocation = resolve; });
+    if (url.includes('/team/channels?') && destination === 'Home') return new Promise(resolve => { finishMetadata = resolve; });
+    if (url === `/v1/channels/${channel}` && destination === 'DMs' && !finishMetadata) return new Promise(resolve => { finishMetadata = resolve; });
+    if (url === `/v1/channels/${channel}`) return dm;
+    if (isMessageHistory(url)) return new Promise(resolve => { finishHistory = resolve; });
+    if (url.includes('/history')) return { events: [], cursor: '0', has_more: false };
+    return [];
+  } })));
+  window.history.replaceState({ spaceView: destination }, '', '/c/VQ6EAOKbQdSnFkRmVUQAAA');
+  mocks.authPending = true;
+  const view = render(<Chat />);
+  const expectConversationFrame = () => {
+    expect(view.container.querySelector('.chat-app .chat-channel-header')).toBeTruthy();
+    expect(view.container.querySelector('.chat-compose')).toBeTruthy();
+    expect(view.container.querySelector('.chat-conversation-skeleton')).toBeNull();
+  };
+  expectConversationFrame();
+  mocks.authPending = false;
+  view.rerender(<Chat />);
+  expectConversationFrame();
+  await waitFor(() => expect(finishLocation).toBeTypeOf('function'));
+  await act(async () => finishLocation({ workspace_id: 'team' }));
+  await waitFor(() => expect(finishMetadata).toBeTypeOf('function'));
+  expect(screen.queryByText('A conversation starts here')).toBeNull();
+  expectConversationFrame();
+  await act(async () => finishMetadata(destination === 'Home' ? { items: [], next_cursor: null } : dm));
+  await screen.findByRole('status', { name: 'Loading messages' });
+  expectConversationFrame();
+  expect(screen.queryByText('Your space for notes, links, and files.')).toBeNull();
+  const composer = screen.getByRole('textbox', { name: 'Message Kai (you)' });
+  await act(async () => finishHistory(messagePage()));
+  await screen.findByText('Your space for notes, links, and files.');
+  expect(screen.getByRole('textbox', { name: 'Message Kai (you)' })).toBe(composer);
+});
+
 it('opens a copied thread in its workspace and restores the channel on browser Back', async () => {
   const channel = '550e8400-e29b-41d4-a716-446655440000';
   const thread = '00000000-0000-4000-8000-000000000001';
@@ -807,6 +848,7 @@ it.each([false,true])('keeps the channel mounted behind the thread transition an
   mockPaginatedChat(()=>messagePage([paginatedMessage('Source message','1')]));
   const view=render(<Chat />);await screen.findByText('Source message');
   const channel=view.container.querySelector('#chat-messages')!;
+  Object.defineProperty(channel.parentElement!, 'clientWidth', { value: 1000 });
   const trigger=screen.getByRole('button',{name:'Reply to Kai'});
   await userEvent.click(trigger);
   const panel=await screen.findByRole('region',{name:'Thread',exact:true});
@@ -814,6 +856,13 @@ it.each([false,true])('keeps the channel mounted behind the thread transition an
   expect(channel.isConnected).toBe(true);
   expect(channel.getAttribute('aria-hidden')).toBe(compact?'true':null);
   expect(channel.hasAttribute('inert')).toBe(compact);
+  const divider = screen.queryByRole('separator', { name: 'Right sidebar width' });
+  if (compact) expect(divider).toBeNull();
+  else {
+    expect(divider?.getAttribute('aria-valuenow')).toBe('400');
+    fireEvent.keyDown(divider!, { key: 'ArrowLeft' });
+    expect((channel.parentElement as HTMLElement).style.getPropertyValue('--conversation-panel-width')).toBe('410px');
+  }
   await userEvent.click(screen.getByRole('button',{name:'Close thread'}));
   expect(channel.getAttribute('aria-hidden')).toBeNull();
   expect(channel.hasAttribute('inert')).toBe(false);
@@ -1273,6 +1322,38 @@ it.each([false,true])('clears a text-only acknowledged draft after leaving its c
   else await userEvent.click(screen.getByRole('button',{name:'first',exact:true}));
   expect((await screen.findByRole('textbox',{name:inThread?'Message thread':'Message first'})).textContent?.trim()).toBe('');
 });
+it.each(['ack', 'realtime'])('keeps an Enter-sent channel message in the same grouped timeline row through %s delivery', async delivery => {
+  let acknowledge!: () => void;
+  mocks.pendingSend = new Promise<void>(resolve => { acknowledge = resolve; });
+  const prior = { ...paginatedMessage('Previous message', '1'), created_at: new Date(Date.now() - 1000).toISOString() };
+  mockPaginatedChat(() => messagePage([prior]), '1');
+  render(<Chat />);
+  const editor = await screen.findByRole('textbox', { name: 'Message first' });
+  const socket = latestChatSocket(), originalTimeout = socket.timeout;
+  const saved = { ...paginatedMessage('Next message', '2'), id: 'server-id', created_at: new Date().toISOString() };
+  socket.timeout = () => ({ emitWithAck: async (name: string, data: any) => {
+    const result = await originalTimeout().emitWithAck(name, data);
+    return name === 'message.send' ? { data: { ...saved, client_message_id: data.client_message_id } } : result;
+  } });
+  await userEvent.type(editor, 'Next message{Enter}');
+  const timeline = within(screen.getByLabelText('Messages in first'));
+  const pending = (await timeline.findByText(saved.text)).closest('article')!;
+  const row = pending.closest('[data-index]');
+  expect(row).toBeTruthy();
+  expect(pending.classList.contains('sp-message--grouped')).toBe(true);
+  const clientId = socket.requests.find((request: any) => request.name === 'message.send').data.client_message_id;
+  if (delivery === 'realtime') {
+    await act(async () => socket.receive('chat.events', { channel_id: 'first', cursor: '2', events: [
+      { type: 'message.created', channel_id: 'first', thread_id: saved.thread_id, sequence: '2', occurred_at: saved.created_at, payload: { ...saved, client_message_id: clientId } },
+    ] }, vi.fn()));
+  }
+  await act(async () => { acknowledge(); await mocks.pendingSend; });
+  const confirmed = timeline.getByText(saved.text).closest('article')!;
+  expect(confirmed.closest('[data-index]')).toBe(row);
+  expect(confirmed.classList.contains('sp-message--grouped')).toBe(true);
+  expect(confirmed.style.opacity).toBe('1');
+});
+
 it.each([false, true])('shows a submission immediately and lets the sender discard a failed row: thread=%s', async inThread => {
   let rejectAttempt!: () => void;
   mocks.pendingSend = new Promise<void>(resolve => { rejectAttempt = resolve; });

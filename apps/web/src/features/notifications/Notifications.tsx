@@ -8,11 +8,12 @@ import { subscribeUpdates } from '../../shared/realtime/live-updates.js';
 import { acquireRealtime } from '../../shared/realtime/socket-session.js';
 import type { ActivityView } from './view-state.js';
 import type { Snapshot } from '../../shared/ui/view-state.js';
+import { createNotificationSound } from './notification-sound.js';
 import './notifications.css';
 
 const failure = (error: unknown) => error instanceof Error ? error.message.replaceAll('_', ' ') : 'Unable to load notifications';
 const denied = (error: unknown) => error instanceof Error && ['unauthorized', 'not_found', 'forbidden'].includes(error.message);
-const empty: NotificationActivity = { items: [], unread_count: 0, next_cursor: null, latest_id: '0' };
+const empty: NotificationActivity = { sound_enabled: false, items: [], unread_count: 0, next_cursor: null, latest_id: '0' };
 const tabs = [['', 'All'], ['direct_message', 'DMs'], ['mention', 'Mentions'], ['thread_reply', 'Threads'], ['reaction', 'Reactions']] as const;
 const labels = { mention: 'Mentioned you', direct_message: 'Direct message', thread_reply: 'Replied to a thread', reaction: 'Reacted to your message', channel_message: 'New channel message' };
 
@@ -116,6 +117,7 @@ export function NotificationPreferences({ workspace, onClose }: { workspace: str
     {!settings ? <p role="status">Loading preferences…</p> : <>
       <label>Notify me about<Select aria-label="Notify me about" disabled={busy} value={settings.mode} onChange={event => void save({ mode: event.target.value as NotificationSettings['mode'] })}><option value="mentions">Mentions and direct messages</option><option value="all">All new messages in joined channels</option><option value="none">Nothing — keep Activity only</option></Select></label>
       <label className="notification-checkbox"><input type="checkbox" checked={settings.thread_replies} disabled={busy} onChange={event => void save({ thread_replies: event.target.checked })}/>Also alert me about followed thread replies</label>
+      <label className="notification-checkbox"><input type="checkbox" checked={settings.sound_enabled} disabled={busy} onChange={event => void save({ sound_enabled: event.target.checked })}/>Play a sound for notifications</label>
       <section><h3>Desktop alerts</h3><p>Delivered by this browser while Space is open. Your browser and operating system control whether banners appear.</p>
         {permission === 'unsupported' ? <p>This browser does not support desktop alerts.</p> : permission === 'denied' ? <p role="status">Desktop alerts are blocked in your browser. Allow notifications for Space in site settings to enable them.</p> : settings.desktop_enabled && permission === 'granted' ? <Button size="sm" disabled={busy} onClick={() => void save({ desktop_enabled: false })}>Disable desktop alerts</Button> : <Button size="sm" disabled={busy} onClick={() => void enable()}>Enable desktop alerts</Button>}
       </section>
@@ -159,6 +161,7 @@ export function useNotificationDelivery(workspace: string, currentChannel: strin
     setCount(0); if (!workspace) return;
     let active = true, baseline = true, generation = 0;
     const seen = new Set<string>();
+    const sound = createNotificationSound();
     const handles = new Map<string, Notification>(), connection = acquireRealtime();
     const close = () => { for (const handle of handles.values()) handle.close(); handles.clear(); };
     connection.on('disconnect', () => { generation++; baseline = true; close(); });
@@ -167,29 +170,48 @@ export function useNotificationDelivery(workspace: string, currentChannel: strin
       try {
         const page = await request<NotificationActivity>(`/workspaces/${workspace}/notifications`);
         if (!active || version !== generation || !Array.isArray(page.items)) return;
+        sound.setEnabled(page.sound_enabled === true);
         setCount(page.unread_count);
         for (const [id, handle] of handles) if (!page.items.some(item => item.id === id && !item.read_at)) { handle.close(); handles.delete(id); }
         const fresh = page.items.filter(item => !seen.has(item.id));
         for (const item of page.items) seen.add(item.id);
         while (seen.size > 500) seen.delete(seen.values().next().value!);
         if (baseline) { baseline = false; return; }
-        if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
+        const desktop = typeof Notification !== 'undefined' && Notification.permission === 'granted';
+        if (!desktop && !sound.ready) return;
         const attending = () => !document.hidden && document.hasFocus();
         const suppressed = (item: NotificationItem) => attending() && (current.current.channel === item.channel_id || current.current.channel === '*');
         const candidates = fresh.filter(item => !item.read_at && !item.silent && !suppressed(item)).slice(0, 3);
+        let played = false;
         for (const item of candidates) {
           if (!active || version !== generation || suppressed(item)) break;
-          const claim = await request<{ deliver: boolean; notification?: NotificationItem; preview_enabled?: boolean }>(`/workspaces/${workspace}/notifications/${item.id}/claim`, {});
+          const path = `/workspaces/${workspace}/notifications/${item.id}/claim`;
+          if (sound.ready) {
+            try {
+              const result = await request<{ deliver: boolean }>(path, { channel: 'sound' });
+              if (!active || version !== generation) return;
+              if (result.deliver && !played && !suppressed(item)) {
+                sound.play();
+                played = true;
+              }
+            } catch (reason) {
+              if (denied(reason)) throw reason;
+              // A transient sound failure still allows the banner to be delivered.
+            }
+          }
+          if (!active || version !== generation) return;
+          if (!desktop || suppressed(item)) continue;
+          const claim = await request<{ deliver: boolean; notification?: NotificationItem; preview_enabled?: boolean }>(path, {});
           if (!active || version !== generation || !claim.deliver || !claim.notification || suppressed(claim.notification)) continue;
           const value = claim.notification;
-          const notification = new Notification(claim.preview_enabled ? `${value.author_name} · ${value.channel_kind === 'direct' ? value.channel_name : `#${value.channel_name}`}` : 'New activity in Space', { body: claim.preview_enabled ? value.text || labels[value.kind] : 'Open Space to view your notification.', tag: `space:${workspace}:${value.id}` });
+          const notification = new Notification(claim.preview_enabled ? `${value.author_name} · ${value.channel_kind === 'direct' ? value.channel_name : `#${value.channel_name}`}` : 'New activity in Space', { silent: true, body: claim.preview_enabled ? value.text || labels[value.kind] : 'Open Space to view your notification.', tag: `space:${workspace}:${value.id}` });
           handles.set(value.id, notification); notification.onclose = () => handles.delete(value.id);
           notification.onclick = () => { window.focus(); notification.close(); if (active) current.current.onOpen(value); };
           if (handles.size > 3) handles.values().next().value?.close();
         }
       } catch (reason) { if (denied(reason)) { generation++; baseline = true; setCount(0); close(); } }
     }, () => { generation++; baseline = true; setCount(0); close(); });
-    return () => { active = false; generation++; stop(); connection.release(); close(); };
+    return () => { active = false; generation++; stop(); connection.release(); sound.setEnabled(false); close(); };
   }, [workspace]);
   return count;
 }

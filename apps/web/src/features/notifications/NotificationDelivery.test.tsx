@@ -1,3 +1,4 @@
+import userEvent from '@testing-library/user-event';
 import { afterEach, expect, it, vi } from 'vitest';
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import { useNotificationDelivery } from './Notifications.js';
@@ -12,7 +13,7 @@ it('skips old activity and uses only fresh authorized claim content for a privat
  const {desktop,close}=browser();let id='10';
  const fetch=vi.fn(async(path:string)=>({ok:true,status:200,json:async()=>path.endsWith('/claim')?{deliver:true,notification:{...base,id,text:'Fresh private text'},preview_enabled:false}:{items:[{...base,id}],latest_id:id,unread_count:1,next_cursor:null}}));vi.stubGlobal('fetch',fetch);
  render(<Fixture/>);await screen.findByText('1 unread');expect(desktop).not.toHaveBeenCalled();
- id='11';await act(()=>mock.read!());expect(desktop).toHaveBeenCalledWith('New activity in Space',expect.objectContaining({body:'Open Space to view your notification.'}));
+ id='11';await act(()=>mock.read!());expect(desktop).toHaveBeenCalledWith('New activity in Space',expect.objectContaining({body:'Open Space to view your notification.',silent:true}));
  await act(()=>mock.read!());expect(desktop).toHaveBeenCalledTimes(1);
  act(()=>mock.revoke!('not_found'));expect(close).toHaveBeenCalled();expect(screen.getByText('0 unread')).toBeTruthy();
 });
@@ -43,4 +44,61 @@ it('closes an already displayed private alert when channel access is revoked',as
  vi.stubGlobal('fetch',vi.fn(async(path:string)=>({ok:true,status:200,json:async()=>path.endsWith('/claim')?{deliver:true,notification:{...base,id:'11'},preview_enabled:true}:{items,latest_id:items[0]?.id??'0',unread_count:items.length,next_cursor:null}})));
  render(<Fixture/>);await screen.findByText('1 unread');items=[{...base,id:'11'}];await act(()=>mock.read!());expect(desktop).toHaveBeenCalledTimes(1);
  items=[];await act(()=>mock.read!());expect(close).toHaveBeenCalledTimes(1);expect(screen.getByText('0 unread')).toBeTruthy();
+});
+
+it('chimes once for fresh authorized activity with desktop permission denied', async () => {
+ const start = vi.fn(), close = vi.fn(async () => {});
+ vi.stubGlobal('Notification', { permission:'denied' });
+ vi.stubGlobal('AudioContext', class {
+   state = 'running';
+   currentTime = 0;
+   close = close;
+   createOscillator() { return {frequency:{value:0}, connect:vi.fn(), start, stop:vi.fn()}; }
+   createGain() { return {gain:{setValueAtTime:vi.fn(), exponentialRampToValueAtTime:vi.fn()}, connect:vi.fn()}; }
+ });
+ let id = '10', enabled = true, granted = true;
+ const fetch = vi.fn(async (path:string, init?:RequestInit) => ({
+   ok:true, status:200, json:async () => {
+     if (path.endsWith('/claim')) {
+       expect(JSON.parse(String(init?.body))).toEqual({channel:'sound'});
+       return {deliver:granted};
+     }
+     return {items:[{...base,id}],unread_count:1,latest_id:id,next_cursor:null,sound_enabled:enabled};
+   }
+ }));
+ vi.stubGlobal('fetch', fetch);
+ const view = render(<Fixture/>);
+ await screen.findByText('1 unread');
+ await userEvent.click(document.body);
+ expect(start).not.toHaveBeenCalled();
+ id = '11';
+ await act(()=>mock.read!());
+ await act(()=>mock.read!());
+ expect(start).toHaveBeenCalledTimes(1);
+ granted = false; id = '12';
+ await act(()=>mock.read!());
+ enabled = false; granted = true; id = '13';
+ await act(()=>mock.read!());
+ expect(start).toHaveBeenCalledTimes(1);
+ expect(fetch.mock.calls.filter(([path])=>path.endsWith('/claim'))).toHaveLength(2);
+ view.unmount();
+ expect(close).toHaveBeenCalledTimes(1);
+});
+
+it('still shows the desktop banner if a sound claim fails', async () => {
+ const { desktop } = browser();
+ vi.stubGlobal('AudioContext', class { state = 'running'; close = async () => {}; });
+ let id = '10';
+ vi.stubGlobal('fetch', vi.fn(async (path:string, init?:RequestInit) => {
+   if (path.endsWith('/claim') && init?.body === '{"channel":"sound"}') throw new Error('Network error');
+   const data = path.endsWith('/claim') ? {deliver:true,notification:{...base,id}} :
+     {items:[{...base,id}],unread_count:1,latest_id:id,next_cursor:null,sound_enabled:true};
+   return {ok:true,status:200,json:async () => data};
+ }));
+ render(<Fixture/>);
+ await screen.findByText('1 unread');
+ await userEvent.click(document.body);
+ id = '11';
+ await act(() => mock.read!());
+ expect(desktop).toHaveBeenCalledTimes(1);
 });

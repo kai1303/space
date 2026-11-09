@@ -159,12 +159,12 @@ export function AssetViewer({ assets, selectedId, onSelect, onClose, onAccessLos
     return () => dialog.removeEventListener('keydown', keyboard);
   });
   return current ? <Dialog open onClose={onClose} title={current.name}>
-      <div className="asset-viewer" ref={viewer}>
+      <div className={assets.length === 1 ? 'asset-viewer asset-viewer--single' : 'asset-viewer'} ref={viewer}>
         <div className="asset-viewer-toolbar">
           <div className="asset-file-navigation"><IconButton label="Previous file" disabled={index <= 0} onClick={() => navigate(-1)}><ArrowLeft size={20} /></IconButton><span>{index + 1} of {assets.length}</span><IconButton label="Next file" disabled={index >= assets.length - 1} onClick={() => navigate(1)}><ArrowRight size={20} /></IconButton></div>
           <a className="sp-button sp-button--secondary sp-button--sm" href={assetUrl(current.id, 'download')}><DownloadSimple size={16} />Download original</a>
         </div>
-        <div className="asset-viewer-content"><ViewerContent key={current.id} asset={current} onAccessLost={onAccessLost} /></div>
+        <div key={current.id} className="asset-viewer-content"><ViewerContent asset={current} onAccessLost={onAccessLost} /></div>
         {assets.length > 1 && <div className="asset-filmstrip" role="group" aria-label="Attached files">{assets.map((asset, position) => <button type="button" key={asset.id} aria-label={`View ${asset.name}`} aria-pressed={position === index} onClick={() => onSelect(asset.id)}><FilmstripPreview asset={asset} preview={previews[asset.id]} /><span>{asset.name}</span></button>)}</div>}
       </div>
     </Dialog> : null;
