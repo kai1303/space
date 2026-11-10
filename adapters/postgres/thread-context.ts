@@ -10,13 +10,13 @@ export async function assertContextThread(c: DbSession, channelId: string, threa
   if (!found.length) throw new AppError(404, 'thread_not_found');
 }
 // Only attachment metadata is returned. Files retain their existing authorized download flow.
-function message(row: ThreadContextMessage & { author_id: string; author_type: 'human' | 'agent'; text_length: number }): ThreadContextMessage {
+function message(row: ThreadContextMessage & { author_id: string; author_type: 'human' | 'agent' | 'app'; text_length: number }): ThreadContextMessage {
   // PostgreSQL counts code points; contracts count UTF-16 units. Never split an emoji.
   const excerpt = row.text.slice(0,1000).replace(/[\uD800-\uDBFF]$/, '');
   return { id: row.id, sequence: row.sequence, text: excerpt, text_truncated: row.text_length > 1000 || excerpt !== row.text, author: { id: row.author_id, kind: row.author_type }, attachments: row.attachments };
 }
 const columns = sql`id, sequence::text, left(text,1000) AS text, length(text) AS text_length,
-  coalesce(user_id,installation_id) AS author_id, author_type, attachments`;
+  coalesce(user_id,installation_id,webhook_id) AS author_id, author_type, attachments`;
 type Row = Parameters<typeof message>[0];
 async function checkpoint(c: DbSession, threadId: string, through: string): Promise<ThreadCheckpoint | null> {
   const [row] = await rows<ThreadCheckpoint>(c, sql`SELECT revision,through_sequence::text,content,source_message_ids,producer_id,producer_name,created_at::text

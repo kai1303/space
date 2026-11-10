@@ -28,6 +28,7 @@ export type SidebarChannel = {
   initials?: string;
   image?: string | null;
   agentName?: string;
+  onDetails?: () => void;
   onRename?: () => void;
   online?: boolean;
   typing?: boolean;
@@ -220,8 +221,8 @@ export function WorkspaceSidebar({
               <Reveal open={isOpen} clip={false}>
                 {items.map((c) => (
                   <motion.div key={c.id} initial={false}
-                    className={c.onRename ? "sp-sidebar-action-row" : undefined}
-                    onContextMenu={c.onRename ? event => {
+                    className={c.onRename || c.onDetails ? "sp-sidebar-action-row" : undefined}
+                    onContextMenu={c.onRename || c.onDetails ? event => {
                       event.preventDefault();
                       const trigger = event.currentTarget.querySelector<HTMLElement>("summary");
                       trigger?.focus();
@@ -253,8 +254,8 @@ export function WorkspaceSidebar({
                       )
                     }
                   />
-                  {c.onRename && <Menu label={`Actions for ${c.name}`} className="sp-sidebar-row-menu" floating
-                    trigger={<DotsThree size={18} weight="bold"/>} items={[{label:"Rename…",icon:<PencilSimple size={16}/>,onSelect:c.onRename}]}/>}
+                  {(c.onRename || c.onDetails) && <Menu label={`Actions for ${c.name}`} className="sp-sidebar-row-menu" floating
+                    trigger={<DotsThree size={18} weight="bold"/>} items={c.onDetails ? [{label:"Channel details",onSelect:c.onDetails}] : [{label:"Rename…",icon:<PencilSimple size={16}/>,onSelect:c.onRename!}]}/>}
                   </motion.div>
                 ))}
                 {sectionFooters?.[section]}

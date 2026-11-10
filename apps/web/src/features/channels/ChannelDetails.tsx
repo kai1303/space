@@ -5,6 +5,7 @@ import { Archive, Copy, Hash, Lock, MagnifyingGlass, UserPlus } from '@phosphor-
 import type { ChannelDetails as Details, ChannelMember, ChannelSummary, ChannelPermissionSnapshot, WorkspaceParticipant } from '@space/contracts';
 import { listAll, request } from '../../shared/api/request.js';
 import './channel-details.css';
+import { ChannelWebhooks } from './ChannelWebhooks.js';
 import { ChannelPermissionEditor, postingLabels, type PermissionSection } from './ChannelPermissions.js';
 
 const errorText = (error: unknown) => error instanceof Error ? error.message === 'channel_has_active_tasks'
@@ -47,10 +48,10 @@ function DetailsDialog({ channel, viewer, initialTab = 'about', permissions, per
     <Dialog open title={`${current.private ? '🔒' : '#'} ${current.name}`} onClose={onClose}>
       <div className="space-channel-details">
         <div className="space-channel-meta"><Badge>{current.private ? 'Private channel' : 'Public channel'}</Badge>{archived && <Badge><Archive size={13} /> Archived</Badge>}<span>{details ? `${details.member_count} ${details.member_count === 1 ? 'member' : 'members'}` : 'Loading…'}</span></div>
-        <Tabs label="Channel details" value={tab} onChange={setTab} items={[{ id: 'about', label: 'About', panelId: `${id}-about` }, { id: 'members', label: `Members${details ? ` ${details.member_count}` : ''}`, panelId: `${id}-members` }, { id: 'settings', label: 'Settings', panelId: `${id}-settings` }]} />
+        <Tabs label="Channel details" value={tab} onChange={setTab} items={[{ id: 'about', label: 'About', panelId: `${id}-about` }, { id: 'members', label: `Members${details ? ` ${details.member_count}` : ''}`, panelId: `${id}-members` }, { id: 'integrations', label: 'Integrations', panelId: `${id}-integrations` }, { id: 'settings', label: 'Settings', panelId: `${id}-settings` }]} />
         {error && <div className="space-channel-error" role="alert">{error} <Button size="sm" onClick={() => { setError(''); void refresh().catch(e => setError(errorText(e))); }}>Retry</Button></div>}
         {!details && !error && <p className="space-channel-loading" role="status">Loading channel details…</p>}
-        {details && <div key={tab} id={`${id}-${tab}`} role="tabpanel" aria-label={tab === 'members' ? 'Members' : tab === 'settings' ? 'Settings' : 'About'} className={tab === 'members' ? 'space-channel-body space-channel-body--members' : 'space-channel-body'}>
+        {details && <div key={tab} id={`${id}-${tab}`} role="tabpanel" aria-label={tab === 'members' ? 'Members' : tab === 'settings' ? 'Settings' : tab === 'integrations' ? 'Integrations' : 'About'} className={tab === 'members' ? 'space-channel-body space-channel-body--members' : 'space-channel-body'}>
           {tab === 'about' && <>
             <div className="space-channel-card">
               {(['name', 'topic', 'description'] as const).map(key => <section key={key} aria-label={key === 'name' ? 'Channel name' : key === 'topic' ? 'Topic' : 'Description'}>
@@ -74,6 +75,8 @@ function DetailsDialog({ channel, viewer, initialTab = 'about', permissions, per
             </ul>
             {!filtered.length && <p className="space-channel-muted">No members match “{query}”.</p>}
           </>}
+          {tab === 'integrations' && (can('manage') && !archived ? <ChannelWebhooks channel={channel.id} /> :
+            <p>{permissionsPending ? 'Checking channel permissions…' : archived ? 'This channel is archived.' : 'Channel managers can manage incoming webhooks.'}</p>)}
           {tab === 'settings' && <>
             <div className="space-channel-card">
               {policy && <><section><div className="space-channel-field-heading"><h3>Posting permissions</h3>{can('manage') && !archived && <button className="space-channel-link" aria-label="Edit posting permissions" onClick={() => setPermissionEditor({ section: 'posting', snapshot: policy })}>Edit</button>}</div><p>{postingLabels[policy.posting]}</p><p className="space-channel-muted">{policy.allow_replies ? 'Threads are allowed.' : 'Only people who can post can reply.'} {policy.allow_broadcast ? 'Channel-wide mentions are allowed, subject to workspace settings.' : 'Channel-wide mentions are disabled.'}</p></section>

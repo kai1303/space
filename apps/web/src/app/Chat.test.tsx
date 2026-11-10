@@ -2061,3 +2061,26 @@ it('keeps a deleted DM root and its thread link in place after reconnect replay'
   await thread.findByText(reply.text);
   expect(thread.getByText('This message was deleted.')).toBeTruthy();
 });
+
+it('opens integrations for a sidebar channel while the active conversation stays selected', async () => {
+  const builds = {id:'builds',name:'builds',joined:true,workspace_id:'workspace',member_count:1,created_at:'2026-11-10T00:00:00Z'};
+  vi.stubGlobal('fetch', vi.fn(async (path: string) => ({ ok:true, status:200, json:async () => {
+    if (path.startsWith('/v1/workspaces?')) return {items:[{id:'workspace',name:'Team'}],next_cursor:null};
+    if (path.includes('/channels?')) return {items:[{...builds,id:'general',name:'general'},builds],next_cursor:null};
+    if (path === '/v1/channels/builds') return builds;
+    if (path.endsWith('/permissions')) return {capabilities:{post:true,reply:true,manage:true},manager_ids:[]};
+    if (path.endsWith('/webhooks')) return [];
+    if (isMessageHistory(path)) return messagePage();
+    if (path.includes('/history')) return {events:[],cursor:'0',has_more:false};
+    return {items:[],next_cursor:null};
+  }})));
+  render(<Chat />);
+  const composer = await screen.findByRole('textbox',{name:'Message general'});
+  fireEvent.contextMenu(screen.getByRole('button',{name:'builds',exact:true}));
+  await userEvent.click(await screen.findByRole('menuitem',{name:'Channel details'}));
+  const modal = await screen.findByRole('dialog',{name:'# builds'});
+  await userEvent.click(within(modal).getByRole('tab',{name:'Integrations'}));
+  await within(modal).findByRole('button',{name:'Create incoming webhook'});
+  expect(composer.isConnected).toBe(true);
+  expect(screen.getByRole('button',{name:'general',exact:true,hidden:true}).getAttribute('aria-current')).toBe('page');
+});

@@ -121,3 +121,18 @@ it('uses the agent avatar for sessions in both regular and starred sections',()=
  rerender(<WorkspaceSidebar {...props} channels={[{id:'session:one',name:'Review README',section:'starred',agentName:'Local Codex'}]}/>);
  expect(screen.getByRole('button',{name:'Review README'}).querySelector('.sp-avatar')?.textContent).toBe('LO');
 });
+
+it("opens another channel's details through either sidebar menu without navigating", async () => {
+  const select = vi.fn(), details = vi.fn();
+  render(<WorkspaceSidebar workspace="Team" selectedId="general" width={220} onWidthChange={() => {}} onSelect={select}
+    channels={[{ id:"general", name:"general", section:"channels" }, { id:"builds", name:"builds", section:"starred", onDetails:details }]} />);
+  const row = screen.getByRole("button", {name:"builds"});
+  fireEvent.contextMenu(row);
+  await userEvent.click(await screen.findByRole("menuitem", {name:"Channel details"}));
+  await userEvent.click(screen.getByRole("button", {name:"Actions for builds"}));
+  await userEvent.click(await screen.findByRole("menuitem", {name:"Channel details"}));
+  expect(details).toHaveBeenCalledTimes(2);
+  expect(select).not.toHaveBeenCalled();
+  await userEvent.click(row);
+  expect(select).toHaveBeenCalledWith("builds");
+});

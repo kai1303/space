@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { ChatMessage } from '@space/contracts';
-import { Dialog } from '@space/ui/primitives';
+import { Badge, Dialog } from '@space/ui/primitives';
 import { AgentMessageBody } from '../agents/AgentMessageBody.js';
 import { request } from '../../shared/api/request.js';
 import { AssetAttachments } from '../files/AssetAttachments.js';
@@ -14,7 +14,7 @@ export function SourceMessage({ direct, channel, name, messageId, onClose, onUna
     return () => { active = false; };
   }, [channel, messageId]);
   return <Dialog open title={`Original message in ${direct ? '' : '#'}${name}`} onClose={onClose}><div className="channel-memory">
-    {error ? <p role="alert">{error}</p> : message ? <><strong>{message.author.name}</strong><small>{new Date(message.created_at).toLocaleString()}</small>
+    {error ? <p role="alert">{error}</p> : message ? <><strong>{message.author.name}</strong>{message.author.kind === 'app' && <Badge>App</Badge>}<small>{new Date(message.created_at).toLocaleString()}</small>
       {message.deleted_at ? <em className="chat-deleted-message">This message was deleted.</em> : <><AgentMessageBody message={message} />
       {!!message.attachments?.length && <AssetAttachments assets={message.attachments} />}</>}
     </> : <p role="status">Loading original message…</p>}

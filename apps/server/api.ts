@@ -36,7 +36,7 @@ import { AppError, record, text, uuid } from '@space/contracts';
 import type { PostgresStore } from '@space/postgres/store';
 import { WorkspaceStore } from '@space/postgres/workspace';
 import { ChatStore } from '@space/postgres/chat';
-import { registerChatRoutes } from './chat.js';
+import { registerChatRoutes, incomingWebhookPath } from './chat.js';
 import { registerRealtime, type RealtimeOptions } from './realtime.js';
 import { registerWorkspaceRoutes } from './workspace.js';
 import { AssetStore } from '@space/postgres/assets';
@@ -60,7 +60,7 @@ export function createApi(store: PostgresStore, options: { monitoring?: Monitori
     throw new AppError(401, 'unauthorized');
   };
   const app = Fastify({
-    logger: options.logger ? {serializers:{req:(request:{method?:string;url?:string})=>({method:request.method,url:request.url?.replace(/(\/invitations\/)[^/?]+/,'$1[redacted]').replace(/([?&]invite=)[^&]+/,'$1[redacted]')})}} : false,
+    logger: options.logger ? {serializers:{req:(request:{method?:string;url?:string})=>({method:request.method,url:request.url?.replace(/(\/hooks\/incoming\/)[^/?]+/,'$1[redacted]').replace(/(\/invitations\/)[^/?]+/,'$1[redacted]').replace(/([?&]invite=)[^&]+/,'$1[redacted]')})}} : false,
     trustProxy: options.trustedProxies ?? false,
     logController: new LogController({ disableRequestLogging: true }),
     bodyLimit: 32768,
@@ -76,6 +76,7 @@ export function createApi(store: PostgresStore, options: { monitoring?: Monitori
     reply.header('cache-control', 'no-store');
     reply.header('x-content-type-options', 'nosniff');
     if (['/healthz','/readyz'].includes(request.routeOptions.url ?? '') && request.method === 'GET') return;
+    if (request.method === 'POST' && request.routeOptions.url === incomingWebhookPath) return;
     if (request.routeOptions.url === MEMORY_MCP_PATH) return;
     if (request.routeOptions.url === HUDDLE_WEBHOOK) return;
     // This route authenticates a source-scoped token itself; it never grants actor access.

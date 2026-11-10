@@ -177,7 +177,8 @@ export class MemoryStore {
     const [row] = await c.select().from(s.messages).where(and(eq(s.messages.id, uuid(messageId)), eq(s.messages.channel_id, channel.channel_id)));
     if (!row) throw new AppError(404, 'not_found');
     let name: string;
-    if (row.user_id) {
+    if (row.webhook_name) name = row.webhook_name;
+    else if (row.user_id) {
       const [author] = await c.select({ name: s.users.display_name }).from(s.users).where(eq(s.users.id, row.user_id));
       name = author!.name;
     } else {
@@ -187,6 +188,6 @@ export class MemoryStore {
     }
     return { id: row.id, channel_id: row.channel_id, thread_id: row.thread_id, task_id: row.task_id, client_message_id: row.client_message_id,
       text: row.text, document: row.document, created_at: row.created_at.toISOString(),
-      author: { kind: row.user_id ? 'human' : 'agent', id: row.user_id ?? row.installation_id!, name }, attachments: row.attachments };
+      author: { kind: row.author_type, id: row.user_id ?? row.installation_id ?? row.webhook_id!, name }, attachments: row.attachments };
   }
 }

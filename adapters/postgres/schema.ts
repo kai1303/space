@@ -72,7 +72,7 @@ export const messages = pgTable('messages', {
   agent_session_id: uuid(),
   deleted_at: timestamp({ withTimezone: true }),
   agent_milestone: boolean().notNull().default(false),
-  author_type: text().$type<'human' | 'agent'>().notNull().default('agent'), user_id: uuid(), client_message_id: uuid(), request_hash: text(),
+  webhook_id: uuid(), webhook_name: text(), author_type: text().$type<'human' | 'agent' | 'app'>().notNull().default('agent'), user_id: uuid(), client_message_id: uuid(), request_hash: text(),
   text: text().notNull(), document: jsonb().$type<RichDocument>(), attachments: jsonb().$type<AssetAttachment[]>().notNull().default([]), created_at: time(),
   agent_response: jsonb().$type<AgentResponse>(),
   reaction_sequence: bigint({ mode: 'bigint' }).notNull().default(0n),

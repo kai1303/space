@@ -119,3 +119,24 @@ it('updates Managed by and member manager badges from the live snapshot after re
   await userEvent.click(screen.getByRole('tab', { name: 'About' }));
   expect(screen.getByText('Managed by').parentElement?.parentElement?.textContent).not.toContain('Owner');
 });
+
+it('creates, copies and revokes a webhook from the selected channel', async () => {
+  const user = userEvent.setup();
+  const fetch = vi.fn(async (url: string, init?: RequestInit) => {
+    const payload = url.endsWith('/webhooks') ? init?.method === 'POST'
+      ? {id:'hook', name:'Build Bot', path:'/v1/hooks/incoming/test'} : []
+      : url.includes('/members?') ? {items:members, next_cursor:null} : channel;
+    return {ok:true, status:init?.method === 'DELETE' ? 204 : 200, json:async () => payload};
+  });
+  vi.stubGlobal('fetch', fetch);
+  render(<ChannelDetails {...props} />);
+  await user.click(await screen.findByRole('tab', {name:'Integrations'}));
+  await user.type(await screen.findByLabelText('Integration name'), 'Build Bot');
+  await user.click(screen.getByRole('button', {name:'Create incoming webhook'}));
+  await user.click(await screen.findByRole('button', {name:'Copy URL'}));
+  expect(await navigator.clipboard.readText()).toBe(location.origin + '/v1/hooks/incoming/test');
+  await user.click(screen.getByRole('button', {name:'Revoke'}));
+  await user.click(screen.getByRole('button', {name:'Revoke webhook'}));
+  await waitFor(() => expect(screen.queryByLabelText('Webhook URL')).toBeNull());
+  expect(fetch).toHaveBeenCalledWith('/v1/channels/channel/webhooks/hook', expect.objectContaining({method:'DELETE'}));
+});

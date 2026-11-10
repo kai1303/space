@@ -12,6 +12,7 @@ export function Message({
   time,
   children,
   agent = false,
+  app = false,
   reactions = [],
   onReact,
   onReply,
@@ -28,6 +29,7 @@ export function Message({
   time: string;
   children: ReactNode;
   agent?: boolean;
+  app?: boolean;
   reactions?: Reaction[];
   onReact?: (emoji: string) => void;
   onReply?: () => void;
@@ -51,7 +53,7 @@ export function Message({
       <div className="sp-message-body">
         <div className={grouped ? "sp-sr-only" : "sp-message-meta"}>
           <strong>{onAuthorClick && !grouped ? <button type="button" className="sp-message-author-name" aria-label={`View ${author}’s profile`} onClick={onAuthorClick}>{author}</button> : author}</strong>
-          {agent && <Badge>Agent</Badge>}
+          {agent && <Badge>Agent</Badge>}{app && <Badge>App</Badge>}
           <span className="sp-message-time">{time}</span>
         </div>
         <div className="sp-message-text">{children}</div>

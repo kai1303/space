@@ -3,6 +3,8 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { AppError, record, uuid } from '@space/contracts';
 import type { ChatStore } from '@space/postgres/chat';
 
+export const incomingWebhookPath = '/v1/hooks/incoming/:token';
+
 function messageActor(request: FastifyRequest) {
   const expected = request.headers['x-expected-actor'];
   if (expected !== undefined && uuid(expected) !== request.actorId) throw new AppError(409, 'actor_changed');
@@ -11,6 +13,15 @@ function messageActor(request: FastifyRequest) {
 
 export function registerChatRoutes(app: FastifyInstance, chat: ChatStore) {
   registerReplySuggestions(app, chat);
+  app.get<{ Params: { channelId: string } }>('/v1/channels/:channelId/webhooks', r => chat.webhooks.list(r.actorId, uuid(r.params.channelId)));
+  app.post<{ Params: { channelId: string } }>('/v1/channels/:channelId/webhooks', async (r, reply) =>
+    reply.code(201).send(await chat.webhooks.create(r.actorId, uuid(r.params.channelId), r.body)));
+  app.delete<{ Params: { channelId: string; id: string } }>('/v1/channels/:channelId/webhooks/:id', async (r, reply) => {
+    await chat.webhooks.revoke(r.actorId, uuid(r.params.channelId), uuid(r.params.id));
+    return reply.code(204).send();
+  });
+  app.post<{ Params: { token: string } }>(incomingWebhookPath, { bodyLimit: 65536 }, r =>
+    chat.webhooks.post(r.params.token, r.headers['idempotency-key'], r.body));
   app.get<{ Params: { workspaceId: string } }>('/v1/workspaces/:workspaceId/notifications', r => chat.notifications.activity(r.actorId, uuid(r.params.workspaceId), r.query));
   app.patch<{ Params: { workspaceId: string; id: string } }>('/v1/workspaces/:workspaceId/notifications/:id', r => chat.notifications.markRead(r.actorId, uuid(r.params.workspaceId), r.params.id, r.body));
   app.post<{ Params: { workspaceId: string } }>('/v1/workspaces/:workspaceId/notifications/read', r => chat.notifications.markAllRead(r.actorId, uuid(r.params.workspaceId), r.body));

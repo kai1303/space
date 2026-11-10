@@ -1,3 +1,4 @@
+import { ChannelWebhooks } from './channel-webhooks.js';
 import {ChannelPermissionStore,readChannelPermissions,requireChannelCapability,requireRemainingChannelManager} from './channel-permissions.js';
 import { requireFullWorkspaceMember } from './workspace-access.js';
 import { requireWorkspacePolicy } from './workspace-settings.js';
@@ -18,8 +19,8 @@ import * as s from './schema.js';
 const notFound = () => new AppError(404, 'not_found');
 
 export class ChatStore {
-  readonly db; readonly permissions; readonly notifications; readonly mentions; readonly unread; readonly directMessages;
-  constructor(readonly pool: Pool) { this.db = database(pool); this.permissions = new ChannelPermissionStore(this.db); this.notifications = new NotificationStore(pool); this.directMessages = new DirectMessageStore(this.db); this.mentions = new MentionStore(pool); this.unread = new UnreadStore(pool); }
+  readonly db; readonly webhooks; readonly permissions; readonly notifications; readonly mentions; readonly unread; readonly directMessages;
+  constructor(readonly pool: Pool) { this.db = database(pool); this.webhooks = new ChannelWebhooks(this.db); this.permissions = new ChannelPermissionStore(this.db); this.notifications = new NotificationStore(pool); this.directMessages = new DirectMessageStore(this.db); this.mentions = new MentionStore(pool); this.unread = new UnreadStore(pool); }
   async channels(actor: string, workspace: string, query: unknown = {}) {
     const { after, limit } = parsePage(query);
     return this.db.transaction(async c => {
