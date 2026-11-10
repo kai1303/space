@@ -19,6 +19,7 @@ function response(path: string): unknown {
   if (path.includes('/channels?')) return { items: channels, next_cursor: null };
   if (path === '/agents/connectors') return defaultPairedConnectors;
   if (path.startsWith('/agents/installations?')) return installations;
+  if (path.endsWith('/settings')) return { role: 'member' };
   if (path.endsWith('/join')) return {};
   throw new Error(`Unexpected request: ${path}`);
 }
@@ -83,8 +84,9 @@ it('shows workspace agents with functioning contextual navigation', async () => 
   await userEvent.click(screen.getByRole('button', { name: 'View your agents' }));
   expect(screen.getByText('Kai’s Codex')).toBeTruthy();
   await userEvent.click(screen.getByRole('button', { name: 'Apps', exact: true }));
-  await userEvent.click(within(screen.getByRole('heading', { name: 'Tools that join the conversation' }).closest('section')!).getByRole('button', { name: 'Connect an agent' }));
-  expect(props.onOpenMembers).toHaveBeenCalledTimes(2);
+  await screen.findByText(/Workspace owners and admins manage MCP servers/);
+  expect(screen.queryByRole('button', { name: 'Add connection' })).toBeNull();
+  expect(api.request.mock.calls.some(([path]) => path.endsWith('/connections') || path.endsWith('/connection-agents'))).toBe(false);
 });
 
 it('Spacebot routes to a real channel with an installed agent and does not invoke a backend model', async () => {
@@ -289,4 +291,45 @@ it('updates the agent status badge from presence and keeps disabled agents disti
   enabled = true; status = undefined;
   await act(async () => { await updates.get('workspace')?.refresh(); });
   expect(screen.getByRole('status').textContent).toBe('Status unavailable');
+});
+
+it('manages workspace MCP servers and drops credentials when the viewer loses the admin role', async () => {
+  let role = 'admin';
+  const item = { id: 'service', name: 'Team tools', url: 'https://team.example.com/mcp', auth_type: 'bearer', enabled: true, revision: 3, status: 'ready', tools: [{ name: 'lookup' }], grants: [] };
+  api.request.mockImplementation(async (path: string) => {
+    if (path === '/workspaces/workspace/settings') return { role };
+    if (path === '/workspaces/workspace/connections') return { items: [item] };
+    if (path === '/workspaces/workspace/connection-agents') return { items: [{ id: 'installed', name: 'Team agent', workspace_name: 'Team' }] };
+    if (path.startsWith('/workspaces/workspace/connections/service')) return {};
+    return response(path);
+  });
+  const view = render(<WorkspaceDestinations view="agents" {...props} />);
+  await userEvent.click(screen.getByRole('button', { name: 'Apps' }));
+  const row = within(await screen.findByRole('region', { name: 'Team tools' }));
+  expect(screen.queryByRole('region', { name: 'Recent tool calls' })).toBeNull();
+  expect(api.request.mock.calls.some(([path]) => path.includes('connection-calls') || path.startsWith('/me/'))).toBe(false);
+  await userEvent.click(row.getByRole('button', { name: 'Agent access' }));
+  await userEvent.click(screen.getByRole('checkbox', { name: 'lookup' }));
+  await userEvent.click(screen.getByRole('button', { name: 'Save access' }));
+  await waitFor(() => expect(api.request).toHaveBeenCalledWith('/workspaces/workspace/connections/service/grants', { revision: 3, installation_id: 'installed', tools: ['lookup'] }, undefined, 'PUT'));
+  await userEvent.click(row.getByRole('button', { name: 'Edit' }));
+  const url = screen.getByLabelText('MCP endpoint');
+  await userEvent.clear(url);
+  await userEvent.type(url, 'https://other.example.com/mcp');
+  expect((screen.getByRole('button', { name: 'Save connection' }) as HTMLButtonElement).disabled).toBe(true);
+  await userEvent.type(screen.getByLabelText('Bearer token'), 'replacement');
+  expect((screen.getByRole('button', { name: 'Save connection' }) as HTMLButtonElement).disabled).toBe(false);
+  role = 'member';
+  await act(async () => { await updates.get('workspace')?.refresh(); });
+  expect(screen.queryByLabelText('Bearer token')).toBeNull();
+  expect(screen.queryByText('Team tools')).toBeNull();
+  expect(screen.queryByRole('button', { name: 'Add connection' })).toBeNull();
+  role = 'owner';
+  await act(async () => { await updates.get('workspace')?.refresh(); });
+  await screen.findByText('Team tools');
+  await userEvent.click(screen.getByRole('button', { name: 'Add connection' }));
+  await userEvent.type(screen.getByLabelText('Bearer token'), 'draft');
+  view.rerender(<WorkspaceDestinations view="agents" {...props} workspace="other" />);
+  expect(screen.queryByLabelText('Bearer token')).toBeNull();
+  expect(screen.queryByText('Team tools')).toBeNull();
 });

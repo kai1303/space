@@ -96,6 +96,8 @@ test('gateway enforces personal grants, separates accounts and denies revoked ac
       assert.notEqual((await client.callTool({ name: tool.name, arguments: {} })).isError, true);
     assert.deepEqual(seen.sort(), ['account-a', 'account-b']);
     const claims = store.security.verify(access.token, 'outbound');
+    assert.equal(claims.workspace, seed.workspace_id);
+    assert.equal(claims.requester, seed.owner_id);
     const name = list.tools[0]!.name;
     const reserved = await store.reserve(claims, 'duplicate', name, {});
     await assert.rejects(store.reserve(claims, 'duplicate', name, {}), /call_in_progress/);

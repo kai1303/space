@@ -93,3 +93,30 @@ test('concurrent personal creates cannot exceed twenty connections', async () =>
   assert.ok(attempts.some((a) => a.status === 'rejected'));
   assert.equal((await store.list(owner)).items.length, 20);
 });
+
+test('workspace ownership survives admin changes and never reuses a shared token at a new endpoint', async () => {
+  const { OutboundStore } = await import('@space/postgres/outbound');
+  const seed = await bootstrap(pool);
+  const store = new OutboundStore(pool, randomBytes(32).toString('hex'));
+  const workspace = seed.workspace_id;
+  const owner = { workspace, actor: seed.owner_id };
+  const admin = { workspace, actor: seed.collaborator_id };
+  await pool.query("UPDATE workspace_members SET role='admin' WHERE workspace_id=$1 AND user_id=$2", [workspace, admin.actor]);
+  const connection = await store.create(admin, {
+    name: 'Workspace tools', url: 'https://tools.example/mcp', auth_type: 'bearer', token: 'team-token',
+  });
+  await pool.query("UPDATE workspace_members SET role='member' WHERE workspace_id=$1 AND user_id=$2", [workspace, admin.actor]);
+  await assert.rejects(store.credentials(admin, connection.id), /forbidden/);
+  await assert.rejects(store.catalog(admin, connection.id, 1, []), /forbidden/);
+  await assert.rejects(store.get(admin.actor, connection.id), /not_found/);
+  assert.deepEqual((await store.list(owner)).items.map(item => item.id), [connection.id]);
+  await assert.rejects(store.update(owner, connection.id, { revision: 1, url: 'https://new.example/mcp' }), /invalid_mcp_token/);
+  assert.equal((await store.credentials(owner, connection.id)).token, 'team-token');
+  const competing = await Promise.allSettled(['First', 'Second'].map(name =>
+    store.update(owner, connection.id, { revision: 1, name })));
+  assert.equal(competing.filter(result => result.status === 'fulfilled').length, 1);
+  assert.match(String(competing.find(result => result.status === 'rejected')?.reason), /connection_changed/);
+  const edited = await store.update(owner, connection.id, { revision: 2, url: 'https://new.example/mcp', token: 'replacement' });
+  assert.equal(edited.revision, 3);
+  assert.equal((await store.credentials(owner, edited.id)).token, 'replacement');
+});
