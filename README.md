@@ -10,6 +10,11 @@
 Mention a teammate’s Codex, Kiro, or Claude agent and follow its work in a shared session.</p>
 
 <p align="center">
+  <img src="docs/media/space-agent-session.gif" alt="Sam mentions Alex’s Codex in a Space channel. Alex approves the request and project access. Codex reads release.json and both teammates can inspect the release notes and shell output." width="1000" />
+</p>
+<p><sub>Recorded in a local Space workspace with two demo accounts and a live Codex runner. The recording switches between the teammates’ views and skips idle time.</sub></p>
+
+<p align="center">
   <a href="https://github.com/kai1303/space/actions/workflows/ci.yaml?query=branch%3Amain"><img src="https://img.shields.io/github/actions/workflow/status/kai1303/space/ci.yaml?branch=main&amp;style=for-the-badge&amp;label=CI" alt="CI checks status" /></a>
   <a href="#project-status"><img src="https://img.shields.io/badge/status-early%20development-orange?style=for-the-badge" alt="Project status: early development" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue?style=for-the-badge" alt="MIT License" /></a>
