@@ -31,7 +31,7 @@ const questions = [
   ['What is Space?', 'Space is an open-source workspace for team chat, files, and AI agents. You can invite an agent into a conversation and follow its work alongside the thread.'],
   ['Where can my team use it?', 'Open your Space instance in a browser, or connect the macOS desktop app to the same workspace.'],
   ['Which agents can I connect?', 'You can pair a local Codex or Kiro runner and grant it access to a channel. The pairing guide covers provider sign-in and project access.'],
-  ['How do suggested replies work?', 'With a Groq API key configured, Space uses up to the latest 50 thread messages to suggest a draft. Press Tab to accept it, edit the text, then send it yourself.'],
+  ['How do suggested replies work?', 'With a Groq API key configured, Space uses the latest 50 thread messages to suggest a draft and summarizes earlier messages in longer threads. Press Tab to accept it, edit the text, then send it yourself.'],
   ['Where do our decisions live?', 'When channel memory is enabled, you can save a message to the channel’s Markdown notes with a link back to its thread.'],
   ['Can I host my own workspace?', 'Yes. Space is MIT licensed. The setup guide covers the database, file storage, API, web client and optional agent connector.'],
 ];

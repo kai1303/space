@@ -316,16 +316,51 @@ export class ChatStore {
   async replySuggestionContext(actor: string, thread: string) {
     return this.db.transaction(async c => {
       await this.requireThreadAccess(actor, thread, c);
-      const result = await c.execute<{ speaker: string; text: string }>(sql`
-        SELECT CASE WHEN m.user_id=${actor} THEN 'me'
-                    WHEN m.author_type='agent' THEN 'agent'
-                    ELSE concat('participant: ', left(u.display_name, 80)) END AS speaker, left(m.text, 1000) AS text
-        FROM threads t JOIN messages m ON m.workspace_id=t.workspace_id AND m.channel_id=t.channel_id AND m.thread_id=t.id
-        LEFT JOIN users u ON u.id=m.user_id
-        WHERE t.id=${thread} AND m.agent_session_id IS NULL
-        ORDER BY m.sequence DESC LIMIT 50`);
-      return result.rows.reverse();
+      const state = (await c.execute<{ summary: string; through: string; offset: number; revision: string; viewer: string }>(sql`
+        SELECT t.reply_summary AS summary, t.reply_summary_through::text AS through,
+          t.reply_summary_offset AS offset, t.reply_history_revision::text AS revision, left(u.display_name, 80) AS viewer
+        FROM threads t JOIN users u ON u.id=${actor} WHERE t.id=${thread}`)).rows[0]!;
+      type Turn = { speaker: string; text: string; sequence: string };
+      const visible = sql`FROM threads t JOIN messages m ON m.workspace_id=t.workspace_id AND m.channel_id=t.channel_id AND m.thread_id=t.id
+        LEFT JOIN users u ON u.id=m.user_id WHERE t.id=${thread} AND m.agent_session_id IS NULL
+        AND m.deleted_at IS NULL AND m.retained_at IS NULL`;
+      const participant = sql`CASE WHEN m.author_type='agent' THEN 'agent' ELSE concat('participant: ', left(u.display_name, 80)) END`;
+      const columns = sql`left(m.text, 1000) AS text, m.sequence::text AS sequence`;
+      const recent = (await c.execute<Turn>(sql`
+        SELECT CASE WHEN m.user_id=${actor} THEN 'me' ELSE ${participant} END AS speaker, ${columns}
+        ${visible} ORDER BY m.sequence DESC LIMIT 51`)).rows;
+      const lastOlder = recent[50];
+      const messages = recent.slice(0, 50).reverse();
+      const older: (Turn & { nextOffset: number })[] = [];
+      if (lastOlder && (lastOlder.sequence !== state.through || state.offset > 0)) {
+        // Page large turns by Unicode code point. A successful batch can end inside a message.
+        const start = sql`CASE WHEN m.sequence=${state.through}::bigint THEN ${state.offset}::int ELSE 0 END`;
+        const rows = (await c.execute<Turn & { start: number; length: number }>(sql`
+          SELECT ${participant} AS speaker, m.sequence::text AS sequence, ${start} AS start,
+            substr(m.text, ${start} + 1, 4096) AS text, length(m.text) AS length ${visible}
+          AND m.sequence >= ${state.through}::bigint AND (m.sequence > ${state.through}::bigint OR ${state.offset}::int > 0)
+          AND m.sequence <= ${lastOlder.sequence}::bigint ORDER BY m.sequence LIMIT 50`)).rows;
+        for (const row of rows) {
+          const chars = Array.from(row.text);
+          for (let i = 0; i < Math.max(1, chars.length); i += 512) {
+            const end = row.start + Math.min(i + 512, chars.length);
+            older.push({ sequence: row.sequence, speaker: row.speaker, text: chars.slice(i, i + 512).join(''),
+              nextOffset: end < row.length ? end : 0 });
+          }
+          if (older.length >= 50 || older.at(-1)!.nextOffset) break;
+        }
+      }
+      return { ...state, messages, older };
     }, { isolationLevel: 'repeatable read', accessMode: 'read only' });
+  }
+  async saveReplySummary(actor: string, thread: string, previous: { through: string; offset: number; revision: string }, end: { sequence: string; nextOffset: number }, summary: string) {
+    await this.db.transaction(async c => {
+      await this.requireThreadAccess(actor, thread, c);
+      // Another request can win this update. The caller always reloads the winning summary.
+      await c.execute(sql`UPDATE threads SET reply_summary=${summary}, reply_summary_through=${end.sequence}::bigint, reply_summary_offset=${end.nextOffset}
+        WHERE id=${thread} AND reply_history_revision=${previous.revision}::bigint AND reply_summary_through=${previous.through}::bigint
+          AND reply_summary_offset=${previous.offset}`);
+    });
   }
   async threadMessages(actor: string, thread: string, query: unknown = {}): Promise<ChatMessage[]> {
     const v = record(query, ['before']);

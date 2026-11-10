@@ -20,6 +20,23 @@ reference data alongside recent messages. Jev keeps `last_message` separate from
 permissions, or count as proof that work was completed. Explicit mentions and active
 ownership retain their existing deterministic routing.
 
+## Suggested replies in long threads
+
+The thread composer requests a draft when it needs a suggestion. With Groq configured,
+threads with up to 50 visible messages use recent message excerpts directly. In longer
+threads the API first folds older text into a rolling summary, then sends the summary
+and the latest 50 turns to the reply model. Private agent-session messages, deleted
+messages and messages erased by retention are excluded from both inputs.
+
+Migration 069 stores the summary and its position on the thread. This summary is
+specific to suggested replies and is shared across participants. Each successful
+batch advances the position, including within a long message. A later request resumes
+from that position. Concurrent requests can duplicate a model call, but only one
+result can advance a given position. Changes to visible source text or visibility
+invalidate the summary. Each model request fits within 12 KiB. A suggestion request
+has a 30-second deadline; if catch-up or generation fails, the composer gets no draft
+and the next request can reuse any completed batches.
+
 ## Agent tools
 
 Use the existing Streamable HTTP MCP endpoint, `/mcp/memory`, with a **thread-scoped**

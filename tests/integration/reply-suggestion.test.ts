@@ -38,9 +38,9 @@ before(async () => {
     assert.ok(Buffer.byteLength(body) <= 12288);
     const data = JSON.parse(payload.messages[1].content);
     if (payload.messages[0].content.startsWith('Summarize')) {
-      summaries.push(data);
+      const number = summaries.push(data);
       await onSummarize();
-      return Response.json({ choices: [{ finish_reason: 'stop', message: { content: 'Earlier decision ' + summaries.length } }] });
+      return Response.json({ choices: [{ finish_reason: 'stop', message: { content: 'Earlier decision ' + number } }] });
     }
     replySummary = data.summary ?? '';
     context = data.messages ?? data;
@@ -60,13 +60,13 @@ after(async () => {
 test('suggests from the newest 50 visible thread messages and checks access across generation', { timeout: 30_000 }, async () => {
   const a = await bootstrap(pool), outsider = await bootstrap(pool);
   const root = await chat.send(a.owner_id, a.channel_id, { client_message_id: randomUUID(), text: 'Root' });
-  for (let i = 1; i <= 51; i++) {
-    await chat.send(i % 2 ? a.collaborator_id : a.owner_id, a.channel_id, { thread_id: root.thread_id, client_message_id: randomUUID(), text: `Message ${i}` });
-  }
   const session = randomUUID();
   await pool.query("INSERT INTO agent_sessions(id,workspace_id,installation_id,origin_thread_id,title,managed) VALUES($1,$2,$3,$4,'Private',true)", [session,a.workspace_id,a.installation_id,root.thread_id]);
   const task = await new PostgresStore(pool).createTask(a.owner_id, { workspace_id: a.workspace_id, thread_id: root.thread_id, installation_id: a.installation_id, goal: 'Internal task', skill: 'demo.echo' }, randomUUID());
   await pool.query("INSERT INTO messages(id,workspace_id,channel_id,thread_id,installation_id,agent_session_id,task_id,text) VALUES($1,$2,$3,$4,$5,$6,$7,'Private content')", [randomUUID(),a.workspace_id,a.channel_id,root.thread_id,a.installation_id,session,task.id]);
+  for (let i = 1; i <= 51; i++) {
+    await chat.send(i % 2 ? a.collaborator_id : a.owner_id, a.channel_id, { thread_id: root.thread_id, client_message_id: randomUUID(), text: `Message ${i}` });
+  }
   const suggest = (token: string) => app.inject({ method: 'POST', url: `/v1/threads/${root.thread_id}/reply-suggestion`, headers: { authorization: `Bearer ${token}` }, payload: {} });
   assert.equal((await suggest(outsider.owner_token)).statusCode, 404);
   assert.equal(calls, 0);
@@ -114,4 +114,71 @@ test('requires a hosted key and fits all 50 long messages into the prompt budget
   assert.ok(await generate(messages, new AbortController().signal));
   assert.equal(context.length, 50);
   context.forEach((item, index) => assert.ok(item.text.startsWith(String(index))));
+});
+
+test('starts at 51, preserves a long first message, and discards an in-flight summary after erasure', async () => {
+  onGenerate = async () => {};
+  const a = await bootstrap(pool);
+  const original = '💬'.repeat(5600) + ' Final decision: Kyoto.';
+  const root = await chat.send(a.owner_id, a.channel_id, { client_message_id: randomUUID(), text: original });
+  const send = (text: string) => chat.send(a.owner_id, a.channel_id, { thread_id: root.thread_id, client_message_id: randomUUID(), text });
+  const suggest = () => app.inject({ method: 'POST', url: `/v1/threads/${root.thread_id}/reply-suggestion`,
+    headers: { authorization: `Bearer ${a.owner_token}` }, payload: {} });
+  for (let i = 1; i < 50; i++) await send('Reply ' + i);
+  const start = summaries.length;
+  await suggest();
+  assert.equal(summaries.length, start);
+  assert.equal(context.length, 50);
+  assert.equal(replySummary, '');
+  await send('The 51st message');
+  onSummarize = async () => { throw new Error('provider unavailable'); };
+  assert.deepEqual((await suggest()).json(), { suggestion: null });
+  onSummarize = async () => {};
+  const retry = summaries.length;
+  assert.ok((await suggest()).json().suggestion);
+  assert.equal(summaries.slice(retry).flatMap(item => item.messages.map(m => m.text)).join(''), original);
+  assert.equal(context[0]?.text, 'Reply 1');
+  await send('The 52nd message');
+  onSummarize = async () => {
+    onSummarize = async () => {};
+    await chat.deleteMessage(a.owner_id, a.channel_id, root.id);
+  };
+  const beforeErase = summaries.length;
+  assert.ok((await suggest()).json().suggestion);
+  assert.equal(summaries[beforeErase + 1]?.summary, '');
+  assert.deepEqual(summaries[beforeErase + 1]?.messages.map(m => m.text), ['Reply 1']);
+  assert.equal(replySummary, 'Earlier decision ' + summaries.length);
+});
+
+test('concurrent participants reuse the winning summary across a multi-page backfill', { timeout: 30_000 }, async () => {
+  const a = await bootstrap(pool);
+  const root = await chat.send(a.owner_id, a.channel_id, { client_message_id: randomUUID(), text: 'Turn 0' });
+  for (let i = 1; i < 103; i++) {
+    await chat.send(a.owner_id, a.channel_id, { thread_id: root.thread_id, client_message_id: randomUUID(), text: 'Turn ' + i });
+  }
+  const suggest = (token: string) => app.inject({ method: 'POST', url: `/v1/threads/${root.thread_id}/reply-suggestion`,
+    headers: { authorization: `Bearer ${token}` }, payload: {} });
+  const start = summaries.length;
+  let enter!: () => void, release!: () => void;
+  const entered = new Promise<void>(resolve => { enter = resolve; });
+  const paused = new Promise<void>(resolve => { release = resolve; });
+  onSummarize = async () => {
+    onSummarize = async () => {};
+    enter();
+    await paused;
+  };
+  const slow = suggest(a.owner_token).then(response => response.json());
+  try {
+    await entered;
+    assert.ok((await suggest(a.collaborator_token)).json().suggestion);
+    const winner = summaries.slice(start + 1);
+    assert.deepEqual(winner.flatMap(item => item.messages.map(m => m.text)),
+      Array.from({ length: 53 }, (_, i) => 'Turn ' + i));
+    assert.deepEqual(context.map(m => m.text), Array.from({ length: 50 }, (_, i) => 'Turn ' + (i + 53)));
+    assert.equal(replySummary, 'Earlier decision ' + summaries.length);
+  } finally { release(); }
+  const count = summaries.length;
+  assert.ok((await slow).suggestion);
+  assert.equal(summaries.length, count);
+  assert.equal(replySummary, 'Earlier decision ' + count);
 });
