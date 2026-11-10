@@ -101,3 +101,23 @@ it('does not restore private write results when the refresh itself rejects acces
   render(<WorkspaceTodos workspace="w" onOpen={()=>{}}/>);await userEvent.click(await screen.findByRole('button',{name:'Review proposal'}));await userEvent.click(screen.getByLabelText('Mark Review proposal complete'));
   await screen.findByRole('alert');expect(screen.queryByText('Review proposal')).toBeNull();expect(screen.queryByLabelText('In-progress')).toBeNull();
 });
+
+it('opens the requested standalone task even when it falls outside the first page',async()=>{
+  const selected={...todo,id:'two',title:'Off-page task'};
+  fake(path=>path.endsWith('/two')?selected:{items:[todo],next_cursor:'older'});
+  render(<WorkspaceTodos workspace="team" initialTodoId="two" onOpen={()=>{}}/>);
+  await waitFor(()=>expect(screen.getByRole('complementary',{name:'To-do details'}).textContent).toContain(selected.title));
+  expect(vi.mocked(fetch).mock.calls.map(([path])=>String(path))).toContain('/v1/workspaces/team/hub/todos/two');
+  await userEvent.click(screen.getByRole('button',{name:'Close to-do details'}));
+  await act(async()=>{await live.refresh!();});
+  expect(screen.getByRole('complementary',{name:'To-do details'}).textContent).not.toContain(selected.title);
+});
+
+it('reports a requested task that is no longer accessible without removing other authorized tasks',async()=>{
+  vi.stubGlobal('fetch',vi.fn(async(path:string)=>path.endsWith('/gone')
+    ? {ok:false,status:404,json:async()=>({error:'not_found'})}
+    : {ok:true,status:200,json:async()=>({items:[todo],next_cursor:null})}));
+  render(<WorkspaceTodos workspace="team" initialTodoId="gone" onOpen={()=>{}}/>);
+  await screen.findByText('This to-do is no longer available.');
+  expect(screen.getByRole('button',{name:todo.title})).toBeTruthy();
+});

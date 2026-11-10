@@ -1,7 +1,7 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { DirectMessages, NewDirectMessage } from './DirectMessages.js';
+import { DirectMessages, DirectMessagesPeek, NewDirectMessage } from './DirectMessages.js';
 const mocks = vi.hoisted(() => ({ refresh: undefined as undefined | (() => unknown), counts: [{ channel_id: 'dm', unread_count: 2, latest_sequence: '2', last_read_sequence: '0' }] }));
 vi.mock('../../shared/realtime/live-updates.js', () => ({ subscribeUpdates: (_scope: string, _id: string, read: () => unknown) => { mocks.refresh = read; void read(); return () => {}; } }));
 vi.mock('../notifications/useWorkspaceUnread.js', () => ({ useWorkspaceUnread: () => ({ channels: mocks.counts }) }));
@@ -101,4 +101,23 @@ it('uses edits made while a recipient open is pending and prevents duplicate ope
   await waitFor(() => expect(opened).toHaveBeenCalledOnce());
   expect(opened.mock.calls[0]?.[1].ops.map((op: { insert: string }) => op.insert).join('')).toContain('Keep the latest edit');
   expect(vi.mocked(fetch).mock.calls.filter(([, options]) => options?.method === 'POST')).toHaveLength(1);
+});
+
+it('previews recent DMs, filters server-side and navigates only when a row is chosen', async () => {
+  fetcher(path => ({ items: path.includes('unread=true') ? [] : [dm], next_cursor: null }));
+  const open = vi.fn();
+  const view = render(<DirectMessagesPeek workspace="workspace" viewer="user" onOpen={open} />);
+  const row = await screen.findByRole('button', { name: /Open DM with Alex/ });
+  expect(within(row).getByText('Alex: Hello there')).toBeTruthy();
+  expect(row.querySelector('time')?.dateTime).toBe(dm.last_message.created_at);
+  expect(open).not.toHaveBeenCalled();
+  await userEvent.click(screen.getByRole('button', { name: 'Unreads' }));
+  await screen.findByText('No unread conversations.');
+  await userEvent.click(screen.getByRole('button', { name: 'Unreads' }));
+  await userEvent.click(await screen.findByRole('button', { name: /Open DM with Alex/ }));
+  expect(open).toHaveBeenCalledWith('dm');
+  expect(vi.mocked(fetch).mock.calls.every(([, options]) => options?.method === 'GET')).toBe(true);
+  const signal = vi.mocked(fetch).mock.calls.at(-1)?.[1]?.signal;
+  view.unmount();
+  expect(signal?.aborted).toBe(true);
 });

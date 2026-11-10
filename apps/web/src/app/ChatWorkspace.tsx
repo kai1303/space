@@ -1,14 +1,17 @@
+import { CollectionRailPreview } from '../features/workspace/collections/CollectionRailPreview.js';
+import { SpacebotPreview } from '../features/workspace/collections/SpacebotPreview.js';
+import type { RailPreview } from './shell/RailNavigation.js';
 import { ConversationLinkLoading } from './shell/ConversationLinkLoading.js';
 import { ConversationLocation } from '../shared/ui/conversation-location.js';
-import { parseConversationPath, parseSessionPath, workspaceIdFromPath, workspacePath, type AgentSessionReference } from '@space/contracts';
+import { parseConversationPath, parseSessionPath, sessionPath, workspaceIdFromPath, workspacePath, type AgentSessionReference } from '@space/contracts';
 import { DestinationTransition } from './navigation/DestinationTransition.js';
 import { WorkspaceMembers } from '../features/workspace/members/WorkspaceMembers.js';
 import { WorkspaceSettings } from '../features/workspace/settings/WorkspaceSettings.js';
 import { WorkspaceCollections } from '../features/workspace/collections/WorkspaceCollections.js';
 import { WorkspaceDestinations } from '../features/workspace/collections/WorkspaceDestinations.js';
 import { ComposerDrafts } from '../features/composer/ComposerDrafts.js';
-import { Notifications } from '../features/notifications/Notifications.js';
-import { DirectMessages } from '../features/direct-messages/DirectMessages.js';
+import { ActivityPeek, Notifications } from '../features/notifications/Notifications.js';
+import { DirectMessagesPeek, DirectMessages } from '../features/direct-messages/DirectMessages.js';
 import { MentionInbox } from "../features/mentions/Mentions.js";
 import { WorkspaceAdministration } from '../features/workspace/members/WorkspaceAdministration.js';
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -43,21 +46,29 @@ export function ChatWorkspace({ profile }: { profile: Profile }) {
   const attachments = useAttachmentUploads(profile.id);
   const [revision, setRevision] = useState(0);
   const address = useRef(browserAddress());
+  const restore = useCallback(() => {
+    const current = browserAddress();
+    if (current.path !== address.current.path || current.view !== address.current.view) {
+      address.current = current;
+      setRevision(value => value + 1);
+    }
+  }, []);
   useEffect(() => {
-    const restore = () => {
-      const current = browserAddress();
-      if (current.path !== address.current.path || current.view !== address.current.view) {
-        address.current = current;
-        setRevision(value => value + 1);
-      }
-    };
     window.addEventListener('popstate', restore);
     return () => window.removeEventListener('popstate', restore);
-  }, []);
-  return <WorkspaceView key={revision} profile={profile} attachments={attachments} address={address}/>;
+  }, [restore]);
+  function openSession(session: AgentSessionReference) {
+    const path = sessionPath(session.id);
+    if (path && path !== location.pathname) {
+      history.pushState(null, '', path);
+      restore();
+    }
+  }
+  return <WorkspaceView key={revision} profile={profile} attachments={attachments} address={address} onOpenSession={openSession}/>;
 }
 
-function WorkspaceView({ profile: initialProfile, attachments, address }: {
+function WorkspaceView({ profile: initialProfile, attachments, address, onOpenSession }: {
+  onOpenSession: (session: AgentSessionReference) => void;
   profile: Profile;
   attachments: ReturnType<typeof useAttachmentUploads>;
   address: { current: ReturnType<typeof browserAddress> };
@@ -80,7 +91,7 @@ function WorkspaceView({ profile: initialProfile, attachments, address }: {
       address.current = browserAddress();
     } else setAgentSetup(undefined);
   }, [workspace]);
-  const { mentionTarget, setMentionTarget, membersOpen, setMembersOpen, connection, setConnection, pageViews, viewForChannel, hubView, setHubView, settingsOpen, setSettingsOpen, navigateHub, openChannel, openCollection, activityOpen, setActivityOpen, directOpen, directId, directCompose, lastHomeChannel, navigationError, mentionNavigation, openMention, openDirect, newDirect, openHome, searchOpen, setSearchOpen, setCanSearch, requestedChannel, setRequestedChannel, navigation, changeWorkspace, visit, travel, destination } = useNavigation(workspaces, workspace, setWorkspace);
+  const { mentionTarget, setMentionTarget, membersOpen, setMembersOpen, connection, setConnection, pageViews, viewForChannel, hubView, initialTodoId, setHubView, settingsOpen, setSettingsOpen, navigateHub, openChannel, openCollection, activityOpen, setActivityOpen, directOpen, directId, directCompose, lastHomeChannel, navigationError, mentionNavigation, openMention, openDirect, newDirect, openHome, searchOpen, setSearchOpen, setCanSearch, requestedChannel, setRequestedChannel, navigation, changeWorkspace, visit, travel, destination } = useNavigation(workspaces, workspace, setWorkspace);
   const { sidebarWidth, setSidebarWidth } = useSidebarWidth();
   const { draftState, saveDraft, uploads, forgetChannelDrafts } = attachments;
   useEffect(() => {
@@ -172,11 +183,25 @@ function WorkspaceView({ profile: initialProfile, attachments, address }: {
   if (!workspace) return <WorkspaceSetup name={profile.display_name} onCreate={addWorkspace} />;
   const selectedWorkspace = workspaces.find(item => item.id === workspace);
   const recent = navigation.entries.map((entry, index) => ({ ...entry, index })).reverse().filter((entry, index, entries) => entries.findIndex(other => other.workspace === entry.workspace && other.channel === entry.channel) === index);
-  const hubContent = workspace && hubView ? hubView === 'drafts' ? <ComposerDrafts key={`drafts:${workspace}`} workspace={workspace} drafts={draftState.current} onOpen={openCollection} onNewMessage={newDirect}/> : ['threads','saved','files','todos'].includes(hubView) ? <WorkspaceCollections key={`${workspace}:${hubView}`} view={hubView as 'threads'|'saved'|'files'|'todos'} workspace={workspace} onOpen={openCollection}/> : <WorkspaceDestinations key={`${workspace}:${hubView}`} view={hubView as 'directories'|'agents'|'spacebot'|'huddles'} workspace={workspace} viewer={profile.id} onOpenChannel={openChannel} onOpenMembers={() => setMembersOpen(true)} onOpenAgents={() => navigateHub('agents')} onOpenConnection={setConnection} onConnectAgent={connector => setAgentSetup({workspace,connector})} viewState={hubView==='spacebot'?pageViews.spacebot:undefined}/> : undefined;
+  function renderPreview(tab: RailPreview, close: () => void) {
+    switch (tab) {
+      case 'dms': return <DirectMessagesPeek workspace={workspace} viewer={profile.id} onOpen={id => { close(); openDirect(id); }}/>;
+      case 'activity': return <ActivityPeek workspace={workspace} onOpen={item => { close(); void openMention(item); }}/>;
+      case 'spacebot': return <SpacebotPreview workspace={workspace}
+        onNewMessage={() => { close(); navigateHub('spacebot'); }}
+        onOpenSession={session => { close(); onOpenSession(session); }}
+        onOpenTodos={() => { close(); navigateHub('todos'); }}/>;
+      case 'files':
+      case 'todos': return <CollectionRailPreview view={tab} workspace={workspace}
+        onOpen={target => { close(); openCollection(target); }}
+        onOpenDestination={todoId => { close(); navigateHub(tab, todoId); }}/>;
+    }
+  }
+  const hubContent = workspace && hubView ? hubView === 'drafts' ? <ComposerDrafts key={`drafts:${workspace}`} workspace={workspace} drafts={draftState.current} onOpen={openCollection} onNewMessage={newDirect}/> : ['threads','saved','files','todos'].includes(hubView) ? <WorkspaceCollections initialTodoId={initialTodoId} key={`${workspace}:${hubView}`} view={hubView as 'threads'|'saved'|'files'|'todos'} workspace={workspace} onOpen={openCollection}/> : <WorkspaceDestinations key={`${workspace}:${hubView}`} view={hubView as 'directories'|'agents'|'spacebot'|'huddles'} workspace={workspace} viewer={profile.id} onOpenChannel={openChannel} onOpenMembers={() => setMembersOpen(true)} onOpenAgents={() => navigateHub('agents')} onOpenConnection={setConnection} onConnectAgent={connector => setAgentSetup({workspace,connector})} viewState={hubView==='spacebot'?pageViews.spacebot:undefined}/> : undefined;
   return <ConversationLocation.Provider value={publish}><ProfileProvider workspace={workspace} viewer={profile.id} onConnection={setConnection} onMessage={(target, channel) => {
     if (target.kind === 'agent') saveDraft(channel, profileMessageDraft(target, draftState.current[channel]));
     setProfileMessage(value => value + 1); openDirect(channel);
-  }}><motion.div className="access-workspace-enter" initial={reduced || location.pathname.startsWith('/c/') ? false : { opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={motionTransition(reduced, .24)}><ChatShell onNavigate={workspace ? navigateHub : undefined} activeDestination={hubView && !homeShortcuts.has(hubView) ? hubView as 'spacebot'|'files'|'todos'|'agents' : undefined} adminItems={workspace ? [{ label: 'Workspace settings', onSelect: () => setSettingsOpen(true) }, { label: 'Manage members', onSelect: () => setMembersOpen(true) }, { label: 'Apps & agents', onSelect: () => navigateHub('agents') }] : undefined} onActivity={workspace ? () => { mentionNavigation.current++; setHubView(undefined); setActivityOpen(true); setSearchOpen(false); setCanSearch(false); } : undefined} activityActive={activityOpen} notificationDelivery={{workspace,channel:activityOpen?'*':hubView?undefined:directOpen?directId:lastHomeChannel.current,onOpen:item=>void openMention(item)}} onHome={openHome} onDirectMessages={workspace ? () => openDirect() : undefined} directMessagesActive={directOpen && !activityOpen} activity={workspace ? <MentionInbox key={workspace} workspace={workspace} onOpen={item => void openMention(item)} /> : undefined} name={selectedWorkspace?.name ?? 'Space'} user={profile.display_name} userId={profile.id} onNameChange={name => setProfile(old => old.display_name === name ? old : { ...old, display_name: name })} workspaces={workspaces} workspace={workspace} onWorkspaceChange={workspaces.length ? changeWorkspace : undefined} onCreateWorkspace={addWorkspace} sidebarWidth={sidebarWidth} onBack={navigation.index > 0 ? () => travel(navigation.index - 1) : undefined} onForward={navigation.index < navigation.entries.length - 1 ? () => travel(navigation.index + 1) : undefined} history={recent.map(entry => ({ label: entry.label, onSelect: () => travel(entry.index) }))} onMembers={workspace ? () => setMembersOpen(true) : undefined} onSearch={workspace ? () => setSearchOpen(true) : undefined}>
+  }}><motion.div className="access-workspace-enter" initial={reduced || location.pathname.startsWith('/c/') ? false : { opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={motionTransition(reduced, .24)}><ChatShell renderPreview={renderPreview} onNavigate={workspace ? navigateHub : undefined} activeDestination={hubView && !homeShortcuts.has(hubView) ? hubView as 'spacebot'|'files'|'todos'|'agents' : undefined} adminItems={workspace ? [{ label: 'Workspace settings', onSelect: () => setSettingsOpen(true) }, { label: 'Manage members', onSelect: () => setMembersOpen(true) }, { label: 'Apps & agents', onSelect: () => navigateHub('agents') }] : undefined} onActivity={workspace ? () => { mentionNavigation.current++; setHubView(undefined); setActivityOpen(true); setSearchOpen(false); setCanSearch(false); } : undefined} activityActive={activityOpen} notificationDelivery={{workspace,channel:activityOpen?'*':hubView?undefined:directOpen?directId:lastHomeChannel.current,onOpen:item=>void openMention(item)}} onHome={openHome} onDirectMessages={workspace ? () => openDirect() : undefined} directMessagesActive={directOpen && !activityOpen} activity={workspace ? <MentionInbox key={workspace} workspace={workspace} onOpen={item => void openMention(item)} /> : undefined} name={selectedWorkspace?.name ?? 'Space'} user={profile.display_name} userId={profile.id} onNameChange={name => setProfile(old => old.display_name === name ? old : { ...old, display_name: name })} workspaces={workspaces} workspace={workspace} onWorkspaceChange={workspaces.length ? changeWorkspace : undefined} onCreateWorkspace={addWorkspace} sidebarWidth={sidebarWidth} onBack={navigation.index > 0 ? () => travel(navigation.index - 1) : undefined} onForward={navigation.index < navigation.entries.length - 1 ? () => travel(navigation.index + 1) : undefined} history={recent.map(entry => ({ label: entry.label, onSelect: () => travel(entry.index) }))} onMembers={workspace ? () => setMembersOpen(true) : undefined} onSearch={workspace ? () => setSearchOpen(true) : undefined}>
     {workspace && <MessageSearch workspace={workspace} open={searchOpen} onClose={() => setSearchOpen(false)} onSelect={result => void openMention({channel_id:result.channel_id,message_id:result.id,...(result.is_reply ? {thread_id:result.thread_id} : {})})}/> }
     {workspace && agentSetup?.workspace === workspace && <WorkspaceMembers workspace={workspace} viewer={profile.id} initialConnector={agentSetup.connector} open onClose={() => setAgentSetup(undefined)}/>}
     {workspace && connection && <WorkspaceMembers workspace={workspace} viewer={profile.id} agent={connection} open onClose={()=>setConnection(undefined)}/>}

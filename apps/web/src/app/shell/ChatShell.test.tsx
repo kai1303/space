@@ -45,12 +45,12 @@ it('opens workspace switching from the rail and connects navigation history cont
   expect(visit).toHaveBeenCalledOnce();
 });
 
-it('matches the seven-item rail while keeping search in the topbar and Admin as a menu', async () => {
+it('matches the eight-item rail while keeping search in the topbar and Admin as a menu', async () => {
   const navigate = vi.fn(), manage = vi.fn();
   render(<ChatShell name="Team" user="Kai" onHome={() => {}} onDirectMessages={() => {}} onActivity={() => {}} onSearch={() => {}} onMembers={() => {}} onNavigate={navigate} activeDestination="files" adminItems={[{label:'Manage members',onSelect:manage}]}><main>Files</main></ChatShell>);
   const rail = screen.getByRole('navigation', {name:'Main navigation'});
   const {within} = await import('@testing-library/react');
-  for (const name of ['Spacebot','DMs','Activity','Files','Agents & tools','Admin']) expect(within(rail).getByRole('button',{name,exact:true})).toBeTruthy();
+  for (const name of ['Spacebot','DMs','Activity','Files','To-dos','Agents & tools','Admin']) expect(within(rail).getByRole('button',{name,exact:true})).toBeTruthy();
   expect(within(rail).getByRole('link',{name:'Home'}).getAttribute('aria-current')).toBeNull();
   expect(within(rail).queryByRole('button',{name:'Search',exact:true})).toBeNull();
   expect(within(rail).queryByRole('button',{name:'Members',exact:true})).toBeNull();

@@ -51,6 +51,41 @@ export function useDirectMessageList(workspace: string, query = '', after = '', 
   return { ...(state.key === key ? state : { items: [], next: null, loaded: false, error: '' }), refresh: () => readRef.current() };
 }
 
+function DirectMessageRow({ dm, viewer, onOpen, count = 0, selected = false, typing = false, preview = false }: {
+  dm: DirectMessageSummary; viewer: string; onOpen: () => void;
+  count?: number; selected?: boolean; typing?: boolean; preview?: boolean;
+}) {
+  const person = dm.participants.find(member => member.id !== viewer) ?? dm.participants[0];
+  const message = dm.last_message;
+  const snippet = message ? message.text || 'Shared a file' : dm.participants.length === 1 ? 'Notes, links, and files just for you' : 'Start a conversation';
+  return <button className={`dm-row${preview ? ' rail-peek-row' : ''}${selected ? ' is-selected' : ''}${count ? ' is-unread' : ''}`}
+    aria-label={`Open DM with ${dm.name}${typing ? ', typing' : ''}${count ? `, ${count} unread` : ''}`}
+    aria-current={selected || undefined} onClick={onOpen}>
+    {typing ? <DirectTypingIcon name={dm.name} size={36}/> : <Avatar name={dm.name} initials={dm.name.slice(0, 2).toUpperCase()} image={person?.image} presence={person?.presence === 'active' ? 'online' : 'away'}/>}
+    <span className="dm-row-body"><strong>{dm.name}</strong><span>{preview && message?.author_name && <>{message.author_name}: </>}{snippet}</span></span>
+    {preview && message && <time dateTime={message.created_at}>{new Date(message.created_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</time>}
+    {count > 0 && <span className="dm-count">{count > 99 ? '99+' : count}</span>}
+  </button>;
+}
+
+export function DirectMessagesPeek({ workspace, viewer, onOpen }: {
+  workspace: string; viewer: string; onOpen: (id: string) => void;
+}) {
+  const [unreads, setUnreads] = useState(false);
+  const list = useDirectMessageList(workspace, '', '', unreads);
+  return <>
+    <header className="rail-peek-header"><h2>Direct messages</h2>
+      <button type="button" aria-pressed={unreads} onClick={() => setUnreads(value => !value)}>Unreads</button>
+    </header>
+    {list.error && <p role="alert" className="rail-peek-empty">{list.error} <Button size="sm" onClick={() => void list.refresh()}>Retry</Button></p>}
+    {!list.loaded ? <p role="status" className="rail-peek-empty">Loading direct messages…</p>
+      : list.items.length ? <ul className="rail-peek-list" aria-label="Direct messages">{list.items.map(dm =>
+        <li key={dm.id}><DirectMessageRow dm={dm} viewer={viewer} preview onOpen={() => onOpen(dm.id)}/></li>
+      )}</ul>
+      : !list.error && <p className="rail-peek-empty">{unreads ? 'No unread conversations.' : 'Your direct messages will appear here.'}</p>}
+  </>;
+}
+
 export function NewDirectMessage({ workspace, viewer, defaultValue, onDraftChange, onOpen, onClose }: { workspace: string; viewer: string; defaultValue?: RichDocument; onDraftChange?: (document: RichDocument) => void; onOpen: (dm: DirectMessageSummary, document: RichDocument) => void; onClose: () => void }) {
   const draft = useRef<RichDocument>(defaultValue ?? { ops: [] });
   const present=useDestinationPresence();
@@ -166,9 +201,8 @@ export function DirectMessages({ workspace, viewer, requestedId, compose = 0, wi
       {!list.loaded || search !== query ? <p role="status">Loading direct messages…</p> : <ul className="dm-list">{items.map(dm => {
         const count = unread.channels.find(item => item.channel_id === dm.id)?.unread_count ?? 0;
         const showTyping = typing.has(dm.id) && (newOpen || dm.id !== selected?.id);
-        return <li key={dm.id}><button className={`dm-row${!newOpen && dm.id === selected?.id ? ' is-selected' : ''}${count ? ' is-unread' : ''}`} aria-label={`Open DM with ${dm.name}${showTyping ? ', typing' : ''}${count ? `, ${count} unread` : ''}`} aria-current={!newOpen && dm.id === selected?.id ? 'true' : undefined} onClick={() => choose(dm)}>
-          {showTyping ? <DirectTypingIcon name={dm.name} size={36}/> : <Avatar name={dm.name} initials={dm.name.slice(0, 2).toUpperCase()} image={(dm.participants.find(person => person.id !== viewer) ?? dm.participants[0])?.image} presence={(dm.participants.find(person => person.id !== viewer) ?? dm.participants[0])?.presence === 'active' ? 'online' : 'away'} />}<span className="dm-row-body"><strong>{dm.name}</strong><span>{dm.last_message?.text || (dm.last_message ? 'Shared a file' : dm.participants.length === 1 ? 'Notes, links, and files just for you' : 'Start a conversation')}</span></span>{count > 0 && <span className="dm-count">{count > 99 ? '99+' : count}</span>}
-        </button></li>;
+        return <li key={dm.id}><DirectMessageRow dm={dm} viewer={viewer} count={count} typing={showTyping}
+          selected={!newOpen && dm.id === selected?.id} onOpen={() => choose(dm)} /></li>;
       })}</ul>}
       {list.loaded && !items.length && !list.error && <p className="dm-hint">{unreads ? 'No unread conversations.' : query ? 'No matching conversations.' : 'Your direct messages will appear here.'}</p>}
       <div className="dm-pages">{after && <Button size="sm" onClick={() => setAfter('')}>Back to newest</Button>}{list.next && <Button size="sm" onClick={() => setAfter(list.next!)}>More conversations</Button>}</div>

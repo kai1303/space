@@ -55,3 +55,6 @@
 .dm-room .chat-channel-header { justify-content: flex-start; }
 .dm-room .chat-header-actions { margin-left: auto; flex-shrink: 0; }
 .dm-room .chat-channel-title h1 { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.dm-row.rail-peek-row { border: 0; }
+.dm-row.rail-peek-row time { flex-shrink: 0; align-self: flex-start; color: var(--sp-text-secondary); font-size: 12px; }

@@ -1,0 +1,21 @@
+.collection-peek-header h2 { margin: 0; font: inherit; }
+.collection-peek-header h2 button { padding: 0; background: none; border: 0; color: inherit; font: inherit; font-weight: 700; cursor: pointer; }
+.collection-peek-header h2 button:hover { text-decoration: underline; }
+.collection-peek-filter { display: inline-flex; align-items: center; gap: 4px; border: 1px solid var(--sp-border); border-radius: 6px; padding: 3px 7px; font: inherit; font-size: 12px; background: var(--sp-surface); color: var(--sp-text-secondary); cursor: pointer; }
+.collection-peek-filter[aria-pressed=true] { color: var(--sp-accent); background: var(--sp-accent-soft); }
+.collection-peek-results { min-height: 0; overflow-y: auto; }
+.collection-peek-list { list-style: none; padding: 0; margin: 0; }
+.collection-peek-item { display: flex; align-items: center; padding-inline: 8px; gap: 4px; }
+.collection-peek-item:hover, .collection-peek-item:focus-within { background: var(--sp-surface-hover); }
+.collection-peek-row { min-width: 0; flex: 1; display: flex; gap: 8px; align-items: center; text-align: left; }
+.collection-peek-text { display: grid; min-width: 0; gap: 2px; }
+.collection-peek-text strong, .collection-peek-text small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.collection-peek-text small { color: var(--sp-text-secondary); }
+.collection-peek-row .files-thumbnail { width: 32px; height: 32px; }
+.collection-peek-menu>summary.sp-button { display: grid; place-items: center; padding: 4px; min-height: 28px; width: 28px; border: 0; background: transparent; }
+.collection-peek-item>input { width: 16px; height: 16px; accent-color: var(--sp-accent); }
+.collection-peek-empty { text-align: center; }
+.collection-peek-empty svg { color: var(--sp-accent); }
+.collection-peek-file { display: grid; grid-template-columns: minmax(0, 1fr) auto; }
+.collection-peek-file .collection-peek-menu, .collection-peek-menu::details-content { display: contents; }
+.collection-peek-file .collection-peek-menu-content { position: static; grid-column: 1 / -1; justify-self: end; min-width: 140px; margin-bottom: 4px; }

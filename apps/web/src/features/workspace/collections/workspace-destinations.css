@@ -32,3 +32,55 @@
 .wd-agent-identity .sp-badge { white-space: normal; }
 
 .wd-tabs.sp-tabs{padding-inline:28px;overflow-x:auto;flex-shrink:0}@media(max-width:640px){.wd-tabs.sp-tabs{padding-inline:17px}}
+
+.wd-workflows { container-type: inline-size; --wf-gutter: clamp(16px, 4cqi, 56px); }
+.wd-workflows .wd-header,.wd-workflows .wd-tabs.sp-tabs { padding-inline: var(--wf-gutter); }
+.wd-workflows .wd-header { border-bottom: 0; }
+.wd-workflows .wd-content { padding: 0 0 40px; }
+.wf-gallery,.wf-receipt,.wd-workflows .wd-error { margin: 24px var(--wf-gutter); }
+.wf-banner { box-sizing: border-box; min-height: 220px; display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 24px var(--wf-gutter); color: #16334a; background: #e9f3f7; border-block: 1px solid var(--sp-border); overflow: hidden; }
+[data-theme="dark"] .wf-banner { background: #0c2536; color: #e6f3f5; }
+.wf-banner h2 { font-size: 22px; line-height: 1.25; margin: 0 0 8px; }
+.wf-banner p { max-width: 55ch; margin: 0; }
+.wf-banner-art { width: 232px; height: 140px; position: relative; flex: none; }
+.wf-banner-art span { --edge: #286a6d; position: absolute; display: grid; place-items: center; width: 62px; height: 62px; color: #124445; background: #b0eadc; border: 2px solid currentColor; border-radius: 10px; transform: rotate(-30deg) skewX(22deg) scaleY(.86); box-shadow: -3px 4px var(--edge), -6px 8px var(--edge), -9px 12px #e2efeb, -12px 16px var(--edge), -16px 22px #03233535; }
+.wf-banner-art span:nth-child(1) { left: 16px; top: 45px; }
+.wf-banner-art span:nth-child(2) { left: 90px; top: 11px; color: #603054; background: #f5c5da; --edge: #935879; }
+.wf-banner-art span:nth-child(3) { left: 155px; top: 67px; color: #62431a; background: #ffd684; --edge: #986928; }
+.wf-banner-art svg { width: 29px; height: 29px; }
+.wf-gallery h2 { font-size: 15px; margin: 0 0 10px; }
+.wf-gallery p,.wf-form p,.wf-list small { color: var(--sp-text-secondary); }
+.wf-template-grid { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 12px; }
+.wf-template { position: relative; display: grid; grid-template-columns: 36px 1fr; align-items: center; gap: 8px; border: 1px solid var(--sp-border-strong); border-radius: 8px; padding: 12px; }
+.wf-template-icon { display: grid; place-items: center; width: 36px; height: 36px; border-radius: 6px; background: #a8dec4; color: #1c463d; }
+.wf-template h3 { margin: 0; font-size: 15px; }
+.wf-template p,.wf-template small { grid-column: 1/-1; margin: 0; }
+.wf-template .sp-button { grid-column: 1/-1; justify-self: start; }
+.wf-list { list-style: none; padding: 0; margin: 0; }
+.wf-list li,.wf-receipt { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.wf-list li { border-block-start: 1px solid var(--sp-border); padding: 14px 0; }
+.wf-list li>div { flex: 1; min-width: min(180px,100%); }
+.wf-list small { display: block; }
+.wf-form p { font-size: 14px; }
+@container (max-width: 790px) { .wf-template-grid { grid-template-columns: repeat(2,minmax(0,1fr)); } }
+@container (max-width: 540px) {
+  .wf-template-grid { grid-template-columns: 1fr; }
+  .wf-banner { min-height: 148px; }
+  .wf-banner-art { display: none; }
+}
+.wf-form fieldset { border: 0; padding: 0; margin: 0; display: grid; gap: 16px; }
+.wf-form label { display: grid; gap: 5px; font-weight: 600; }
+.wf-form input,.wf-form select,.wf-form textarea { font: inherit; font-weight: 400; box-sizing: border-box; width: 100%; background: var(--sp-surface); color: var(--sp-text); border: 1px solid var(--sp-border-strong); border-radius: 5px; padding: 8px 10px; }
+.wf-form footer { display: flex; justify-content: flex-end; gap: 8px; }
+
+.wd-workflows { --wf-gutter: max(16px, calc((100cqi - 968px) / 2)); }
+.wf-banner { position: relative; min-height: clamp(180px,24cqi,294px); }
+.wf-dismiss,.wf-toggle { cursor: pointer; background: transparent; border: 0; color: inherit; }
+.wf-dismiss { position: absolute; display: grid; place-items: center; inset: 12px 12px auto auto; padding: 6px; }
+.wf-toggle { display: inline-flex; gap: 6px; align-items: center; font: inherit; padding: 0; }
+.wf-toggle[aria-expanded=false] svg { transform: rotate(-90deg); }
+button.wf-template { text-align: left; font: inherit; color: inherit; background: var(--sp-surface); cursor: pointer; align-content: start; min-height: 116px; }
+button.wf-template:hover { background: var(--sp-surface-hover); }
+.wf-template-description { grid-column: 1/-1; color: var(--sp-text-secondary); }
+.wf-preview ol { padding-left: 24px; margin: 12px 0 24px; }
+.wf-preview li { margin-block: 8px; }

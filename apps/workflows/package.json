@@ -20,5 +20,14 @@
     "@temporalio/testing": "1.25.0",
     "@types/node": "22",
     "typescript": "^7.0.2"
-  }
+  },
+  "exports": {
+    "./help-client": {
+      "types": "./dist/help-client.d.ts",
+      "default": "./dist/help-client.js"
+    }
+  },
+  "files": [
+    "dist"
+  ]
 }

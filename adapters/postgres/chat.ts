@@ -21,14 +21,14 @@ const notFound = () => new AppError(404, 'not_found');
 export class ChatStore {
   readonly db; readonly webhooks; readonly permissions; readonly notifications; readonly mentions; readonly unread; readonly directMessages;
   constructor(readonly pool: Pool) { this.db = database(pool); this.webhooks = new ChannelWebhooks(this.db); this.permissions = new ChannelPermissionStore(this.db); this.notifications = new NotificationStore(pool); this.directMessages = new DirectMessageStore(this.db); this.mentions = new MentionStore(pool); this.unread = new UnreadStore(pool); }
-  async channels(actor: string, workspace: string, query: unknown = {}) {
+  async channels(actor: string, workspace: string, query: unknown = {}, channelIds?: string[]) {
     const { after, limit } = parsePage(query);
     return this.db.transaction(async c => {
       await requireWorkspaceAccess(c, actor, workspace);
       const member = c.select({ user_id: s.channelMembers.user_id }).from(s.channelMembers)
         .where(and(eq(s.channelMembers.channel_id, s.channels.id), eq(s.channelMembers.user_id, actor)));
       const rows = await c.select({ channel: s.channels, joined: sql<boolean>`exists (${member})` })
-        .from(s.channels).where(and(eq(s.channels.workspace_id, workspace), eq(s.channels.kind, 'channel'), or(and(eq(s.channels.private, false),sql`EXISTS(SELECT 1 FROM workspace_members wm WHERE wm.workspace_id=${workspace} AND wm.user_id=${actor} AND wm.guest_type='none')`), exists(member)), after ? gt(s.channels.id, after) : undefined))
+        .from(s.channels).where(and(eq(s.channels.workspace_id, workspace), eq(s.channels.kind, 'channel'), channelIds && inArray(s.channels.id, channelIds), or(and(eq(s.channels.private, false),sql`EXISTS(SELECT 1 FROM workspace_members wm WHERE wm.workspace_id=${workspace} AND wm.user_id=${actor} AND wm.guest_type='none')`), exists(member)), after ? gt(s.channels.id, after) : undefined))
         .orderBy(s.channels.id).limit(limit + 1);
       return page(rows.map(row => channelDto(row.channel, row.joined)), limit, row => row.id);
     });

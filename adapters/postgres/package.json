@@ -12,6 +12,7 @@
   },
   "exports": {
     "./tool-approvals": {"types":"./dist/tool-approvals.d.ts","default":"./dist/tool-approvals.js"},
+    "./help-workflows": {"types":"./dist/help-workflows.d.ts","default":"./dist/help-workflows.js"},
     "./huddles": {
       "types": "./dist/huddles.d.ts",
       "default": "./dist/huddles.js"

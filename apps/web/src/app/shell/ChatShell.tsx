@@ -1,3 +1,5 @@
+import { RailNavigation, type RailDestination, type RailProps } from './RailNavigation.js';
+export type { RailDestination } from './RailNavigation.js';
 import { readChatTheme } from './chat-theme.js';
 import {useNotificationDelivery} from '../../features/notifications/Notifications.js';
 import type {NotificationItem} from '@space/contracts';
@@ -11,8 +13,8 @@ import { UserSettings } from '../../features/profile/UserProfile.js';
 import { SpaceLogo } from '../../shared/branding/SpaceLogo.js';
 import { WorkspaceIcon, WorkspaceSwitcher, type WorkspaceChoice } from './WorkspaceSwitcher.js';
 
-export type RailDestination = 'spacebot' | 'files' | 'todos' | 'agents';
-export function ChatShell({ notificationDelivery, onNavigate, activeDestination, adminItems, onActivity, activityActive = false, notificationCount = 0, onHome, onDirectMessages, directMessagesActive = false, name, user, userId, onNameChange, onSearch, onMembers, workspaces = [], workspace = '', onWorkspaceChange, onCreateWorkspace, sidebarWidth = 220, onBack, onForward, history = [], activity, children }: {
+export function ChatShell({ renderPreview, notificationDelivery, onNavigate, activeDestination, adminItems, onActivity, activityActive = false, notificationCount = 0, onHome, onDirectMessages, directMessagesActive = false, name, user, userId, onNameChange, onSearch, onMembers, workspaces = [], workspace = '', onWorkspaceChange, onCreateWorkspace, sidebarWidth = 220, onBack, onForward, history = [], activity, children }: {
+  renderPreview?: RailProps['renderPreview'];
   notificationDelivery?: {workspace:string;channel?:string;onOpen:(item:NotificationItem)=>void};
   onNavigate?: (destination: RailDestination) => void;
   activeDestination?: RailDestination;
@@ -46,10 +48,6 @@ export function ChatShell({ notificationDelivery, onNavigate, activeDestination,
   const shell = useSidebarMotion<HTMLDivElement>(sidebarOpen, '(max-width: 720px)', '.chat-sidebar', workspace);
   const reduced = useReducedMotion();
   const railId = useId();
-  const railIcon = (active: boolean, content: ReactNode) => <span className="chat-rail-icon">
-    {active && (reduced ? <span className="chat-rail-active" aria-hidden="true"/> : <motion.span className="chat-rail-active" aria-hidden="true" layoutId="active-rail-item" transition={motionTransition(false,.22)}/>)}
-    <span className="chat-rail-glyph">{content}</span>
-  </span>;
   useEffect(() => { setSidebarOpen(false); }, [activeDestination, activityActive, directMessagesActive]);
   const menu = useRef<HTMLDivElement>(null);
   function openSearch() { setSidebarOpen(false); onSearch?.(); }
@@ -84,12 +82,9 @@ export function ChatShell({ notificationDelivery, onNavigate, activeDestination,
     <div className="chat-body">
       <LayoutGroup id={railId}><nav className="chat-rail" aria-label="Main navigation">
         {onWorkspaceChange ? <WorkspaceSwitcher items={workspaces} value={workspace} onChange={onWorkspaceChange} onCreate={onCreateWorkspace} /> : <div className="chat-workspace-mark" title={name}><SpaceLogo icon /></div>}
-        {onNavigate && <button className={`chat-rail-item${activeDestination === 'spacebot' ? ' is-active' : ''}`} aria-current={activeDestination === 'spacebot' ? 'page' : undefined} onClick={() => onNavigate('spacebot')}>{railIcon(activeDestination === 'spacebot',<NavigationIcon name="spacebot" size={32} active={activeDestination === 'spacebot'}/>)}<span>Spacebot</span></button>}
-        <a href="/chat" className={`chat-rail-item${directMessagesActive || activityActive || activeDestination ? '' : ' is-active'}`} aria-current={directMessagesActive || activityActive || activeDestination ? undefined : 'page'} onClick={event => { if (onHome) { event.preventDefault(); onHome(); } }}>{railIcon(!directMessagesActive && !activityActive && !activeDestination,<NavigationIcon name="home" active={!directMessagesActive && !activityActive && !activeDestination}/>)}<span>Home</span></a>
-        {onDirectMessages && <button className={`chat-rail-item${directMessagesActive ? ' is-active' : ''}`} aria-current={directMessagesActive ? 'page' : undefined} onClick={onDirectMessages}>{railIcon(directMessagesActive,<NavigationIcon name="dms" active={directMessagesActive}/>)}<span>DMs</span></button>}
-        {onActivity && <button className={`chat-rail-item${activityActive ? ' is-active' : ''}`} aria-current={activityActive ? 'page' : undefined} aria-label={`Activity${notificationCount ? ` (${notificationCount} unread)` : ''}`} onClick={onActivity}>{railIcon(activityActive,<><NavigationIcon name="activity" active={activityActive}/>{notificationCount > 0 && <span className="notification-rail-count" aria-hidden="true">{notificationCount > 99 ? '99+' : notificationCount}</span>}</>)}<span>Activity</span></button>}
-        {onNavigate && ([['files', 'Files'], ['agents', 'Agents & tools']] as const).map(([view, label]) => <button key={view} className={`chat-rail-item${activeDestination === view ? ' is-active' : ''}`} aria-current={activeDestination === view ? 'page' : undefined} onClick={() => onNavigate(view)}>{railIcon(activeDestination === view,<NavigationIcon name={view} active={activeDestination === view}/>)}<span>{label}</span></button>)}
-        {!!adminItems?.length && <Menu label="Admin" menuLabel="Admin tools" className="chat-admin-menu" floating align="start" trigger={<><span className="chat-rail-icon"><NavigationIcon name="admin"/></span><span>Admin</span></>} items={adminItems}/>}
+        <RailNavigation key={workspace} active={activeDestination ?? (activityActive ? 'activity' : directMessagesActive ? 'dms' : 'home')}
+          onHome={onHome} onNavigate={onNavigate} onDirectMessages={onDirectMessages} onActivity={onActivity}
+          adminItems={adminItems} notificationCount={notificationCount} renderPreview={renderPreview}/>
         <div className="chat-rail-bottom">
           <IconButton label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} theme`} onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}>{theme === 'dark' ? <Sun size={21} /> : <Moon size={21} />}</IconButton>
           <UserSettings user={user} userId={userId} onNameChange={onNameChange} />

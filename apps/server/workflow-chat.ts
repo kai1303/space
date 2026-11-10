@@ -1,7 +1,10 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
-import { AppError, record, text, uuid } from '@space/contracts';
+import { AppError, record, text, uuid, type WorkspaceWorkflow } from '@space/contracts';
 import type { ChatStore } from '@space/postgres/chat';
+
+import { HelpWorkflows } from '@space/postgres/help-workflows';
+import { helpWorkflowClient } from '@space/workflows/help-client';
 
 export const workflowMessagePath = '/v1/workflow-messages';
 export interface WorkflowChatConfig {
@@ -20,7 +23,63 @@ export function workflowChatConfig(): WorkflowChatConfig | undefined {
     help: uuid(process.env.SPACE_WORKFLOW_HELP_CHANNEL_ID), onCall: uuid(process.env.SPACE_WORKFLOW_ON_CALL_CHANNEL_ID) };
 }
 
-export function registerWorkflowChat(app: FastifyInstance, chat: ChatStore, config: WorkflowChatConfig) {
+export function registerWorkflowChat(app: FastifyInstance, chat: ChatStore, config?: WorkflowChatConfig) {
+  app.get<{ Params: { workspace: string } }>('/v1/workspaces/:workspace/workflows', async request => {
+    const workspace = uuid(request.params.workspace);
+    const routes = config?.workspace === workspace ? [
+      { urgency: 'normal', id: config.help }, { urgency: 'urgent', id: config.onCall },
+    ] as const : [];
+    const visible = await chat.channels(request.actorId, workspace, {}, routes.map(route => route.id));
+    const items: WorkspaceWorkflow[] = routes.length ? [{
+      name: 'IT Help Request',
+      destinations: routes.flatMap(route => {
+        const channel = visible.items.find(item => item.id === route.id && !item.archived_at);
+        return channel ? [{ urgency: route.urgency, channel }] : [];
+      }),
+    }] : [];
+    return { items, next_cursor: null };
+  });
+  if (!config) return;
+  const publications = new HelpWorkflows(chat.db, config);
+  const client = helpWorkflowClient(process.env.TEMPORAL_ADDRESS);
+  app.addHook('onClose', () => client.close());
+  const base = '/v1/workspaces/:workspace/workflows/published';
+  type Params = { workspace: string; id: string };
+  function checkWorkspace(workspace: string) {
+    if (uuid(workspace) !== config!.workspace) throw new AppError(404, 'not_found');
+  }
+  app.get<{Params: Params; Querystring: {mine?: string; after?: string; limit?: string}}>(base, async r => {
+    checkWorkspace(r.params.workspace);
+    const { mine, ...paging } = r.query;
+    return publications.list(r.actorId, mine === 'true', paging);
+  });
+  app.post<{Params: Params}>(base, async (r, reply) => {
+    checkWorkspace(r.params.workspace);
+    const b = record(r.body, ['id','name','normal_channel','urgent_channel']);
+    const result = await publications.publish(r.actorId, uuid(b.id), text(b.name,80).trim(), uuid(b.normal_channel), uuid(b.urgent_channel));
+    return reply.code(201).send(result);
+  });
+  app.patch<{Params: Params}>(base + '/:id', async (r, reply) => {
+    checkWorkspace(r.params.workspace);
+    const b = record(r.body, ['revision','name','normal_channel','urgent_channel']);
+    if (typeof b.revision !== 'number' || !Number.isSafeInteger(b.revision) || b.revision < 1) throw new AppError(400, 'invalid_revision');
+    await publications.edit(r.actorId,uuid(r.params.id),b.revision,text(b.name,80).trim(),uuid(b.normal_channel),uuid(b.urgent_channel));
+    return reply.code(204).send();
+  });
+  app.post<{Params: Params}>(base + '/:id/requests', async (r, reply) => {
+    checkWorkspace(r.params.workspace);
+    const id = uuid(r.params.id), b = record(r.body, ['request_id','urgency','description']);
+    const key = uuid(b.request_id), description = text(b.description,4000).trim();
+    if (b.urgency !== 'normal' && b.urgency !== 'urgent') throw new AppError(400, 'invalid_urgency');
+    const result = await publications.prepare(r.actorId,id,key,b.urgency,description);
+    const workflowId = `help-${id}-${r.actorId}-${key}`;
+    if (!result.started) {
+      try { await client.start(workflowId,result.name,result.channel,{requester:r.actorId,urgency:b.urgency,description}); }
+      catch { throw new AppError(503, 'workflow_start_unconfirmed_retry'); }
+      await publications.acknowledge(r.actorId,id,key);
+    }
+    return reply.code(202).send({ workflow_id: workflowId, channel_id: result.channel });
+  });
   const digest = (value: string) => createHash('sha256').update(value).digest();
   const expected = digest('Bearer ' + config.token);
   app.post(workflowMessagePath, { onRequest: async request => {
@@ -40,6 +99,8 @@ export function registerWorkflowChat(app: FastifyInstance, chat: ChatStore, conf
       channel = dm.id;
     } else if (body.target === 'channel' && (body.destination === '#help' || body.destination === '#on-call')) {
       channel = body.destination === '#help' ? config.help : config.onCall;
+    } else if (body.target === 'channel' && (body.destination === config.help || body.destination === config.onCall)) {
+      channel = body.destination;
     } else {
       throw new AppError(400, 'invalid_workflow_destination');
     }

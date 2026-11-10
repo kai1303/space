@@ -13,9 +13,12 @@ export function useNavigation(workspaces: Workspace[], workspace: string, setWor
   const pageViews=useMemo(createWorkspaceViewState,[workspace]);
   const viewForChannel=(id:string)=>conversationView(pageViews.rooms,id);
   const [hubView, setHubView] = useState<HubView>();
+  const [todoTarget, setTodoTarget] = useState<{workspace:string; id:string}>();
   const pendingSearch = useRef(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  function navigateHub(view: HubView) { pendingSearch.current = false; mentionNavigation.current++; setHubView(view); setActivityOpen(false); setDirectOpen(false); setDirectCompose(0); setSearchOpen(false); }
+  function navigateHub(view: HubView, todoId?: string) {
+    setTodoTarget(view === 'todos' && todoId ? {workspace, id:todoId} : undefined);
+    pendingSearch.current = false; mentionNavigation.current++; setHubView(view); setActivityOpen(false); setDirectOpen(false); setDirectCompose(0); setSearchOpen(false); }
   function openChannel(id: string) { setHubView(undefined); setActivityOpen(false); setDirectOpen(false); setRequestedChannel(id); setSearchOpen(false); }
   function openCollection(item: {channel_id:string;message_id?:string;thread_id?:string}) {
     if (item.message_id) void openMention({channel_id:item.channel_id,message_id:item.message_id});
@@ -74,5 +77,5 @@ export function useNavigation(workspaces: Workspace[], workspace: string, setWor
     setNavigation(previous => ({ ...previous, index }));
   }
   const destination=hubView&&!homeShortcuts.has(hubView)?hubView==='spacebot'?'Spacebot':hubView:activityOpen?'Activity':directOpen?'DMs':'Home';
-  return { mentionTarget, setMentionTarget, membersOpen, setMembersOpen, connection, setConnection, pageViews, viewForChannel, hubView, setHubView, pendingSearch, settingsOpen, setSettingsOpen, navigateHub, openChannel, openCollection, activityOpen, setActivityOpen, directOpen, directId, directCompose, lastHomeChannel, navigationError, mentionNavigation, openMention, openDirect, newDirect, openHome, searchOpen, setSearchOpen, canSearch, setCanSearch, requestedChannel, setRequestedChannel, navigation, changeWorkspace, visit, travel, destination };
+  return { mentionTarget, setMentionTarget, membersOpen, setMembersOpen, connection, setConnection, pageViews, viewForChannel, hubView, initialTodoId:todoTarget?.workspace === workspace ? todoTarget.id : undefined, setHubView, pendingSearch, settingsOpen, setSettingsOpen, navigateHub, openChannel, openCollection, activityOpen, setActivityOpen, directOpen, directId, directCompose, lastHomeChannel, navigationError, mentionNavigation, openMention, openDirect, newDirect, openHome, searchOpen, setSearchOpen, canSearch, setCanSearch, requestedChannel, setRequestedChannel, navigation, changeWorkspace, visit, travel, destination };
 }

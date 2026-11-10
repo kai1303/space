@@ -155,7 +155,7 @@ export function createApi(store: PostgresStore, options: { workflowChat?: Workfl
 
   const chat = new ChatStore(store.pool);
   registerChatRoutes(app, chat);
-  if (options.workflowChat) registerWorkflowChat(app, chat, options.workflowChat);
+  registerWorkflowChat(app, chat, options.workflowChat);
   registerNavigatorRoutes(app, new NavigatorStore(store.pool));
   const memory = new MemoryStore(store.pool), memoryProviders = createMemoryProviders(options.memory);
   store.memoryReader = createAgentMemoryReader(memory, memoryProviders);

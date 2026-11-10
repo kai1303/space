@@ -1,0 +1,23 @@
+{
+  "fill-specializations": [
+    { "value": { "solid": "srgb:1,1,1,1" } },
+    { "appearance": "dark", "value": { "solid": "srgb:0,0,0,1" } }
+  ],
+  "groups": [
+    {
+      "layers": [
+        {
+          "name": "Orbit",
+          "image-name-specializations": [
+            { "value": "Orbit.png" },
+            { "appearance": "dark", "value": "Orbit-dark.png" }
+          ],
+          "glass": false
+        }
+      ],
+      "specular": false,
+      "translucency": { "enabled": false, "value": 0 }
+    }
+  ],
+  "supported-platforms": { "squares": ["macOS"] }
+}

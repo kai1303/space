@@ -43,7 +43,13 @@ function useActivity(workspace: string, kind = '', unread = false, before = '') 
   return { ...(state.key === key ? state : { page: empty, loaded: false, error: '' }), refresh: () => refresh.current() };
 }
 
-export function Notifications({ workspace, onOpen, viewState }: { viewState?: Snapshot<ActivityView>; workspace: string; onOpen: (item: NotificationItem) => void }) {
+type ActivityProps = { workspace: string; onOpen: (item: NotificationItem) => void; viewState?: Snapshot<ActivityView> };
+
+export function ActivityPeek(props: Omit<ActivityProps, 'viewState'>) {
+  return <Notifications {...props} preview />;
+}
+
+export function Notifications({ workspace, onOpen, viewState, preview = false }: ActivityProps & { preview?: boolean }) {
   const present=useDestinationPresence();
   const localView=useRef<ActivityView>({kind:'',unread:false,before:'',scroll:0}), view=viewState??localView;
   const pageRef=useRef<HTMLElement>(null);
@@ -61,13 +67,49 @@ export function Notifications({ workspace, onOpen, viewState }: { viewState?: Sn
     finally { if (active.current) setBusy(false); }
   }
   const mark = (item: NotificationItem, read: boolean, open = false) => change(() => request(`/workspaces/${workspace}/notifications/${item.id}`, { read }, undefined, 'PATCH'), open ? () => onOpen(item) : undefined);
+  function openNotification(item: NotificationItem) {
+    if (preview) {
+      // A deliberate navigation must survive the transient panel being dismissed.
+      if (!item.read_at) void mark(item, true);
+      onOpen(item);
+    } else {
+      void mark(item, true, true);
+    }
+  }
+  function openButton(item: NotificationItem) {
+    const timestamp = new Date(item.created_at).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+    return <button className={preview ? 'notification-open rail-peek-row' : 'notification-open'}
+      aria-label={`Open notification from ${item.author_name}: ${item.text || labels[item.kind]}`}
+      disabled={busy} onClick={() => openNotification(item)}>
+      <Avatar name={item.author_name} initials={item.author_name.slice(0, 2).toUpperCase()} size="sm"/>
+      <span className="notification-copy">
+        <span className="notification-meta">
+          <strong>{item.author_name}</strong><span>{labels[item.kind]}{item.emoji ? ` ${item.emoji}` : ''}</span>
+          <time dateTime={item.created_at}>{timestamp}</time>
+        </span>
+        <span className="notification-preview">{item.text || 'Shared a file'}</span>
+        <span className="notification-context">{item.channel_kind === 'direct' ? item.channel_name : `#${item.channel_name}`}{item.silent && <><BellSlash size={12}/> Silent</>}</span>
+      </span>
+    </button>;
+  }
+  if (preview) return <>
+    <header className="rail-peek-header"><h2>Activity</h2>
+      <button type="button" aria-pressed={unread} onClick={() => setUnread(value => !value)}>Unreads</button>
+    </header>
+    {(readError || error) && <p role="alert" className="rail-peek-empty">{readError || error} <Button size="sm" onClick={() => void refresh()}>Retry</Button></p>}
+    {!loaded ? <p role="status" className="rail-peek-empty">Loading activity…</p>
+      : page.items.length ? <ul className="rail-peek-list" aria-label="Activity">{page.items.map(item =>
+        <li key={item.id} className={item.read_at ? '' : 'is-unread'}>{openButton(item)}</li>
+      )}</ul>
+      : !readError && <p className="rail-peek-empty">{unread ? 'No unread notifications.' : 'You’re all caught up.'}</p>}
+  </>;
   return <main ref={pageRef} onScroll={event=>{view.current.scroll=event.currentTarget.scrollTop;}} id="chat-messages" tabIndex={-1} className="notification-activity">
     <header className="notification-heading"><div><h1>Activity</h1><p>Catch up on the conversations that need you.</p></div><IconButton label="Notification settings" onClick={() => setPreferences(true)}><GearSix size={22}/></IconButton></header>
     <Tabs className="notification-tabs" label="Activity types" value={kind} items={tabs.map(([id,label])=>({id,label}))} onChange={value=>{setKind(value);setBefore('');view.current.scroll=0;}}/>
     <div className="notification-toolbar"><label><input type="checkbox" checked={unread} onChange={event => { setUnread(event.target.checked); setBefore(''); }}/>Unreads</label><span>{page.unread_count} unread</span><Button size="sm" disabled={busy || !page.unread_count || !loaded} onClick={() => void change(() => request(`/workspaces/${workspace}/notifications/read`, { through: page.latest_id }))}><Checks size={17}/>Mark all as read</Button></div>
     {(readError || error) && <p role="alert" className="notification-error">{readError || error}<Button size="sm" onClick={() => void refresh()}>Retry</Button></p>}
     {!loaded ? <p role="status" className="notification-empty">Loading activity…</p> : !page.items.length && !readError ? <div className="notification-empty"><Bell size={38}/><h2>You’re all caught up</h2><p>{unread ? 'No unread notifications in this view.' : 'New messages, mentions, replies, and reactions will appear here.'}</p></div> : <ul className="notification-list">{page.items.map(item => <li key={item.id} className={item.read_at ? '' : 'is-unread'}>
-      <button className="notification-open" aria-label={`Open notification from ${item.author_name}: ${item.text || labels[item.kind]}`} disabled={busy} onClick={() => void mark(item, true, true)}><Avatar name={item.author_name} initials={item.author_name.slice(0, 2).toUpperCase()} size="sm"/><span className="notification-copy"><span className="notification-meta"><strong>{item.author_name}</strong><span>{labels[item.kind]}{item.emoji ? ` ${item.emoji}` : ''}</span><time dateTime={item.created_at}>{new Date(item.created_at).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</time></span><span className="notification-preview">{item.text || 'Shared a file'}</span><span className="notification-context">{item.channel_kind === 'direct' ? item.channel_name : `#${item.channel_name}`}{item.silent && <><BellSlash size={12}/> Silent</>}</span></span></button>
+      {openButton(item)}
       <IconButton label={item.read_at ? `Mark notification ${item.id} unread` : `Mark notification ${item.id} read`} disabled={busy} onClick={() => void mark(item, !item.read_at)}>{item.read_at ? <Bell size={18}/> : <Check size={18}/>}</IconButton>
     </li>)}</ul>}
     <footer className="notification-pages">{before && <Button size="sm" onClick={() => setBefore('')}>Back to newest</Button>}{page.next_cursor && <Button size="sm" onClick={() => setBefore(page.next_cursor!)}>Older activity</Button>}</footer>

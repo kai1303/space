@@ -234,6 +234,9 @@ importers:
       '@space/redis':
         specifier: workspace:*
         version: link:../../adapters/redis
+      '@space/workflows':
+        specifier: workspace:*
+        version: link:../workflows
       better-auth:
         specifier: 1.7.15
         version: 1.7.15(react-dom@19.3.1)(react@19.3.1)(vitest@3.2.7)

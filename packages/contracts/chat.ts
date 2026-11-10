@@ -72,6 +72,21 @@ export interface ChannelSummary {
   id: string; workspace_id: string; name: string; private: boolean; joined: boolean;
   topic: string; description: string; archived_at: string | null; created_by: string | null; created_at: string;
 }
+export interface WorkflowSettings {
+  revision: number;
+  normal_channel: string;
+  urgent_channel: string;
+}
+export interface PublishedHelpWorkflow {
+  settings?: WorkflowSettings;
+  id: string;
+  name: string;
+  manager_id: string;
+}
+export interface WorkspaceWorkflow {
+  name: string;
+  destinations: { urgency: 'normal' | 'urgent'; channel: ChannelSummary }[];
+}
 export interface ChannelDetails extends ChannelSummary {
   permissions?: import('./channel-permissions.js').ChannelPermissionSnapshot;
   participants?: ChannelMember[]; hidden?: boolean; last_message?: DirectMessageSummary['last_message'];

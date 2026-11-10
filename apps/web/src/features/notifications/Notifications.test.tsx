@@ -1,7 +1,7 @@
 import { afterEach, beforeAll, expect, it, vi } from 'vitest';
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { Notifications, NotificationPreferences, ThreadNotificationToggle } from './Notifications.js';
+import { Notifications, ActivityPeek, NotificationPreferences, ThreadNotificationToggle } from './Notifications.js';
 const mock = vi.hoisted(() => ({ refresh: undefined as undefined | (() => Promise<void>), revoke: undefined as undefined | ((code:string)=>void) }));
 vi.mock('../../shared/realtime/live-updates.js', () => ({ subscribeUpdates: (_scope: string, _id: string, read: () => Promise<void>, revoke:(code:string)=>void) => { mock.refresh = read; mock.revoke = revoke; void read(); return () => {}; } }));
 beforeAll(() => { HTMLDialogElement.prototype.showModal = function () { this.open = true; }; HTMLDialogElement.prototype.close = function () { this.open = false; }; });
@@ -97,4 +97,32 @@ it('saves the sound toggle independently of desktop alerts and restores it when 
  expect((await checkbox()).checked).toBe(true);
  await userEvent.click(await checkbox());
  await waitFor(() => expect(sound).toBe(false));
+});
+
+it('previews Activity without marking it read and opens only the selected notification', async () => {
+  fake(path => ({ items: path.includes('unread=true') ? [] : [item], unread_count: 1, next_cursor: null, latest_id: item.id }));
+  const open = vi.fn();
+  render(<ActivityPeek workspace="workspace" onOpen={open} />);
+  const row = await screen.findByRole('button', { name: /Open notification from Alex/ });
+  expect(row.querySelector('time')?.dateTime).toBe(item.created_at);
+  await userEvent.click(screen.getByRole('button', { name: 'Unreads' }));
+  await screen.findByText('No unread notifications.');
+  expect(vi.mocked(fetch).mock.calls.every(([, options]) => options?.method === 'GET')).toBe(true);
+  await userEvent.click(screen.getByRole('button', { name: 'Unreads' }));
+  await userEvent.click(await screen.findByRole('button', { name: /Open notification from Alex/ }));
+  expect(vi.mocked(fetch).mock.calls.filter(([, options]) => options?.method === 'PATCH').map(([path]) => path)).toEqual(['/v1/workspaces/workspace/notifications/12']);
+  expect(open).toHaveBeenCalledWith(item);
+});
+
+it('opens a chosen Activity target even if the pointer leaves while its read receipt is pending', async () => {
+  let confirmRead = () => {};
+  fake((_path, options) => options?.method === 'PATCH'
+    ? new Promise(resolve => { confirmRead = () => resolve({ read: true }); })
+    : { items: [item], unread_count: 1, next_cursor: null, latest_id: item.id });
+  const open = vi.fn();
+  const view = render(<ActivityPeek workspace="workspace" onOpen={open} />);
+  await userEvent.click(await screen.findByRole('button', { name: /Open notification from Alex/ }));
+  view.unmount();
+  await act(async () => { confirmRead(); });
+  expect(open).toHaveBeenCalledExactlyOnceWith(item);
 });

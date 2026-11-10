@@ -70,6 +70,7 @@
     "@space/events": "workspace:*",
     "@space/postgres": "workspace:*",
     "@space/redis": "workspace:*",
+    "@space/workflows": "workspace:*",
     "better-auth": "1.7.15",
     "fastify": "^5.12.8",
     "file-type": "^22.3.0",

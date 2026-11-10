@@ -19,6 +19,8 @@ function response(path: string): unknown {
   if (path.includes('/channels?')) return { items: channels, next_cursor: null };
   if (path === '/agents/connectors') return defaultPairedConnectors;
   if (path.startsWith('/agents/installations?')) return installations;
+  if (path.includes('/workflows/published?')) return {items:[],next_cursor:null};
+  if (path.includes('/workflows?')) return { items: [{ name: 'IT Help Request', destinations: [{ urgency: 'normal', channel: channels[0] }] }], next_cursor: null };
   if (path.endsWith('/settings')) return { role: 'member' };
   if (path.endsWith('/join')) return {};
   throw new Error(`Unexpected request: ${path}`);
@@ -80,13 +82,59 @@ it('shows workspace agents with functioning contextual navigation', async () => 
   await userEvent.click(screen.getByRole('button', { name: 'View connection' }));
   expect(props.onOpenMembers).toHaveBeenCalledOnce();
   await userEvent.click(screen.getByRole('button', { name: 'Workflows', exact: true }));
-  expect(screen.getByText(/workflow builder and third-party workflow automations are not available/)).toBeTruthy();
-  await userEvent.click(screen.getByRole('button', { name: 'View your agents' }));
-  expect(screen.getByText('Kai’s Codex')).toBeTruthy();
+  await screen.findByRole('region', { name: 'Featured templates' });
+  expect(screen.getByRole('tab', {name:'Templates'}).getAttribute('aria-selected')).toBe('true');
+  await userEvent.click(screen.getByRole('tab', {name:'Managed by you'}));
+  await screen.findByText('Workflows you publish will appear here.');
+  expect(api.request.mock.calls.some(([path]) => path.includes('mine=true'))).toBe(true);
   await userEvent.click(screen.getByRole('button', { name: 'Apps', exact: true }));
   await screen.findByText(/Workspace owners and admins manage MCP servers/);
   expect(screen.queryByRole('button', { name: 'Add MCP server' })).toBeNull();
   expect(api.request.mock.calls.some(([path]) => path.endsWith('/connections') || path.endsWith('/connection-agents'))).toBe(false);
+});
+
+it('sets up, publishes, and starts an IT request from the workspace gallery', async () => {
+  HTMLDialogElement.prototype.showModal = function () { this.open = true; };
+  HTMLDialogElement.prototype.close = function () { this.open = false; };
+  let published = false, name = 'IT Help Request';
+  api.request.mockImplementation(async (path: string, body?: {name?: string; urgency?: string; description?: string}, _options?: unknown, method?: string) => {
+    if (path.endsWith('/workflows/published') && body) {
+      expect(body).toMatchObject({ name:'IT Help Request', normal_channel:'general', urgent_channel:'general' });
+      published = true;
+      return {id:'flow'};
+    }
+    if (path.endsWith('/published/flow') && method === 'PATCH') {
+      expect(body).toMatchObject({revision:1,normal_channel:'general',urgent_channel:'general'});
+      name = body!.name!;
+      return;
+    }
+    if (path.includes('/workflows/published?')) return { items:published ? [{id:'flow',name,manager_id:'kai',settings:path.includes('mine=true') ? {revision:1,normal_channel:'general',urgent_channel:'general'} : undefined}] : [], next_cursor:null };
+    if (path.endsWith('/flow/requests')) {
+      expect(body).toMatchObject({urgency:'normal',description:'VPN issue',request_id:expect.any(String)});
+      return {channel_id:'general'};
+    }
+    return response(path);
+  });
+  render(<WorkspaceDestinations view="agents" {...props}/>);
+  await userEvent.click(screen.getByRole('button', {name:'Workflows'}));
+  await userEvent.click(await screen.findByRole('button', {name:'Featured templates'}));
+  expect(screen.getAllByRole('button', {name:'Preview IT Help Request'})).toHaveLength(1);
+  await userEvent.click(within(screen.getByRole('region',{name:'All templates'})).getByRole('button',{name:'Preview IT Help Request'}));
+  await userEvent.click(await screen.findByRole('button', {name:'Set up'}));
+  await userEvent.click(screen.getByRole('button', {name:'Publish workflow'}));
+  await userEvent.click(await screen.findByRole('button', {name:'Edit IT Help Request'}));
+  await userEvent.clear(screen.getByLabelText('Workflow name'));
+  await userEvent.type(screen.getByLabelText('Workflow name'),'IT Support');
+  await userEvent.click(screen.getByRole('button',{name:'Publish changes'}));
+  await screen.findByRole('button',{name:'Edit IT Support'});
+  await userEvent.click(screen.getByRole('tab',{name:'All',exact:true}));
+  await screen.findByText('IT Support');
+  expect(screen.queryByRole('button',{name:'Edit IT Support'})).toBeNull();
+  await userEvent.click(await screen.findByRole('button', {name:'Start request'}));
+  await userEvent.type(screen.getByLabelText('What do you need help with?'), 'VPN issue');
+  await userEvent.click(screen.getByRole('button', {name:'Submit request'}));
+  await userEvent.click(await screen.findByRole('button', {name:'Open request channel'}));
+  expect(props.onOpenChannel).toHaveBeenCalledWith('general');
 });
 
 it('Spacebot routes to a real channel with an installed agent and does not invoke a backend model', async () => {

@@ -140,13 +140,10 @@
 
 /* Slack's rail keeps destinations visible and leaves search in the topbar. */
 .chat-rail{overflow-y:auto;scrollbar-width:thin}
-.chat-rail-item,.chat-admin-menu>summary{flex-shrink:0}
-.chat-admin-menu{width:52px;margin-top:6px;border-top:1px solid #ffffff26;padding-top:6px}
-.chat-admin-menu>summary.sp-button{display:flex;flex-direction:column;justify-content:center;gap:4px;width:52px;height:68px;padding:8px 0;border:0;background:transparent;color:inherit;font:11px/12px var(--sp-font-sans)}
-.chat-admin-menu>summary:hover .chat-rail-icon{background:#ffffff18}
+.chat-rail-item{flex-shrink:0}
 .chat-rail-bottom{padding-top:16px}
-@media(max-height:800px){.chat-rail-item,.chat-admin-menu>summary.sp-button{height:59px;min-height:59px}.chat-rail-bottom{gap:6px;padding-top:8px}}
-@media(max-width:720px){.chat-admin-menu,.chat-admin-menu>summary.sp-button{width:44px}.chat-rail-item,.chat-admin-menu>summary.sp-button{font-size:9px}}
+@media(max-height:800px){.chat-rail-bottom{gap:6px;padding-top:8px}}
+@media(max-width:720px){.chat-rail-item{font-size:9px}}
 .chat-channel-heading{display:flex;align-items:center;gap:5px;min-width:0}.chat-channel-heading>.sp-button{flex-shrink:0}.chat-mobile-toggle[hidden]{display:none}
 @media(max-width:720px){.chat-app--sidebar-open .workspace-collection,.chat-app--sidebar-open .workspace-destinations,.chat-app--sidebar-open .composer-drafts{visibility:hidden}}
 

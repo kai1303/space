@@ -8,14 +8,14 @@ import './workspace-collections.css';
 import { WorkspaceTodos } from '../../todos/WorkspaceTodos.js';
 
 export type { CollectionView } from './useWorkspaceCollection.js';
-type Props = { view: CollectionView; workspace: string; onOpen: (target: { channel_id: string; message_id?: string; thread_id?: string }) => void };
+type Props = { initialTodoId?: string; view: CollectionView; workspace: string; onOpen: (target: { channel_id: string; message_id?: string; thread_id?: string }) => void };
 const titles = { threads: 'Threads', saved: 'Saved', sent: 'Sent', files: 'Files', todos: 'To-dos' };
 const descriptions = { threads: 'Conversations you have joined, all in one place.', saved: 'Keep the messages you want to come back to.', sent: 'Your messages across this workspace.', files: 'Find files shared in your conversations.', todos: 'A place to keep track of what comes next.' };
 const date = (value: string) => new Date(value).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 
 // Remount before private data or a pending mutation can cross workspace/view boundaries.
 export function WorkspaceCollections(props: Props) {
-  if (props.view === 'todos') return <WorkspaceTodos key={props.workspace} workspace={props.workspace} onOpen={props.onOpen}/>;
+  if (props.view === 'todos') return <WorkspaceTodos key={props.workspace} workspace={props.workspace} initialTodoId={props.initialTodoId} onOpen={props.onOpen}/>;
   if (props.view === 'files') return <WorkspaceFiles key={props.workspace} workspace={props.workspace} onOpen={props.onOpen}/>;
   return <Collection key={`${props.workspace}:${props.view}`} {...props}/>;
 }

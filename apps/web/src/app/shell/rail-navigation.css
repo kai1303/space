@@ -1,0 +1,91 @@
+/* Desktop rail geometry measured from Slack's labeled navigation. */
+@media (min-width:721px) {
+  .chat-rail > .chat-workspace-switcher-anchor { flex-shrink: 0; margin-bottom: 18px; }
+}
+.chat-rail .chat-rail-item {
+  height: auto;
+  min-height: 68px;
+  padding: 8px 0;
+  font-weight: 700;
+  text-align: center;
+}
+.chat-rail [data-rail-tab="admin"] {
+  margin-top: 6px;
+  border-top: 1px solid #ffffff26;
+  border-radius: 0;
+}
+.rail-symbol { display: grid; place-items: center; }
+.chat-rail .chat-rail-item:is(:hover,.is-peeking):not(.is-active) .chat-rail-icon {
+  background: rgba(239,225,245,.25);
+}
+.rail-peek {
+  position: fixed;
+  z-index: 40;
+  width: min(360px, calc(100vw - 76px));
+  color: var(--sp-text);
+  font: 15px/1.47 var(--sp-font-sans);
+}
+/* Cover the narrow pointer path from the icon to the card. */
+.rail-peek::before { content: ""; position: absolute; inset: 0 100% 0 -10px; }
+.rail-peek-card {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  height: 65vh;
+  max-height: calc(100vh - 20px);
+  overflow: hidden;
+  border-radius: 12px;
+  background: var(--sp-surface-raised);
+  box-shadow: 0 0 0 1px var(--sp-border), 0 18px 48px #0002;
+}
+.rail-peek--spacebot .rail-peek-card, .rail-peek--admin .rail-peek-card {
+  height: auto;
+  max-height: min(65vh, calc(100vh - 20px));
+  overflow-y: auto;
+}
+.rail-peek-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  box-sizing: border-box;
+  min-height: 44px;
+  padding: 0 8px 0 16px;
+  border-bottom: 1px solid var(--sp-border);
+  flex: none;
+}
+.rail-peek-header h2 { margin: 0; font-size: 15px; font-weight: 900; }
+.rail-peek-header > button[aria-pressed] {
+  min-height: 26px;
+  padding: 2px 8px;
+  border: 1px solid var(--sp-border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--sp-text-secondary);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.rail-peek-header > button[aria-pressed=true] { background: var(--sp-accent-soft); color: var(--sp-accent); }
+.rail-peek-list { list-style: none; margin: 0; padding: 0; overflow-y: auto; }
+.rail-peek-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 16px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+.rail-peek-row:hover, .rail-peek-row:focus-visible { background: var(--sp-surface-hover); }
+.rail-peek-empty { margin: 0; padding: 16px; color: var(--sp-text-secondary); font-size: 14px; }
+.rail-peek-admin-items { padding: 6px 0; }
+@media (max-height:584px) { .rail-peek-card { height: calc(100vh - 20px); } }
+@media (max-width:720px) {
+  .chat-rail .chat-rail-item { min-height: 55px; padding: 4px 0; }
+  .rail-peek { width: min(360px, calc(100vw - 58px)); }
+}

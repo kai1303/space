@@ -1,8 +1,6 @@
 import {createContext,useContext,useEffect,useRef,useState,type ReactNode} from 'react';
 import {Button,IconButton,Select} from '@space/ui/primitives';
 import {Phone,PhoneDisconnect,VideoCamera,VideoCameraSlash,Microphone,MicrophoneSlash,X,CaretDown,CaretUp} from '@phosphor-icons/react';
-import type {CallSession} from '@space/contracts';
-import {request} from '../../shared/api/request.js';
 import {CallController,emptyCallView,type CallView} from './controller.js';
 import './calling.css';
 
@@ -60,15 +58,4 @@ function CallPanel({controller:c,view:v}:{controller:CallController;view:CallVie
   </div>
   {call&&!ended&&owned&&!v.preview&&<div className="call-actions"><Button variant="danger" onClick={()=>void c.hangup()}><PhoneDisconnect size={19}/> {call.state==='ringing'?'Cancel call':'Hang up'}</Button></div>}
  </section>;
-}
-export function CallHistory({channel}:{channel:string}){
- const calling=useContext(CallingContext),[open,setOpen]=useState(false),[calls,setCalls]=useState<CallSession[]>([]),[error,setError]=useState('');
- const call=calling?.view.call;
- useEffect(()=>{
-  if(!open)return;const abort=new AbortController();
-  void request<CallSession[]>(`/channels/${channel}/calls`,undefined,undefined,'POST',abort.signal).then(rows=>{setCalls(rows);setError('');}).catch(e=>{if(!abort.signal.aborted)setError(e instanceof Error?e.message:'Could not load call history.');});
-  return()=>abort.abort();
- },[channel,open,call?.channel_id===channel?call.revision:undefined]);
- if(!calling)return null;
- return <div className="call-history"><button type="button" aria-expanded={open} onClick={()=>setOpen(!open)}><Phone size={14}/>Call history {open?<CaretUp size={14}/>:<CaretDown size={14}/>}</button>{open&&<div>{error&&<p role="alert">{error}</p>}{!error&&!calls.length&&<p>No calls yet.</p>}<ul>{calls.map(item=><li key={item.id}><span>{item.mode==='video'?'Video':'Voice'} call · {item.state==='ended'?item.reason==='missed'?'Missed':item.reason==='declined'?'Declined':item.reason==='completed'?'Ended':item.reason==='cancelled'?'Cancelled':'Disconnected':item.state==='ringing'?'Ringing':'In progress'}</span><time dateTime={item.created_at}>{new Date(item.created_at).toLocaleString()}</time></li>)}</ul></div>}</div>;
 }

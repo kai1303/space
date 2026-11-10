@@ -1,0 +1,30 @@
+.spacebot-preview .rail-peek-header h2,
+.spacebot-preview-subhead {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.spacebot-preview .sp-tabs { padding-inline: 12px; }
+.spacebot-preview-subhead {
+  justify-content: space-between;
+  padding: 8px 12px 2px;
+}
+.spacebot-preview-subhead h3 { margin: 0; font-size: 13px; }
+.spacebot-preview-session,
+.spacebot-preview-reminder {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.spacebot-preview-session strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.spacebot-preview .rail-peek-row time {
+  margin-inline-start: auto;
+  white-space: nowrap;
+}
+.spacebot-preview time,
+.spacebot-preview-session small { color: var(--sp-text-secondary); font-size: 12px; }
+.spacebot-preview-reminder { padding: 6px 12px; overflow-wrap: anywhere; }

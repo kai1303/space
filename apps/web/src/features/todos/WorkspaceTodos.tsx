@@ -16,13 +16,14 @@ const displayDate = (value: string) => new Date(value).toLocaleString([], {month
 const denied = (reason: unknown) => reason instanceof Error && ['unauthorized','forbidden','not_found'].includes(reason.message);
 const failure = (reason: unknown) => reason instanceof Error ? reason.message === 'todo_conflict' ? 'This to-do changed elsewhere. Close the editor and reopen it to use the latest version. Your draft is still here.' : reason.message.replaceAll('_',' ') : 'Unable to update to-dos';
 
-function useTodos(workspace: string, filters: Filters) {
+function useTodos(workspace: string, filters: Filters, initialTodoId?: string) {
   const [items,setItems] = useState<HubTodo[]>([]), [cursor,setCursor] = useState<string|null>(null), [selected,setSelected] = useState<HubTodo>();
   const [loading,setLoading] = useState(true), [busy,setBusy] = useState(false), [error,setError] = useState(''), [revoked,setRevoked] = useState(false);
-  const state = useRef({active:true,revoked:false,writing:false,revision:0,pages:1,selectedId:undefined as string|undefined,read:undefined as AbortController|undefined,write:undefined as AbortController|undefined});
+  const [selectionUnavailable,setSelectionUnavailable] = useState(false);
+  const state = useRef({active:true,revoked:false,writing:false,revision:0,pages:1,selectedId:initialTodoId,read:undefined as AbortController|undefined,write:undefined as AbortController|undefined});
   const base = `/workspaces/${encodeURIComponent(workspace)}/hub/todos`;
   const query = new URLSearchParams({status:filters.status,reminder:filters.reminder,sort:filters.sort,archived:String(filters.archived),limit:String(PAGE_SIZE)}).toString();
-  function clear() { setItems([]);setCursor(null);setSelected(undefined);state.current.selectedId=undefined; }
+  function clear() { setItems([]);setCursor(null);setSelected(undefined);setSelectionUnavailable(false);state.current.selectedId=undefined; }
   async function load(after?: string) {
     const s=state.current;if(!s.active || s.revoked || s.writing)return;
     s.read?.abort();const controller=new AbortController();s.read=controller;const revision=++s.revision;
@@ -36,13 +37,13 @@ function useTodos(workspace: string, filters: Filters) {
       const selectionId=s.selectedId;
       let detail=incoming.find(item=>item.id===selectionId);
       if(selectionId && !detail){
-        try {detail=await request<HubTodo>(`${base}/${selectionId}`,undefined,undefined,'POST',controller.signal);}
+        try {detail=await request<HubTodo>(`${base}/${encodeURIComponent(selectionId)}`,undefined,undefined,'POST',controller.signal);}
         catch(reason){if(!denied(reason))throw reason;}
       }
       if(!s.active || controller.signal.aborted || revision!==s.revision)return;
       setItems(previous=>after?[...new Map([...previous,...incoming].map(item=>[item.id,item])).values()].slice(0,MAX_ITEMS):incoming);
       setCursor(next??null);s.pages=after?Math.min(10,s.pages+1):pages;
-      if(selectionId && s.selectedId===selectionId){setSelected(detail);if(!detail)s.selectedId=undefined;}
+      if(selectionId && s.selectedId===selectionId){setSelected(detail);setSelectionUnavailable(!detail);if(!detail)s.selectedId=undefined;}
     }catch(reason){if(!s.active || controller.signal.aborted || revision!==s.revision)return;if(denied(reason)){s.revoked=true;setRevoked(true);clear();}setError(failure(reason));}
     finally {if(s.active && revision===s.revision)setLoading(false);}
   }
@@ -62,13 +63,13 @@ function useTodos(workspace: string, filters: Filters) {
     }catch(reason){if(s.active && !controller.signal.aborted){if(denied(reason))clear();setError(failure(reason));}}
     finally{s.writing=false;if(s.active)setBusy(false);}
   }
-  function select(item?:HubTodo){if(item && (!state.current.active || state.current.revoked))return;state.current.selectedId=item?.id;setSelected(item);}
-  return {items,cursor,selected,select,loading,busy:busy||revoked,error,revoked,load,change};
+  function select(item?:HubTodo){if(item && (!state.current.active || state.current.revoked))return;state.current.selectedId=item?.id;setSelectionUnavailable(false);setSelected(item);}
+  return {items,cursor,selected,select,selectionUnavailable,loading,busy:busy||revoked,error,revoked,load,change};
 }
 
-export function WorkspaceTodos({workspace,onOpen,archived=false}:{workspace:string;onOpen:Open;archived?:boolean}) {
+export function WorkspaceTodos({workspace,onOpen,archived=false,initialTodoId}:{workspace:string;onOpen:Open;archived?:boolean;initialTodoId?:string}) {
   const [status,setStatus]=useState('all'),[reminder,setReminder]=useState('all'),[sort,setSort]=useState('due');
-  const data=useTodos(workspace,{status,reminder,sort,archived});
+  const data=useTodos(workspace,{status,reminder,sort,archived},initialTodoId);
   const [creating,setCreating]=useState(false),[editing,setEditing]=useState(false),[cleanup,setCleanup]=useState<Cleanup>();
   const [notice,setNotice]=useState(''),[undo,setUndo]=useState<HubTodo>(),[nextCleanup,setNextCleanup]=useState<Cleanup>();
   const addButton=useRef<HTMLSpanElement>(null), detailPane=useRef<HTMLElement>(null);
@@ -99,6 +100,7 @@ export function WorkspaceTodos({workspace,onOpen,archived=false}:{workspace:stri
         <Menu label="Sort" trigger={<><ArrowsDownUp size={16}/><CaretDown size={12}/></>} floating items={[['due','Due date'],['oldest','Earliest date created'],['newest','Latest date created']].map(([value,label])=>({label:label!,icon:sort===value?<CheckCircle size={15}/>:undefined,onSelect:()=>{if(!data.busy)setSort(value!);}}))}/>
       </div>
       {data.error && <div className="todos-error" role="alert">{data.error}{!data.revoked&&<button onClick={()=>void data.load()} disabled={data.busy}>Retry</button>}</div>}
+      {data.selectionUnavailable && <p role="status" className="todos-notice">This to-do is no longer available.</p>}
       {notice && <div className="todos-notice" role="status">{notice}{undo&&<button disabled={data.busy} onClick={async()=>{const saved=await data.change<HubTodo>(`/${undo.id}`,{deleted:false,archived:archived});if(saved){setNotice('To-do restored.');setUndo(undefined);}}}>Undo</button>}{nextCleanup&&<button disabled={data.busy} onClick={()=>setCleanup(nextCleanup)}>Continue cleanup</button>}<button aria-label="Dismiss notification" onClick={()=>{setNotice('');setUndo(undefined);}}><X size={14}/></button></div>}
       <div className="todos-scroll" aria-busy={data.loading}>
         {!data.loading&&!data.error&&!data.items.length&&<div className="todos-empty"><img className="todos-empty-image" src="/illustrations/todos-empty.svg" alt="" width={157} height={140}/><h2>{archived?'No saved to-dos':filtered?'No matching to-dos':'No to-dos yet'}</h2><p>{archived?'To-dos moved to Saved will appear here.':filtered?'Try changing or clearing your filters.':'Add a to-do from any message, or write your own.'}</p>{!archived&&!filtered&&<Button variant="secondary" size="sm" onClick={add} disabled={data.busy}>Add To-do</Button>}</div>}

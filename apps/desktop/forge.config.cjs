@@ -7,7 +7,7 @@ module.exports = {
     executableName: 'Space',
     appBundleId: 'io.github.kai1303.space',
     appCategoryType: 'public.app-category.productivity',
-    icon: join(__dirname, 'assets', 'space-icon.icns'),
+    icon: [join(__dirname, 'Space.icon'), join(__dirname, 'assets', 'space-icon.icns')],
     asar: true,
     download: { checksums: require('electron/checksums.json') },
     protocols: [{ name: 'Open Space Desktop', schemes: ['space-desktop'] }],

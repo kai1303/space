@@ -1,4 +1,4 @@
-const { app, dialog, Menu } = require('electron');
+const { app, dialog, Menu, nativeTheme } = require('electron');
 const { readFileSync, writeFileSync, renameSync } = require('node:fs');
 const { join } = require('node:path');
 const { spaceUrl, desktopHandoff } = require('./policy.cjs');
@@ -72,7 +72,14 @@ if (!app.requestSingleInstanceLock()) {
   app.on('activate', () => { if (url) openWindow(); });
   app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
   app.whenReady().then(() => {
-    if (!app.isPackaged && app.dock) app.dock.setIcon(join(__dirname, '../assets/space-icon.png'));
+    if (app.dock) {
+      const updateDockIcon = () => {
+        const icon = nativeTheme.shouldUseDarkColors ? 'space-icon-dark.png' : 'space-icon.png';
+        app.dock.setIcon(join(__dirname, '../assets', icon));
+      };
+      updateDockIcon();
+      nativeTheme.on('updated', updateDockIcon);
+    }
     let config = require('../desktop.config.json');
     try {
       config = JSON.parse(readFileSync(join(app.getPath('userData'), 'desktop.json'), 'utf8'));
