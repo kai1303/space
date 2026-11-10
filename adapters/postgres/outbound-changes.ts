@@ -2,7 +2,7 @@ import type { Pool } from 'pg';
 
 // A lost notification channel fails closed. The service must restart before
 // dispatching again; live database checks remain authoritative on every request.
-export async function watchOutboundChanges(pool: Pool, changed: (owner: string) => void, lost: () => void) {
+export async function watchOutboundChanges(pool: Pool, changed: (subject: string) => void, lost: () => void) {
   const client = await pool.connect();
   let closed = false;
   try {

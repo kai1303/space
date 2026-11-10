@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from '
 import type { AgentSessionReference, Page } from '@space/contracts';
 import { request } from '../../shared/api/request.js';
 import { invalidateUpdates, subscribeUpdates } from '../../shared/realtime/live-updates.js';
-type StarredConversation = {id:string;name:string;kind:string;private:boolean;can_rename?:boolean;session?:AgentSessionReference};
+type StarredConversation = {id:string;name:string;kind:string;private:boolean;can_rename?:boolean;working?:boolean;session?:AgentSessionReference};
 type PendingStar = { active: boolean; conversation?: StarredConversation };
 const pendingStars = new Map<string, ReadonlyMap<string, PendingStar>>();
 const emptyPending: ReadonlyMap<string, PendingStar> = new Map();

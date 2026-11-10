@@ -17,11 +17,11 @@ const outbound = { url: 'https://space.example.com/mcp/outbound', token: 'short-
 test('invocations accept a bounded gateway capability and reject unsafe URLs, credentials and tool names', () => {
   assert.deepEqual(parseInvocation({ ...invocation, outbound }).outbound, outbound);
   assert.equal(parseInvocation({ ...invocation, outbound: { ...outbound, url: 'http://127.0.0.1:3000/mcp/outbound' } }).outbound.url, 'http://127.0.0.1:3000/mcp/outbound');
-  const maximum = Array.from({ length: 2000 }, (_, index) => `${index}_`.padEnd(128, 'x'));
+  const maximum = Array.from({ length: 4000 }, (_, index) => `${index}_`.padEnd(128, 'x'));
   assert.deepEqual(parseInvocation({ ...invocation, outbound: { ...outbound, tools: maximum } }).outbound.tools, maximum);
   for (const bad of [
     { url: 'http://remote.example.com/mcp' }, { url: 'https://user:password@space.example.com/mcp' }, { url: 'https://space.example.com/mcp?token=secret' },
-    { token: '' }, { token: 'x'.repeat(4097) }, { token: 'header\r\ninjection' }, { tools: ['*'] }, { tools: ['same', 'same'] }, { tools: ['x'.repeat(129)] }, { tools: Array(2001).fill('tool') }, { tools: ['bad name'] }, { extra: true },
+    { token: '' }, { token: 'x'.repeat(4097) }, { token: 'header\r\ninjection' }, { tools: ['*'] }, { tools: ['same', 'same'] }, { tools: ['x'.repeat(129)] }, { tools: Array.from({length: 4001}, (_, index) => `tool_${index}`) }, { tools: ['bad name'] }, { extra: true },
   ]) assert.throws(() => parseInvocation({ ...invocation, outbound: { ...outbound, ...bad } }));
 });
 

@@ -212,3 +212,116 @@ test('revocation cancels an active call and concurrent duplicate requests never 
     await gateway.close();
   }
 });
+
+test('workspace grants dispatch only the shared credential for a member using a paired agent', async () => {
+  const { createGateway } = await import('../../apps/mcp-gateway/dist/gateway.js');
+  const seed = await fixture();
+  const store = new OutboundStore(pool, randomBytes(32).toString('hex'));
+  const scope = { actor: seed.owner_id, workspace: seed.workspace_id };
+  const upstreamTools = [{ name: 'lookup', inputSchema: { type: 'object' } }];
+  async function grant(actor: string | typeof scope, token: string) {
+    let connection = await store.create(actor, {
+      name: 'Search',
+      url: 'https://example.com/mcp',
+      auth_type: 'bearer',
+      token,
+    });
+    connection = await store.catalog(actor, connection.id, connection.revision, upstreamTools);
+    return store.grant(actor, connection.id, {
+      revision: connection.revision,
+      installation_id: seed.installation_id,
+      tools: ['lookup'],
+    });
+  }
+  await grant(seed.owner_id, 'personal-token');
+  const shared = await grant(scope, 'workspace-token');
+  const ownerAccess = (await store.issue(seed.execution, seed.installation_id, 'http://localhost/mcp'))!;
+  assert.equal(ownerAccess.tools.length, 2);
+  const ownerClaims = store.security.verify(ownerAccess.token, 'outbound');
+  const { requester, workspace, ...legacyClaims } = ownerClaims;
+  assert.equal((await store.allowed(legacyClaims)).length, 1);
+  await pool.query('UPDATE tasks SET requester_id=$2 WHERE id=$1', [seed.task, seed.collaborator_id]);
+  await assert.rejects(store.allowed(ownerClaims), /outbound_access_revoked/);
+  await assert.rejects(store.allowed(legacyClaims), /outbound_access_revoked/);
+
+  let started!: () => void;
+  const dispatched = new Promise<void>((resolve) => {
+    started = resolve;
+  });
+  let block = false;
+  const seen: (string | undefined)[] = [];
+  const gateway = createGateway(store, {
+    remote: {
+      async discover() {
+        return upstreamTools;
+      },
+      async call(connection, _name, _args, signal) {
+        seen.push(connection.token);
+        if (block) {
+          started();
+          await new Promise<void>((_, reject) =>
+            signal.addEventListener('abort', () => reject(signal.reason), { once: true }),
+          );
+        }
+        return { content: [{ type: 'text' as const, text: 'ok' }] };
+      },
+    },
+  });
+  const address = await gateway.listen({ host: '127.0.0.1', port: 0 });
+  const client = new Client({ name: 'shared-test', version: '1' });
+  try {
+    const access = await store.issue(seed.execution, seed.installation_id, `${address}/mcp`);
+    assert.ok(access);
+    const claims = store.security.verify(access.token, 'outbound');
+    assert.equal(claims.requester, seed.collaborator_id);
+    await assert.rejects(store.allowed({ ...claims, workspace: randomUUID() }), /outbound_access_revoked/);
+    await client.connect(
+      new StreamableHTTPClientTransport(new URL(access.url), {
+        requestInit: { headers: { Authorization: `Bearer ${access.token}` } },
+      }),
+    );
+    const listed = await client.listTools();
+    assert.deepEqual(
+      listed.tools.map((t) => t.name),
+      access.tools,
+    );
+    assert.equal(access.tools.length, 1);
+    const name = access.tools[0]!;
+    const personalName = ownerAccess.tools.find((tool) => tool !== name)!;
+    assert.equal((await client.callTool({ name: personalName })).isError, true);
+    assert.notEqual((await client.callTool({ name })).isError, true);
+    assert.deepEqual(seen, ['workspace-token']);
+    assert.equal((await store.calls(seed.collaborator_id)).items.length, 1);
+
+    block = true;
+    const pending = client.callTool({ name });
+    await dispatched;
+    await store.grant(scope, shared.id, {
+      revision: shared.revision,
+      installation_id: seed.installation_id,
+      tools: [],
+    });
+    assert.equal((await pending).isError, true);
+    assert.deepEqual((await client.listTools()).tools, []);
+    assert.equal(await store.issue(seed.execution, seed.installation_id, access.url), undefined);
+
+    await pool.query('DELETE FROM channel_members WHERE channel_id=$1 AND user_id=$2', [
+      seed.channel_id,
+      seed.collaborator_id,
+    ]);
+    await assert.rejects(store.authority(claims), /outbound_access_revoked/);
+    await pool.query('INSERT INTO channel_members(workspace_id,channel_id,user_id) VALUES($1,$2,$3)', [
+      seed.workspace_id,
+      seed.channel_id,
+      seed.collaborator_id,
+    ]);
+    await pool.query('UPDATE workspace_members SET active=false WHERE workspace_id=$1 AND user_id=$2', [
+      seed.workspace_id,
+      seed.collaborator_id,
+    ]);
+    await assert.rejects(store.authority(claims), /outbound_access_revoked/);
+  } finally {
+    await client.close();
+    await gateway.close();
+  }
+});

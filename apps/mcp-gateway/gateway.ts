@@ -22,7 +22,7 @@ export function createGateway(
     });
   const active = new Map<
       AbortController,
-      { owner: string; check?: () => Promise<void>; checking: boolean; dirty: boolean }
+      { changeSubjects: readonly string[]; check?: () => Promise<void>; checking: boolean; dirty: boolean }
     >(),
     owners = new Map<string, number>();
   let requests = 0;
@@ -50,8 +50,8 @@ export function createGateway(
   app.addHook('onReady', async () => {
     stopWatching = await watchOutboundChanges(
       store.pool,
-      (owner) => {
-        for (const [controller, operation] of active) if (operation.owner === owner) void recheck(controller);
+      (subject) => {
+        for (const [controller, operation] of active) if (operation.changeSubjects.includes(subject)) void recheck(controller);
       },
       () => {
         healthy = false;
@@ -65,12 +65,13 @@ export function createGateway(
     signal: AbortSignal,
     work: (signal: AbortSignal) => Promise<T>,
     check?: () => Promise<void>,
+    changeSubjects: readonly string[] = [owner],
   ) {
     if (!healthy) throw new AppError(503, 'outbound_unavailable');
     if (active.size >= 32 || (owners.get(owner) ?? 0) >= 4) throw new AppError(429, 'outbound_busy');
     const controller = new AbortController(),
       combined = AbortSignal.any([signal, controller.signal, AbortSignal.timeout(30000)]);
-    active.set(controller, { owner, check, checking: false, dirty: false });
+    active.set(controller, { changeSubjects, check, checking: false, dirty: false });
     owners.set(owner, (owners.get(owner) ?? 0) + 1);
     try {
       return await work(combined);
@@ -110,20 +111,21 @@ export function createGateway(
   app.get('/healthz', async (_r, reply) => reply.code(healthy ? 200 : 503).send({ ready: healthy }));
   app.post('/internal/discover', async (r) => {
     const claims = verify(r.headers.authorization, 'outbound-internal'),
-      v = record(r.body, ['connection_id', 'revision']);
-    const connection = await store.credentials(claims.owner, uuid(v.connection_id));
+      v = record(r.body, ['connection_id', 'revision']),
+      scope = claims.workspace === undefined ? claims.owner : { actor: claims.owner, workspace: claims.workspace };
+    const connection = await store.credentials(scope, uuid(v.connection_id));
     if (connection.revision !== v.revision) throw new AppError(409, 'connection_changed');
     return bounded(claims.owner, new AbortController().signal, async (signal) => {
       try {
         return await store.catalog(
-          claims.owner,
+          scope,
           connection.id,
           connection.revision,
           await remote.discover(connection, signal),
         );
       } catch (e) {
         if (e instanceof AppError && e.code === 'connection_changed') throw e;
-        await store.discoveryFailed(claims.owner, connection.id, connection.revision);
+        await store.discoveryFailed(scope, connection.id, connection.revision);
         throw new AppError(502, 'mcp_discovery_failed');
       }
     });
@@ -143,7 +145,7 @@ export function createGateway(
       let revision: number | undefined;
       try {
         return await bounded(
-          claims.owner,
+          claims.requester ?? claims.owner,
           context.mcpReq.signal,
           async (signal) => {
             const selected = (await store.allowed(claims)).find((t) => t.name === request.params.name);
@@ -185,6 +187,7 @@ export function createGateway(
             if (!current || (revision !== undefined && current.revision !== revision))
               throw new AppError(403, 'outbound_access_revoked');
           },
+          [claims.owner, claims.requester ?? claims.owner, ...(claims.workspace ? [`workspace:${claims.workspace}`] : [])],
         );
       } catch (e) {
         return {

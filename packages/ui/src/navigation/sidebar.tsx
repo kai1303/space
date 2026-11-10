@@ -32,7 +32,7 @@ export type SidebarChannel = {
   online?: boolean;
   typing?: boolean;
 };
-export function DirectTypingIcon({ name, size = 20 }: { name: string; size?: number }) {
+export function DirectTypingIcon({ name, label = `${name} is typing`, size = 20 }: { name: string; label?: string; size?: number }) {
   const reduced = useReducedMotion();
   const [scope, animate] = useAnimate<SVGSVGElement>();
   useEffect(() => {
@@ -42,7 +42,7 @@ export function DirectTypingIcon({ name, size = 20 }: { name: string; size?: num
     });
     return () => pulse.cancel();
   }, [animate, reduced]);
-  return <svg ref={scope} role="img" aria-label={`${name} is typing`} viewBox="0 0 24 24" style={{width: size, height: size, flexShrink: 0}}>
+  return <svg ref={scope} role="img" aria-label={label} viewBox="0 0 24 24" style={{width: size, height: size, flexShrink: 0}}>
     {[4, 12, 20].map(x => <circle key={x} cx={x} cy={12} r={3} fill="currentColor" opacity={0.8}/> )}
   </svg>;
 }
@@ -237,7 +237,7 @@ export function WorkspaceSidebar({
                     onClick={() => onSelect(c.id)}
                     icon={
                       c.typing && c.id !== selectedId ? (
-                        <DirectTypingIcon name={c.name} size={c.section === "starred" ? 16 : 20}/>
+                        <DirectTypingIcon name={c.name} label={c.agentName ? `${c.agentName} is working` : undefined} size={c.section === "starred" && !c.agentName ? 16 : 20}/>
                       ) : c.agentName ? (
                         <span className="sp-sidebar-avatar" aria-hidden="true"><Avatar name={c.agentName} initials={c.agentName.slice(0,2).toUpperCase()} image={c.image} size="sm" tone="green"/></span>
                       ) : c.section === "direct" ? (

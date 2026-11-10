@@ -72,7 +72,8 @@ export function parseInvocation(value: unknown): InvocationRequest {
     if ((url.protocol !== 'https:' && !(url.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname))) || url.username || url.password || url.search || url.hash) throw new AppError(400, 'invalid_outbound_url');
     const token = text(access.token, 4096);
     if (/\s/.test(token)) throw new AppError(400, 'invalid_outbound_token');
-    if (!Array.isArray(access.tools) || access.tools.length > 2000 || access.tools.some(name => typeof name !== 'string' || !/^[-a-zA-Z0-9_.]{1,128}$/.test(name)) || new Set(access.tools).size !== access.tools.length) throw new AppError(400, 'invalid_outbound_tools');
+    // A turn can use 20 personal and 20 workspace servers with 100 tools each.
+    if (!Array.isArray(access.tools) || access.tools.length > 4000 || access.tools.some(name => typeof name !== 'string' || !/^[-a-zA-Z0-9_.]{1,128}$/.test(name)) || new Set(access.tools).size !== access.tools.length) throw new AppError(400, 'invalid_outbound_tools');
     outbound = { url: url.href, token, tools: access.tools };
   }
   return { ...(outbound ? { outbound } : {}), ...(persistent_session ? { persistent_session } : {}), ...(context?{context}:{}), schema_version: '1.0', task_id: uuid(v.task_id), execution_id, session_id: uuid(v.session_id), idempotency_key: execution_id, goal: text(v.goal), skill: text(v.skill, 80) };

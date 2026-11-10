@@ -359,9 +359,13 @@ See the [connector guide](apps/connector/README.md) and
 
 ---
 
-## Personal MCP connections
+## MCP connections
 
-Connections are personal configuration. Add multiple accounts for the same MCP
+Workspace owners and admins can open **Agents & tools → Apps → Add MCP server** to register a shared HTTPS endpoint. Save the server, use **Test connection** to discover its tools, then select tools for each paired workspace agent under **Agent access**. Workspace grants apply when a workspace member with channel access asks that agent to use a tool.
+
+### Personal connections
+
+Use your account menu to add multiple accounts for the same MCP
 server, then grant individual tools to each of your paired Codex, Kiro, or Claude
 agents. Your agents receive these tools automatically on your authorized requests.
 

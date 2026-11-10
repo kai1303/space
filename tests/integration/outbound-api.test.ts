@@ -279,7 +279,7 @@ test(
     assert.ok(!created.body.includes(secret));
     const id = created.json().id, path = `${base}/connections/${id}`;
     const before = upstreamRequests.length;
-    for (const token of [a.collaborator_token, b.owner_token]) {
+    for (const [token, expected] of [[a.collaborator_token, 403], [b.owner_token, 404]] as const) {
       const requests = [
         await call(token, 'GET', `${base}/connections`),
         await call(token, 'GET', `${base}/connection-agents`),
@@ -289,7 +289,7 @@ test(
         await call(token, 'PUT', `${path}/grants`, { revision: 1, installation_id: local.installation_id, tools: [] }),
         await call(token, 'DELETE', path, { revision: 1 }),
       ];
-      for (const response of requests) assert.ok([403, 404].includes(response.statusCode), response.body);
+      for (const response of requests) assert.equal(response.statusCode, expected, response.body);
     }
     assert.equal(upstreamRequests.length, before);
     assert.deepEqual((await call(a.owner_token, 'GET', '/me/connections')).json().items, []);
@@ -298,6 +298,8 @@ test(
     await pool.query("UPDATE workspace_members SET role='admin' WHERE workspace_id=$1 AND user_id=$2", [a.workspace_id, a.collaborator_id]);
     const agents = await call(a.collaborator_token, 'GET', `${base}/connection-agents`);
     assert.deepEqual(agents.json().items.map((item: { id: string }) => item.id), [local.installation_id]);
+    const remaining = await call(a.collaborator_token, 'GET', `${base}/connection-agents?after=${local.installation_id}`);
+    assert.deepEqual(remaining.json().items, []);
     const changed = await call(a.collaborator_token, 'PATCH', path, { revision: 1, name: 'Team search' });
     assert.equal(changed.statusCode, 200, changed.body);
     const discovered = await call(a.collaborator_token, 'POST', `${path}/discover`, { revision: changed.json().revision });
@@ -314,16 +316,16 @@ test(
     assert.deepEqual(granted.json().grants, [{ installation_id: local.installation_id, tools: ['search'] }]);
     const [listed] = (await call(a.owner_token, 'GET', `${base}/connections`)).json().items;
     assert.deepEqual(listed, granted.json());
-    await pool.query("UPDATE workspace_members SET role='member' WHERE workspace_id=$1 AND user_id=$2", [a.workspace_id, a.collaborator_id]);
     const signed = new OutboundStore(pool, key).security.sign({
       aud: 'outbound-internal', owner: a.collaborator_id, workspace: a.workspace_id,
       installation: '', execution: '', exp: Date.now() + 35000,
     });
+    await pool.query("UPDATE workspace_members SET role='member' WHERE workspace_id=$1 AND user_id=$2", [a.workspace_id, a.collaborator_id]);
     const revoked = await gateway.inject({
       method: 'POST', url: '/internal/discover', headers: { authorization: `Bearer ${signed}` },
       payload: { connection_id: id, revision: listed.revision },
     });
-    assert.ok([403, 404].includes(revoked.statusCode), revoked.body);
+    assert.equal(revoked.statusCode, 403, revoked.body);
     assert.equal(upstreamRequests.length, before + requests.length);
     assert.equal((await call(a.owner_token, 'DELETE', path, { revision: listed.revision })).statusCode, 200);
   },

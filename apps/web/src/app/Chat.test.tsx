@@ -1896,7 +1896,7 @@ it('opens agent sessions below direct messages, retains drafts, and refreshes si
  const user=userEvent.setup();
  mockPaginatedChat(()=>messagePage([paginatedMessage('Channel source','1')]));
  const fallback=vi.mocked(fetch).getMockImplementation()!;
- let session={id:'sidebar-session',channel_id:'first',channel_archived:false,workspace_id:'workspace',origin_thread_id:'session-thread',installation_id:'mine',title:'Launch checklist',state:'active',managed:true,created_by:'user',owner_id:'user',agent_name:'My Codex',created_at:'2026-11-04T00:00:00Z',skill:'codex.run',turn_count:0};
+ let session={working:false,id:'sidebar-session',channel_id:'first',channel_archived:false,workspace_id:'workspace',origin_thread_id:'session-thread',installation_id:'mine',title:'Launch checklist',state:'active',managed:true,created_by:'user',owner_id:'user',agent_name:'My Codex',created_at:'2026-11-04T00:00:00Z',skill:'codex.run',turn_count:0};
  let items=[session];
  vi.mocked(fetch).mockImplementation(async(input,init)=>{
   const path=String(input);
@@ -1916,6 +1916,14 @@ it('opens agent sessions below direct messages, retains drafts, and refreshes si
  const headings=within(nav).getAllByRole('button').map(button=>button.textContent);
  expect(headings.indexOf('Agent sessions')).toBeGreaterThan(headings.indexOf('Direct messages'));
  expect(headings.indexOf('Agent sessions')).toBeLessThan(headings.indexOf('Apps'));
+ const updateActivity=async(working:boolean)=>{
+  items=[{...session,working}];
+  await act(async()=>{latestChatSocket().receive('updates.changed',{scope:'workspace',id:'workspace'});});
+ };
+ await updateActivity(true);
+ await within(entry).findByRole('img',{name:'My Codex is working'});
+ await updateActivity(false);
+ await waitFor(()=>expect(within(entry).queryByRole('img',{name:'My Codex is working'})).toBeNull());
  fireEvent.contextMenu(entry);
  await user.click(await screen.findByRole('menuitem',{name:'Rename…'}));
  const rename=within(await screen.findByRole('dialog',{name:'Rename session'}));
@@ -1929,6 +1937,9 @@ it('opens agent sessions below direct messages, retains drafts, and refreshes si
  await user.click(entry);
  expect(entry.getAttribute('aria-current')).toBe('page');
  await screen.findByRole('heading',{name:'My Codex',exact:true,level:1});
+ await updateActivity(true);
+ expect(within(entry).queryByRole('img',{name:'My Codex is working'})).toBeNull();
+ await updateActivity(false);
  await user.type(await screen.findByRole('textbox',{name:'Message agent session'}),'Remember this draft');
  await user.click(screen.getByRole('button',{name:'Rename session'}));
  const headerRename=within(await screen.findByRole('dialog',{name:'Rename session'}));

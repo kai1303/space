@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
-import type { OutboundAgent, OutboundCall, OutboundConnection } from '@space/contracts';
+import type { OutboundAgent, OutboundCall, OutboundConnection, WorkspaceSettings } from '@space/contracts';
 import { Button, Dialog, Select, TextField } from '@space/ui/primitives';
 import { request } from '../../shared/api/request.js';
 import { subscribeUpdates } from '../../shared/realtime/live-updates.js';
@@ -10,58 +10,112 @@ const callStatus = { pending: 'Pending', succeeded: 'Succeeded', failed: 'Failed
 // Only local messages are rendered: a remote failure can contain credentials or tool data.
 function failure(error: unknown) {
   const code = error instanceof Error ? error.message : '';
-  if (['revision_conflict', 'conflict', 'stale_revision'].includes(code)) return 'This connection changed. Refresh and review the latest settings before saving again.';
+  if (['connection_changed', 'revision_conflict', 'conflict', 'stale_revision'].includes(code)) return 'This connection changed. Refresh and review the latest settings before saving again.';
+  if (code === 'outbound_not_configured') return 'The MCP gateway has not been configured for this Space installation.';
+  if (code === 'workspace_management_forbidden') return 'Your workspace management access changed.';
   if (code === 'invalid_mcp_url') return 'Use a public HTTPS MCP endpoint without credentials, a query, or a fragment.';
   if (code === 'invalid_mcp_token') return 'Enter a valid bearer token.';
   if (['unauthorized', 'forbidden', 'not_found'].includes(code)) return 'This connection is no longer available to your account. Refresh to continue.';
   return 'Could not complete the request. Check the connection settings and try again.';
 }
 
-export function Connections({ userId, onClose }: { userId: string; onClose: () => void }) {
-  const [items, setItems] = useState<OutboundConnection[]>([]), [agents, setAgents] = useState<OutboundAgent[]>([]), [calls, setCalls] = useState<OutboundCall[]>([]);
+type AgentPage = { items: OutboundAgent[]; next_cursor?: string | null };
+const firstAgentPage: AgentPage & { cursors: string[] } = { items: [], cursors: [] };
+
+type ConnectionsProps = { userId: string; onClose: () => void } | { workspaceId: string };
+
+export function Connections(props: ConnectionsProps) {
+  const workspace = 'workspaceId' in props;
+  const scopeId = workspace ? props.workspaceId : props.userId;
+  const base = workspace ? `/workspaces/${encodeURIComponent(scopeId)}` : '/me';
+  const connectionsPath = `${base}/connections`;
+  const [role, setRole] = useState<'manager' | 'member'>();
+  const [agentPage, setAgentPage] = useState(firstAgentPage);
+  const requestedAgentCursors = useRef<string[]>([]);
+  const [items, setItems] = useState<OutboundConnection[]>([]), [calls, setCalls] = useState<OutboundCall[]>([]);
   const [loaded, setLoaded] = useState(false), [busy, setBusy] = useState(false), [error, setError] = useState(''), [revoked, setRevoked] = useState(false);
   const [editing, setEditing] = useState<OutboundConnection | 'new' | null>(null), [access, setAccess] = useState<string | null>(null), [deleting, setDeleting] = useState<string | null>(null);
   const active = useRef(true), generation = useRef(0);
+  function clearAccess(nextRole?: 'member') {
+    generation.current++;
+    setRole(nextRole); setItems([]); setAgentPage(firstAgentPage); setCalls([]);
+    requestedAgentCursors.current = [];
+    setEditing(null); setAccess(null); setDeleting(null); setBusy(false); setLoaded(true);
+  }
+  function workspaceDenied(error: unknown) {
+    return workspace && error instanceof Error && ['workspace_management_forbidden', 'unauthorized', 'forbidden', 'not_found'].includes(error.message);
+  }
   async function refresh() {
+    if (!active.current) return;
     const attempt = ++generation.current;
+    const current = () => active.current && attempt === generation.current;
     try {
+      if (workspace) {
+        const settings = await request<WorkspaceSettings>(`${base}/settings`);
+        if (!current()) return;
+        if (settings.role !== 'owner' && settings.role !== 'admin') {
+          clearAccess('member'); setError(''); return;
+        }
+      }
+      const cursors = requestedAgentCursors.current;
+      const after = cursors.at(-1);
       const [connections, available, history] = await Promise.all([
-        request<{ items: OutboundConnection[] }>('/me/connections'),
-        request<{ items: OutboundAgent[] }>('/me/connection-agents'),
-        request<{ items: OutboundCall[] }>('/me/connection-calls'),
+        request<{ items: OutboundConnection[] }>(connectionsPath),
+        request<AgentPage>(`${base}/connection-agents${after ? `?after=${encodeURIComponent(after)}` : ''}`),
+        workspace ? undefined : request<{ items: OutboundCall[] }>('/me/connection-calls'),
       ]);
-      if (active.current && attempt === generation.current) { setItems(connections.items); setAgents(available.items); setCalls(history.items); setLoaded(true); }
-    } catch (e) { if (active.current && attempt === generation.current) { setError(failure(e)); setLoaded(true); } }
+      if (current()) {
+        setItems(connections.items); setAgentPage({ ...available, cursors }); setCalls(history?.items ?? []);
+        if (workspace) setRole('manager'); setLoaded(true); setError('');
+      }
+    } catch (reason) {
+      if (!current()) return;
+      if (workspaceDenied(reason)) clearAccess();
+      setError(failure(reason)); setLoaded(true);
+    }
   }
   useEffect(() => {
     active.current = true;
-    const stop = subscribeUpdates('actor', userId, refresh, () => {
-      active.current = false; generation.current++; setItems([]); setAgents([]); setCalls([]); setEditing(null); setAccess(null); setDeleting(null); setRevoked(true); setLoaded(true); setBusy(false);
-      setError('Your access changed. Close Connections and sign in again.');
+    const stop = subscribeUpdates(workspace ? 'workspace' : 'actor', scopeId, refresh, () => {
+      active.current = false; clearAccess(); setRevoked(true);
+      setError(workspace ? 'You no longer have access to this workspace.' : 'Your access changed. Close Connections and sign in again.');
     });
     return () => { active.current = false; generation.current++; stop(); };
-  }, [userId]);
+  }, [scopeId, workspace]);
   async function mutate(path: string, body: object, method: 'POST' | 'PATCH' | 'PUT' | 'DELETE' = 'POST') {
-    if (busy || !active.current) return false;
+    if (busy || !active.current || (workspace && role !== 'manager')) return false;
     setBusy(true); setError(''); generation.current++;
     try {
       await request(path, body, undefined, method);
       if (!active.current) return false;
       await refresh();
       return true;
-    } catch (e) { if (active.current) setError(failure(e)); return false; }
+    } catch (e) {
+      if (active.current) {
+        if (workspaceDenied(e)) clearAccess();
+        setError(failure(e));
+      }
+      return false;
+    }
     finally { if (active.current) setBusy(false); }
   }
+  function showAgentPage(cursors: string[]) {
+    requestedAgentCursors.current = cursors;
+    void refresh();
+  }
   const selected = items.find(item => item.id === access);
-  return <Dialog open title="Connections" description="Your accounts and the tools your agents can use." onClose={onClose} onBeforeClose={() => !busy}>
-    <div className="space-connections">
-      <p className="space-connections-hint">Connect a remote MCP server using Streamable HTTP over public HTTPS, with a bearer token or no authentication. OAuth and local stdio servers are not supported.</p>
-      <p className="space-connections-hint">Connections belong to you. Add separate connections for multiple accounts, then choose tools for each of your agents. New tools are never granted automatically.</p>
+  const canManage = !revoked && (!workspace || role === 'manager');
+  const content = <div className="space-connections">
+      {workspace && <h2>Workspace MCP servers</h2>}
+      {role === 'member' && !revoked && <p>Workspace owners and admins manage MCP servers for this workspace.</p>}
+      {canManage && <><p className="space-connections-hint">Connect a remote MCP server using Streamable HTTP over public HTTPS, with a bearer token or no authentication. OAuth and local stdio servers are not supported.</p>
+      <p className="space-connections-hint">{workspace ? 'Choose which tools each workspace agent can use with the shared account.' : 'Connections belong to you. Add separate connections for multiple accounts, then choose tools for each of your agents.'} New tools are never granted automatically.</p></>}
       {error && <p role="alert" className="space-connections-error">{error}</p>}
-      {!revoked && <div className="space-connections-actions"><Button variant="primary" disabled={busy || !loaded} onClick={() => { setEditing('new'); setAccess(null); setDeleting(null); setError(''); }}>Add connection</Button><Button disabled={busy} onClick={() => { setError(''); void refresh(); }}>Refresh</Button></div>}
-      {!loaded ? <p role="status">Loading connections…</p> : !revoked && !items.length && <p>No connections yet. Add an account to get started.</p>}
-      {editing && <ConnectionEditor key={editing === 'new' ? 'new' : editing.id} connection={editing === 'new' ? undefined : editing} busy={busy} onCancel={() => setEditing(null)} onSave={async body => {
-        const saved = await mutate(editing === 'new' ? '/me/connections' : `/me/connections/${editing.id}`, editing === 'new' ? body : { revision: editing.revision, ...body }, editing === 'new' ? 'POST' : 'PATCH');
+      {canManage && <div className="space-connections-actions"><Button variant="primary" disabled={busy || !loaded} onClick={() => { setEditing('new'); setAccess(null); setDeleting(null); setError(''); }}>{workspace ? 'Add MCP server' : 'Add connection'}</Button><Button disabled={busy} onClick={() => { setError(''); void refresh(); }}>Refresh</Button></div>}
+      {workspace && error && !canManage && !revoked && <Button onClick={() => void refresh()}>Retry</Button>}
+      {!loaded ? <p role="status">Loading connections…</p> : canManage && !items.length && <p>No connections yet. Add an account to get started.</p>}
+      {editing && <ConnectionEditor workspace={workspace} key={editing === 'new' ? 'new' : editing.id} connection={editing === 'new' ? undefined : editing} busy={busy} onCancel={() => setEditing(null)} onSave={async body => {
+        const saved = await mutate(editing === 'new' ? connectionsPath : `${connectionsPath}/${editing.id}`, editing === 'new' ? body : { revision: editing.revision, ...body }, editing === 'new' ? 'POST' : 'PATCH');
         if (saved && active.current) setEditing(null);
       }} />}
       <div className="space-connections-list">{items.map(item => <section className="space-connection" aria-label={item.name} key={item.id}>
@@ -70,25 +124,28 @@ export function Connections({ userId, onClose }: { userId: string; onClose: () =
         <p className="space-connections-hint">{item.auth_type === 'bearer' ? 'Bearer token saved' : 'No authentication'} · Last observed: {statusText[item.status]} · {item.tools.length} tools</p>
         <div className="space-connections-actions">
           <Button size="sm" disabled={busy} onClick={() => { setEditing(item); setAccess(null); setDeleting(null); setError(''); }}>Edit</Button>
-          <Button size="sm" disabled={busy} onClick={() => void mutate(`/me/connections/${item.id}/discover`, { revision: item.revision })}>Test connection</Button>
+          <Button size="sm" disabled={busy} onClick={() => void mutate(`${connectionsPath}/${item.id}/discover`, { revision: item.revision })}>Test connection</Button>
           <Button size="sm" disabled={busy} onClick={() => { setAccess(item.id); setEditing(null); setDeleting(null); setError(''); }}>Agent access</Button>
-          <Button size="sm" disabled={busy} onClick={() => void mutate(`/me/connections/${item.id}`, { revision: item.revision, enabled: !item.enabled }, 'PATCH')}>{item.enabled ? 'Disable' : 'Enable'}</Button>
+          <Button size="sm" disabled={busy} onClick={() => void mutate(`${connectionsPath}/${item.id}`, { revision: item.revision, enabled: !item.enabled }, 'PATCH')}>{item.enabled ? 'Disable' : 'Enable'}</Button>
           <Button size="sm" variant="ghost" disabled={busy} onClick={() => { setDeleting(item.id); setEditing(null); setAccess(null); }}>Delete</Button>
         </div>
-        {deleting === item.id && <div className="space-connection-confirm"><p>Delete {item.name}? Its saved credentials and agent access will be removed.</p><div className="space-connections-actions"><Button disabled={busy} onClick={() => setDeleting(null)}>Cancel</Button><Button disabled={busy} onClick={async () => { if (await mutate(`/me/connections/${item.id}`, { revision: item.revision }, 'DELETE')) setDeleting(null); }}>Delete connection</Button></div></div>}
+        {deleting === item.id && <div className="space-connection-confirm"><p>Delete {item.name}? Its saved credentials and agent access will be removed.</p><div className="space-connections-actions"><Button disabled={busy} onClick={() => setDeleting(null)}>Cancel</Button><Button disabled={busy} onClick={async () => { if (await mutate(`${connectionsPath}/${item.id}`, { revision: item.revision }, 'DELETE')) setDeleting(null); }}>Delete connection</Button></div></div>}
       </section>)}</div>
-      {selected && <GrantEditor key={`${selected.id}:${selected.revision}`} connection={selected} agents={agents} busy={busy} onSave={async (installation_id, tools) => { if (await mutate(`/me/connections/${selected.id}/grants`, { revision: selected.revision, installation_id, tools }, 'PUT')) setAccess(null); }} onCancel={() => setAccess(null)} />}
-      <p className="space-connections-hint">Test connection discovers the server’s current tools. Status shows the last observed result, not a continuous health check.</p>
-      <section className="space-connection-history" aria-label="Recent tool calls"><h3>Recent tool calls</h3>
+      {selected && <GrantEditor workspace={workspace} key={`${selected.id}:${selected.revision}:${agentPage.cursors.at(-1) ?? ''}`} connection={selected} agents={agentPage.items} busy={busy}
+        onPrevious={workspace && agentPage.cursors.length ? () => showAgentPage(agentPage.cursors.slice(0, -1)) : undefined}
+        onNext={workspace && agentPage.next_cursor ? () => showAgentPage([...agentPage.cursors, agentPage.next_cursor!]) : undefined} onSave={async (installation_id, tools) => { if (await mutate(`${connectionsPath}/${selected.id}/grants`, { revision: selected.revision, installation_id, tools }, 'PUT')) setAccess(null); }} onCancel={() => setAccess(null)} />}
+      {canManage && <p className="space-connections-hint">Test connection discovers the server’s current tools. Status shows the last observed result, not a continuous health check.</p>}
+      {!workspace && <section className="space-connection-history" aria-label="Recent tool calls"><h3>Recent tool calls</h3>
         {!calls.length ? <p className="space-connections-hint">No tool calls yet.</p> : <ul>{calls.map(call => <li key={call.id}><div><strong>{call.tool_name}</strong><span>{callStatus[call.status]}</span></div><p>{call.connection_name} · {call.agent_name}</p><small><time dateTime={call.created_at}>{new Date(call.created_at).toLocaleString()}</time>{call.duration_ms !== null && ` · ${call.duration_ms} ms`}</small>{call.status === 'uncertain' && <p className="space-connections-hint">The remote action may have completed. Check the service before trying it again.</p>}</li>)}</ul>}
-      </section>
-    </div>
-  </Dialog>;
+      </section>}
+    </div>;
+  return workspace ? content : <Dialog open title="Connections" description="Your accounts and the tools your agents can use." onClose={props.onClose} onBeforeClose={() => !busy}>{content}</Dialog>;
 }
 
-function ConnectionEditor({ connection, busy, onSave, onCancel }: { connection?: OutboundConnection; busy: boolean; onSave: (body: object) => Promise<void>; onCancel: () => void }) {
+function ConnectionEditor({ connection, busy, workspace, onSave, onCancel }: { workspace: boolean; connection?: OutboundConnection; busy: boolean; onSave: (body: object) => Promise<void>; onCancel: () => void }) {
   const [name, setName] = useState(connection?.name ?? ''), [url, setUrl] = useState(connection?.url ?? ''), [auth, setAuth] = useState<'bearer' | 'none'>(connection?.auth_type ?? 'bearer'), [token, setToken] = useState('');
-  const requiresToken = auth === 'bearer' && (!connection || connection.auth_type !== 'bearer');
+  const endpointChanged = workspace && connection && url.trim() !== connection.url;
+  const requiresToken = auth === 'bearer' && (!connection || connection.auth_type !== 'bearer' || endpointChanged);
   async function submit(event: FormEvent) {
     event.preventDefault();
     const body = { name: name.trim(), url: url.trim(), auth_type: auth, ...(auth === 'bearer' && token ? { token } : {}) };
@@ -98,23 +155,27 @@ function ConnectionEditor({ connection, busy, onSave, onCancel }: { connection?:
   return <form className="space-connection-editor" onSubmit={submit}>
     <h3>{connection ? `Edit ${connection.name}` : 'Add a connection'}</h3>
     <fieldset disabled={busy}>
-      <TextField label="Connection name" required maxLength={100} value={name} onChange={event => setName(event.target.value)} placeholder="GitHub personal" />
+      <TextField label="Connection name" required maxLength={100} value={name} onChange={event => setName(event.target.value)} placeholder={workspace ? "Team GitHub" : "GitHub personal"} />
       <TextField label="MCP endpoint" type="url" required maxLength={2000} value={url} onChange={event => setUrl(event.target.value)} placeholder="https://example.com/mcp" hint="Public HTTPS only. Put credentials in the token field, never in the URL." />
       <label className="space-connection-select">Authentication<Select aria-label="Authentication" value={auth} onChange={event => { setAuth(event.target.value as 'bearer' | 'none'); setToken(''); }}><option value="bearer">Bearer token</option><option value="none">No authentication</option></Select></label>
-      {auth === 'bearer' && <TextField label="Bearer token" type="password" autoComplete="new-password" required={requiresToken} maxLength={4096} value={token} onChange={event => setToken(event.target.value)} hint={connection?.auth_type === 'bearer' ? 'Leave blank to keep the saved token. Tokens are never shown again.' : 'Stored securely and sent only to this MCP server.'} />}
+      {auth === 'bearer' && <TextField label="Bearer token" type="password" autoComplete="new-password" required={requiresToken} maxLength={4096} value={token} onChange={event => setToken(event.target.value)} hint={endpointChanged ? 'Enter a token for the new endpoint.' : connection?.auth_type === 'bearer' ? 'Leave blank to keep the saved token. Tokens are never shown again.' : 'Stored securely and sent only to this MCP server.'} />}
     </fieldset>
     {connection && <p className="space-connections-hint">Changing the endpoint or credentials clears discovered tools and agent grants. Test the connection and grant access again afterward.</p>}
     <div className="space-connections-actions"><Button disabled={busy} onClick={onCancel}>Cancel</Button><Button type="submit" variant="primary" loading={busy} disabled={!name.trim() || !url.trim() || (requiresToken && !token)}>Save connection</Button></div>
   </form>;
 }
 
-function GrantEditor({ connection, agents, busy, onSave, onCancel }: { connection: OutboundConnection; agents: OutboundAgent[]; busy: boolean; onSave: (agent: string, tools: string[]) => Promise<void>; onCancel: () => void }) {
+function GrantEditor({ connection, agents, busy, workspace, onPrevious, onNext, onSave, onCancel }: { onPrevious?: () => void; onNext?: () => void; workspace: boolean; connection: OutboundConnection; agents: OutboundAgent[]; busy: boolean; onSave: (agent: string, tools: string[]) => Promise<void>; onCancel: () => void }) {
   const [agent, setAgent] = useState(agents[0]?.id ?? '');
   const [tools, setTools] = useState(connection.grants.find(grant => grant.installation_id === agent)?.tools ?? []);
   return <form className="space-connection-editor" onSubmit={event => { event.preventDefault(); if (agents.some(item => item.id === agent)) void onSave(agent, tools); }}>
     <h3>Agent access · {connection.name}</h3>
     <p className="space-connections-hint">Selected tools can act with this account’s permissions. Only grant tools you want this agent to use.</p>
-    {!agents.length ? <p>Connect one of your agents to a workspace first.</p> : <fieldset disabled={busy}>
+    {(onPrevious || onNext) && <div className="space-connections-actions">
+      {onPrevious && <Button size="sm" disabled={busy} onClick={onPrevious}>Previous agents</Button>}
+      {onNext && <Button size="sm" disabled={busy} onClick={onNext}>Next agents</Button>}
+    </div>}
+    {!agents.length ? <p>{workspace ? 'Connect an agent to this workspace first.' : 'Connect one of your agents to a workspace first.'}</p> : <fieldset disabled={busy}>
       <label className="space-connection-select">Agent<Select aria-label="Agent" value={agent} onChange={event => { setAgent(event.target.value); setTools(connection.grants.find(grant => grant.installation_id === event.target.value)?.tools ?? []); }}>{agents.map(item => <option key={item.id} value={item.id}>{item.name} · {item.workspace_name}</option>)}</Select></label>
       {!connection.tools.length && <p>Test the connection to discover available tools.</p>}
       {connection.tools.map(tool => <label className="space-connection-tool" key={tool.name}><input type="checkbox" checked={tools.includes(tool.name)} onChange={event => setTools(old => event.target.checked ? [...old, tool.name] : old.filter(name => name !== tool.name))} /><span><strong>{tool.name}</strong>{tool.description && <small>{tool.description}</small>}</span></label>)}

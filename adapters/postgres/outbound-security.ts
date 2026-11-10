@@ -2,6 +2,8 @@ import { createCipheriv, createDecipheriv, createHmac, randomBytes, timingSafeEq
 import { AppError } from '@space/contracts';
 export interface OutboundClaims {
   owner: string;
+  workspace?: string;
+  requester?: string;
   installation: string;
   execution: string;
   exp: number;
@@ -52,7 +54,8 @@ export class OutboundSecurity {
         !Number.isSafeInteger(claims.exp) ||
         claims.exp <= Date.now() ||
         claims.exp > Date.now() + 300000 ||
-        !['owner', 'installation', 'execution'].every((k) => typeof claims[k] === 'string')
+        !['owner', 'installation', 'execution'].every((k) => typeof claims[k] === 'string') ||
+        !['workspace', 'requester'].every((k) => claims[k] === undefined || typeof claims[k] === 'string')
       )
         throw 0;
       return claims;

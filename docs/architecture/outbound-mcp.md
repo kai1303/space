@@ -1,6 +1,8 @@
-# Personal outbound MCP connections
+# Outbound MCP connections
 
 Users open **Connections** from their personal account menu, add an MCP endpoint, test it to discover tools, and choose tools for each of their own paired Codex, Kiro, or Claude agents. Unpaired and worker-delivered integrations are not offered in this release. Connections can share an endpoint while storing different account credentials. No tool is granted automatically.
+
+Workspace owners and admins open **Agents & tools → Apps → Add MCP server**. Enter a name, public HTTPS endpoint and optional bearer token, save, then use **Test connection** to discover tools. Under **Agent access**, select a paired workspace agent, check its tools and save. Repeat for each agent. Shared credentials belong to the workspace and survive the adding admin’s departure. Any current workspace owner or admin can edit, disable or delete the server and update grants. Changing a shared bearer endpoint requires a token for the new endpoint.
 
 V1 supports Streamable HTTP at public HTTPS endpoints with a bearer token or no authentication. OAuth, local stdio upstreams, legacy SSE-only endpoints, inbound integrations, and provider-specific connectors are deferred. Endpoint URLs cannot contain credentials, query strings, or fragments.
 
@@ -36,7 +38,7 @@ The gateway keeps one PostgreSQL LISTEN connection for permission-change events.
 
 ## Authorization and lifecycle
 
-Management APIs derive the owner from the signed-in session. A gateway capability lasts 150 seconds and binds the owner, agent installation, execution and audience. The connector's invocation deadline is 120 seconds. Every gateway list/call rechecks the current execution, requester, agent ownership, workspace/channel membership, connector state, enabled connection and exact tool grant. Another user's request through the owner's agent cannot use these personal connections.
+Personal management APIs derive the owner from the signed-in session. Workspace management APIs verify the actor’s current admin or owner role. A gateway capability lasts 150 seconds and binds the agent owner, requester, workspace, installation, execution and audience. The connector's invocation deadline is 120 seconds. Every gateway list/call rechecks the current execution, requester, agent ownership, workspace/channel membership, connector state, enabled connection and exact tool grant. A request by the agent owner can use both the owner’s personal grants and workspace grants. Another channel member’s request through that agent can use only its workspace grants. The requester and agent owner must both retain workspace and channel access.
 
 Upstream credentials are encrypted with AES-256-GCM and identity-bound associated data. They never go to the connector or management responses. Endpoint/token changes discard the catalog and grants. Rediscovery removes grants for removed or changed definitions. Gateway tool aliases include a hash of connection/tool identity and fit provider naming limits.
 
@@ -46,15 +48,15 @@ Permission changes trigger revalidation of active work. Revocation aborts local 
 
 ## Bounds and failure handling
 
-- 20 connections per user; 100 tools and 256 KiB per catalog.
-- Four concurrent calls per owner; 32 active upstream operations per gateway process. Overload is rejected.
+- Each user can configure 20 personal connections. Each workspace can configure 20 shared connections. Each catalog supports 100 tools and 256 KiB.
+- Four concurrent calls per requester, 32 active upstream operations per gateway process. Overload is rejected.
 - 256 KiB argument bodies; 1 MiB cumulative upstream response bytes; 30-second operations.
 - Schema validation runs in a worker with memory/CPU bounds. Remote schema references do not fetch data.
 - DNS answers must all be public addresses. The selected address is pinned for the operation while TLS hostname verification remains enabled. Redirects are rejected.
 - Dispatch intent and a request fingerprint are recorded before network calls. Reusing an execution/request ID never repeats a dispatched operation. Unknown outcomes remain **uncertain**, including after a gateway restart.
 - Audits contain names, status, duration and timestamps, without arguments/results/tokens. The API pages 100 records at a time using `?before=<next_cursor>`. Completion prunes records beyond 1,000 only after their capability/replay window and execution have ended.
 
-The UI loads initially, after mutations, and on actor-scoped realtime invalidation/reconnect. No health or resource polling was added. A displayed connection status is the last observed discovery outcome.
+The UI loads initially, after mutations, and on actor- or workspace-scoped realtime invalidation and reconnect. No health or resource polling was added. A displayed connection status is the last observed discovery outcome.
 
 ## Verification boundary
 

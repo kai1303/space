@@ -15,6 +15,9 @@ const admin = new Pool({ connectionString: url });
 const pool = new Pool({ connectionString: url, options: `-c search_path=${schema}` });
 const chat = new ChatStore(pool);
 let app: ReturnType<typeof createApi>, calls = 0, context: { speaker: string; text: string }[];
+const summaries: { summary: string; messages: { speaker: string; text: string }[] }[] = [];
+let replySummary = '';
+let onSummarize = async () => {};
 let onGenerate = async () => {};
 before(async () => {
   assert.ok(url);
@@ -33,7 +36,14 @@ before(async () => {
     assert.equal(payload.reasoning_effort, 'low');
     assert.equal(payload.max_completion_tokens, 256);
     assert.ok(Buffer.byteLength(body) <= 12288);
-    context = JSON.parse(payload.messages[1].content);
+    const data = JSON.parse(payload.messages[1].content);
+    if (payload.messages[0].content.startsWith('Summarize')) {
+      summaries.push(data);
+      await onSummarize();
+      return Response.json({ choices: [{ finish_reason: 'stop', message: { content: 'Earlier decision ' + summaries.length } }] });
+    }
+    replySummary = data.summary ?? '';
+    context = data.messages ?? data;
     calls++;
     await onGenerate();
     return Response.json({ choices: [{ finish_reason: 'stop', message: { content: 'Can you send the link?' } }] });
@@ -65,6 +75,9 @@ test('suggests from the newest 50 visible thread messages and checks access acro
   assert.deepEqual(result.json(), { suggestion: 'Can you send the link?' });
   assert.deepEqual(context.map(m => m.text), Array.from({ length: 50 }, (_, i) => `Message ${i + 2}`));
   assert.equal(context[0]!.speaker, 'me');
+  assert.deepEqual(summaries[0]?.messages.map(m => m.text), ['Root', 'Message 1']);
+  assert.ok(summaries[0]?.messages.every(m => m.speaker !== 'me'));
+  assert.equal(replySummary, 'Earlier decision 1');
   assert.deepEqual((await suggest(a.owner_token)).json(), result.json());
   assert.equal(calls, 1, 'refocusing an unchanged thread must reuse the suggestion');
   await chat.send(a.collaborator_id, a.channel_id, { thread_id: root.thread_id, client_message_id: randomUUID(), text: 'Updated question' });
@@ -80,6 +93,10 @@ test('suggests from the newest 50 visible thread messages and checks access acro
   assert.equal(await first, 200);
   assert.equal(calls, 2, 'a new message must generate a fresh reply');
   assert.equal(context.at(-1)!.text, 'Updated question');
+  assert.equal(summaries.length, 2);
+  assert.equal(summaries[1]!.summary, 'Earlier decision 1');
+  assert.deepEqual(summaries[1]!.messages.map(m => m.text), ['Message 2']);
+  assert.equal(replySummary, 'Earlier decision 2');
   await pool.query('DELETE FROM channel_members WHERE channel_id=$1 AND user_id=$2', [a.channel_id, a.owner_id]);
   assert.equal((await suggest(a.owner_token)).statusCode, 404);
   assert.equal(calls, 2);

@@ -85,7 +85,7 @@ it('shows workspace agents with functioning contextual navigation', async () => 
   expect(screen.getByText('Kai’s Codex')).toBeTruthy();
   await userEvent.click(screen.getByRole('button', { name: 'Apps', exact: true }));
   await screen.findByText(/Workspace owners and admins manage MCP servers/);
-  expect(screen.queryByRole('button', { name: 'Add connection' })).toBeNull();
+  expect(screen.queryByRole('button', { name: 'Add MCP server' })).toBeNull();
   expect(api.request.mock.calls.some(([path]) => path.endsWith('/connections') || path.endsWith('/connection-agents'))).toBe(false);
 });
 
@@ -299,7 +299,8 @@ it('manages workspace MCP servers and drops credentials when the viewer loses th
   api.request.mockImplementation(async (path: string) => {
     if (path === '/workspaces/workspace/settings') return { role };
     if (path === '/workspaces/workspace/connections') return { items: [item] };
-    if (path === '/workspaces/workspace/connection-agents') return { items: [{ id: 'installed', name: 'Team agent', workspace_name: 'Team' }] };
+    if (path === '/workspaces/workspace/connection-agents') return { items: [{ id: 'first', name: 'First agent', workspace_name: 'Team' }], next_cursor: 'first' };
+    if (path === '/workspaces/workspace/connection-agents?after=first') return { items: [{ id: 'installed', name: 'Team agent', workspace_name: 'Team' }], next_cursor: null };
     if (path.startsWith('/workspaces/workspace/connections/service')) return {};
     return response(path);
   });
@@ -309,6 +310,8 @@ it('manages workspace MCP servers and drops credentials when the viewer loses th
   expect(screen.queryByRole('region', { name: 'Recent tool calls' })).toBeNull();
   expect(api.request.mock.calls.some(([path]) => path.includes('connection-calls') || path.startsWith('/me/'))).toBe(false);
   await userEvent.click(row.getByRole('button', { name: 'Agent access' }));
+  await userEvent.click(screen.getByRole('button', { name: 'Next agents' }));
+  await screen.findByRole('button', { name: 'Previous agents' });
   await userEvent.click(screen.getByRole('checkbox', { name: 'lookup' }));
   await userEvent.click(screen.getByRole('button', { name: 'Save access' }));
   await waitFor(() => expect(api.request).toHaveBeenCalledWith('/workspaces/workspace/connections/service/grants', { revision: 3, installation_id: 'installed', tools: ['lookup'] }, undefined, 'PUT'));
@@ -323,13 +326,34 @@ it('manages workspace MCP servers and drops credentials when the viewer loses th
   await act(async () => { await updates.get('workspace')?.refresh(); });
   expect(screen.queryByLabelText('Bearer token')).toBeNull();
   expect(screen.queryByText('Team tools')).toBeNull();
-  expect(screen.queryByRole('button', { name: 'Add connection' })).toBeNull();
+  expect(screen.queryByRole('button', { name: 'Add MCP server' })).toBeNull();
   role = 'owner';
   await act(async () => { await updates.get('workspace')?.refresh(); });
   await screen.findByText('Team tools');
-  await userEvent.click(screen.getByRole('button', { name: 'Add connection' }));
+  await userEvent.click(screen.getByRole('button', { name: 'Add MCP server' }));
   await userEvent.type(screen.getByLabelText('Bearer token'), 'draft');
   view.rerender(<WorkspaceDestinations view="agents" {...props} workspace="other" />);
   expect(screen.queryByLabelText('Bearer token')).toBeNull();
   expect(screen.queryByText('Team tools')).toBeNull();
+});
+
+it('clears the workspace editor when the server denies a request after the role read', async () => {
+  let forbidden = false;
+  api.request.mockImplementation(async (path: string) => {
+    if (path.endsWith('/settings')) return { role: 'owner' };
+    if (path.endsWith('/connection-agents')) return { items: [] };
+    if (path.endsWith('/connections')) {
+      if (forbidden) throw new Error('workspace_management_forbidden');
+      return { items: [] };
+    }
+    return response(path);
+  });
+  render(<WorkspaceDestinations view="agents" {...props} />);
+  await userEvent.click(screen.getByRole('button', { name: 'Apps' }));
+  await userEvent.click(await screen.findByRole('button', { name: 'Add MCP server' }));
+  await userEvent.type(screen.getByLabelText('Bearer token'), 'draft');
+  forbidden = true;
+  await act(async () => { await updates.get('workspace')?.refresh(); });
+  expect(screen.queryByLabelText('Bearer token')).toBeNull();
+  expect(screen.queryByRole('button', { name: 'Add MCP server' })).toBeNull();
 });

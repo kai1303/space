@@ -45,7 +45,8 @@ export class AgentSessionStore {
         if (cursor.workspace_id !== workspace || !cursor.managed) throw notFound();
       }
       const result = await c.execute<WorkspaceAgentSession & Record<string, unknown>>(sql`
-        SELECT ${summaryColumns},t.channel_id,ch.archived_at IS NOT NULL AS channel_archived
+        SELECT ${summaryColumns},EXISTS(SELECT 1 FROM tasks WHERE session_id=a.id AND status='running') AS working,
+          t.channel_id,ch.archived_at IS NOT NULL AS channel_archived
         FROM agent_sessions a JOIN threads t ON t.id=a.origin_thread_id
         JOIN channels ch ON ch.id=t.channel_id
         JOIN channel_members m ON m.channel_id=t.channel_id AND m.workspace_id=a.workspace_id AND m.user_id=${actor}

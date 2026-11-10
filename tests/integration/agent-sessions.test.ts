@@ -115,6 +115,35 @@ test('turns preserve retry identity, serialize sends, reuse owner approval and s
   assert.equal(metadata, true);
 });
 
+test('workspace and starred session rows follow running turns through completion and stop', async () => {
+  const a = await fixture(), one = await session(a);
+  const workspace = `/workspaces/${a.workspace_id}`;
+  await api(a.owner_token, 'POST', `${workspace}/hub/starred-sessions/${one.id}`, {active:true});
+  const read = async () => Promise.all(['agent-sessions','hub/starred-sessions'].map(async resource =>
+    (await api(a.owner_token, 'GET', `${workspace}/${resource}`)).items[0].working));
+  const revision = async () => Number((await pool.query('SELECT revision FROM resource_update_revisions WHERE resource=$1',
+    [`workspace:${a.workspace_id}`])).rows[0].revision);
+  for (const finish of ['complete','stop']) {
+    const task = await api(a.owner_token, 'POST', `/agent-sessions/${one.id}/messages`, {text:'Work'}, 201);
+    const delivery = (await store.claimDelivery(a.installation_id))!;
+    assert.deepEqual(await read(), [false,false]);
+    const idle = await revision();
+    await store.acceptEvent(a.installation_id, event(task.active_execution_id, 1, 'execution.started'), delivery);
+    assert.deepEqual(await read(), [true,true]);
+    const working = await revision();
+    assert.ok(working > idle);
+    await store.acceptEvent(a.installation_id, event(task.active_execution_id, 2, 'execution.progress'), delivery);
+    assert.equal(await revision(), working);
+    if (finish === 'stop') await api(a.owner_token, 'POST', `/agent-sessions/${one.id}/stop`, {});
+    else {
+      await store.acceptEvent(a.installation_id, event(task.active_execution_id, 3, 'execution.completed'), delivery);
+      await store.ackDelivery(delivery);
+    }
+    assert.deepEqual(await read(), [false,false]);
+    assert.ok(await revision() > working);
+  }
+});
+
 test('stop and end fence leases and approvals, retain history, and enforce creator or owner access', async () => {
   const a = await fixture(), one = await session(a);
   const task = await api(a.owner_token, 'POST', `/agent-sessions/${one.id}/messages`, { text: 'Work' }, 201);

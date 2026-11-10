@@ -1,4 +1,5 @@
 import { useMemberProfile } from '../../profile/MemberProfile.js';
+import { Connections } from '../../connections/Connections.js';
 import { Huddles } from '../../huddles/Huddles.js';
 import {useDestinationPresence} from '../../../shared/ui/useDestinationPresence.js';
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
@@ -107,7 +108,7 @@ function Destination({ onConnectAgent, viewState, onOpenConnection, view, worksp
   const [joining, setJoining] = useState(''), [actionError, setActionError] = useState('');
   const alive = useRef(true), opening = useRef(false);
   useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
-  const mode: Mode = view === 'directories' ? directory === 'People' ? 'people' : directory === 'Channels' ? 'channels' : 'none' : view === 'agents' ? 'agents' : view;
+  const mode: Mode = view === 'directories' ? directory === 'People' ? 'people' : directory === 'Channels' ? 'channels' : 'none' : view === 'agents' && agentSection === 'Apps' ? 'none' : view;
   const { data, loading, more, error, access, retry, loadMore } = useDestinationData(workspace, mode);
   const query = search.trim().toLocaleLowerCase();
   const matches = (...values: string[]) => values.join(' ').toLocaleLowerCase().includes(query);
@@ -153,7 +154,7 @@ function Destination({ onConnectAgent, viewState, onOpenConnection, view, worksp
           {view === 'directories' && directory === 'Invitations' && <Empty icon={<Users size={34} />} title="Workspace invitations" description="An invitation directory is not available in Space. You can view current members and pair a local agent in workspace members."><Button onClick={onOpenMembers}>Open workspace members</Button></Empty>}
           {view === 'agents' && agentSection === 'All agents' && <><div className="wd-section-heading"><div><h2>Your workspace agents</h2><p>Bring your own agents into your team’s conversations.</p></div></div><div className="wd-agent-grid">{installed.map(installation => { const info = agentInfo(installation); return <article key={installation.id} className="wd-agent-card"><div className="wd-agent-identity"><button type="button" className="space-profile-trigger" aria-label={`View ${info.name}’s profile`} onClick={() => profiles?.open({kind:'agent',id:installation.id})}><Avatar name={info.name} initials={initials(info.name)} tone="purple" size="lg" /></button><span role="status"><Badge dot tone={installation.enabled && info.participant?.status ? statusTone[info.participant.status] : 'neutral'}>{!installation.enabled ? 'Disabled' : info.participant?.status ? statusText[info.participant.status] : 'Status unavailable'}</Badge></span></div><h3><button type="button" className="space-profile-trigger" aria-label={`View ${info.name}’s profile`} onClick={() => profiles?.open({kind:'agent',id:installation.id})}>{info.name}</button></h3>{installation.owner_id === viewer && <span className="wd-agent-owner">Owned by you</span>}<Button size="sm" onClick={() => onOpenConnection ? onOpenConnection(installation.id) : onOpenMembers()}>View connection</Button></article>; })}</div>{!installed.length && !error && <Empty icon={<NavigationIcon name="agents" size={32}/>} title={query ? 'No agents match your search' : 'Make room for your first agent'} description={query ? 'Try another name or skill.' : 'Connect an agent to bring it into this workspace.'}>{!query && <Button onClick={() => connectAgent()}>Connect an agent</Button>}</Empty>}</>}
           {view === 'agents' && agentSection === 'Workflows' && <Empty icon={<NavigationIcon name="workflow" size={38}/>} title="Build momentum with your agents" description="A workflow builder and third-party workflow automations are not available in Space. Installed agents can run their advertised skills in channel discussions."><Button onClick={() => { setAgentSection('All agents'); setSearch(''); }}>View your agents</Button></Empty>}
-          {view === 'agents' && agentSection === 'Apps' && <Empty icon={<NavigationIcon name="apps" size={38}/>} title="Tools that join the conversation" description="Space currently supports registered agent connectors. A third-party app marketplace is not available."><Button onClick={() => connectAgent()}>Connect an agent</Button></Empty>}
+          {view === 'agents' && agentSection === 'Apps' && <Connections key={workspace} workspaceId={workspace} />}
           {view === 'spacebot' && <section className="wd-bot-welcome" aria-labelledby="spacebot-greeting">
             <div className="wd-bot-greeting"><span className="wd-bot-mark"><Spacebot size={140}/></span><h2 id="spacebot-greeting">What would you like to work on?</h2></div>
             {currentAgent ? <div className="wd-bot-panel">
