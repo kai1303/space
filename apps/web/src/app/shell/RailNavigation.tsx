@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { Fragment, useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
-import { motion, useReducedMotion } from 'motion/react';
+import { animate, motion, useMotionValue, useReducedMotion } from 'motion/react';
 import { NavigationIcon } from '@space/ui/navigation';
 import { motionTransition } from '@space/ui/motion';
 import './rail-navigation.css';
@@ -13,6 +13,10 @@ const labels = { spacebot:'Spacebot', home:'Home', dms:'DMs', activity:'Activity
 const order = ['spacebot','home','dms','activity','files','todos','agents','admin'] as const;
 const glyphMotion = { idle:{scale:1}, hovered:{scale:1.15} };
 const glyphTransition = {duration:.125, ease:[.17,.67,.55,1.09] as const};
+// Slack's shared trigger uses a 300 ms initial dwell. A shorter handoff lets
+// deliberate moves switch cards without mounting every tab the pointer crosses.
+const initialDwell = 300;
+const handoffDwell = 65;
 const enabledControl = 'button:not(:disabled):not([tabindex="-1"]), a[href], input:not(:disabled), summary, [tabindex="0"]';
 
 export interface RailProps {
@@ -29,6 +33,8 @@ export interface RailProps {
 export function RailNavigation({active, onNavigate, onDirectMessages, onActivity, onHome, adminItems, renderPreview, notificationCount = 0}: RailProps) {
   const [panel, setPanel] = useState<Panel>();
   const panelRef = useRef<HTMLDivElement>(null);
+  const positionedAnchor = useRef<HTMLElement>(undefined);
+  const panelTop = useMotionValue(0);
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const stopTimer = useCallback(() => clearTimeout(timer.current), []);
   const close = useCallback(() => { stopTimer(); setPanel(undefined); }, [stopTimer]);
@@ -38,27 +44,45 @@ export function RailNavigation({active, onNavigate, onDirectMessages, onActivity
 
   useLayoutEffect(() => {
     const card = panelRef.current;
-    if (!panel || !card) return;
+    if (!panel || !card) { positionedAnchor.current = undefined; return; }
     const {anchor} = panel;
-    function position() {
+    const handoff = !!positionedAnchor.current && positionedAnchor.current !== anchor;
+    const rail = anchor.closest('nav');
+    positionedAnchor.current = anchor;
+    function position(smooth = false) {
       if (!card) return;
       const rect = anchor.getBoundingClientRect();
-      const rail = anchor.closest('nav')?.getBoundingClientRect();
-      if (rail && rail.height > 0 && (rect.bottom <= rail.top || rect.top >= rail.bottom)) { close(); return; }
-      const left = Math.min((rail?.right ?? rect.right + 9) - 3, window.innerWidth - card.offsetWidth - 4);
-      const top = Math.min(rect.top - 44, window.innerHeight - card.offsetHeight - 10);
-      card.style.left = Math.max(4, left) + 'px';
-      card.style.top = Math.max(4, top) + 'px';
+      const bounds = rail?.getBoundingClientRect();
+      if (bounds && bounds.height > 0 && (rect.bottom <= bounds.top || rect.top >= bounds.bottom)) { close(); return; }
+      const left = Math.max(4, Math.min((bounds?.right ?? rect.right + 9) - 3, window.innerWidth - card.offsetWidth - 4));
+      const maxTop = Math.max(4, window.innerHeight - card.offsetHeight - 10);
+      const target = Math.max(4, Math.min(rect.top - 44, maxTop));
+      card.style.left = left + 'px';
+      if (smooth && !reduced && !panel?.keyboard) {
+        panelTop.jump(Math.max(4, Math.min(panelTop.get(), maxTop)));
+        animate(panelTop, target, { duration: .12, ease: [.25, 1, .5, 1] });
+      } else {
+        panelTop.jump(target);
+      }
     }
-    position();
-    const observer = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(position) : undefined;
+    position(handoff);
+    // The initial ResizeObserver callback also fires without a size change.
+    let height = card.offsetHeight;
+    const observer = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(() => {
+      if (card.offsetHeight !== height) { height = card.offsetHeight; position(); }
+    }) : undefined;
     observer?.observe(card);
-    const rail = anchor.closest('nav');
-    rail?.addEventListener('scroll', position);
-    window.addEventListener('resize', position);
+    const reposition = () => position();
+    rail?.addEventListener('scroll', reposition);
+    window.addEventListener('resize', reposition);
     if (panel.keyboard) (card.querySelector<HTMLElement>(enabledControl) ?? card).focus();
-    return () => { observer?.disconnect(); rail?.removeEventListener('scroll', position); window.removeEventListener('resize', position); };
-  }, [panel, close]);
+    return () => {
+      panelTop.stop();
+      observer?.disconnect();
+      rail?.removeEventListener('scroll', reposition);
+      window.removeEventListener('resize', reposition);
+    };
+  }, [panel, close, panelTop, reduced]);
 
   useEffect(() => {
     const outside = (event: Event) => {
@@ -84,7 +108,10 @@ export function RailNavigation({active, onNavigate, onDirectMessages, onActivity
 
   function leave() {
     stopTimer();
-    if (panel && !panel.pinned) timer.current = setTimeout(close, 150);
+    if (panel && !panel.pinned) timer.current = setTimeout(() => {
+      if (panelRef.current?.contains(document.activeElement)) panel.anchor.focus({preventScroll:true});
+      close();
+    }, 150);
   }
 
   const actions = {home:onHome, dms:onDirectMessages, activity:onActivity, files:onNavigate, todos:onNavigate, agents:onNavigate, spacebot:onNavigate, admin:adminItems?.length};
@@ -110,7 +137,7 @@ export function RailNavigation({active, onNavigate, onDirectMessages, onActivity
         stopTimer();
         if (!expanded) {
           const anchor = event.currentTarget;
-          timer.current = setTimeout(() => setPanel({tab, anchor, pinned:false, keyboard:false}), 300);
+          timer.current = setTimeout(() => setPanel({tab, anchor, pinned:false, keyboard:false}), panel ? handoffDwell : initialDwell);
         }
       }}
       onPointerLeave={leave}
@@ -133,7 +160,7 @@ export function RailNavigation({active, onNavigate, onDirectMessages, onActivity
         else onNavigate?.(tab);
       }}>{contents}</motion.button>;
   })}
-    {panel && createPortal(<div key={panel.tab} id={id} ref={panelRef} role={panel.tab === 'admin' ? 'menu' : 'dialog'} aria-label={panel.tab === 'admin' ? 'Admin tools' : labels[panel.tab]}
+    {panel && createPortal(<motion.div style={{top:0, y:panelTop}} id={id} ref={panelRef} role={panel.tab === 'admin' ? 'menu' : 'dialog'} aria-label={panel.tab === 'admin' ? 'Admin tools' : labels[panel.tab]}
       tabIndex={-1} className={'rail-peek rail-peek--' + panel.tab} onPointerEnter={stopTimer} onPointerLeave={leave}
       onKeyDown={event => {
         if (event.key === 'Tab' && !event.defaultPrevented) {
@@ -155,8 +182,8 @@ export function RailNavigation({active, onNavigate, onDirectMessages, onActivity
         items[next]?.focus();
       }}>
       <motion.div className="rail-peek-card" initial={reduced ? false : {opacity:0,x:-8}} animate={{opacity:1,x:0}} transition={{duration:reduced ? 0 : .16,ease:[.25,1,.5,1]}}>
-        {panel.tab === 'admin' ? <><header className="rail-peek-header"><h2>Admin tools</h2></header><div className="rail-peek-admin-items">{adminItems?.map(item => <button key={item.label} type="button" role="menuitem" className="rail-peek-row" onClick={() => { panel.anchor.focus(); close(); item.onSelect(); }}>{item.label}</button>)}</div></> : renderPreview?.(panel.tab, close)}
+        <Fragment key={panel.tab}>{panel.tab === 'admin' ? <><header className="rail-peek-header"><h2>Admin tools</h2></header><div className="rail-peek-admin-items">{adminItems?.map(item => <button key={item.label} type="button" role="menuitem" className="rail-peek-row" onClick={() => { panel.anchor.focus(); close(); item.onSelect(); }}>{item.label}</button>)}</div></> : renderPreview?.(panel.tab, close)}</Fragment>
       </motion.div>
-    </div>, document.body)}
+    </motion.div>, document.body)}
   </>;
 }

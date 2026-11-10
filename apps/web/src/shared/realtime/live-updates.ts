@@ -4,7 +4,7 @@ import { socketCommand } from './socket-command.js';
 type Scope = 'actor' | 'workspace' | 'channel' | 'thread' | 'task';
 type Update = { scope: Scope; id: string; error?: string };
 type Listener = { refresh: () => unknown; onRevoked?: (code: string) => void; active: boolean; running: boolean; pending: boolean; completion?: Promise<void> };
-type Subscription = { listeners: Set<Listener>; close: () => void };
+type Subscription = { listeners: Set<Listener>; close: () => void; version?: object };
 const subscriptions = new Map<string, Subscription>();
 const denied = (code: string) => ['unauthorized', 'not_found', 'forbidden', 'subscription_limit', 'invalid_scope', 'invalid_id'].includes(code);
 
@@ -22,8 +22,16 @@ async function refresh(listener: Listener) {
   } finally { listener.running = false; complete(); listener.completion = undefined; }
 }
 
+// A page can be reused only while the same acknowledged subscription has seen no changes.
+export function workspaceReadVersion(workspace: string) {
+  return subscriptions.get(`workspace:${workspace}`)?.version;
+}
+
 export async function invalidateUpdates(scope: Scope, id: string): Promise<void> {
-  await Promise.all([...subscriptions.get(`${scope}:${id}`)?.listeners ?? []].map(refresh));
+  const subscription = subscriptions.get(`${scope}:${id}`);
+  if (!subscription) return;
+  if (subscription.version) subscription.version = {};
+  await Promise.all([...subscription.listeners].map(refresh));
 }
 
 export function subscribeUpdates(scope: Scope, id: string, read: () => unknown, onRevoked?: (code: string) => void): () => void {
@@ -33,7 +41,10 @@ export function subscribeUpdates(scope: Scope, id: string, read: () => unknown, 
     const connection = acquireRealtime(), socket = connection.socket;
     const listeners = new Set<Listener>();
     let active = true, subscribing = false, pending = false, generation = 0;
-    const notify = () => { for (const listener of listeners) void refresh(listener); };
+    const notify = (acknowledged = false) => {
+      if (subscription && (acknowledged || subscription.version)) subscription.version = {};
+      for (const listener of listeners) void refresh(listener);
+    };
     const matches = (update: Update) => update?.scope === scope && update.id === id;
     const revoke = (code: string) => {
       if (!active) return;
@@ -52,7 +63,7 @@ export function subscribeUpdates(scope: Scope, id: string, read: () => unknown, 
       const attempt = generation;
       try {
         await socketCommand(socket, 'updates.subscribe', { scope, id });
-        if (active && attempt === generation) notify();
+        if (active && attempt === generation) notify(true);
       } catch (error) {
         if (!active || attempt !== generation) return;
         const code = error instanceof Error ? error.message : '';
@@ -64,11 +75,11 @@ export function subscribeUpdates(scope: Scope, id: string, read: () => unknown, 
       }
     };
     connection.on('connect', () => { void subscribe(); });
-    connection.on('disconnect', () => { generation++; });
+    connection.on('disconnect', () => { generation++; if (subscription) subscription.version = undefined; });
     connection.on('updates.changed', (update: Update) => { if (active && matches(update)) notify(); });
     connection.on('updates.revoked', (update: Update) => { if (matches(update)) revoke(update.error ?? 'not_found'); });
     connection.on('session.revoked', () => revoke('unauthorized'));
-    connection.on('focus', notify);
+    connection.on('focus', () => notify());
     subscription = { listeners, close: () => {
       if (!active) return;
       active = false;

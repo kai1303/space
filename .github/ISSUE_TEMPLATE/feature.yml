@@ -1,0 +1,17 @@
+name: Feature request
+description: Suggest a change to how Space works.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: workflow
+    attributes:
+      label: What are you trying to do?
+      description: Describe who encounters the problem and how they handle it today.
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: What would a better outcome look like?
+    validations:
+      required: true

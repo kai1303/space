@@ -25,8 +25,14 @@
   color: var(--sp-text);
   font: 15px/1.47 var(--sp-font-sans);
 }
-/* Cover the narrow pointer path from the icon to the card. */
-.rail-peek::before { content: ""; position: absolute; inset: 0 100% 0 -10px; }
+/* Extend only the active button across the rail gutter. A full-height bridge
+   on the floating panel would cover the edges of neighboring buttons. */
+.chat-rail-item.is-peeking { position: relative; }
+.chat-rail-item.is-peeking::after {
+  content: "";
+  position: absolute;
+  inset: 0 -10px 0 100%;
+}
 .rail-peek-card {
   box-sizing: border-box;
   display: flex;

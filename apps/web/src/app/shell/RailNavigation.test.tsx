@@ -55,6 +55,7 @@ it('dismisses a hovered panel after using a filter and cancels a pending hover o
   within(panel).getByRole('button').focus();
   fireEvent.pointerLeave(panel);
   await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  expect(document.activeElement).toBe(activity);
   vi.useFakeTimers();
   try {
     fireEvent.pointerEnter(activity);
@@ -80,4 +81,42 @@ it('keeps a clicked Admin menu open on pointer exit and supports arrow key selec
   fireEvent.click(members);
   expect(manage).toHaveBeenCalledOnce();
   expect(screen.queryByRole('menu')).toBeNull();
+});
+
+it('hands an open hover card to the next tab without a second entrance or a second mounted panel', () => {
+  vi.useFakeTimers();
+  try {
+    render(<RailNavigation {...props} active="home"/>);
+    const dms = screen.getByRole('button', { name: 'DMs' });
+    const files = screen.getByRole('button', { name: 'Files' });
+    fireEvent.pointerEnter(dms);
+    act(() => vi.advanceTimersByTime(300));
+    const dialog = screen.getByRole('dialog', { name: 'DMs' });
+    const card = dialog.firstElementChild;
+    fireEvent.pointerLeave(dms);
+    fireEvent.pointerEnter(files);
+    expect(screen.getByRole('dialog', { name: 'DMs' })).toBe(dialog);
+    act(() => vi.advanceTimersByTime(100));
+    expect(screen.getByRole('dialog', { name: 'Files' })).toBe(dialog);
+    expect(dialog.firstElementChild).toBe(card);
+    expect(within(dialog).queryByText('Open dms row')).toBeNull();
+    expect(within(dialog).getByText('Open files row')).toBeTruthy();
+    expect(document.activeElement).not.toBe(dialog);
+  } finally { vi.useRealTimers(); }
+});
+
+it('starts fresh when the workspace changes during a hover or while its card is open', () => {
+  vi.useFakeTimers();
+  try {
+    const view = render(<RailNavigation key="first" {...props} active="home"/>);
+    fireEvent.pointerEnter(screen.getByRole('button', { name: 'Activity' }));
+    view.rerender(<RailNavigation key="second" {...props} active="home"/>);
+    act(() => vi.advanceTimersByTime(350));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    fireEvent.pointerEnter(screen.getByRole('button', { name: 'Activity' }));
+    act(() => vi.advanceTimersByTime(350));
+    expect(screen.getByRole('dialog', { name: 'Activity' })).toBeTruthy();
+    view.rerender(<RailNavigation key="third" {...props} active="home"/>);
+    expect(screen.queryByRole('dialog')).toBeNull();
+  } finally { vi.useRealTimers(); }
 });

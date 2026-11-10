@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import { invalidateUpdates, subscribeUpdates } from './live-updates.js';
+import { invalidateUpdates, subscribeUpdates, workspaceReadVersion } from './live-updates.js';
 const stops = new Set<() => void>();
 function watch(...args: Parameters<typeof subscribeUpdates>) { const stop=subscribeUpdates(...args); stops.add(stop); return stop; }
 const clients = vi.hoisted(() => [] as any[]);
@@ -168,4 +168,30 @@ it('surfaces a subscription limit without reconnecting other authorized streams'
  await vi.waitFor(()=>expect(denied).toHaveBeenCalledWith('subscription_limit'));
  expect(clients[0].connected).toBe(true);expect(clients[0].disconnect).not.toHaveBeenCalled();
  stop();owner();
+});
+
+it('allows page reuse only inside an uninterrupted acknowledged workspace subscription', async () => {
+  const stop = watch('workspace', 'team', () => {}, () => {});
+  expect(workspaceReadVersion('team')).toBeUndefined();
+  await vi.waitFor(() => expect(workspaceReadVersion('team')).toBeDefined());
+  let previous = workspaceReadVersion('team');
+  clients[0].receive('updates.changed', { scope: 'workspace', id: 'elsewhere' });
+  expect(workspaceReadVersion('team')).toBe(previous);
+  for (const change of [
+    () => clients[0].receive('updates.changed', { scope: 'workspace', id: 'team' }),
+    () => invalidateUpdates('workspace', 'team'),
+    () => window.dispatchEvent(new Event('focus')),
+  ]) {
+    await change();
+    const current = workspaceReadVersion('team');
+    expect(current).toBeDefined(); expect(current).not.toBe(previous); previous = current;
+  }
+  clients[0].receive('disconnect');
+  expect(workspaceReadVersion('team')).toBeUndefined();
+  clients[0].receive('connect');
+  await vi.waitFor(() => expect(workspaceReadVersion('team')).toBeDefined());
+  expect(workspaceReadVersion('team')).not.toBe(previous);
+  clients[0].receive('updates.revoked', { scope: 'workspace', id: 'team', error: 'forbidden' });
+  expect(workspaceReadVersion('team')).toBeUndefined();
+  stop();
 });

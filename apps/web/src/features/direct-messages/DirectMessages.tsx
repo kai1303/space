@@ -8,6 +8,7 @@ import { Avatar, Button, IconButton } from '@space/ui/primitives';
 import { ChatCircle, MagnifyingGlass, PencilSimple } from '@phosphor-icons/react';
 import { request } from '../../shared/api/request.js';
 import { subscribeUpdates } from '../../shared/realtime/live-updates.js';
+import { readWorkspaceQuery, useWorkspaceQueryCache } from '../../shared/realtime/workspace-query-cache.js';
 import { useWorkspaceUnread } from '../notifications/useWorkspaceUnread.js';
 import { ConversationLoading } from '../chat/ConversationLoading.js';
 import { ConversationComposer, ConversationHeader } from '../chat/ThreadConversation.js';
@@ -24,8 +25,12 @@ function useDebouncedValue(value: string) {
 }
 
 export function useDirectMessageList(workspace: string, query = '', after = '', unreadOnly = false) {
-  const key = `${workspace}:${query}:${after}:${unreadOnly}`;
-  const [state, setState] = useState({ key, items: [] as DirectMessageSummary[], next: null as string | null, loaded: false, error: '' });
+  const workspaceCache = useWorkspaceQueryCache(workspace);
+  const pageCache = !query && !after ? workspaceCache : undefined;
+  const base = `/workspaces/${workspace}/direct-messages?`;
+  const params = new URLSearchParams({ limit: '50', ...(query ? { q: query } : {}), ...(after ? { after } : {}), ...(unreadOnly ? { unread: 'true' } : {}) });
+  const key = base + params;
+  const [state, setState] = useState({ owner: workspaceCache, key: '', items: [] as DirectMessageSummary[], next: null as string | null, loaded: false, error: '' });
   const readRef = useRef<() => Promise<void>>(async () => {});
   useEffect(() => {
     let active = true, generation = 0;
@@ -33,22 +38,27 @@ export function useDirectMessageList(workspace: string, query = '', after = '', 
     const read = async () => {
       const attempt = ++generation; controller?.abort(); controller = new AbortController();
       try {
-        const params = new URLSearchParams({ limit: '50', ...(query ? { q: query } : {}), ...(after ? { after } : {}), ...(unreadOnly ? { unread: 'true' } : {}) });
-        const page = await request<Page<DirectMessageSummary>>(`/workspaces/${workspace}/direct-messages?${params}`, undefined, undefined, 'POST', controller.signal);
-        if (active && attempt === generation) setState({ key, items: page.items ?? [], next: page.next_cursor ?? null, loaded: true, error: '' });
+        const page = await readWorkspaceQuery<Page<DirectMessageSummary>>(pageCache, key, controller.signal);
+        if (active && attempt === generation) setState({ owner: workspaceCache, key, items: page.items ?? [], next: page.next_cursor ?? null, loaded: true, error: '' });
       } catch (error) {
         if (active && attempt === generation && !(error instanceof Error && error.name === 'AbortError')) {
-          setState(old => ({ ...(old.key === key && !denied(error) ? old : { key, items: [], next: null }), loaded: true, error: errorText(error) }));
+          setState(old => ({ ...(old.owner === workspaceCache && old.key === key && !denied(error) ? old : { owner: workspaceCache, key, items: [], next: null }), loaded: true, error: errorText(error) }));
         }
       }
     };
     readRef.current = read;
     const stop = subscribeUpdates('workspace', workspace, read, code => {
-      generation++; controller?.abort(); setState({ key, items: [], next: null, loaded: true, error: errorText(new Error(code)) });
+      generation++; controller?.abort(); setState({ owner: workspaceCache, key, items: [], next: null, loaded: true, error: errorText(new Error(code)) });
     });
     return () => { active = false; generation++; controller?.abort(); stop(); };
-  }, [workspace, query, after, unreadOnly]);
-  return { ...(state.key === key ? state : { items: [], next: null, loaded: false, error: '' }), refresh: () => readRef.current() };
+  }, [workspace, key, pageCache, workspaceCache]);
+  const matches = state.key === key && state.owner === workspaceCache;
+  const warm = !matches ? pageCache?.peek<Page<DirectMessageSummary>>(key) : undefined;
+  const {items, next, loaded, error} = matches ? state : { items: warm?.items ?? [], next: warm?.next_cursor ?? null, loaded: !!warm, error: '' };
+  return {
+    items, next, loaded, error,
+    refresh: () => { workspaceCache?.invalidate(base); return readRef.current(); },
+  };
 }
 
 function DirectMessageRow({ dm, viewer, onOpen, count = 0, selected = false, typing = false, preview = false }: {

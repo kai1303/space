@@ -1,9 +1,12 @@
 import userEvent from '@testing-library/user-event';
 import { afterEach, expect, it, vi } from 'vitest';
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
-import { useNotificationDelivery } from './Notifications.js';
+import { useState } from 'react';
+import { WorkspaceQueryProvider } from '../../shared/realtime/workspace-query-cache.js';
+import { ActivityPeek, useNotificationDelivery } from './Notifications.js';
 const mock = vi.hoisted(() => ({ read: undefined as undefined | (() => Promise<void>), revoke: undefined as undefined | ((code:string)=>void), disconnect: undefined as undefined | (()=>void) }));
-vi.mock('../../shared/realtime/live-updates.js',()=>({subscribeUpdates:(_s:string,_id:string,read:()=>Promise<void>,revoke:(code:string)=>void)=>{mock.read=read;mock.revoke=revoke;void read();return ()=>{};}}));
+const version = vi.hoisted(() => ({}));
+vi.mock('../../shared/realtime/live-updates.js',()=>({workspaceReadVersion: () => version, subscribeUpdates:(_s:string,_id:string,read:()=>Promise<void>,revoke:(code:string)=>void)=>{mock.read=read;mock.revoke=revoke;void read();return ()=>{};}}));
 vi.mock('../../shared/realtime/socket-session.js',()=>({acquireRealtime:()=>({on:(_event:string,callback:()=>void)=>{mock.disconnect=callback;},release:vi.fn()})}));
 const base={id:'10',kind:'direct_message',channel_id:'dm',channel_kind:'direct',channel_name:'Alex',message_id:'message',thread_id:'thread',author_name:'Alex',text:'Private message',emoji:null,created_at:new Date().toISOString(),read_at:null,silent:false};
 function Fixture({channel}:{channel?:string}){return <span>{useNotificationDelivery('workspace',channel,()=>{})} unread</span>;}
@@ -101,4 +104,32 @@ it('still shows the desktop banner if a sound claim fails', async () => {
  id = '11';
  await act(() => mock.read!());
  expect(desktop).toHaveBeenCalledTimes(1);
+});
+
+it('reuses delivery’s authorized Activity page on first paint and discards it after a preview read receipt', async () => {
+  let readAt: string | null = null;
+  const transport = vi.fn(async (_path: string, init: RequestInit) => {
+    if (init.method === 'PATCH') readAt = base.created_at;
+    const page = { items: [{ ...base, read_at: readAt }], unread_count: readAt ? 0 : 1, next_cursor: null, latest_id: base.id };
+    return { ok: true, status: 200, json: async () => init.method === 'PATCH' ? { read: true } : page };
+  });
+  vi.stubGlobal('fetch', transport);
+  function Preview() {
+    const [shown, setShown] = useState(false);
+    return <><Fixture/><button onClick={() => setShown(true)}>Show preview</button>
+      {shown && <ActivityPeek workspace="workspace" onOpen={() => setShown(false)}/>}</>;
+  }
+  render(<WorkspaceQueryProvider workspace="workspace" viewer="user"><Preview/></WorkspaceQueryProvider>);
+  await screen.findByText('1 unread');
+  const show = screen.getByRole('button', { name: 'Show preview' });
+  act(() => show.click());
+  const first = screen.getByRole('button', { name: /Open notification from Alex/ });
+  expect(first.closest('li')?.classList.contains('is-unread')).toBe(true);
+  expect(transport.mock.calls.filter(([, init]) => init.method === 'GET')).toHaveLength(1);
+  await userEvent.click(first);
+  expect(screen.queryByRole('button', { name: /Open notification from Alex/ })).toBeNull();
+  await userEvent.click(show);
+  const next = await screen.findByRole('button', { name: /Open notification from Alex/ });
+  expect(next.closest('li')?.classList.contains('is-unread')).toBe(false);
+  expect(transport.mock.calls.filter(([, init]) => init.method === 'GET')).toHaveLength(2);
 });

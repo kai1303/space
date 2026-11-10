@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Security contact request
+    url: https://github.com/kai1303/space/security/policy
+    about: Ask how to reach a maintainer privately before sharing vulnerability details.

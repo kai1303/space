@@ -614,6 +614,8 @@ alone do not contain uploaded bytes or Markdown memory. See the
 
 ## Security
 
+To report a suspected vulnerability, follow the [security reporting policy](SECURITY.md).
+
 Space checks current workspace and channel access on API requests and realtime
 commands. File downloads require authorization and use short-lived signed URLs.
 Channel memory is off by default; managers enable it and control scoped MCP keys.
@@ -669,13 +671,9 @@ after the tagged commit passes CI. Previews are marked as prereleases.
 ## Contributing
 
 Bug reports, setup feedback, documentation improvements, and focused fixes are
-welcome. [Open an issue](https://github.com/kai1303/space/issues) with reproduction
-steps, expected behavior, and relevant logs with credentials removed.
-
-For a code change, fork the repository, create a branch, and open a pull request.
-Describe the behavior you changed and the checks you ran. Run build, typecheck,
-and the relevant tests; note any checks you could not run. For larger features,
-start with an issue and the [module roadmap](docs/architecture/module-roadmap.md).
+welcome. See the [contributing guide](CONTRIBUTING.md) for setup and pull requests,
+the [accessibility statement](ACCESSIBILITY.md) for reporting barriers, and the
+[code of conduct](CODE_OF_CONDUCT.md) for community expectations.
 
 Looking for a place to start? Browse
 [good first issues](https://github.com/kai1303/space/issues?q=is%3Aissue%20is%3Aopen%20label%3A%22good%20first%20issue%22)
@@ -683,7 +681,7 @@ or [documentation issues](https://github.com/kai1303/space/issues?q=is%3Aissue%2
 These are issue filters; available work depends on the current issue list.
 
 <p align="center">
-  <a href="https://github.com/kai1303/space/issues/new"><img src="https://img.shields.io/badge/Report%20a%20bug-GitHub%20Issues-4a154b?style=for-the-badge&amp;logo=github" alt="Report a bug in GitHub Issues" /></a>
+  <a href="https://github.com/kai1303/space/issues/new?template=bug.yml"><img src="https://img.shields.io/badge/Report%20a%20bug-GitHub%20Issues-4a154b?style=for-the-badge&amp;logo=github" alt="Report a bug in GitHub Issues" /></a>
   <a href="https://github.com/kai1303/space/compare"><img src="https://img.shields.io/badge/Contribute-Open%20a%20PR-80558c?style=for-the-badge&amp;logo=github" alt="Contribute a pull request" /></a>
 </p>
 

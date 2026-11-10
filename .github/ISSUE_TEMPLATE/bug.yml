@@ -1,0 +1,26 @@
+name: Bug report
+description: Report a problem with Space or its setup.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This report is public. Remove credentials, signed URLs, and private workspace content. For a suspected vulnerability, follow the [security policy](https://github.com/kai1303/space/security/policy).
+  - type: textarea
+    id: behavior
+    attributes:
+      label: What happened, and what did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps or circumstances
+      description: If the problem is intermittent, describe what you were doing when it happened.
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: Include the Space release or commit, operating system, and relevant browser, macOS app, or connector version if known.

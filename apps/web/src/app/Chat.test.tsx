@@ -1755,7 +1755,7 @@ function mockDestinationNavigation() {
   const session={id:'nav-session',title:'Navigation session',workspace_id:'workspace',origin_thread_id:'thread',installation_id:'agent',managed:true,state:'active',owner_id:'user',created_by:'user',agent_name:'Codex',turn_count:0};
   vi.mocked(fetch).mockImplementation(async(...args)=>{
     const path=String(args[0]);
-    const data=path==='/v1/agent-sessions/nav-session'?{session,turns:[],next_cursor:null}:path==='/v1/channels/nav-dm'?direct:path.includes('/direct-messages?')?{items:[direct],next_cursor:null}:path.includes('/notifications?')?{items:[],unread_count:0,next_cursor:null,latest_id:'0'}:undefined;
+    const data=path==='/v1/agent-sessions/nav-session'?{session,turns:[],next_cursor:null}:path==='/v1/channels/nav-dm'?direct:path.includes('/direct-messages?')?{items:[direct],next_cursor:null}:(/\/notifications(?:\?|$)/).test(path)?{items:[],unread_count:0,next_cursor:null,latest_id:'0'}:undefined;
     return data===undefined?original(...args):new Response(JSON.stringify(data),{status:200});
   });
 }

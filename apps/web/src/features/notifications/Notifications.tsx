@@ -2,9 +2,10 @@ import {useDestinationPresence} from '../../shared/ui/useDestinationPresence.js'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { NotificationActivity, NotificationItem, NotificationSettings } from '@space/contracts';
 import { Tabs, Select, Avatar, Button, Dialog, IconButton } from '@space/ui/primitives';
-import { Bell, BellSlash, Check, Checks, GearSix } from '@phosphor-icons/react';
+import { At, Bell, BellSlash, ChatCircle, Chats, Check, Checks, GearSix, Hash, Smiley } from '@phosphor-icons/react';
 import { request } from '../../shared/api/request.js';
 import { subscribeUpdates } from '../../shared/realtime/live-updates.js';
+import { useWorkspaceQueryCache, readWorkspaceQuery } from '../../shared/realtime/workspace-query-cache.js';
 import { acquireRealtime } from '../../shared/realtime/socket-session.js';
 import type { ActivityView } from './view-state.js';
 import type { Snapshot } from '../../shared/ui/view-state.js';
@@ -19,8 +20,12 @@ const labels = { mention: 'Mentioned you', direct_message: 'Direct message', thr
 
 // Each page is scoped and cancellable; subscriptions coalesce events and recover on reconnect.
 function useActivity(workspace: string, kind = '', unread = false, before = '') {
-  const key = `${workspace}:${kind}:${unread}:${before}`;
-  const [state, setState] = useState({ key, page: empty, loaded: false, error: '' });
+  const cache = useWorkspaceQueryCache(workspace);
+  const pageCache = before ? undefined : cache;
+  const base = `/workspaces/${workspace}/notifications`;
+  const params = new URLSearchParams({ ...(kind ? { kind } : {}), ...(unread ? { unread: 'true' } : {}), ...(before ? { before } : {}) }).toString();
+  const path = params ? `${base}?${params}` : base;
+  const [state, setState] = useState<{ cache: typeof cache; path: string; page: NotificationActivity; error: string }>();
   const refresh = useRef<() => Promise<void>>(async () => {});
   useEffect(() => {
     if (!workspace) return;
@@ -28,22 +33,76 @@ function useActivity(workspace: string, kind = '', unread = false, before = '') 
     const read = async () => {
       const version = ++revision; controller?.abort(); controller = new AbortController();
       try {
-        const params = new URLSearchParams({ ...(kind ? { kind } : {}), ...(unread ? { unread: 'true' } : {}), ...(before ? { before } : {}) });
-        const page = await request<NotificationActivity>(`/workspaces/${workspace}/notifications?${params}`, undefined, undefined, 'POST', controller.signal);
-        if (!Array.isArray(page.items)) throw new Error('Invalid notification response');
-        if (active && version === revision) setState({ key, page, loaded: true, error: '' });
+        const page = await readWorkspaceQuery<NotificationActivity>(pageCache, path, controller.signal);
+        if (!Array.isArray(page?.items)) { cache?.invalidate(path); throw new Error('Invalid notification response'); }
+        if (active && version === revision) setState({ cache, path, page, error: '' });
       } catch (error) {
-        if (active && version === revision && !(error instanceof Error && error.name === 'AbortError')) setState(old => ({ key, page: denied(error) || old.key !== key ? empty : old.page, loaded: true, error: failure(error) }));
+        if (!active || version !== revision || (error instanceof Error && error.name === 'AbortError')) return;
+        const accessLost = denied(error);
+        if (accessLost) cache?.invalidate(base);
+        setState(old => ({
+          cache, path, page: !accessLost && old?.path === path && old.cache === cache ? old.page : empty,
+          error: failure(error),
+        }));
       }
     };
     refresh.current = read;
-    const stop = subscribeUpdates('workspace', workspace, read, code => { revision++; controller?.abort(); setState({ key, page: empty, loaded: true, error: failure(new Error(code)) }); });
+    const stop = subscribeUpdates('workspace', workspace, read, code => { revision++; controller?.abort(); cache?.invalidate(base); setState({ cache, path, page: empty, error: failure(new Error(code)) }); });
     return () => { active = false; revision++; controller?.abort(); stop(); };
-  }, [key, workspace, kind, unread, before]);
-  return { ...(state.key === key ? state : { page: empty, loaded: false, error: '' }), refresh: () => refresh.current() };
+  }, [workspace, cache, pageCache, base, path]);
+  const current = state?.path === path && state.cache === cache ? state : undefined;
+  const warm = current ? undefined : pageCache?.peek<NotificationActivity>(path);
+  const page = current?.page ?? (Array.isArray(warm?.items) ? warm : undefined);
+  return {
+    page: page ?? empty, loaded: !!page, error: current?.error ?? '',
+    refresh: () => refresh.current(),
+    invalidate: () => cache?.invalidate(base),
+  };
 }
 
 type ActivityProps = { workspace: string; onOpen: (item: NotificationItem) => void; viewState?: Snapshot<ActivityView> };
+
+const peekContexts = {
+  mention: { icon: At, label: 'Mention in' },
+  direct_message: { icon: ChatCircle, label: 'Direct message from' },
+  thread_reply: { icon: Chats, label: 'Thread in' },
+  reaction: { icon: Smiley, label: 'Reaction in' },
+  channel_message: { icon: Hash, label: 'Message in' },
+} as const;
+
+function peekTime(createdAt: string) {
+  const date = new Date(createdAt);
+  const today = new Date();
+  if (today.toDateString() === date.toDateString()) return date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  const weekAgo = new Date(today.getFullYear(), today.getMonth(), today.getDate() - 7);
+  return date >= weekAgo
+    ? date.toLocaleDateString([], { weekday: 'long' })
+    : date.toLocaleDateString([], { month: 'short', day: 'numeric' });
+}
+
+function ActivityPeekRow({ item, onOpen, busy }: { item: NotificationItem; onOpen: (item: NotificationItem) => void; busy: boolean }) {
+  const { icon: ContextIcon, label } = peekContexts[item.kind];
+  return <li className={item.read_at ? '' : 'is-unread'}>
+    <button type="button" className="activity-peek-row" disabled={busy} onClick={() => onOpen(item)}
+      aria-label={`Open notification from ${item.author_name}: ${item.text || labels[item.kind]}`}>
+      <Avatar name={item.author_name} initials={item.author_name.slice(0, 2).toUpperCase()}/>
+      <span className="activity-peek-copy">
+        <span className="activity-peek-sender">
+          <strong>{item.author_name}</strong>
+          <time dateTime={item.created_at} title={new Date(item.created_at).toLocaleString()}>{peekTime(item.created_at)}</time>
+        </span>
+        <span className="activity-peek-message">{item.text || 'Shared a file'}</span>
+        <span className="activity-peek-context">
+          <ContextIcon size={16} aria-hidden="true"/>
+          <span>{label}</span>
+          <strong>{item.channel_kind === 'direct' ? item.channel_name : `#${item.channel_name}`}</strong>
+          {item.emoji && <span>{item.emoji}</span>}
+          {item.silent && <BellSlash size={14} aria-label="Silent"/>}
+        </span>
+      </span>
+    </button>
+  </li>;
+}
 
 export function ActivityPeek(props: Omit<ActivityProps, 'viewState'>) {
   return <Notifications {...props} preview />;
@@ -56,13 +115,13 @@ export function Notifications({ workspace, onOpen, viewState, preview = false }:
   const [kind, setKind] = useState(view.current.kind), [unread, setUnread] = useState(view.current.unread), [before, setBefore] = useState(view.current.before);
   useLayoutEffect(()=>{view.current={...view.current,kind,unread,before};},[view,kind,unread,before]);
   const [preferences, setPreferences] = useState(false), [busy, setBusy] = useState(false), [error, setError] = useState('');
-  const { page, loaded, error: readError, refresh } = useActivity(workspace, kind, unread, before);
+  const { page, loaded, error: readError, refresh, invalidate } = useActivity(workspace, kind, unread, before);
   useLayoutEffect(()=>{if(loaded&&pageRef.current)pageRef.current.scrollTop=view.current.scroll;},[loaded,view]);
   const active = useRef(true);
   useEffect(() => { active.current = true; return () => { active.current = false; }; }, []);
   async function change(work: () => Promise<unknown>, done?: () => void) {
     if (busy) return; setBusy(true); setError('');
-    try { await work(); if (active.current && present.current) { done?.(); await refresh(); } }
+    try { await work(); invalidate(); if (active.current && present.current) { done?.(); await refresh(); } }
     catch (reason) { if (active.current) setError(failure(reason)); }
     finally { if (active.current) setBusy(false); }
   }
@@ -78,7 +137,7 @@ export function Notifications({ workspace, onOpen, viewState, preview = false }:
   }
   function openButton(item: NotificationItem) {
     const timestamp = new Date(item.created_at).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
-    return <button className={preview ? 'notification-open rail-peek-row' : 'notification-open'}
+    return <button className="notification-open"
       aria-label={`Open notification from ${item.author_name}: ${item.text || labels[item.kind]}`}
       disabled={busy} onClick={() => openNotification(item)}>
       <Avatar name={item.author_name} initials={item.author_name.slice(0, 2).toUpperCase()} size="sm"/>
@@ -94,14 +153,16 @@ export function Notifications({ workspace, onOpen, viewState, preview = false }:
   }
   if (preview) return <>
     <header className="rail-peek-header"><h2>Activity</h2>
-      <button type="button" aria-pressed={unread} onClick={() => setUnread(value => !value)}>Unreads</button>
+      <button type="button" className="activity-peek-switch" aria-pressed={unread} onClick={() => setUnread(value => !value)}>
+        Unreads<span aria-hidden="true"/>
+      </button>
     </header>
     {(readError || error) && <p role="alert" className="rail-peek-empty">{readError || error} <Button size="sm" onClick={() => void refresh()}>Retry</Button></p>}
     {!loaded ? <p role="status" className="rail-peek-empty">Loading activity…</p>
-      : page.items.length ? <ul className="rail-peek-list" aria-label="Activity">{page.items.map(item =>
-        <li key={item.id} className={item.read_at ? '' : 'is-unread'}>{openButton(item)}</li>
+      : page.items.length ? <ul className="rail-peek-list activity-peek-list" aria-label="Activity">{page.items.map(item =>
+        <ActivityPeekRow key={item.id} item={item} onOpen={openNotification} busy={busy}/>
       )}</ul>
-      : !readError && <p className="rail-peek-empty">{unread ? 'No unread notifications.' : 'You’re all caught up.'}</p>}
+      : !readError && <div className="activity-peek-empty"><h3>All caught up</h3><p>New activity will appear here when someone mentions you or replies.</p></div>}
   </>;
   return <main ref={pageRef} onScroll={event=>{view.current.scroll=event.currentTarget.scrollTop;}} id="chat-messages" tabIndex={-1} className="notification-activity">
     <header className="notification-heading"><div><h1>Activity</h1><p>Catch up on the conversations that need you.</p></div><IconButton label="Notification settings" onClick={() => setPreferences(true)}><GearSix size={22}/></IconButton></header>
@@ -197,11 +258,14 @@ export function ThreadNotificationToggle({ thread }: { thread: string }) {
 
 // Activity is durable; desktop banners are intentionally a bounded, best-effort hint.
 export function useNotificationDelivery(workspace: string, currentChannel: string | undefined, onOpen: (item: NotificationItem) => void) {
+  const cache = useWorkspaceQueryCache(workspace);
   const [count, setCount] = useState(0);
   const current = useRef({ channel: currentChannel, onOpen }); current.current = { channel: currentChannel, onOpen };
   useEffect(() => {
     setCount(0); if (!workspace) return;
     let active = true, baseline = true, generation = 0;
+    const controller = new AbortController();
+    const path = `/workspaces/${workspace}/notifications`;
     const seen = new Set<string>();
     const sound = createNotificationSound();
     const handles = new Map<string, Notification>(), connection = acquireRealtime();
@@ -210,8 +274,9 @@ export function useNotificationDelivery(workspace: string, currentChannel: strin
     const stop = subscribeUpdates('workspace', workspace, async () => {
       const version = generation;
       try {
-        const page = await request<NotificationActivity>(`/workspaces/${workspace}/notifications`);
-        if (!active || version !== generation || !Array.isArray(page.items)) return;
+        const page = await readWorkspaceQuery<NotificationActivity>(cache, path, controller.signal);
+        if (!active || version !== generation) return;
+        if (!Array.isArray(page?.items)) { cache?.invalidate(`/workspaces/${workspace}/notifications`); return; }
         sound.setEnabled(page.sound_enabled === true);
         setCount(page.unread_count);
         for (const [id, handle] of handles) if (!page.items.some(item => item.id === id && !item.read_at)) { handle.close(); handles.delete(id); }
@@ -251,9 +316,9 @@ export function useNotificationDelivery(workspace: string, currentChannel: strin
           notification.onclick = () => { window.focus(); notification.close(); if (active) current.current.onOpen(value); };
           if (handles.size > 3) handles.values().next().value?.close();
         }
-      } catch (reason) { if (denied(reason)) { generation++; baseline = true; setCount(0); close(); } }
-    }, () => { generation++; baseline = true; setCount(0); close(); });
-    return () => { active = false; generation++; stop(); connection.release(); sound.setEnabled(false); close(); };
-  }, [workspace]);
+      } catch (reason) { if (denied(reason)) { cache?.invalidate(path); generation++; baseline = true; setCount(0); close(); } }
+    }, () => { cache?.invalidate(path); generation++; baseline = true; setCount(0); close(); });
+    return () => { active = false; generation++; controller.abort(); stop(); connection.release(); sound.setEnabled(false); close(); };
+  }, [workspace, cache]);
   return count;
 }

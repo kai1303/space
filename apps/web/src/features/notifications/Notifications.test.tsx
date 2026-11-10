@@ -106,7 +106,8 @@ it('previews Activity without marking it read and opens only the selected notifi
   const row = await screen.findByRole('button', { name: /Open notification from Alex/ });
   expect(row.querySelector('time')?.dateTime).toBe(item.created_at);
   await userEvent.click(screen.getByRole('button', { name: 'Unreads' }));
-  await screen.findByText('No unread notifications.');
+  await screen.findByRole('heading', { name: 'All caught up' });
+  expect(screen.getByText(/new activity will appear here/i)).toBeTruthy();
   expect(vi.mocked(fetch).mock.calls.every(([, options]) => options?.method === 'GET')).toBe(true);
   await userEvent.click(screen.getByRole('button', { name: 'Unreads' }));
   await userEvent.click(await screen.findByRole('button', { name: /Open notification from Alex/ }));
@@ -125,4 +126,17 @@ it('opens a chosen Activity target even if the pointer leaves while its read rec
   view.unmount();
   await act(async () => { confirmRead(); });
   expect(open).toHaveBeenCalledExactlyOnceWith(item);
+});
+
+
+it('shows the conversation source below the message and keeps the timestamp beside the sender', async () => {
+  const reply = { ...item, kind: 'thread_reply', channel_kind: 'channel', channel_name: 'Design' };
+  fake(() => ({ items: [reply], unread_count: 1, next_cursor: null, latest_id: reply.id }));
+  render(<ActivityPeek workspace="workspace" onOpen={() => {}}/>);
+  const row = await screen.findByRole('button', { name: /Open notification from Alex/ });
+  const source = screen.getByText('Thread in');
+  expect(source.closest('button')).toBe(row);
+  expect(source.parentElement?.querySelector('strong')?.textContent).toBe('#Design');
+  expect(row.querySelector('time')?.previousElementSibling?.textContent).toBe('Alex');
+  expect(screen.getByText(reply.text).compareDocumentPosition(source) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 });

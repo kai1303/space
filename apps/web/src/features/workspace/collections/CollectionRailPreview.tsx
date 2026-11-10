@@ -20,7 +20,7 @@ function Preview({ view, workspace, onOpen, onOpenDestination }: Props) {
   const [starred, setStarred] = useState(false);
   const files = view === 'files';
   const title = files ? 'Files' : 'To-dos';
-  const data = useCollection(workspace, view, files ? `sort=recent&starred=${starred}` : 'status=open&sort=due&archived=false');
+  const data = useCollection(workspace, view, files ? `sort=recent&starred=${starred}` : 'status=open&sort=due&archived=false', { preview: true });
   const fileItems = files ? (data.items as HubFile[]).filter(file => !starred || file.starred) : [];
   const todos = files ? [] : (data.items as HubTodo[]).filter(todo => !todo.completed && !todo.archived && !todo.deleted);
   const empty = files ? !fileItems.length : !todos.length;

@@ -57,7 +57,7 @@ function Recents({ workspace, onOpenSession, onNewMessage }: Omit<Props, 'onOpen
 }
 
 function Agenda({ workspace, onOpenTodos }: Pick<Props, 'workspace' | 'onOpenTodos'>) {
-  const data = useCollection(workspace, 'todos', 'status=open&reminder=upcoming&sort=due&archived=false');
+  const data = useCollection(workspace, 'todos', 'status=open&reminder=upcoming&sort=due&archived=false', { preview: true });
   return <>
     <div className="spacebot-preview-subhead"><h3>Upcoming reminders</h3><Button size="sm" variant="ghost" onClick={onOpenTodos}>Open To-dos</Button></div>
     {data.loading && <p className="rail-peek-empty" role="status">Loading reminders…</p>}

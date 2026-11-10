@@ -1,3 +1,4 @@
+import { useWorkspaceQueryCache } from '../../shared/realtime/workspace-query-cache.js';
 import { useEffect, useRef, useState } from 'react';
 import type { HubTodo, Page } from '@space/contracts';
 import { Select, Button, Dialog, IconButton, Menu, Popover } from '@space/ui/primitives';
@@ -17,6 +18,7 @@ const denied = (reason: unknown) => reason instanceof Error && ['unauthorized','
 const failure = (reason: unknown) => reason instanceof Error ? reason.message === 'todo_conflict' ? 'This to-do changed elsewhere. Close the editor and reopen it to use the latest version. Your draft is still here.' : reason.message.replaceAll('_',' ') : 'Unable to update to-dos';
 
 function useTodos(workspace: string, filters: Filters, initialTodoId?: string) {
+  const cache = useWorkspaceQueryCache(workspace);
   const [items,setItems] = useState<HubTodo[]>([]), [cursor,setCursor] = useState<string|null>(null), [selected,setSelected] = useState<HubTodo>();
   const [loading,setLoading] = useState(true), [busy,setBusy] = useState(false), [error,setError] = useState(''), [revoked,setRevoked] = useState(false);
   const [selectionUnavailable,setSelectionUnavailable] = useState(false);
@@ -55,12 +57,14 @@ function useTodos(workspace: string, filters: Filters, initialTodoId?: string) {
   useEffect(()=>()=>state.current.write?.abort(),[]);
   async function change<T>(path:string,body:object):Promise<T|undefined>{
     const s=state.current;if(!s.active || s.revoked || s.writing)return;
+    cache?.invalidate(base);
     s.writing=true;s.revision++;s.read?.abort();const controller=new AbortController();s.write=controller;setBusy(true);setLoading(false);setError('');
     try {
       const value=await request<T>(`${base}${path}`,body,undefined,'POST',controller.signal);
+      cache?.invalidate(base);
       if(!s.active || s.revoked || controller.signal.aborted)return;
       s.writing=false;await load();if(!s.active || s.revoked || controller.signal.aborted)return;return value;
-    }catch(reason){if(s.active && !controller.signal.aborted){if(denied(reason))clear();setError(failure(reason));}}
+    }catch(reason){cache?.invalidate(base);if(s.active && !controller.signal.aborted){if(denied(reason))clear();setError(failure(reason));}}
     finally{s.writing=false;if(s.active)setBusy(false);}
   }
   function select(item?:HubTodo){if(item && (!state.current.active || state.current.revoked))return;state.current.selectedId=item?.id;setSelectionUnavailable(false);setSelected(item);}

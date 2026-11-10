@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { HubFile, HubMessage, HubTodo, Page } from '@space/contracts';
 import { request } from '../../../shared/api/request.js';
 import { subscribeUpdates } from '../../../shared/realtime/live-updates.js';
+import { useWorkspaceQueryCache, readWorkspaceQuery } from '../../../shared/realtime/workspace-query-cache.js';
 export type CollectionView = 'threads' | 'saved' | 'sent' | 'files' | 'todos';
 type Item = HubMessage | HubFile | HubTodo;
 const failure = (error: unknown) => error instanceof Error ? error.message.replaceAll('_', ' ') : 'Unable to load this collection';
@@ -9,26 +10,34 @@ const denied = (error: unknown) => error instanceof Error && ['unauthorized', 'n
 const PAGE_SIZE = 24;
 export const MAX_ITEMS = 240;
 
-export function useCollection(workspace: string, view: CollectionView, query = '') {
-  const [items, setItems] = useState<Item[]>([]), [cursor, setCursor] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true), [error, setError] = useState(''), [busy, setBusy] = useState(false), [writeError, setWriteError] = useState(''), [revoked, setRevoked] = useState(false);
+export function useCollection(workspace: string, view: CollectionView, query = '', { preview = false } = {}) {
+  const base = `/workspaces/${encodeURIComponent(workspace)}/hub`;
+  const cache = useWorkspaceQueryCache(workspace);
+  const previewCache = preview ? cache : undefined;
+  const firstPage = new URLSearchParams(query); firstPage.set('limit', String(PAGE_SIZE));
+  const firstPath = `${base}/${view}?${firstPage}`;
+  const initial = () => {
+    const page = previewCache?.peek<Page<Item>>(firstPath);
+    return Array.isArray(page?.items) ? page : undefined;
+  };
+  const [items, setItems] = useState<Item[]>(() => initial()?.items ?? []), [cursor, setCursor] = useState<string | null>(() => initial()?.next_cursor ?? null);
+  const [loading, setLoading] = useState(() => !initial()), [error, setError] = useState(''), [busy, setBusy] = useState(false), [writeError, setWriteError] = useState(''), [revoked, setRevoked] = useState(false);
   const controls = useRef({ active: true, revoked: false, revision: 0, writing: false, read: undefined as AbortController | undefined, write: undefined as AbortController | undefined });
   const retryAfter = useRef<string | undefined>(undefined);
   // shortcut: confirmed new rows outside the loaded range await pagination; use targeted GETs for cross-client detail refresh.
   const loadedPages = useRef(1), confirmedTodos = useRef(new Map<string, HubTodo>());
-  const base = `/workspaces/${encodeURIComponent(workspace)}/hub`;
   async function load(after?: string) {
     const state = controls.current;
     if (!state.active || state.revoked || state.writing) return;
     state.read?.abort(); const controller = new AbortController(); state.read = controller;
-    const revision = ++state.revision; retryAfter.current = after; setLoading(true); setError('');
+    const revision = ++state.revision; retryAfter.current = after; setLoading(!!after || !initial()); setError('');
     try {
       const pageCount = (view === 'todos' || view === 'files') && !after ? loadedPages.current : 1;
       const incoming: Item[] = []; let next = after, pagesRead = 0;
       do {
-        const params = new URLSearchParams(query); params.set('limit', String(PAGE_SIZE)); if (next) params.set('after', next);
-        const page = await request<Page<Item>>(`${base}/${view}?${params}`, undefined, undefined, 'POST', controller.signal);
-        if (!Array.isArray(page.items)) throw new Error('Invalid collection response');
+        const path = next ? `${firstPath}&after=${encodeURIComponent(next)}` : firstPath;
+        const page = await readWorkspaceQuery<Page<Item>>(next ? undefined : previewCache, path, controller.signal);
+        if (!Array.isArray(page?.items)) { previewCache?.invalidate(path); throw new Error('Invalid collection response'); }
         if (!state.active || controller.signal.aborted || revision !== state.revision) return;
         incoming.push(...page.items); next = page.next_cursor ?? undefined; pagesRead++;
       } while (next && pagesRead < pageCount);
@@ -55,14 +64,16 @@ export function useCollection(workspace: string, view: CollectionView, query = '
       setItems([]); setCursor(null); setLoading(false); setBusy(false); setWriteError(''); setError(failure(new Error(code)));
     });
     return () => { state.active = false; state.revision++; state.read?.abort(); state.write?.abort(); stop(); };
-  }, [workspace, view, query]);
+  }, [workspace, view, query, previewCache]);
   async function change<T>(path: string, body: object): Promise<T | undefined> {
     const state = controls.current;
     if (state.writing || state.revoked || !state.active) return;
+    cache?.invalidate(`${base}/${view}`);
     state.writing = true; state.revision++; state.read?.abort(); setLoading(false); setBusy(true); setWriteError('');
     const controller = new AbortController(); state.write = controller;
     try {
       const value = await request<T>(`${base}${path}`, body, undefined, 'POST', controller.signal);
+      cache?.invalidate(`${base}/${view}`);
       if (!state.active || state.revoked || controller.signal.aborted) return;
       if (view === 'todos') {
         const todo = value as HubTodo;
@@ -74,11 +85,12 @@ export function useCollection(workspace: string, view: CollectionView, query = '
       await load();
       return value;
     } catch (reason) {
+      cache?.invalidate(`${base}/${view}`);
       if (state.active && !controller.signal.aborted) {
         if (denied(reason)) { confirmedTodos.current.clear(); loadedPages.current = 1; setItems([]); setCursor(null); }
         setWriteError(failure(reason));
       }
     } finally { state.writing = false; if (state.active) setBusy(false); }
   }
-  return { items, cursor, loading, error, busy, writeError, revoked, change, clearAndRefresh: () => { setItems([]); setCursor(null); return load(); }, more: () => load(cursor ?? undefined), retry: () => load(retryAfter.current) };
+  return { items, cursor, loading, error, busy, writeError, revoked, change, clearAndRefresh: () => { cache?.invalidate(`${base}/${view}`); setItems([]); setCursor(null); return load(); }, more: () => load(cursor ?? undefined), retry: () => load(retryAfter.current) };
 }

@@ -1,0 +1,16 @@
+name: Accessibility barrier
+description: Tell us where using Space became difficult or impossible.
+labels: [accessibility]
+body:
+  - type: textarea
+    id: barrier
+    attributes:
+      label: What were you trying to do and where did you get stuck?
+      description: For example, did focus move unexpectedly when you opened a thread?
+    validations:
+      required: true
+  - type: input
+    id: setup
+    attributes:
+      label: Your setup (optional)
+      description: Share your browser or macOS app version, input method, or assistive technology if relevant.
