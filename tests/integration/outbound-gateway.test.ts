@@ -233,13 +233,13 @@ test('workspace grants dispatch only the shared credential for a member using a 
       tools: ['lookup'],
     });
   }
-  await grant(seed.owner_id, 'personal-token');
+  const personal = await grant(seed.owner_id, 'personal-token');
   const shared = await grant(scope, 'workspace-token');
   const ownerAccess = (await store.issue(seed.execution, seed.installation_id, 'http://localhost/mcp'))!;
   assert.equal(ownerAccess.tools.length, 2);
   const ownerClaims = store.security.verify(ownerAccess.token, 'outbound');
   const { requester, workspace, ...legacyClaims } = ownerClaims;
-  assert.equal((await store.allowed(legacyClaims)).length, 1);
+  assert.deepEqual((await store.allowed(legacyClaims)).map((tool) => tool.connection_id), [personal.id]);
   await pool.query('UPDATE tasks SET requester_id=$2 WHERE id=$1', [seed.task, seed.collaborator_id]);
   await assert.rejects(store.allowed(ownerClaims), /outbound_access_revoked/);
   await assert.rejects(store.allowed(legacyClaims), /outbound_access_revoked/);
@@ -249,6 +249,7 @@ test('workspace grants dispatch only the shared credential for a member using a 
     started = resolve;
   });
   let block = false;
+  let remoteSignal: AbortSignal | undefined;
   const seen: (string | undefined)[] = [];
   const gateway = createGateway(store, {
     remote: {
@@ -258,6 +259,7 @@ test('workspace grants dispatch only the shared credential for a member using a 
       async call(connection, _name, _args, signal) {
         seen.push(connection.token);
         if (block) {
+          remoteSignal = signal;
           started();
           await new Promise<void>((_, reject) =>
             signal.addEventListener('abort', () => reject(signal.reason), { once: true }),
@@ -281,6 +283,7 @@ test('workspace grants dispatch only the shared credential for a member using a 
       }),
     );
     const listed = await client.listTools();
+    assert.deepEqual(listed.tools.map((tool) => tool.description), ['Workspace connection "Search". lookup']);
     assert.deepEqual(
       listed.tools.map((t) => t.name),
       access.tools,
@@ -302,6 +305,7 @@ test('workspace grants dispatch only the shared credential for a member using a 
       tools: [],
     });
     assert.equal((await pending).isError, true);
+    assert.equal(remoteSignal?.reason.name, 'AbortError');
     assert.deepEqual((await client.listTools()).tools, []);
     assert.equal(await store.issue(seed.execution, seed.installation_id, access.url), undefined);
 
@@ -321,6 +325,96 @@ test('workspace grants dispatch only the shared credential for a member using a 
     ]);
     await assert.rejects(store.authority(claims), /outbound_access_revoked/);
   } finally {
+    await client.close();
+    await gateway.close();
+  }
+});
+
+test('editing another paired agent’s workspace grant preserves a selected tool and its in-flight response', async () => {
+  const { createGateway } = await import('../../apps/mcp-gateway/dist/gateway.js');
+  const seed = await fixture();
+  const scope = { actor: seed.owner_id, workspace: seed.workspace_id };
+  const pairings = new AgentConnectionStore(pool);
+  const pairing = await pairings.createPairing(seed.collaborator_id, seed.workspace_id, { provider: 'codex' });
+  const other = await pairings.claim({
+    code: pairing.code,
+    credential: randomBytes(32).toString('base64url'),
+    provider: 'codex',
+  });
+  const store = new OutboundStore(pool, randomBytes(32).toString('hex'));
+  let connection = await store.create(scope, { name: 'Team', url: 'https://example.com/mcp', auth_type: 'none' });
+  const tools = [{ name: 'read', inputSchema: { type: 'object' } }];
+  const grant = async (installation: string) => {
+    connection = await store.grant(scope, connection.id, {
+      revision: connection.revision,
+      installation_id: installation,
+      tools: ['read'],
+    });
+  };
+  connection = await store.catalog(scope, connection.id, connection.revision, tools);
+  await grant(seed.installation_id);
+  let dispatch!: () => void, complete!: () => void;
+  const dispatched = new Promise<void>((resolve) => {
+    dispatch = resolve;
+  });
+  const completed = new Promise<void>((resolve) => {
+    complete = resolve;
+  });
+  const gateway = createGateway(store, {
+    remote: {
+      async discover() {
+        return tools;
+      },
+      async call(_connection, _name, _args, signal) {
+        dispatch();
+        await completed;
+        signal.throwIfAborted();
+        return { content: [{ type: 'text' as const, text: 'response for first agent' }] };
+      },
+    },
+  });
+  const address = await gateway.listen({ host: '127.0.0.1', port: 0 });
+  const client = new Client({ name: 'concurrent-grant-test', version: '1' });
+  try {
+    const access = (await store.issue(seed.execution, seed.installation_id, `${address}/mcp`))!;
+    const claims = store.security.verify(access.token, 'outbound');
+    const name = access.tools[0]!;
+    const selected = (await store.allowedTool(claims, name))!;
+    await client.connect(
+      new StreamableHTTPClientTransport(new URL(access.url), {
+        requestInit: { headers: { Authorization: `Bearer ${access.token}` } },
+      }),
+    );
+    const pending = client.callTool({ name });
+    await dispatched;
+    await grant(other.installation_id);
+    complete();
+    const result = await pending;
+    assert.deepEqual(result.content, [{ type: 'text', text: 'response for first agent' }]);
+    const reserved = await store.reserve(claims, 'after-other-grant', name, {}, selected.dispatchRevision);
+    await store.finish(reserved.id, 'succeeded', 1);
+
+    const revisedTools = [{ ...tools[0]!, description: 'Revised tool' }];
+    connection = await store.catalog(scope, connection.id, connection.revision, revisedTools);
+    await grant(seed.installation_id);
+    await assert.rejects(
+      store.reserve(claims, 'old-definition', name, {}, selected.dispatchRevision),
+      /connection_changed/,
+    );
+    const beforeRotation = (await store.allowedTool(claims, name))!;
+    connection = await store.update(scope, connection.id, {
+      revision: connection.revision,
+      auth_type: 'bearer',
+      token: 'rotated',
+    });
+    connection = await store.catalog(scope, connection.id, connection.revision, revisedTools);
+    await grant(seed.installation_id);
+    await assert.rejects(
+      store.reserve(claims, 'old-credential', name, {}, beforeRotation.dispatchRevision),
+      /connection_changed/,
+    );
+  } finally {
+    complete();
     await client.close();
     await gateway.close();
   }

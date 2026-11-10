@@ -40,14 +40,38 @@ async function requireManager(c: Query, scope: OutboundScope) {
   if (!['owner', 'admin'].includes(rows[0].role)) throw new AppError(403, 'workspace_management_forbidden');
 }
 
-const connectionSelect = `SELECT c.id,c.name,c.url,c.auth_type,c.enabled,c.revision,c.status,c.tools,c.created_at,
-  coalesce((SELECT jsonb_agg(jsonb_build_object('installation_id',g.installation_id,'tools',g.tools) ORDER BY g.installation_id)
-    FROM outbound_grants g WHERE g.connection_id=c.id),'[]') AS grants FROM outbound_connections c`;
-
-const eligibleAgents = `FROM agent_installations i JOIN agent_definitions d ON d.id=i.definition_id
+const agentTables = `FROM agent_installations i JOIN agent_definitions d ON d.id=i.definition_id
   JOIN workspaces w ON w.id=i.workspace_id JOIN workspace_members m ON m.workspace_id=i.workspace_id AND m.user_id=i.owner_id
-  JOIN agent_connections ac ON ac.installation_id=i.id WHERE i.enabled AND i.connector_id IN ('codex.local','kiro.local','claude.local')
-  AND m.active AND ac.revoked_at IS NULL`;
+  LEFT JOIN agent_connections ac ON ac.installation_id=i.id`;
+const canGrant = `i.enabled AND i.connector_id IN ('codex.local','kiro.local','claude.local')
+  AND m.active AND ac.installation_id IS NOT NULL AND ac.revoked_at IS NULL`;
+
+function agentPage(scope: OutboundScope) {
+  // Keep grantees visible while disabled or offboarded so admins can revoke access.
+  const visible = typeof scope === 'string' ? canGrant : `(${canGrant}) OR EXISTS (
+    SELECT 1 FROM outbound_grants saved JOIN outbound_connections server ON server.id=saved.connection_id
+    WHERE saved.installation_id=i.id AND server.workspace_id=$1 AND saved.tools<>'[]'::jsonb)`;
+  return `${agentTables} WHERE (${visible}) AND i.${scopeKey(scope).column}=$1
+          AND ($2::uuid IS NULL OR i.id>$2) ORDER BY i.id`;
+}
+
+async function readAgentPage(c: Query, scope: OutboundScope, after?: unknown): Promise<{ items: OutboundAgent[]; next_cursor?: string }> {
+  const { rows } = await c.query(
+    `SELECT i.id,coalesce(ac.name,d.name) AS name,w.name AS workspace_name
+      ${typeof scope === 'string' ? '' : `, (${canGrant}) AS can_grant`} ${agentPage(scope)} LIMIT 101`,
+    [scopeKey(scope).id, after === undefined ? null : uuid(after)],
+  );
+  return { items: rows.slice(0, 100), ...(rows.length > 100 ? { next_cursor: rows[99].id } : {}) };
+}
+
+function connectionSelect(scope: OutboundScope) {
+  const workspace = typeof scope !== 'string';
+  const visibleGrants = workspace ? `AND g.installation_id IN (SELECT i.id ${agentPage(scope)} LIMIT 100)` : '';
+  return `SELECT c.id,c.name,c.url,c.auth_type,c.enabled,c.revision,c.status,c.tools,c.created_at,
+    coalesce((SELECT jsonb_agg(jsonb_build_object('installation_id',g.installation_id,'tools',g.tools) ORDER BY g.installation_id)
+      FROM outbound_grants g WHERE g.connection_id=c.id ${visibleGrants}),'[]') AS grants
+    FROM outbound_connections c WHERE c.${scopeKey(scope).column}=$1`;
+}
 const revision = (value: unknown) => {
   if (!Number.isSafeInteger(value) || (value as number) < 1) throw new AppError(400, 'invalid_revision');
   return value as number;
@@ -96,16 +120,19 @@ export class OutboundStore {
     if (typeof scope !== 'string' && c === this.pool) return this.transaction(client => this.get(scope, id, client));
     await requireManager(c, scope);
     const key = scopeKey(scope);
-    const { rows } = await c.query(`${connectionSelect} WHERE c.${key.column}=$1 AND c.id=$2`, [key.id, uuid(id)]);
+    const params = typeof scope === 'string' ? [key.id, uuid(id)] : [key.id, null, uuid(id)];
+    const { rows } = await c.query(`${connectionSelect(scope)} AND c.id=$${params.length}`, params);
     if (!rows[0]) throw new AppError(404, 'not_found');
     return { ...rows[0], created_at: rows[0].created_at.toISOString() };
   }
-  async list(scope: OutboundScope) {
+  async list(scope: OutboundScope, after?: unknown) {
     const key = scopeKey(scope);
     return this.transaction(async c => {
       await requireManager(c, scope);
-      const { rows } = await c.query(`${connectionSelect} WHERE c.${key.column}=$1 ORDER BY c.created_at,c.id LIMIT 20`, [key.id]);
-      return { items: rows.map(row => ({ ...row, created_at: row.created_at.toISOString() })) };
+      const params = typeof scope === 'string' ? [key.id] : [key.id, after === undefined ? null : uuid(after)];
+      const { rows } = await c.query(`${connectionSelect(scope)} ORDER BY c.created_at,c.id LIMIT 20`, params);
+      const items: OutboundConnection[] = rows.map(row => ({ ...row, created_at: row.created_at.toISOString() }));
+      return typeof scope === 'string' ? { items } : { items, agents: await readAgentPage(c, scope, after) };
     });
   }
   async create(scope: OutboundScope, raw: unknown) {
@@ -154,7 +181,9 @@ export class OutboundStore {
         throw new AppError(400, 'invalid_mcp_token');
       const reset = parsed.url !== previous.url || parsed.auth_type !== previous.auth_type || input.token !== undefined;
       await c.query(
-        `UPDATE outbound_connections SET name=$2,url=$3,auth_type=$4,secret=$5,enabled=$6,revision=revision+1,tools=CASE WHEN $7 THEN '[]'::jsonb ELSE tools END,status=CASE WHEN $7 THEN 'untested' ELSE status END WHERE id=$1`,
+        `UPDATE outbound_connections SET name=$2,url=$3,auth_type=$4,secret=$5,enabled=$6,revision=revision+1,
+         credential_revision=credential_revision + CASE WHEN $7 OR enabled IS DISTINCT FROM $6 THEN 1 ELSE 0 END,
+         tools=CASE WHEN $7 THEN '[]'::jsonb ELSE tools END,status=CASE WHEN $7 THEN 'untested' ELSE status END WHERE id=$1`,
         [
           id,
           parsed.name,
@@ -192,18 +221,18 @@ export class OutboundStore {
     return this.transaction(async (c) => {
       const previous = await this.get(scope, id, c);
       if (previous.revision !== revision(rev)) throw new AppError(409, 'connection_changed');
-      for (const grant of previous.grants) {
-        const retained = grant.tools.filter((name) => {
-          const before = previous.tools.find((t) => t.name === name),
-            after = tools.find((t) => t.name === name);
-          return before && after && fingerprint(before) === fingerprint(after);
-        });
-        await c.query('UPDATE outbound_grants SET tools=$3 WHERE connection_id=$1 AND installation_id=$2', [
-          id,
-          grant.installation_id,
-          JSON.stringify(retained),
-        ]);
-      }
+      const retained = tools.filter(tool => {
+        const before = previous.tools.find(old => old.name === tool.name);
+        return before && fingerprint(before) === fingerprint(tool);
+      }).map(tool => tool.name);
+      // Reconcile every grant, including agents outside the current UI page.
+      await c.query(
+        `UPDATE outbound_grants SET tools=coalesce((SELECT jsonb_agg(name ORDER BY ord)
+           FROM jsonb_array_elements_text(tools) WITH ORDINALITY AS granted(name, ord)
+           WHERE name=ANY($2::text[])), '[]'::jsonb)
+         WHERE connection_id=$1 AND NOT tools <@ to_jsonb($2::text[])`,
+        [id, retained],
+      );
       await c.query(
         "UPDATE outbound_connections SET tools=$2,status='ready',revision=revision+1 WHERE id=$1",
         [id, JSON.stringify(tools)],
@@ -221,16 +250,10 @@ export class OutboundStore {
       );
     });
   }
-  async agents(scope: OutboundScope, after?: unknown): Promise<{ items: OutboundAgent[]; next_cursor?: string }> {
-    const key = scopeKey(scope);
+  async agents(scope: OutboundScope, after?: unknown) {
     return this.transaction(async c => {
       await requireManager(c, scope);
-      const { rows } = await c.query(
-        `SELECT i.id,coalesce(ac.name,d.name) AS name,w.name AS workspace_name ${eligibleAgents}
-         AND i.${key.column}=$1 AND ($2::uuid IS NULL OR i.id>$2) ORDER BY i.id LIMIT 101`,
-        [key.id, after === undefined ? null : uuid(after)],
-      );
-      return { items: rows.slice(0, 100), ...(rows.length > 100 ? { next_cursor: rows[99].id } : {}) };
+      return readAgentPage(c, scope, after);
     });
   }
   async grant(scope: OutboundScope, id: string, raw: unknown) {
@@ -251,12 +274,24 @@ export class OutboundStore {
       if (!selectedTools.every((name) => connection.tools.some((t) => t.name === name)))
         throw new AppError(400, 'unknown_tool');
       const key = scopeKey(scope);
-      const agent = await c.query(`SELECT 1 ${eligibleAgents} AND i.id=$1 AND i.${key.column}=$2`, [installation, key.id]);
-      if (!agent.rows.length) throw new AppError(404, typeof scope === 'string' ? 'agent_not_owned' : 'agent_not_available');
-      await c.query(
-        'INSERT INTO outbound_grants(connection_id,installation_id,tools) VALUES($1,$2,$3) ON CONFLICT(connection_id,installation_id) DO UPDATE SET tools=excluded.tools',
-        [id, installation, JSON.stringify(selectedTools)],
-      );
+      const eligible = await c.query(`SELECT 1 ${agentTables} WHERE ${canGrant} AND i.id=$1 AND i.${key.column}=$2`, [installation, key.id]);
+      if (!eligible.rowCount) {
+        if (typeof scope === 'string') throw new AppError(404, 'agent_not_owned');
+        const existing = await c.query(
+          `SELECT 1 FROM outbound_grants g JOIN agent_installations i ON i.id=g.installation_id
+           WHERE i.workspace_id=$1 AND g.connection_id=$2 AND i.id=$3 AND g.tools<>'[]'::jsonb AND g.tools @> $4::jsonb`,
+          [key.id, id, installation, JSON.stringify(selectedTools)],
+        );
+        if (!existing.rowCount) throw new AppError(404, 'agent_not_available');
+      }
+      if (typeof scope !== 'string' && !selectedTools.length) {
+        await c.query('DELETE FROM outbound_grants WHERE connection_id=$1 AND installation_id=$2', [id, installation]);
+      } else {
+        await c.query(
+          'INSERT INTO outbound_grants(connection_id,installation_id,tools) VALUES($1,$2,$3) ON CONFLICT(connection_id,installation_id) DO UPDATE SET tools=excluded.tools',
+          [id, installation, JSON.stringify(selectedTools)],
+        );
+      }
       await c.query('UPDATE outbound_connections SET revision=revision+1 WHERE id=$1', [id]);
       return this.get(scope, id, c);
     });
@@ -277,15 +312,20 @@ export class OutboundStore {
        WHERE e.id=$1 AND i.id=$2 AND i.owner_id=$3 AND t.requester_id=$4 AND ($5::uuid IS NULL OR i.workspace_id=$5)
        AND e.status IN ('queued','running') AND t.status IN ('queued','running') AND s.state<>'ended'
        AND i.enabled AND i.connector_id IN ('codex.local','kiro.local','claude.local')`,
-      [uuid(claims.execution), uuid(claims.installation), uuid(claims.owner), uuid(claims.requester ?? claims.owner),
-        claims.workspace === undefined ? null : uuid(claims.workspace)],
+      [
+        uuid(claims.execution),
+        uuid(claims.installation),
+        uuid(claims.owner),
+        uuid(claims.requester ?? claims.owner),
+        claims.workspace === undefined ? null : uuid(claims.workspace),
+      ],
     );
     if (!result.rows.length) throw new AppError(403, 'outbound_access_revoked');
   }
   async allowed(claims: OutboundClaims, c: Query = this.pool) {
     await this.authority(claims, c);
     const { rows } = await c.query(
-      `SELECT c.id,c.name AS connection_name,c.revision,c.tools,g.tools AS allowed
+      `SELECT c.id,c.name AS connection_name,c.workspace_id,c.revision,c.credential_revision,c.tools,g.tools AS allowed
        FROM outbound_connections c JOIN outbound_grants g ON g.connection_id=c.id
        WHERE ((c.owner_id=$1 AND c.owner_id=$3) OR c.workspace_id=$4) AND g.installation_id=$2
        AND c.enabled AND c.status='ready' ORDER BY c.id`,
@@ -297,12 +337,23 @@ export class OutboundStore {
         .map((t) => ({
           ...t,
           name: outboundToolName(r.id, t.name),
-          description: `Connection "${r.connection_name}". ${t.description ?? t.name}`,
+          description: `${r.workspace_id ? 'Workspace connection' : 'Connection'} "${r.connection_name}". ${t.description ?? t.name}`,
           upstreamName: t.name,
+          definition: t,
           connection_id: r.id,
-          revision: r.revision,
+          revision: r.revision as number,
+          credentialRevision: r.workspace_id ? r.credential_revision as number : undefined,
         })),
     );
+  }
+  async allowedTool(claims: OutboundClaims, name: string, c: Query = this.pool) {
+    const selected = (await this.allowed(claims, c)).find((tool) => tool.name === name);
+    if (!selected) return undefined;
+    // A different installation's grant edit does not invalidate this workspace tool.
+    const dispatchRevision = selected.credentialRevision === undefined
+      ? selected.revision
+      : fingerprint([selected.credentialRevision, selected.definition]);
+    return { ...selected, dispatchRevision };
   }
   async issue(execution: string, installation: string, url: string) {
     const { rows } = await this.pool.query(
@@ -329,13 +380,13 @@ export class OutboundStore {
     }
     return tools.length ? { url, token: this.security.sign(claims), tools: tools.map((t) => t.name) } : undefined;
   }
-  async reserve(claims: OutboundClaims, requestId: string, name: string, args: unknown, expectedRevision?: number) {
+  async reserve(claims: OutboundClaims, requestId: string, name: string, args: unknown, expectedRevision?: number | string) {
     text(requestId, 200);
     const hash = fingerprint({ name, args });
     return this.transaction(async (c) => {
-      const selected = (await this.allowed(claims, c)).find((t) => t.name === name);
+      const selected = await this.allowedTool(claims, name, c);
       if (!selected) throw new AppError(403, 'tool_not_allowed');
-      if (expectedRevision !== undefined && selected.revision !== expectedRevision)
+      if (expectedRevision !== undefined && selected.dispatchRevision !== expectedRevision)
         throw new AppError(409, 'connection_changed');
       const existing = (
         await c.query(

@@ -112,23 +112,32 @@ export function createGateway(
   app.post('/internal/discover', async (r) => {
     const claims = verify(r.headers.authorization, 'outbound-internal'),
       v = record(r.body, ['connection_id', 'revision']),
+      id = uuid(v.connection_id),
       scope = claims.workspace === undefined ? claims.owner : { actor: claims.owner, workspace: claims.workspace };
-    const connection = await store.credentials(scope, uuid(v.connection_id));
-    if (connection.revision !== v.revision) throw new AppError(409, 'connection_changed');
-    return bounded(claims.owner, new AbortController().signal, async (signal) => {
-      try {
-        return await store.catalog(
-          scope,
-          connection.id,
-          connection.revision,
-          await remote.discover(connection, signal),
-        );
-      } catch (e) {
-        if (e instanceof AppError && e.code === 'connection_changed') throw e;
-        await store.discoveryFailed(scope, connection.id, connection.revision);
-        throw new AppError(502, 'mcp_discovery_failed');
-      }
-    });
+    const recheckRevision = async () => {
+      const current = await store.get(scope, id);
+      if (current.revision !== v.revision) throw new AppError(409, 'connection_changed');
+    };
+    return bounded(
+      claims.owner,
+      new AbortController().signal,
+      async (signal) => {
+        const connection = await store.credentials(scope, id);
+        if (connection.revision !== v.revision) throw new AppError(409, 'connection_changed');
+        try {
+          const tools = await remote.discover(connection, signal);
+          signal.throwIfAborted();
+          return await store.catalog(scope, id, connection.revision, tools);
+        } catch (e) {
+          if (e instanceof AppError && e.code === 'connection_changed') throw e;
+          if (signal.aborted) await recheckRevision();
+          await store.discoveryFailed(scope, id, connection.revision);
+          throw new AppError(502, 'mcp_discovery_failed');
+        }
+      },
+      recheckRevision,
+      claims.workspace === undefined ? [claims.owner] : [claims.owner, `workspace:${claims.workspace}`],
+    );
   });
   const handler = createMcpHandler(async ({ requestInfo }) => {
     const claims = verify(requestInfo?.headers.get('authorization'));
@@ -142,15 +151,15 @@ export function createGateway(
       })),
     }));
     server.server.setRequestHandler('tools/call', async (request, context) => {
-      let revision: number | undefined;
+      let revision: number | string | undefined;
       try {
         return await bounded(
           claims.requester ?? claims.owner,
           context.mcpReq.signal,
           async (signal) => {
-            const selected = (await store.allowed(claims)).find((t) => t.name === request.params.name);
+            const selected = await store.allowedTool(claims, request.params.name);
             if (!selected) throw new AppError(403, 'tool_not_allowed');
-            revision = selected.revision;
+            revision = selected.dispatchRevision;
             const args = request.params.arguments ?? {};
             if (Buffer.byteLength(JSON.stringify(args)) > 262144) throw new AppError(413, 'mcp_arguments_too_large');
             await validateArguments(selected.inputSchema, args, signal);
@@ -160,18 +169,16 @@ export function createGateway(
                 `${typeof context.mcpReq.id}:${context.mcpReq.id}`,
                 request.params.name,
                 args,
-                selected.revision,
+                selected.dispatchRevision,
               ),
               started = Date.now();
             let status: 'succeeded' | 'failed' | 'uncertain' = 'uncertain';
             try {
               signal.throwIfAborted();
               const result = await remote.call(call.connection, call.tool.upstreamName, args, signal);
-              await store.authority(claims);
-              const allowed = (await store.allowed(claims)).find(
-                (t) => t.name === request.params.name && t.revision === call.tool.revision,
-              );
-              if (!allowed) throw new AppError(403, 'outbound_access_revoked');
+              const allowed = await store.allowedTool(claims, request.params.name);
+              if (allowed?.dispatchRevision !== call.tool.dispatchRevision) throw new AppError(403, 'outbound_access_revoked');
+              signal.throwIfAborted();
               if (Buffer.byteLength(JSON.stringify(result)) > 1048576)
                 throw new AppError(413, 'mcp_response_too_large');
               status = result.isError ? 'failed' : 'succeeded';
@@ -183,8 +190,8 @@ export function createGateway(
             }
           },
           async () => {
-            const current = (await store.allowed(claims)).find((t) => t.name === request.params.name);
-            if (!current || (revision !== undefined && current.revision !== revision))
+            const current = await store.allowedTool(claims, request.params.name);
+            if (!current || (revision !== undefined && current.dispatchRevision !== revision))
               throw new AppError(403, 'outbound_access_revoked');
           },
           [claims.owner, claims.requester ?? claims.owner, ...(claims.workspace ? [`workspace:${claims.workspace}`] : [])],

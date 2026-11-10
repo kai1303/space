@@ -50,23 +50,31 @@ export function Connections(props: ConnectionsProps) {
     const attempt = ++generation.current;
     const current = () => active.current && attempt === generation.current;
     try {
+      const cursors = requestedAgentCursors.current;
+      let page: { items: OutboundConnection[]; agents: AgentPage };
+      let calls: OutboundCall[] = [];
       if (workspace) {
         const settings = await request<WorkspaceSettings>(`${base}/settings`);
         if (!current()) return;
         if (settings.role !== 'owner' && settings.role !== 'admin') {
           clearAccess('member'); setError(''); return;
         }
+        const after = cursors.at(-1);
+        const pageQuery = after ? `?after=${encodeURIComponent(after)}` : '';
+        page = await request(`${connectionsPath}${pageQuery}`);
+      } else {
+        const [connections, agents, history] = await Promise.all([
+          request<{ items: OutboundConnection[] }>(connectionsPath),
+          request<AgentPage>('/me/connection-agents'),
+          request<{ items: OutboundCall[] }>('/me/connection-calls'),
+        ]);
+        page = { items: connections.items, agents };
+        calls = history.items;
       }
-      const cursors = requestedAgentCursors.current;
-      const after = cursors.at(-1);
-      const [connections, available, history] = await Promise.all([
-        request<{ items: OutboundConnection[] }>(connectionsPath),
-        request<AgentPage>(`${base}/connection-agents${after ? `?after=${encodeURIComponent(after)}` : ''}`),
-        workspace ? undefined : request<{ items: OutboundCall[] }>('/me/connection-calls'),
-      ]);
       if (current()) {
-        setItems(connections.items); setAgentPage({ ...available, cursors }); setCalls(history?.items ?? []);
-        if (workspace) setRole('manager'); setLoaded(true); setError('');
+        setItems(page.items); setAgentPage({ ...page.agents, cursors }); setCalls(calls);
+        if (workspace) setRole('manager');
+        setLoaded(true); setError('');
       }
     } catch (reason) {
       if (!current()) return;
@@ -167,8 +175,13 @@ function ConnectionEditor({ connection, busy, workspace, onSave, onCancel }: { w
 
 function GrantEditor({ connection, agents, busy, workspace, onPrevious, onNext, onSave, onCancel }: { onPrevious?: () => void; onNext?: () => void; workspace: boolean; connection: OutboundConnection; agents: OutboundAgent[]; busy: boolean; onSave: (agent: string, tools: string[]) => Promise<void>; onCancel: () => void }) {
   const [agent, setAgent] = useState(agents[0]?.id ?? '');
-  const [tools, setTools] = useState(connection.grants.find(grant => grant.installation_id === agent)?.tools ?? []);
-  return <form className="space-connection-editor" onSubmit={event => { event.preventDefault(); if (agents.some(item => item.id === agent)) void onSave(agent, tools); }}>
+  const savedTools = connection.grants.find(grant => grant.installation_id === agent)?.tools ?? [];
+  const [tools, setTools] = useState(savedTools);
+  const selected = agents.find(item => item.id === agent);
+  const removeOnly = workspace && selected?.can_grant === false;
+  const selectedTools = removeOnly ? tools.filter(name => savedTools.includes(name)) : tools;
+  const canSave = !busy && !!selected && (!removeOnly || selectedTools.length < savedTools.length);
+  return <form className="space-connection-editor" onSubmit={event => { event.preventDefault(); if (canSave) void onSave(agent, selectedTools); }}>
     <h3>Agent access · {connection.name}</h3>
     <p className="space-connections-hint">Selected tools can act with this account’s permissions. Only grant tools you want this agent to use.</p>
     {(onPrevious || onNext) && <div className="space-connections-actions">
@@ -176,10 +189,11 @@ function GrantEditor({ connection, agents, busy, workspace, onPrevious, onNext, 
       {onNext && <Button size="sm" disabled={busy} onClick={onNext}>Next agents</Button>}
     </div>}
     {!agents.length ? <p>{workspace ? 'Connect an agent to this workspace first.' : 'Connect one of your agents to a workspace first.'}</p> : <fieldset disabled={busy}>
-      <label className="space-connection-select">Agent<Select aria-label="Agent" value={agent} onChange={event => { setAgent(event.target.value); setTools(connection.grants.find(grant => grant.installation_id === event.target.value)?.tools ?? []); }}>{agents.map(item => <option key={item.id} value={item.id}>{item.name} · {item.workspace_name}</option>)}</Select></label>
+      <label className="space-connection-select">Agent<Select aria-label="Agent" value={agent} onChange={event => { setAgent(event.target.value); setTools(connection.grants.find(grant => grant.installation_id === event.target.value)?.tools ?? []); }}>{agents.map(item => <option key={item.id} value={item.id}>{item.name} · {item.workspace_name}{workspace && item.can_grant === false && ' · Unavailable'}</option>)}</Select></label>
+      {removeOnly && <p className="space-connections-hint">This agent is unavailable. You can remove its existing tool access.</p>}
       {!connection.tools.length && <p>Test the connection to discover available tools.</p>}
-      {connection.tools.map(tool => <label className="space-connection-tool" key={tool.name}><input type="checkbox" checked={tools.includes(tool.name)} onChange={event => setTools(old => event.target.checked ? [...old, tool.name] : old.filter(name => name !== tool.name))} /><span><strong>{tool.name}</strong>{tool.description && <small>{tool.description}</small>}</span></label>)}
+      {connection.tools.map(tool => <label className="space-connection-tool" key={tool.name}><input type="checkbox" checked={selectedTools.includes(tool.name)} disabled={removeOnly && !savedTools.includes(tool.name)} onChange={event => setTools(old => event.target.checked ? [...old, tool.name] : old.filter(name => name !== tool.name))} /><span><strong>{tool.name}</strong>{tool.description && <small>{tool.description}</small>}</span></label>)}
     </fieldset>}
-    <div className="space-connections-actions"><Button disabled={busy} onClick={onCancel}>Cancel</Button><Button type="submit" variant="primary" disabled={busy || !agents.some(item => item.id === agent)}>Save access</Button></div>
+    <div className="space-connections-actions"><Button disabled={busy} onClick={onCancel}>Cancel</Button><Button type="submit" variant="primary" disabled={!canSave}>Save access</Button></div>
   </form>;
 }

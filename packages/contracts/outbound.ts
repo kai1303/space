@@ -24,6 +24,7 @@ export interface OutboundAgent {
   id: string;
   name: string;
   workspace_name: string;
+  can_grant?: boolean;
 }
 export interface OutboundCall {
   id: string;

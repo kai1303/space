@@ -20,6 +20,7 @@ const admin = new Pool({ connectionString: process.env.TEST_DATABASE_URL }),
   pool = new Pool({ connectionString: process.env.TEST_DATABASE_URL, options: `-c search_path=${schema}` });
 let app: ReturnType<typeof createApi>, gateway: ReturnType<typeof createGateway>, address: string;
 const upstreamRequests: { method: string; authorization: string | undefined }[] = [];
+let holdToolList: ((resume: () => void) => void) | undefined;
 const tools = [
   {
     name: 'search',
@@ -49,8 +50,12 @@ const upstream = createServer(async (request, response) => {
       : message.method === 'tools/list'
         ? { tools }
         : {};
-  response.writeHead(200, { 'content-type': 'application/json' });
-  response.end(JSON.stringify({ jsonrpc: '2.0', id: message.id, result }));
+  const send = () => {
+    response.writeHead(200, { 'content-type': 'application/json' });
+    response.end(JSON.stringify({ jsonrpc: '2.0', id: message.id, result }));
+  };
+  if (message.method === 'tools/list' && holdToolList) holdToolList(send);
+  else send();
 });
 before(async () => {
   assert.ok(process.env.TEST_DATABASE_URL, 'TEST_DATABASE_URL required');
@@ -269,17 +274,23 @@ test(
   'workspace admins share connection management and discover with the workspace credential',
   { timeout: 15000 },
   async () => {
-    const a = await bootstrap(pool), b = await bootstrap(pool);
+    const a = await bootstrap(pool),
+      b = await bootstrap(pool);
     const base = `/workspaces/${a.workspace_id}`;
-    const local = await pairLocalAgent(a), foreign = await pairLocalAgent(b);
+    const local = await pairLocalAgent(a),
+      foreign = await pairLocalAgent(b);
     const secret = 'shared-account-credential';
     const input = { name: 'Shared search', url: 'https://workspace.example/mcp', auth_type: 'bearer', token: secret };
     const created = await call(a.owner_token, 'POST', `${base}/connections`, input);
     assert.equal(created.statusCode, 201, created.body);
     assert.ok(!created.body.includes(secret));
-    const id = created.json().id, path = `${base}/connections/${id}`;
+    const id = created.json().id,
+      path = `${base}/connections/${id}`;
     const before = upstreamRequests.length;
-    for (const [token, expected] of [[a.collaborator_token, 403], [b.owner_token, 404]] as const) {
+    for (const [token, expected] of [
+      [a.collaborator_token, 403],
+      [b.owner_token, 404],
+    ] as const) {
       const requests = [
         await call(token, 'GET', `${base}/connections`),
         await call(token, 'GET', `${base}/connection-agents`),
@@ -293,16 +304,39 @@ test(
     }
     assert.equal(upstreamRequests.length, before);
     assert.deepEqual((await call(a.owner_token, 'GET', '/me/connections')).json().items, []);
-    assert.equal((await call(a.owner_token, 'PATCH', `/me/connections/${id}`, { revision: 1, name: 'mine' })).statusCode, 404);
-    assert.equal((await call(b.owner_token, 'PATCH', `/workspaces/${b.workspace_id}/connections/${id}`, { revision: 1, name: 'mine' })).statusCode, 404);
-    await pool.query("UPDATE workspace_members SET role='admin' WHERE workspace_id=$1 AND user_id=$2", [a.workspace_id, a.collaborator_id]);
+    assert.equal(
+      (await call(a.owner_token, 'PATCH', `/me/connections/${id}`, { revision: 1, name: 'mine' })).statusCode,
+      404,
+    );
+    assert.equal(
+      (
+        await call(b.owner_token, 'PATCH', `/workspaces/${b.workspace_id}/connections/${id}`, {
+          revision: 1,
+          name: 'mine',
+        })
+      ).statusCode,
+      404,
+    );
+    await pool.query("UPDATE workspace_members SET role='admin' WHERE workspace_id=$1 AND user_id=$2", [
+      a.workspace_id,
+      a.collaborator_id,
+    ]);
     const agents = await call(a.collaborator_token, 'GET', `${base}/connection-agents`);
-    assert.deepEqual(agents.json().items.map((item: { id: string }) => item.id), [local.installation_id]);
-    const remaining = await call(a.collaborator_token, 'GET', `${base}/connection-agents?after=${local.installation_id}`);
+    assert.deepEqual(
+      agents.json().items.map((item: { id: string }) => item.id),
+      [local.installation_id],
+    );
+    const remaining = await call(
+      a.collaborator_token,
+      'GET',
+      `${base}/connection-agents?after=${local.installation_id}`,
+    );
     assert.deepEqual(remaining.json().items, []);
     const changed = await call(a.collaborator_token, 'PATCH', path, { revision: 1, name: 'Team search' });
     assert.equal(changed.statusCode, 200, changed.body);
-    const discovered = await call(a.collaborator_token, 'POST', `${path}/discover`, { revision: changed.json().revision });
+    const discovered = await call(a.collaborator_token, 'POST', `${path}/discover`, {
+      revision: changed.json().revision,
+    });
     assert.equal(discovered.statusCode, 200, discovered.body);
     assert.deepEqual(discovered.json().tools, tools);
     const requests = upstreamRequests.slice(before);
@@ -310,23 +344,68 @@ test(
     assert.ok(requests.every((request) => request.authorization === `Bearer ${secret}`));
     assert.ok(!discovered.body.includes(secret));
     const grant = { revision: discovered.json().revision, installation_id: local.installation_id, tools: ['search'] };
-    assert.equal((await call(a.collaborator_token, 'PUT', `${path}/grants`, { ...grant, installation_id: foreign.installation_id })).statusCode, 404);
+    assert.equal(
+      (
+        await call(a.collaborator_token, 'PUT', `${path}/grants`, {
+          ...grant,
+          installation_id: foreign.installation_id,
+        })
+      ).statusCode,
+      404,
+    );
     const granted = await call(a.collaborator_token, 'PUT', `${path}/grants`, grant);
     assert.equal(granted.statusCode, 200, granted.body);
     assert.deepEqual(granted.json().grants, [{ installation_id: local.installation_id, tools: ['search'] }]);
-    const [listed] = (await call(a.owner_token, 'GET', `${base}/connections`)).json().items;
+    const page = (await call(a.owner_token, 'GET', `${base}/connections`)).json();
+    const [listed] = page.items;
     assert.deepEqual(listed, granted.json());
+    assert.deepEqual(page.agents, agents.json());
+    const grantPage = await call(a.owner_token, 'GET', `${base}/connections?after=${local.installation_id}`);
+    assert.deepEqual(grantPage.json().items, [{ ...listed, grants: [] }]);
+    assert.deepEqual(grantPage.json().agents, remaining.json());
     const signed = new OutboundStore(pool, key).security.sign({
-      aud: 'outbound-internal', owner: a.collaborator_id, workspace: a.workspace_id,
-      installation: '', execution: '', exp: Date.now() + 35000,
+      aud: 'outbound-internal',
+      owner: a.collaborator_id,
+      workspace: a.workspace_id,
+      installation: '',
+      execution: '',
+      exp: Date.now() + 35000,
     });
-    await pool.query("UPDATE workspace_members SET role='member' WHERE workspace_id=$1 AND user_id=$2", [a.workspace_id, a.collaborator_id]);
+    const upstreamStarted = new Promise<() => void>((resolve) => {
+      holdToolList = resolve;
+    });
+    const inFlight = Promise.resolve(
+      call(a.collaborator_token, 'POST', `${path}/discover`, { revision: listed.revision }),
+    );
+    const resume = await upstreamStarted;
+    const deadline = AbortSignal.timeout(5000);
+    try {
+      await pool.query("UPDATE workspace_members SET role='member' WHERE workspace_id=$1 AND user_id=$2", [
+        a.workspace_id,
+        a.collaborator_id,
+      ]);
+      const interrupted = await Promise.race([
+        inFlight,
+        new Promise<never>((_, reject) =>
+          deadline.addEventListener('abort', () => reject(new Error('discovery still active after demotion')), {
+            once: true,
+          }),
+        ),
+      ]);
+      assert.equal(interrupted.statusCode, 403, interrupted.body);
+    } finally {
+      holdToolList = undefined;
+      resume();
+    }
+    const afterInterruption = upstreamRequests.length;
     const revoked = await gateway.inject({
-      method: 'POST', url: '/internal/discover', headers: { authorization: `Bearer ${signed}` },
+      method: 'POST',
+      url: '/internal/discover',
+      headers: { authorization: `Bearer ${signed}` },
       payload: { connection_id: id, revision: listed.revision },
     });
     assert.equal(revoked.statusCode, 403, revoked.body);
-    assert.equal(upstreamRequests.length, before + requests.length);
+    assert.equal(upstreamRequests.length, afterInterruption);
     assert.equal((await call(a.owner_token, 'DELETE', path, { revision: listed.revision })).statusCode, 200);
   },
 );

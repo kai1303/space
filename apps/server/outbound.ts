@@ -39,12 +39,12 @@ export function registerOutbound(app: FastifyInstance, tasks: PostgresStore, opt
   type ConnectionParams = ScopeParams & { id: string };
   const scope = (r: { actorId: string; params: ScopeParams }) =>
     r.params.workspaceId === undefined ? r.actorId : { actor: r.actorId, workspace: uuid(r.params.workspaceId) };
+  const after = (r: { params: ScopeParams; query: unknown }) =>
+    r.params.workspaceId === undefined ? undefined : record(r.query, ['after']).after;
 
   for (const base of ['/v1/me', '/v1/workspaces/:workspaceId']) {
-    app.get<{ Params: ScopeParams }>(`${base}/connections`, (r) => configured().list(scope(r)));
-    app.get<{ Params: ScopeParams }>(`${base}/connection-agents`, (r) =>
-      configured().agents(scope(r), record(r.query, ['after']).after),
-    );
+    app.get<{ Params: ScopeParams }>(`${base}/connections`, (r) => configured().list(scope(r), after(r)));
+    app.get<{ Params: ScopeParams }>(`${base}/connection-agents`, (r) => configured().agents(scope(r), after(r)));
     app.post<{ Params: ScopeParams }>(`${base}/connections`, async (r, reply) =>
       reply.code(201).send(await configured().create(scope(r), r.body)),
     );

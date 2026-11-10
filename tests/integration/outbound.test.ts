@@ -120,3 +120,39 @@ test('workspace ownership survives admin changes and never reuses a shared token
   assert.equal(edited.revision, 3);
   assert.equal((await store.credentials(owner, edited.id)).token, 'replacement');
 });
+
+test('workspace grant pages match the agent picker and rediscovery reconciles off-page grants', async () => {
+  const { OutboundStore } = await import('@space/postgres/outbound');
+  const seed = await bootstrap(pool);
+  const store = new OutboundStore(pool, randomBytes(32).toString('hex'));
+  const scope = { actor: seed.owner_id, workspace: seed.workspace_id };
+  await pool.query(
+    `WITH installed AS (
+       INSERT INTO agent_installations(id,workspace_id,owner_id,definition_id,connector_id)
+       SELECT gen_random_uuid(),$1,$2,$3,'codex.local' FROM generate_series(1,101) RETURNING id
+     ) INSERT INTO agent_connections(installation_id,name) SELECT id,'Paired agent' FROM installed`,
+    [seed.workspace_id, seed.collaborator_id, seed.definition_id],
+  );
+  const shared = await store.create(scope, { name: 'Team', url: 'https://example.com/mcp', auth_type: 'none' });
+  const original = [{ name: 'read', inputSchema: { type: 'object' } }, { name: 'write', inputSchema: { type: 'object' } }];
+  const ready = await store.catalog(scope, shared.id, shared.revision, original);
+  const first = await store.list(scope);
+  assert.equal(first.agents?.items.length, 100);
+  const cursor = first.agents?.next_cursor;
+  assert.ok(cursor);
+  const second = await store.list(scope, cursor);
+  assert.equal(second.agents?.items.length, 1);
+  const last = second.agents!.items[0]!.id;
+  const granted = await store.grant(scope, shared.id, { revision: ready.revision, installation_id: last, tools: ['read', 'write'] });
+  assert.deepEqual((await store.list(scope)).items[0]!.grants, []);
+  assert.deepEqual((await store.list(scope, cursor)).items[0]!.grants, [{ installation_id: last, tools: ['read', 'write'] }]);
+  const updated = await store.catalog(scope, shared.id, granted.revision, [original[0], { ...original[1], description: 'Changed' }]);
+  assert.deepEqual((await store.list(scope, cursor)).items[0]!.grants, [{ installation_id: last, tools: ['read'] }]);
+  await pool.query('UPDATE workspace_members SET active=false WHERE workspace_id=$1 AND user_id=$2', [seed.workspace_id, seed.collaborator_id]);
+  const inactive = await store.list(scope);
+  assert.deepEqual(inactive.agents?.items.map(item => [item.id, item.can_grant]), [[last, false]]);
+  await assert.rejects(store.grant(scope, shared.id, { revision: updated.revision, installation_id: last, tools: ['write'] }), /agent_not_available/);
+  await store.grant(scope, shared.id, { revision: updated.revision, installation_id: last, tools: [] });
+  await pool.query('UPDATE workspace_members SET active=true WHERE workspace_id=$1 AND user_id=$2', [seed.workspace_id, seed.collaborator_id]);
+  assert.deepEqual((await store.list(scope, cursor)).items[0]!.grants, []);
+});

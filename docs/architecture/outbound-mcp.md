@@ -2,9 +2,11 @@
 
 Users open **Connections** from their personal account menu, add an MCP endpoint, test it to discover tools, and choose tools for each of their own paired Codex, Kiro, or Claude agents. Unpaired and worker-delivered integrations are not offered in this release. Connections can share an endpoint while storing different account credentials. No tool is granted automatically.
 
-Workspace owners and admins open **Agents & tools → Apps → Add MCP server**. Enter a name, public HTTPS endpoint and optional bearer token, save, then use **Test connection** to discover tools. Under **Agent access**, select a paired workspace agent, check its tools and save. Repeat for each agent. Shared credentials belong to the workspace and survive the adding admin’s departure. Any current workspace owner or admin can edit, disable or delete the server and update grants. Changing a shared bearer endpoint requires a token for the new endpoint.
+Workspace owners and admins open **Agents & tools → Apps → Add MCP server**. Enter a name, public HTTPS endpoint and optional bearer token, save, then use **Test connection** to discover tools. Under **Agent access**, select a paired workspace agent, check its tools and save. Repeat for each agent. Shared credentials belong to the workspace and survive the adding admin’s departure. Any current workspace owner or admin can edit, disable or delete the server and update grants. Changing a shared bearer endpoint requires a token for the new endpoint. An unavailable agent with saved workspace grants stays in the picker so admins can remove those grants. Adding a tool requires an eligible paired agent.
 
 V1 supports Streamable HTTP at public HTTPS endpoints with a bearer token or no authentication. OAuth, local stdio upstreams, legacy SSE-only endpoints, inbound integrations, and provider-specific connectors are deferred. Endpoint URLs cannot contain credentials, query strings, or fragments.
+
+GitHub and Calendar are planned additions to the shared server list. The calendar provider is still open.
 
 ## Running the gateway
 

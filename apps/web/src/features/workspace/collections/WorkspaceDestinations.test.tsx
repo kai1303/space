@@ -295,12 +295,17 @@ it('updates the agent status badge from presence and keeps disabled agents disti
 
 it('manages workspace MCP servers and drops credentials when the viewer loses the admin role', async () => {
   let role = 'admin';
-  const item = { id: 'service', name: 'Team tools', url: 'https://team.example.com/mcp', auth_type: 'bearer', enabled: true, revision: 3, status: 'ready', tools: [{ name: 'lookup' }], grants: [] };
+  const item = { id: 'service', name: 'Team tools', url: 'https://team.example.com/mcp', auth_type: 'bearer', enabled: true, revision: 3, status: 'ready', tools: [{ name: 'lookup' }, { name: 'report' }], grants: [] };
   api.request.mockImplementation(async (path: string) => {
     if (path === '/workspaces/workspace/settings') return { role };
-    if (path === '/workspaces/workspace/connections') return { items: [item] };
-    if (path === '/workspaces/workspace/connection-agents') return { items: [{ id: 'first', name: 'First agent', workspace_name: 'Team' }], next_cursor: 'first' };
-    if (path === '/workspaces/workspace/connection-agents?after=first') return { items: [{ id: 'installed', name: 'Team agent', workspace_name: 'Team' }], next_cursor: null };
+    if (path === '/workspaces/workspace/connections') return {
+      items: [item],
+      agents: { items: [{ id: 'first', name: 'First agent', workspace_name: 'Team' }], next_cursor: 'first' },
+    };
+    if (path === '/workspaces/workspace/connections?after=first') return {
+      items: [{ ...item, grants: [{ installation_id: 'installed', tools: ['lookup'] }] }],
+      agents: { items: [{ id: 'installed', name: 'Team agent', workspace_name: 'Team' }], next_cursor: null },
+    };
     if (path.startsWith('/workspaces/workspace/connections/service')) return {};
     return response(path);
   });
@@ -308,13 +313,14 @@ it('manages workspace MCP servers and drops credentials when the viewer loses th
   await userEvent.click(screen.getByRole('button', { name: 'Apps' }));
   const row = within(await screen.findByRole('region', { name: 'Team tools' }));
   expect(screen.queryByRole('region', { name: 'Recent tool calls' })).toBeNull();
-  expect(api.request.mock.calls.some(([path]) => path.includes('connection-calls') || path.startsWith('/me/'))).toBe(false);
+  expect(api.request.mock.calls.some(([path]) => path.includes('connection-calls') || path.includes('connection-agents') || path.startsWith('/me/'))).toBe(false);
   await userEvent.click(row.getByRole('button', { name: 'Agent access' }));
   await userEvent.click(screen.getByRole('button', { name: 'Next agents' }));
   await screen.findByRole('button', { name: 'Previous agents' });
-  await userEvent.click(screen.getByRole('checkbox', { name: 'lookup' }));
+  expect((screen.getByRole('checkbox', { name: 'lookup' }) as HTMLInputElement).checked).toBe(true);
+  await userEvent.click(screen.getByRole('checkbox', { name: 'report' }));
   await userEvent.click(screen.getByRole('button', { name: 'Save access' }));
-  await waitFor(() => expect(api.request).toHaveBeenCalledWith('/workspaces/workspace/connections/service/grants', { revision: 3, installation_id: 'installed', tools: ['lookup'] }, undefined, 'PUT'));
+  await waitFor(() => expect(api.request).toHaveBeenCalledWith('/workspaces/workspace/connections/service/grants', { revision: 3, installation_id: 'installed', tools: ['lookup', 'report'] }, undefined, 'PUT'));
   await userEvent.click(row.getByRole('button', { name: 'Edit' }));
   const url = screen.getByLabelText('MCP endpoint');
   await userEvent.clear(url);
@@ -332,6 +338,10 @@ it('manages workspace MCP servers and drops credentials when the viewer loses th
   await screen.findByText('Team tools');
   await userEvent.click(screen.getByRole('button', { name: 'Add MCP server' }));
   await userEvent.type(screen.getByLabelText('Bearer token'), 'draft');
+  view.rerender(<WorkspaceDestinations view="agents" {...props} viewer="other-admin" />);
+  expect(screen.queryByLabelText('Bearer token')).toBeNull();
+  await userEvent.click(await screen.findByRole('button', { name: 'Add MCP server' }));
+  await userEvent.type(screen.getByLabelText('Bearer token'), 'another-draft');
   view.rerender(<WorkspaceDestinations view="agents" {...props} workspace="other" />);
   expect(screen.queryByLabelText('Bearer token')).toBeNull();
   expect(screen.queryByText('Team tools')).toBeNull();
@@ -341,10 +351,9 @@ it('clears the workspace editor when the server denies a request after the role 
   let forbidden = false;
   api.request.mockImplementation(async (path: string) => {
     if (path.endsWith('/settings')) return { role: 'owner' };
-    if (path.endsWith('/connection-agents')) return { items: [] };
     if (path.endsWith('/connections')) {
       if (forbidden) throw new Error('workspace_management_forbidden');
-      return { items: [] };
+      return { items: [], agents: { items: [] } };
     }
     return response(path);
   });
@@ -356,4 +365,38 @@ it('clears the workspace editor when the server denies a request after the role 
   await act(async () => { await updates.get('workspace')?.refresh(); });
   expect(screen.queryByLabelText('Bearer token')).toBeNull();
   expect(screen.queryByRole('button', { name: 'Add MCP server' })).toBeNull();
+});
+
+it('only removes saved grants when an agent becomes unavailable during editing', async () => {
+  let canGrant = true;
+  const item = { id: 'service', name: 'Team tools', url: 'https://team.example.com/mcp', auth_type: 'none', enabled: true, revision: 4, status: 'ready', tools: [{ name: 'read' }, { name: 'write' }], grants: [{ installation_id: 'paired', tools: ['read'] }] };
+  api.request.mockImplementation(async (path: string) => {
+    if (path.endsWith('/settings')) return { role: 'admin' };
+    if (path.endsWith('/connections')) return { items: [item], agents: { items: [{ id: 'paired', name: 'Team agent', workspace_name: 'Team', can_grant: canGrant }] } };
+    if (path.endsWith('/grants')) return {};
+    return response(path);
+  });
+  render(<WorkspaceDestinations view="agents" {...props} />);
+  await userEvent.click(screen.getByRole('button', { name: 'Apps' }));
+  await userEvent.click(await screen.findByRole('button', { name: 'Agent access' }));
+  const read = screen.getByRole('checkbox', { name: 'read' }) as HTMLInputElement;
+  const write = screen.getByRole('checkbox', { name: 'write' }) as HTMLInputElement;
+  await userEvent.click(write);
+  expect(write.checked).toBe(true);
+  canGrant = false;
+  await act(async () => { await updates.get('workspace')?.refresh(); });
+  expect(screen.getByRole('combobox', { name: 'Agent' }).textContent).toContain('Unavailable');
+  expect(write.checked).toBe(false);
+  expect(write.disabled).toBe(true);
+  expect(read.checked).toBe(true);
+  const save = screen.getByRole('button', { name: 'Save access' }) as HTMLButtonElement;
+  expect(save.disabled).toBe(true);
+  await userEvent.click(read);
+  expect(save.disabled).toBe(false);
+  await userEvent.click(read);
+  expect(read.checked).toBe(true);
+  expect(save.disabled).toBe(true);
+  await userEvent.click(read);
+  await userEvent.click(save);
+  await waitFor(() => expect(api.request).toHaveBeenCalledWith('/workspaces/workspace/connections/service/grants', { revision: 4, installation_id: 'paired', tools: [] }, undefined, 'PUT'));
 });
