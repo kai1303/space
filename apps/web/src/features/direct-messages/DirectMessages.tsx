@@ -1,3 +1,5 @@
+import { DirectTypingIcon } from '@space/ui/navigation';
+import { useDirectTyping } from '../chat/typing.js';
 import { useConversationLocation } from '../../shared/ui/conversation-location.js';
 import {useDestinationPresence} from '../../shared/ui/useDestinationPresence.js';
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode, type CSSProperties } from 'react';
@@ -154,6 +156,7 @@ export function DirectMessages({ workspace, viewer, requestedId, compose = 0, wi
       await list.refresh();
     } catch (reason) { if (active.current) setError(errorText(reason)); }
   }
+  const typing = useDirectTyping(workspace, viewer);
   const items = list.items.filter(dm => !unreads || (unread.channels.find(item => item.channel_id === dm.id)?.unread_count ?? 0) > 0);
   return <div className={`chat-layout dm-layout${newOpen || openingConversation || (mobileConversation && selected) ? ' dm-layout--conversation' : ''}`} style={{ '--chat-sidebar-width': `${width}px` } as CSSProperties}>
     <aside ref={sidebar} onScroll={event=>{view.current.scroll=event.currentTarget.scrollTop;}} id="chat-conversations" className="chat-sidebar dm-inbox" aria-label="Direct messages">
@@ -162,8 +165,9 @@ export function DirectMessages({ workspace, viewer, requestedId, compose = 0, wi
       {list.error && <div role="alert" className="dm-error">{list.error}<Button size="sm" onClick={() => void list.refresh()}>Retry</Button></div>}
       {!list.loaded || search !== query ? <p role="status">Loading direct messages…</p> : <ul className="dm-list">{items.map(dm => {
         const count = unread.channels.find(item => item.channel_id === dm.id)?.unread_count ?? 0;
-        return <li key={dm.id}><button className={`dm-row${!newOpen && dm.id === selected?.id ? ' is-selected' : ''}${count ? ' is-unread' : ''}`} aria-label={`Open DM with ${dm.name}${count ? `, ${count} unread` : ''}`} aria-current={!newOpen && dm.id === selected?.id ? 'true' : undefined} onClick={() => choose(dm)}>
-          <Avatar name={dm.name} initials={dm.name.slice(0, 2).toUpperCase()} image={(dm.participants.find(person => person.id !== viewer) ?? dm.participants[0])?.image} presence={(dm.participants.find(person => person.id !== viewer) ?? dm.participants[0])?.presence === 'active' ? 'online' : 'away'} /><span className="dm-row-body"><strong>{dm.name}</strong><span>{dm.last_message?.text || (dm.last_message ? 'Shared a file' : dm.participants.length === 1 ? 'Notes, links, and files just for you' : 'Start a conversation')}</span></span>{count > 0 && <span className="dm-count">{count > 99 ? '99+' : count}</span>}
+        const showTyping = typing.has(dm.id) && (newOpen || dm.id !== selected?.id);
+        return <li key={dm.id}><button className={`dm-row${!newOpen && dm.id === selected?.id ? ' is-selected' : ''}${count ? ' is-unread' : ''}`} aria-label={`Open DM with ${dm.name}${showTyping ? ', typing' : ''}${count ? `, ${count} unread` : ''}`} aria-current={!newOpen && dm.id === selected?.id ? 'true' : undefined} onClick={() => choose(dm)}>
+          {showTyping ? <DirectTypingIcon name={dm.name} size={36}/> : <Avatar name={dm.name} initials={dm.name.slice(0, 2).toUpperCase()} image={(dm.participants.find(person => person.id !== viewer) ?? dm.participants[0])?.image} presence={(dm.participants.find(person => person.id !== viewer) ?? dm.participants[0])?.presence === 'active' ? 'online' : 'away'} />}<span className="dm-row-body"><strong>{dm.name}</strong><span>{dm.last_message?.text || (dm.last_message ? 'Shared a file' : dm.participants.length === 1 ? 'Notes, links, and files just for you' : 'Start a conversation')}</span></span>{count > 0 && <span className="dm-count">{count > 99 ? '99+' : count}</span>}
         </button></li>;
       })}</ul>}
       {list.loaded && !items.length && !list.error && <p className="dm-hint">{unreads ? 'No unread conversations.' : query ? 'No matching conversations.' : 'Your direct messages will appear here.'}</p>}

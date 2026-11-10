@@ -15,12 +15,22 @@ it('renders live structured agent responses and replaces activity with one saved
   const response = { messages: [{ id: 'm', text: '**Streaming result**', status: 'streaming' }], tools: [], components: [{ id: 'c', type: 'card', title: 'Churn analysis', body: 'Down 2%' }] };
   const activity = { channel_id: 'first', thread_id: 'thread', sequence: '2', occurred_at: root.created_at, type: 'task.event', payload: { task_id: 'task', type: 'execution.progress', actor_id: 'agent', installation_id: 'agent', owner_id: 'user', data: { text: 'Working', response } } };
   await act(async () => { socket.receive('chat.events', { channel_id: 'first', cursor: '2', events: [activity] }, vi.fn()); });
-  expect((await screen.findByText('Streaming result')).tagName).toBe('STRONG');
+  const thread = screen.getByRole('region', { name: 'Thread', exact: true });
+  const body = thread.querySelector('.sp-agent-markdown')!;
+  await waitFor(() => expect(body.querySelector('strong')?.textContent).toBe('Streaming result'));
+  const word = body.querySelector('.sp-agent-word');
+  expect(word).toBeTruthy();
+  const extended = { ...response, messages: [{ ...response.messages[0]!, text: '**Streaming result** is ready.' }] };
+  await act(async () => { socket.receive('chat.events', { channel_id: 'first', cursor: '3', events: [
+    { ...activity, sequence: '3', payload: { ...activity.payload, data: { text: 'Working', response: extended } } },
+  ] }, vi.fn()); });
+  await waitFor(() => expect(body.textContent).toBe('Streaming result is ready.'));
+  expect(thread.querySelector('.sp-agent-word')).toBe(word);
   expect(screen.getByText('Down 2%')).toBeTruthy();
-  const saved = { ...paginatedMessage('Final result', '3'), thread_root_id: root.id, reply_count: 1, task_id: 'task', text: '**Streaming result**', agent_response: { ...response, messages: [{ id: 'm', text: '**Streaming result**', status: 'complete' }] }, author: { kind: 'agent', id: 'agent', name: 'Research agent' } };
-  await act(async () => { socket.receive('chat.events', { channel_id: 'first', cursor: '4', events: [
-    { type: 'message.created', channel_id: 'first', thread_id: 'thread', sequence: '3', occurred_at: root.created_at, payload: saved },
-    { ...activity, sequence: '4', payload: { ...activity.payload, type: 'task.completed', data: { result: saved.text, response: saved.agent_response } } },
+  const saved = { ...paginatedMessage('Final result', '4'), thread_root_id: root.id, reply_count: 1, task_id: 'task', text: extended.messages[0]!.text, agent_response: { ...extended, messages: [{ ...extended.messages[0]!, status: 'complete' }] }, author: { kind: 'agent', id: 'agent', name: 'Research agent' } };
+  await act(async () => { socket.receive('chat.events', { channel_id: 'first', cursor: '5', events: [
+    { type: 'message.created', channel_id: 'first', thread_id: 'thread', sequence: '4', occurred_at: root.created_at, payload: saved },
+    { ...activity, sequence: '5', payload: { ...activity.payload, type: 'task.completed', data: { result: saved.text, response: saved.agent_response } } },
   ] }, vi.fn()); });
   expect(screen.getAllByText('Streaming result')).toHaveLength(1);
   expect(screen.getAllByText('Down 2%')).toHaveLength(1);
@@ -1491,6 +1501,36 @@ it('publishes local typing and displays other people separately in the channel a
  expect(screen.getByText('Ari').closest('main')?.classList.contains('chat-channel')).toBe(true);
  act(()=>socket.receive('disconnect','transport close'));
  expect(screen.queryByText('Ari')).toBeNull();expect(screen.queryByText('Sam')).toBeNull();
+});
+
+it('shows typing dots for a background DM, restores its avatar when opened, and clears on stop', async () => {
+ const peer = {id:'maya', name:'Maya', image:'/maya.png', presence:'active'};
+ const dm = {id:'maya-dm', workspace_id:'workspace', kind:'direct', name:peer.name, private:true, joined:true, participants:[peer]};
+ vi.stubGlobal('fetch', vi.fn(async(path:string) => ({ok:true, status:200, json:async() => {
+  if (path.startsWith('/v1/workspaces?')) return {items:[{id:'workspace',name:'Team'}],next_cursor:null};
+  if (path.includes('/direct-messages?')) return {items:[dm],next_cursor:null};
+  if (path === '/v1/channels/maya-dm') return dm;
+  if (path.includes('/channels?')) return {items:[{id:'first',name:'general',joined:true,workspace_id:'workspace'}],next_cursor:null};
+  if (isMessageHistory(path)) return messagePage();
+  if (path.includes('/history')) return {events:[],cursor:'0',has_more:false};
+  return [];
+ }})));
+ render(<Chat/>);
+ const row = await screen.findByRole('button',{name:'Maya',exact:true});
+ const socket = latestChatSocket();
+ const event = {workspace_id:'workspace',channel_id:dm.id,thread_id:null,source_id:'tab',user:peer,active:true,expires_at:Date.now()+6000};
+ const dots = () => within(row).queryByRole('img',{name:'Maya is typing'});
+ act(() => socket.receive('workspace.dm-typing',{...event,thread_id:'thread'}));
+ expect(dots()).toBeNull();
+ act(() => socket.receive('workspace.dm-typing',event));
+ expect(dots()?.querySelectorAll('circle')).toHaveLength(3);
+ act(() => socket.receive('workspace.dm-typing',{...event,active:false}));
+ expect(dots()).toBeNull();
+ act(() => socket.receive('workspace.dm-typing',event));
+ await userEvent.click(row);
+ await screen.findByRole('textbox',{name:'Message Maya'});
+ expect(dots()).toBeNull();
+ expect(row.querySelector('img')?.getAttribute('src')).toBe('/maya.png');
 });
 
 it.each([false,true])('keeps the DM introduction before populated history only at its beginning: older=%s', async hasOlder => {

@@ -4,11 +4,11 @@ type Listener = (event: TypingEvent) => void;
 type Pump = (active: () => boolean, read: () => Promise<void>, revoke: (error: unknown) => void) => () => void;
 
 interface TypingSubscription {
-  channel: string;
+  key: string;
   socketId: string;
   pump: Pump;
   active: () => boolean;
-  readAccess: () => Promise<{ archived: boolean }>;
+  authorizeEvents: (events: TypingEvent[]) => Promise<TypingEvent[]>;
   emit: Listener;
   revoke: (error: unknown) => void;
 }
@@ -16,35 +16,35 @@ interface TypingSubscription {
 export class TypingListeners {
   private readonly channels = new Map<string, Set<Listener>>();
 
-  publish(event: TypingEvent) {
-    for (const listener of this.channels.get(event.channel_id) ?? []) listener(event);
+  publish(event: TypingEvent, key = event.channel_id) {
+    for (const listener of this.channels.get(key) ?? []) listener(event);
   }
 
-  subscribe({ channel, socketId, pump, active, readAccess, emit, revoke }: TypingSubscription) {
+  subscribe({ key, socketId, pump, active, authorizeEvents, emit, revoke }: TypingSubscription) {
     const pending = new Map<string, TypingEvent>();
     const wake = pump(active, async () => {
       const events = [...pending.values()];
       pending.clear();
-      const access = await readAccess();
+      const allowed = await authorizeEvents(events);
       if (!active()) return;
-      for (const event of events) {
-        if (!event.active || event.expires_at > Date.now()) emit(access.archived ? { ...event, active: false } : event);
+      for (const event of allowed) {
+        if (!event.active || event.expires_at > Date.now()) emit(event);
       }
     }, revoke);
     const listener: Listener = event => {
       if (event.source_id === socketId) return;
-      const key = event.source_id + ':' + (event.thread_id ?? '');
+      const key = event.channel_id + ':' + event.source_id + ':' + (event.thread_id ?? '');
       if (!pending.has(key) && pending.size >= 64) pending.delete(pending.keys().next().value!);
       pending.set(key, event);
       wake();
     };
-    const listeners = this.channels.get(channel) ?? new Set<Listener>();
+    const listeners = this.channels.get(key) ?? new Set<Listener>();
     listeners.add(listener);
-    this.channels.set(channel, listeners);
+    this.channels.set(key, listeners);
     return () => {
       pending.clear();
       listeners.delete(listener);
-      if (!listeners.size) this.channels.delete(channel);
+      if (!listeners.size) this.channels.delete(key);
     };
   }
 }

@@ -1,4 +1,6 @@
-import { isValidElement, type ReactNode } from 'react';
+import { isValidElement, memo, useState, type ReactNode } from 'react';
+import { motion } from 'motion/react';
+import { fadeStreamedWords, useStreamingText, wordFadeMs, words } from './streaming-text.js';
 import Markdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { AgentResponse as Response, AgentText, AgentTool } from '@space/contracts';
@@ -7,7 +9,25 @@ import { FileToolDetails } from './FileToolDetails.js';
 import { ToolExecution } from './work-items.js';
 import { safeLink } from '../rich-text/rich-text.js';
 
+// Keep the settled prefix in one text node and only mount Motion spans near the leading edge.
+const StreamedWords = memo(function StreamedWords({ text, from }: { text: string; from: number }) {
+  if (!words || from >= text.length) return text;
+  const boundary = words.segment(text).containing(from);
+  const start = boundary && boundary.index < from ? boundary.index + boundary.segment.length : from;
+  const parts: ReactNode[] = [text.slice(0, start)];
+  for (const { segment, index } of words.segment(text.slice(start))) {
+    parts.push(segment.trim() ? (
+      <motion.span key={start + index} className="sp-agent-word" initial={{ opacity: 0 }} animate={{ opacity: 1 }}
+        transition={{ duration: wordFadeMs / 1000, ease: [0.37, 0.55, 0.86, 0.88] }}>{segment}</motion.span>
+    ) : segment);
+  }
+  return <>{parts}</>;
+});
+
 const markdownComponents: Components = {
+  span: ({ children, node }) => typeof node?.properties.dataFadeFrom === 'number' && typeof children === 'string'
+    ? <StreamedWords text={children} from={node.properties.dataFadeFrom} />
+    : <span>{children}</span>,
   a: ({ href, children }) => href ? <a href={href} target="_blank" rel="noopener noreferrer">{children}</a> : <span>{children}</span>,
   img: ({ alt }) => <span>{alt}</span>,
   pre: ({ children }) => {
@@ -18,11 +38,19 @@ const markdownComponents: Components = {
   table: ({ children }) => <div className="sp-agent-table-scroll" tabIndex={0} role="region" aria-label="Response table"><table>{children}</table></div>,
 };
 
-export function AgentMarkdown({ text }: { text: string }) {
-  return <div className="sp-agent-markdown"><Markdown remarkPlugins={[remarkGfm]} skipHtml urlTransform={url => safeLink(url) ?? ''} components={markdownComponents}>{text}</Markdown></div>;
+export function AgentMarkdown({ text, streaming = false, newArrival = false }: { text: string; streaming?: boolean; newArrival?: boolean }) {
+  const visible = useStreamingText(text, streaming, newArrival);
+  const from = visible.fadeFrom;
+  // Bound concurrent word animations even when a provider sends a whole page in one snapshot.
+  const tailFrom = Math.max(from ?? 0, visible.text.length - 512);
+  return <div className="sp-agent-markdown">
+    <Markdown remarkPlugins={[remarkGfm]} rehypePlugins={from === undefined ? [] : [[fadeStreamedWords, from, tailFrom]]}
+      skipHtml urlTransform={url => safeLink(url) ?? ''} components={markdownComponents}>{visible.text}</Markdown>
+  </div>;
 }
 
-export function AgentResponse({ response, streaming = false, showActivity = true, fallback }: { response: Response; streaming?: boolean; showActivity?: boolean; fallback?: string }) {
+export function AgentResponse({ response, streaming = false, showActivity = true, newArrival = false, fallback }: { response: Response; streaming?: boolean; showActivity?: boolean; newArrival?: boolean; fallback?: string }) {
+  const [initialMessages] = useState(() => new Set(response.messages.map(message => message.id)));
   const messages = new Map(response.messages.map(message => [message.id, message]));
   const tools = new Map(response.tools.map(tool => [tool.id, tool]));
   const items = response.items ?? [...response.tools.map(tool => ({ type: 'tool' as const, id: tool.id })), ...response.messages.map(message => ({ type: 'message' as const, id: message.id }))];
@@ -41,7 +69,7 @@ export function AgentResponse({ response, streaming = false, showActivity = true
   }
   return <div className="sp-agent-response" aria-busy={streaming}>
     {blocks.map(block => block.type === 'message'
-      ? <AgentMarkdown key={`message:${block.id}`} text={block.message.text} />
+      ? <AgentMarkdown key={`message:${block.id}`} text={block.message.text} streaming={streaming && block.message.status === 'streaming'} newArrival={newArrival || !initialMessages.has(block.id)} />
       : <ToolExecution key={`tool:${block.id}`} completed={!streaming} points={block.tools.map(tool => ({
       id: tool.id, icon: 'code',
       text: `${tool.name}${tool.status === 'interrupted' ? ' · Interrupted' : tool.status === 'running' ? ' · Running' : tool.status === 'calling' ? ' · Preparing' : ' · Completed'}`,
@@ -51,7 +79,7 @@ export function AgentResponse({ response, streaming = false, showActivity = true
         ...(tool.result ? [{ id: 'result', text: <><strong>Result</strong><div className="sp-agent-tool-result"><CodeBlock code={tool.result} /></div></> }] : []),
       ],
     }))} />)}
-    {!streaming && fallback && !response.messages.some(message => message.text.trim()) && !response.tools.length && !response.components.length && <AgentMarkdown text={fallback} />}
+    {!streaming && fallback && !response.messages.some(message => message.text.trim()) && !response.tools.length && !response.components.length && <AgentMarkdown text={fallback} newArrival={newArrival} />}
     {response.components.map(component => component.type === 'card'
       ? <article key={component.id} className="sp-work-card sp-agent-result"><h4>{component.title}</h4><p>{component.body}</p></article>
       : <div key={component.id} className="sp-agent-table-scroll" role="region" aria-label={component.title} tabIndex={0}><table>

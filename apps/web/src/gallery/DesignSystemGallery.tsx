@@ -72,6 +72,7 @@ const groups: {
       { id: "agent-approval", label: "Agent approval" },
       { id: "agent-workspace", label: "Agent workspace" },
       { id: "agent-response", label: "Rich agent response" },
+      { id: "agent-response-streaming", label: "Streaming agent text" },
     ],
   },
   {

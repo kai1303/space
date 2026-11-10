@@ -1,4 +1,4 @@
-export { WorkspaceSidebar } from "./sidebar.js";
+export { WorkspaceSidebar, DirectTypingIcon } from "./sidebar.js";
 export type { SidebarChannel } from "./sidebar.js";
 export { WorkspaceSearch } from "./search-dialog.js";
 export { parseSearch, searchMessages, toggleSearchFilter } from "./search.js";

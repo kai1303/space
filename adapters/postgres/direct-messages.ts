@@ -76,6 +76,14 @@ export class DirectMessageStore {
       return { ...result, items: result.items.map(({ activity_at, ...summary }) => summary) };
     });
   }
+  async visibleTypingChannels(actor: string, workspace: string, channels: string[]) {
+    const rows = await this.db.execute<{id: string}>(sql`SELECT v.channel_id AS id FROM direct_message_views v
+      JOIN workspace_members w ON w.workspace_id=v.workspace_id AND w.user_id=v.user_id AND w.active
+      JOIN channel_members m ON m.channel_id=v.channel_id AND m.user_id=v.user_id AND m.workspace_id=v.workspace_id
+      WHERE v.workspace_id=${workspace} AND v.user_id=${actor} AND NOT v.hidden
+        AND v.channel_id IN (${sql.join(channels.map(id => sql`${id}::uuid`), sql`,`)})`);
+    return new Set(rows.rows.map(row => row.id));
+  }
   async open(actor: string, workspace: string, input: unknown) {
     const user = uuid(record(input, ['user_id']).user_id);
     const [low, high] = [actor, user].sort() as [string, string];

@@ -1,6 +1,6 @@
 import { NavigationIcon } from "./navigation-icons.js";
-import { useId, useState, type ReactNode } from "react";
-import { LayoutGroup, motion, useReducedMotion } from "motion/react";
+import { useEffect, useId, useState, type ReactNode } from "react";
+import { LayoutGroup, motion, stagger, useAnimate, useReducedMotion } from "motion/react";
 import { motionTransition } from "../motion/motion.js";
 import { Reveal } from "../motion/reveal.js";
 import {
@@ -30,7 +30,22 @@ export type SidebarChannel = {
   agentName?: string;
   onRename?: () => void;
   online?: boolean;
+  typing?: boolean;
 };
+export function DirectTypingIcon({ name, size = 20 }: { name: string; size?: number }) {
+  const reduced = useReducedMotion();
+  const [scope, animate] = useAnimate<SVGSVGElement>();
+  useEffect(() => {
+    if (reduced) return;
+    const pulse = animate("circle", { opacity: [1, 0.2] }, {
+      duration: 0.75, delay: stagger(0.15), repeat: Infinity, repeatDelay: 0.05, ease: "linear",
+    });
+    return () => pulse.cancel();
+  }, [animate, reduced]);
+  return <svg ref={scope} role="img" aria-label={`${name} is typing`} viewBox="0 0 24 24" style={{width: size, height: size, flexShrink: 0}}>
+    {[4, 12, 20].map(x => <circle key={x} cx={x} cy={12} r={3} fill="currentColor" opacity={0.8}/> )}
+  </svg>;
+}
 type SidebarState = { query: string; expanded: Record<string, boolean> };
 const initialSidebarState: SidebarState = { query: "", expanded: { starred: true, channels: true, direct: true, sessions: true, apps: true } };
 export function WorkspaceSidebar({
@@ -221,7 +236,9 @@ export function WorkspaceSidebar({
                     unread={c.unread}
                     onClick={() => onSelect(c.id)}
                     icon={
-                      c.agentName ? (
+                      c.typing && c.id !== selectedId ? (
+                        <DirectTypingIcon name={c.name} size={c.section === "starred" ? 16 : 20}/>
+                      ) : c.agentName ? (
                         <span className="sp-sidebar-avatar" aria-hidden="true"><Avatar name={c.agentName} initials={c.agentName.slice(0,2).toUpperCase()} image={c.image} size="sm" tone="green"/></span>
                       ) : c.section === "direct" ? (
                         <span className="sp-sidebar-avatar" aria-hidden="true"><Avatar name={c.name} initials={c.initials ?? c.name.slice(0, 2).toUpperCase()} image={c.image} size="sm" presence={c.online ? 'online' : 'offline'}/></span>

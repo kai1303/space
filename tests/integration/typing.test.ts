@@ -4,7 +4,7 @@ import {randomBytes} from 'node:crypto';
 import {setTimeout as delay} from 'node:timers/promises';
 import {Pool} from 'pg';
 import {io,type Socket} from 'socket.io-client';
-import {AppError} from '@space/contracts';
+import {AppError,type TypingEvent} from '@space/contracts';
 import {ChatStore} from '@space/postgres/chat';
 import {RedisSocketAdapter} from '@space/redis';
 import {bootstrap} from '@space/postgres/bootstrap';
@@ -28,10 +28,10 @@ async function connect(token:string,channel:string,instance=0){
  return socket;
 }
 const command=(socket:Socket,body:object)=>socket.timeout(2000).emitWithAck('typing.change',body);
-function next(socket:Socket,predicate:(value:any)=>boolean){return new Promise<any>((resolve,reject)=>{
- const timer=setTimeout(()=>{socket.off('chat.typing',receive);reject(new Error('Typing event not received'));},2500);
- const receive=(value:any)=>{if(predicate(value)){clearTimeout(timer);socket.off('chat.typing',receive);resolve(value);}};
- socket.on('chat.typing',receive);
+function next(socket:Socket,predicate:(value:any)=>boolean, name='chat.typing'){return new Promise<any>((resolve,reject)=>{
+ const timer=setTimeout(()=>{socket.off(name,receive);reject(new Error('Typing event not received'));},2500);
+ const receive=(value:any)=>{if(predicate(value)){clearTimeout(timer);socket.off(name,receive);resolve(value);}};
+ socket.on(name,receive);
 });}
 test('typing reaches other API instances with server identity, separate thread scope, and no persisted events',async()=>{
  const a=await bootstrap(pool),other=await bootstrap(pool);
@@ -119,4 +119,42 @@ test('a replacement channel subscription survives an old typing check', {timeout
    release();
    await delivered;
  } finally { release(); viewer.disconnect(); sender.disconnect(); }
+});
+
+test('background DM typing reaches only the visible DM peer across servers and stops on disconnect', async () => {
+ const a = await bootstrap(pool);
+ const chat = new ChatStore(pool);
+ const dm = await chat.directMessages.open(a.owner_id, a.workspace_id, {user_id:a.collaborator_id});
+ const sender = await connect(a.owner_token, dm.id);
+ const peer = await connect(a.collaborator_token, a.channel_id, 1);
+ const eventName = 'workspace.dm-typing';
+ const received: TypingEvent[] = [], own: TypingEvent[] = [];
+ for (const socket of [sender, peer]) socket.on('workspace.unread', (_value, ack) => ack());
+ peer.on(eventName, e => received.push(e));
+ sender.on(eventName, e => own.push(e));
+ try {
+  for (const socket of [sender, peer]) assert.ok((await socket.timeout(2000).emitWithAck('workspace.subscribe',{workspace_id:a.workspace_id})).data);
+  const start = () => command(sender, {channel_id:dm.id, active:true});
+  await start();
+  await delay(100);
+  assert.equal(received.length, 0, 'a hidden DM stays private to the sidebar');
+  await chat.directMessages.open(a.collaborator_id, a.workspace_id, {user_id:a.owner_id});
+  const active = next(peer, e => e.active, eventName);
+  await start();
+  const started = await active;
+  assert.equal(started.workspace_id, a.workspace_id);
+  assert.equal(started.channel_id, dm.id);
+  assert.equal(started.user.id, a.owner_id);
+  const stop = next(peer, e => !e.active, eventName);
+  await command(sender, {channel_id:dm.id, active:false});
+  await stop;
+  await delay(1050);
+  const again = next(peer, e => e.active, eventName);
+  await start(); await again;
+  const left = next(peer, e => !e.active, eventName);
+  sender.disconnect(); await left;
+  assert.equal(own.length, 0);
+  await pool.query('UPDATE workspace_members SET active=false WHERE workspace_id=$1 AND user_id=$2', [a.workspace_id, a.collaborator_id]);
+  assert.equal((await chat.directMessages.visibleTypingChannels(a.collaborator_id, a.workspace_id, [dm.id])).size, 0);
+ } finally { sender.disconnect(); peer.disconnect(); }
 });

@@ -12,5 +12,5 @@ test('session outputs reject unsafe preview URLs, excessive files and unexpected
 
 test('saved turn-presentation snapshots remain readable in the original response format',()=>{
  const saved={...response,metadata:{model:'saved-model'},messages:[{id:'m',text:'Saved answer',status:'complete',phase:'final_answer'}],tools:[{id:'t',name:'Read',arguments:'{}',result:'Missing file',status:'failed',duration_ms:25,result_characters:12,arguments_characters:2}]};
- assert.deepEqual(parseAgentResponse(saved),{...response,messages:[{id:'m',text:'Saved answer',status:'complete'}],tools:[{id:'t',name:'Read',arguments:'{}',result:'Missing file',status:'interrupted'}]});
+ assert.deepEqual(parseAgentResponse(saved),{...response,messages:[{id:'m',text:'Saved answer',status:'complete',phase:'final_answer'}],tools:[{id:'t',name:'Read',arguments:'{}',result:'Missing file',status:'interrupted'}]});
 });

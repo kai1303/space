@@ -131,6 +131,8 @@ Reduced motion sets these durations to zero, removes entrance displacement, and 
 
 `Message` accepts `arrival` to animate its first appearance. `useMessageArrivals(messages, context)` identifies newly added message IDs regardless of author, including multiple arrivals in one update. Use the active conversation ID as context, or null while its feed is hidden. Initial history, channel switches and revisiting a hidden feed stay still. The workspace uses this shared path for both sent and received entries; a real incoming transport is not connected yet. Replay the visual effect in the gallery at `/#message-motion` with **Receive a message**.
 
+Agent replies use the same adaptive pacing and 700 ms word fade for commentary and final answers. With reduced motion, each incoming chunk appears immediately. Completion reveals any buffered text. A new reply delivered in a single completed update plays the reveal once. Opening saved history shows the full text immediately. Select **Replay response** in the [streaming agent text example](http://127.0.0.1:5173/design-system#agent-response-streaming).
+
 ## Work and agent components
 
 The gallery's Work & Agents section demonstrates `TicketCard`, `Alert`, `CodeBlock`, `ToolExecution`, and `AgentApproval`. Their public exports come from `@space/ui`. See [the source evidence and layout research](research/slack-action-components.md) before extending Slack-specific behavior.

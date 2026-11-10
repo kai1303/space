@@ -200,7 +200,10 @@ it('shows one waiting indicator for Kiro and adds the reply when it arrives',asy
  await screen.findByText('is thinking…');
  expect(within(log).getAllByRole('article')).toHaveLength(1);
  current=answered;await act(async()=>{await mocks.refresh?.();});
- await within(log).findByText('Result: Check my session');
+ const reply = log.querySelector('.sp-agent-markdown')!;
+ expect(reply.textContent).not.toBe(answered.task.result);
+ await waitFor(()=>expect(reply.querySelector('.sp-agent-word')).toBeTruthy());
+ await waitFor(()=>expect(reply.textContent).toBe(answered.task.result));
  expect(within(log).getAllByRole('article')).toHaveLength(2);
  expect(screen.queryByText(/Waiting for Local Kiro/)).toBeNull();
 });

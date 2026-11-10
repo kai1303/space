@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
 import { localSessionStore, type LocalSessionStorage } from './session-storage.js';
-import { CODING_TURN_TIMEOUT_MS, parseInvocation, parseAgentEvent, parseAgentResponse, type AgentEvent, type OutboundAccess } from '@space/contracts';
+import { CODING_TURN_TIMEOUT_MS, parseInvocation, parseAgentEvent, parseAgentResponse, type AgentEvent, type AgentText, type OutboundAccess } from '@space/contracts';
 
 import {sessionRuntime} from './session-runtime.js';
 import { outboundServer, outboundTokenEnv, turnScopedRuntime } from './outbound-tools.js';
@@ -116,7 +116,7 @@ async function startSingleCodex(accessToken: string, onExit: () => void, launch:
     const turnFinished = new Promise<void>(resolve => { finishTurn = resolve; });
     let progress: NodeJS.Timeout | undefined, dirty = false, progressPending = false, settled = false;
     const output = new AgentProgress(coding);
-    const messages = new Map<string, { id: string; text: string; status: 'streaming' | 'complete' }>();
+    const messages = new Map<string, AgentText>();
     let queue = Promise.resolve();
     const approvalLifetime = new AbortController();
     let finish!: () => void, reject!: (error: Error) => void;
@@ -208,7 +208,9 @@ async function startSingleCodex(accessToken: string, onExit: () => void, launch:
         } else if (message.method === 'item/started' && p.item?.type === 'agentMessage') {
           if (typeof p.item.id !== 'string') throw new Error();
           output.message(p.item.id);
-          if (!messages.has(p.item.id)) messages.set(p.item.id, { id: p.item.id, text: '', status: 'streaming' });
+          const current: AgentText = messages.get(p.item.id) ?? { id: p.item.id, text: '', status: 'streaming' };
+          if (p.item.phase === 'commentary' || p.item.phase === 'final_answer') current.phase = p.item.phase;
+          messages.set(p.item.id, current);
           if (coding) boundCodingMessages(messages);
           output.setActivity('responding'); dirty = true; if (!progress) progress = setTimeout(flush, 100);
         } else if (message.method === 'item/started' && !['userMessage', 'agentMessage', 'reasoning', 'plan', ...(coding ? ['contextCompaction'] : [])].includes(p.item?.type)) {
@@ -228,7 +230,7 @@ async function startSingleCodex(accessToken: string, onExit: () => void, launch:
           if (typeof p.item.id !== 'string' || typeof p.item.text !== 'string') throw new Error();
           output.setActivity('responding');
           output.message(p.item.id);
-          messages.set(p.item.id, { id: p.item.id, text: p.item.text, status: 'complete' });
+          messages.set(p.item.id, { id: p.item.id, text: p.item.text, status: 'complete', phase: p.item.phase ?? messages.get(p.item.id)?.phase });
           if (coding) boundCodingMessages(messages);
           parseAgentResponse({ messages: [...messages.values()], tools: [], components: [] });
           dirty = true;

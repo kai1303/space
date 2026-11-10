@@ -62,9 +62,16 @@ export function registerRealtime(app: FastifyInstance, authenticate: (headers: I
   });
   // Transient fanout uses the existing Redis adapter; no message history or replay.
   const typingListeners = new TypingListeners();
-  const receiveTyping = (event: TypingEvent) => typingListeners.publish(event);
+  const sidebarTyping = new TypingListeners();
+  const receiveTyping = (event: TypingEvent, peerKey?: string) => {
+    typingListeners.publish(event);
+    if (peerKey && !event.thread_id) sidebarTyping.publish(event, peerKey);
+  };
   io.on('space.typing',receiveTyping);
-  const publishTyping=(event:TypingEvent)=>{receiveTyping(event);if(options.adapter?.isReady)io.serverSideEmit('space.typing',event);};
+  const publishTyping = (event: TypingEvent, peerKey?: string) => {
+    receiveTyping(event, peerKey);
+    if (options.adapter?.isReady) io.serverSideEmit('space.typing', event, peerKey);
+  };
   const receipts = options.receiptMetrics && liveReceipts(io, options.receiptMetrics, () => !!options.adapter?.isReady);
   io.on('connection', socket => {
     const receiptSender = socket.handshake.auth.live_receipts === 1 ? receipts?.sender(socket) : undefined;
@@ -87,12 +94,12 @@ export function registerRealtime(app: FastifyInstance, authenticate: (headers: I
       socket.emit('chat.error', failure(error));
       socket.disconnect(true);
     };
-    const typing=new Map<string,{event:TypingEvent;timer:NodeJS.Timeout}>();
+    const typing=new Map<string,{event:TypingEvent;peerKey?:string;timer:NodeJS.Timeout}>();
     let stopTypingListener:(()=>void)|undefined;
     const stopTyping=(thread?:string|null)=>{
       for(const [key,entry] of typing){
         if(thread!==undefined&&entry.event.thread_id!==thread)continue;
-        clearTimeout(entry.timer);typing.delete(key);publishTyping({...entry.event,active:false,expires_at:Date.now()});
+        clearTimeout(entry.timer);typing.delete(key);publishTyping({...entry.event,active:false,expires_at:Date.now()},entry.peerKey);
       }
     };
     const leaveTyping=()=>{stopTyping();stopTypingListener?.();stopTypingListener=undefined;};
@@ -203,7 +210,17 @@ export function registerRealtime(app: FastifyInstance, authenticate: (headers: I
         socket.emit('workspace.revoked', { workspace_id: id, ...failure(error) });
       });
       workspace?.stop(); workspace = current;
-      current.stop = subscriptions.add(['global', `actor:${socket.data.actor}`, `workspace:${id}`, `unread:${id}`, `unread-user:${id}:${socket.data.actor}`], current.wake);
+      const stopUnread = subscriptions.add(['global', `actor:${socket.data.actor}`, `workspace:${id}`, `unread:${id}`, `unread-user:${id}:${socket.data.actor}`], current.wake);
+      const stopSidebar = sidebarTyping.subscribe({
+        key: `${id}:${socket.data.actor}`, socketId: socket.id, pump: boundedPump, active,
+        authorizeEvents: async events => {
+          const channels = await chat.directMessages.visibleTypingChannels(socket.data.actor, id, [...new Set(events.map(e => e.channel_id))]);
+          return events.filter(event => channels.has(event.channel_id));
+        },
+        emit: event => socket.volatile.emit('workspace.dm-typing', {...event, workspace_id: id}),
+        revoke: disconnect,
+      });
+      current.stop = () => { stopUnread(); stopSidebar(); };
       setImmediate(current.wake);
       return { workspace_id: id };
     });
@@ -243,8 +260,11 @@ export function registerRealtime(app: FastifyInstance, authenticate: (headers: I
       leaveTyping();subscription?.stop();subscription = current;
       current.stop = subscriptions.add(['global', `actor:${socket.data.actor}`, `workspace:${ref.workspace_id}`, `channel:${channel}`, `channel-events:${channel}`], current.wake);
       stopTypingListener = typingListeners.subscribe({
-        channel, socketId: socket.id, pump: boundedPump, active, revoke,
-        readAccess: () => chat.typingActor(socket.data.actor, channel),
+        key: channel, socketId: socket.id, pump: boundedPump, active, revoke,
+        authorizeEvents: async events => {
+          const access = await chat.typingActor(socket.data.actor, channel);
+          return access.archived ? events.map(event => ({...event, active: false})) : events;
+        },
         emit: event => socket.volatile.emit('chat.typing', event),
       });
       setImmediate(current.wake);
@@ -269,7 +289,8 @@ export function registerRealtime(app: FastifyInstance, authenticate: (headers: I
       clearTimeout(typing.get(key)?.timer);
       const event:TypingEvent={...value,source_id:socket.id,user:access.user,expires_at:Date.now()+TYPING_TTL_MS};
       const timer=setTimeout(()=>stopTyping(value.thread_id),TYPING_TTL_MS);timer.unref();
-      typing.set(key,{event,timer});publishTyping(event);return value;
+      const peerKey = access.sidebarPeer ? `${access.workspace}:${access.sidebarPeer}` : undefined;
+      typing.set(key,{event,timer,peerKey});publishTyping(event,peerKey);return value;
     });
     handle('message.send', async input => {
       const v = record(input, ['channel_id', 'client_message_id', 'text', 'thread_id', 'document', 'asset_ids', 'asset_descriptions', 'broadcast_confirmed', 'receipt_id']);

@@ -266,6 +266,70 @@ test(
 );
 
 test(
+  'workspace admins share connection management and discover with the workspace credential',
+  { timeout: 15000 },
+  async () => {
+    const a = await bootstrap(pool), b = await bootstrap(pool);
+    const base = `/workspaces/${a.workspace_id}`;
+    const local = await pairLocalAgent(a), foreign = await pairLocalAgent(b);
+    const secret = 'shared-account-credential';
+    const input = { name: 'Shared search', url: 'https://workspace.example/mcp', auth_type: 'bearer', token: secret };
+    const created = await call(a.owner_token, 'POST', `${base}/connections`, input);
+    assert.equal(created.statusCode, 201, created.body);
+    assert.ok(!created.body.includes(secret));
+    const id = created.json().id, path = `${base}/connections/${id}`;
+    const before = upstreamRequests.length;
+    for (const token of [a.collaborator_token, b.owner_token]) {
+      const requests = [
+        await call(token, 'GET', `${base}/connections`),
+        await call(token, 'GET', `${base}/connection-agents`),
+        await call(token, 'POST', `${base}/connections`, input),
+        await call(token, 'POST', `${path}/discover`, { revision: 1 }),
+        await call(token, 'PATCH', path, { revision: 1, name: 'renamed' }),
+        await call(token, 'PUT', `${path}/grants`, { revision: 1, installation_id: local.installation_id, tools: [] }),
+        await call(token, 'DELETE', path, { revision: 1 }),
+      ];
+      for (const response of requests) assert.ok([403, 404].includes(response.statusCode), response.body);
+    }
+    assert.equal(upstreamRequests.length, before);
+    assert.deepEqual((await call(a.owner_token, 'GET', '/me/connections')).json().items, []);
+    assert.equal((await call(a.owner_token, 'PATCH', `/me/connections/${id}`, { revision: 1, name: 'mine' })).statusCode, 404);
+    assert.equal((await call(b.owner_token, 'PATCH', `/workspaces/${b.workspace_id}/connections/${id}`, { revision: 1, name: 'mine' })).statusCode, 404);
+    await pool.query("UPDATE workspace_members SET role='admin' WHERE workspace_id=$1 AND user_id=$2", [a.workspace_id, a.collaborator_id]);
+    const agents = await call(a.collaborator_token, 'GET', `${base}/connection-agents`);
+    assert.deepEqual(agents.json().items.map((item: { id: string }) => item.id), [local.installation_id]);
+    const changed = await call(a.collaborator_token, 'PATCH', path, { revision: 1, name: 'Team search' });
+    assert.equal(changed.statusCode, 200, changed.body);
+    const discovered = await call(a.collaborator_token, 'POST', `${path}/discover`, { revision: changed.json().revision });
+    assert.equal(discovered.statusCode, 200, discovered.body);
+    assert.deepEqual(discovered.json().tools, tools);
+    const requests = upstreamRequests.slice(before);
+    assert.ok(requests.some((request) => request.method === 'tools/list'));
+    assert.ok(requests.every((request) => request.authorization === `Bearer ${secret}`));
+    assert.ok(!discovered.body.includes(secret));
+    const grant = { revision: discovered.json().revision, installation_id: local.installation_id, tools: ['search'] };
+    assert.equal((await call(a.collaborator_token, 'PUT', `${path}/grants`, { ...grant, installation_id: foreign.installation_id })).statusCode, 404);
+    const granted = await call(a.collaborator_token, 'PUT', `${path}/grants`, grant);
+    assert.equal(granted.statusCode, 200, granted.body);
+    assert.deepEqual(granted.json().grants, [{ installation_id: local.installation_id, tools: ['search'] }]);
+    const [listed] = (await call(a.owner_token, 'GET', `${base}/connections`)).json().items;
+    assert.deepEqual(listed, granted.json());
+    await pool.query("UPDATE workspace_members SET role='member' WHERE workspace_id=$1 AND user_id=$2", [a.workspace_id, a.collaborator_id]);
+    const signed = new OutboundStore(pool, key).security.sign({
+      aud: 'outbound-internal', owner: a.collaborator_id, workspace: a.workspace_id,
+      installation: '', execution: '', exp: Date.now() + 35000,
+    });
+    const revoked = await gateway.inject({
+      method: 'POST', url: '/internal/discover', headers: { authorization: `Bearer ${signed}` },
+      payload: { connection_id: id, revision: listed.revision },
+    });
+    assert.ok([403, 404].includes(revoked.statusCode), revoked.body);
+    assert.equal(upstreamRequests.length, before + requests.length);
+    assert.equal((await call(a.owner_token, 'DELETE', path, { revision: listed.revision })).statusCode, 200);
+  },
+);
+
+test(
   'actor subscriptions authorize only their owner and connection mutations advance only that actor revision',
   { timeout: 15000 },
   async (t) => {

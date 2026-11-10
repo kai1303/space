@@ -65,7 +65,10 @@ export class ChatStore {
       if (threadId && !(await c.select({id:s.threads.id}).from(s.threads).where(and(eq(s.threads.id,uuid(threadId)),eq(s.threads.channel_id,channel.id)))).length) throw notFound();
       const [user] = await c.select({id:s.users.id,name:s.users.display_name}).from(s.users).where(eq(s.users.id,actor));
       if (!user) throw notFound();
-      return {user,archived:!!channel.archived_at};
+      const peer = channel.direct_user_low === actor ? channel.direct_user_high : channel.direct_user_low;
+      return {user, archived: !!channel.archived_at,
+        sidebarPeer: channel.kind === 'direct' && !threadId && peer && peer !== actor ? peer : undefined,
+        workspace: channel.workspace_id};
     }, {accessMode:'read only'});
   }
   async conversationLocation(actor: string, channel: string, thread?: string) {

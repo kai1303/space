@@ -393,7 +393,7 @@ test('whole-turn streaming preserves alternating text and two tools through term
  const message=(id,text)=>notify('item/agentMessage/delta',{itemId:id,delta:text});
  const tool=(id,stage)=>notify(stage==='started'?'item/started':'item/completed',{item:{id,type:'mcpToolCall',server:'space_project',tool:'read_text_file',arguments:{path:id+'.txt'},status:stage==='started'?'inProgress':'completed',...(stage==='completed'?{result:{content:[{type:'text',text:id+' result'}]}}:{})}});
  const behavior=notify('item/started',{item:{id:'reasoning',type:'reasoning'}})+
- `setTimeout(()=>{${message('before','Before first read.')}},180);`+
+ `setTimeout(()=>{${notify('item/started',{item:{id:'before',type:'agentMessage',phase:'commentary'}})}${message('before','Before first read.')}},180);`+
  `setTimeout(()=>{${tool('first','started')}},360);`+
  `setTimeout(()=>{${tool('first','completed')}${message('between','Between reads.')}},540);`+
  `setTimeout(()=>{${tool('second','started')}},720);`+
@@ -403,6 +403,7 @@ test('whole-turn streaming preserves alternating text and two tools through term
  try{
   await runtime.invoke(invocation,async e=>events.push(e),new AbortController().signal);
   const final=events.at(-1).payload.response;
+  assert.equal(final.messages[0].phase,'commentary');
   assert.deepEqual(final.messages.map(m=>m.text),['Before first read.','Between reads.','Final answer.']);
   assert.deepEqual(final.items,[{type:'message',id:'before'},{type:'tool',id:'first'},{type:'message',id:'between'},{type:'tool',id:'second'},{type:'message',id:'final'}]);
   assert.deepEqual(final.tools.map(tool=>[tool.id,tool.status,tool.result]),[['first','completed','first result'],['second','completed','second result']]);

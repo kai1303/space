@@ -1,5 +1,5 @@
-import { afterEach, expect, it } from 'vitest';
-import { cleanup, render, screen } from '@testing-library/react';
+import { afterEach, expect, it, vi } from 'vitest';
+import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { AgentResponse as Response } from '@space/contracts';
 import { AgentMarkdown, AgentResponse } from './agent-response.js';
@@ -59,9 +59,11 @@ it('keeps text and expanded tools stable in chronological streaming order',async
  expect(first.compareDocumentPosition(tool)&Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
  await userEvent.click(screen.getByRole('button',{name:'Expand timeline'}));
  rerender(<AgentResponse response={{...base,messages:[{...before,status:'complete'},{id:'final',text:'Final answer.',status:'complete'}],tools:[{id:'read',name:'read_text_file',arguments:'{"path":"README.md"}',status:'completed',result:'Read result.'}],activity:undefined,items:[{type:'message',id:'before'},{type:'tool',id:'read'},{type:'message',id:'final'}]}}/>);
- expect(screen.getByText('Before first read.')).toBe(first);expect(screen.getByText('Final answer.')).toBeTruthy();
+ const final = container.querySelectorAll('.sp-agent-markdown')[1]!;
+ await waitFor(() => expect(final.textContent).toBe('Final answer.'));
+ expect(screen.getByText('Before first read.')).toBe(first);
  expect(screen.getByRole('button',{name:'Collapse timeline'})).toBeTruthy();expect(screen.getByText('Read result.')).toBeTruthy();
- expect(screen.getByText('read_text_file · Completed').compareDocumentPosition(screen.getByText('Final answer.'))&Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+ expect(screen.getByText('read_text_file · Completed').compareDocumentPosition(final)&Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
  expect(container.querySelector('[aria-busy="true"]')).toBeNull();
 });
 
@@ -111,4 +113,74 @@ it('keeps malformed file inputs readable and shows failed edit output beside req
  await userEvent.click(screen.getByRole('button',{name:'Expand timeline'}));await userEvent.click(screen.getByText('Details'));expect(screen.getByRole('group',{name:'JSON code block'}).querySelector('code')?.textContent).toBe('{"path":"/truncated');
  rerender(<AgentResponse response={{messages:[],components:[],tools:[{id:'edit',name:'edit_file',arguments:JSON.stringify({path:'a.txt',edits:[{oldText:'old',newText:'new'}]}),status:'interrupted',result:'Tool failed.'}]}}/>);
  expect(screen.getByText('Requested edits')).toBeTruthy();expect(screen.getByText('Tool failed.')).toBeTruthy();
+});
+
+it.each(['commentary', 'final_answer', undefined] as const)('paces %s text, preserves visible words, and flushes on completion', phase => {
+  vi.useFakeTimers();
+  const show = (text: string, status: 'streaming' | 'complete' = 'streaming') =>
+    <AgentResponse streaming response={{ messages: [{ id: 'answer', text, status, phase }], tools: [], components: [] }} />;
+  try {
+    const view = render(show('Start.'));
+    const body = view.container.querySelector('.sp-agent-markdown')!;
+    const burst = ' More words to reveal smoothly.'.repeat(8);
+    view.rerender(show('Start.' + burst));
+    expect(body.textContent).toBe('Start.');
+    act(() => vi.advanceTimersByTime(100));
+    expect(body.textContent!.length).toBeGreaterThan(6);
+    expect(body.textContent!.length).toBeLessThan(6 + burst.length);
+    const word = body.querySelector('.sp-agent-word');
+    expect(word).toBeTruthy();
+    act(() => vi.advanceTimersByTime(100));
+    expect(body.querySelector('.sp-agent-word')).toBe(word);
+    view.rerender(show('Start.' + burst, 'complete'));
+    expect(body.textContent).toBe('Start.' + burst);
+    expect(body.querySelector('.sp-agent-word')).toBeNull();
+  } finally { vi.useRealTimers(); }
+});
+
+it('replaces corrected text immediately even with a queued burst', () => {
+  const show = (text: string, phase: 'commentary' | 'final_answer') =>
+    <AgentResponse streaming response={{ messages: [{ id: 'm', text, phase, status: 'streaming' }], tools: [], components: [] }} />;
+  const view = render(show('Checking', 'commentary'));
+  view.rerender(show('Checking the files', 'commentary'));
+  expect(view.container.querySelector('.sp-agent-markdown')?.textContent).toBe('Checking');
+  view.rerender(show('Revised answer', 'final_answer'));
+  expect(screen.getByText('Revised answer')).toBeTruthy();
+});
+
+it('animates a new live row while keeping a large single burst bounded', () => {
+  vi.useFakeTimers();
+  try {
+    const text = 'A small word. '.repeat(1100).trim();
+    const view = render(<AgentMarkdown text={text} streaming newArrival />);
+    expect(view.container.textContent).toBe('');
+    act(() => vi.advanceTimersByTime(1500));
+    expect(view.container.textContent).toBe(text);
+    expect(view.container.querySelectorAll('.sp-agent-word').length).toBeLessThan(512);
+    view.unmount();
+    const restored = render(<AgentMarkdown text={text} streaming />);
+    expect(restored.container.textContent).toBe(text);
+    expect(restored.container.querySelector('.sp-agent-word')).toBeNull();
+  } finally { vi.useRealTimers(); }
+});
+
+it('reveals a completed live arrival once and renders restored history immediately', () => {
+  vi.useFakeTimers();
+  try {
+    const text = 'A reply delivered in a single update.';
+    const view = render(<AgentMarkdown text={text} newArrival />);
+    expect(view.container.textContent).toBe('');
+    view.rerender(<AgentMarkdown text={text} />);
+    act(() => vi.advanceTimersByTime(80));
+    expect(view.container.querySelector('.sp-agent-word')).toBeTruthy();
+    expect(view.container.textContent!.length).toBeLessThan(text.length);
+    act(() => vi.advanceTimersByTime(500));
+    expect(view.container.textContent).toBe(text);
+    act(() => vi.advanceTimersByTime(700));
+    expect(view.container.querySelector('.sp-agent-word')).toBeNull();
+    view.unmount();
+    const history = render(<AgentMarkdown text={text} />);
+    expect(history.container.textContent).toBe(text);
+    expect(history.container.querySelector('.sp-agent-word')).toBeNull();
+  } finally { vi.useRealTimers(); }
 });

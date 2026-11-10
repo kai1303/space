@@ -25,9 +25,16 @@ export function ThreadHistory({ thread, channel, live, renderMessage, activity, 
   const messages = (history.page?.messages ?? []).filter(message => !message.agent_session_id);
   const rootId = messages.find(message => message.thread_root_id)?.thread_root_id ?? (!history.page?.has_older ? messages[0]?.id : undefined);
   const replyCount = Math.max(0, ...messages.map(message => message.reply_count ?? 0), messages.filter(message => message.id !== rootId).length);
-  const arrivals = useMessageArrivals(messages, history.page && !history.loading ? thread : null);
   const messageEvents: ChatEvent[] = messages.map(message => ({ type: 'message.created', channel_id: channel, thread_id: thread, sequence: message.sequence!, occurred_at: message.created_at, payload: message }));
   const savedResponses = new Set(messages.filter(message => message.agent_response).map(message => message.task_id));
   const items = mergeEvents(messageEvents, (history.page ? activity : []).filter(event => (event.type !== 'task.event' || !savedResponses.has(event.payload.task_id)) && (!history.page?.has_older || BigInt(event.sequence) >= BigInt(history.page.older_cursor ?? '0')) && (!history.page?.has_newer || BigInt(event.sequence) <= BigInt(history.page.newer_cursor ?? '0'))));
-  return <>{error && <p role="alert">{error} <Button size="sm" onClick={() => { setError(''); void history.load('latest'); }}>Retry thread history</Button></p>}<MessageTimeline label="Thread messages" items={items} page={history.page} loading={history.loading} latestVersion={history.latestVersion} load={history.load} pinned={pinned} trailing={history.page && renderOutgoing?.(messages)} footer={footer} busy={!history.page && !error} render={event => event.type === 'message.created' ? <>{renderMessage(event.payload, arrivals.has(event.payload.id))}{event.payload.id === rootId && replyCount > 0 && <ConversationReplyDivider count={replyCount} />}</> : event.type === 'task.event' ? <TaskActivity event={event} profile={profile} onOpenWorkspace={() => onOpenWorkspace(event)} /> : null}>{!history.page && !error && <p role="status">Loading thread…</p>}</MessageTimeline></>;
+  // Keep each task mounted across progress events. Its saved reply inherits the same arrival identity.
+  const rows = items.map(event => event.type === 'task.event' ? { ...event, id: `task:${event.payload.task_id}` } : event);
+  function arrivalId(event: ChatEvent) {
+    if (event.type === 'task.event') return `${event.payload.data.response ? 'reply' : 'activity'}:${event.payload.task_id}`;
+    if (event.payload.agent_response && event.payload.task_id) return `reply:${event.payload.task_id}`;
+    return event.payload.id;
+  }
+  const arrivals = useMessageArrivals(rows.map(event => ({ id: arrivalId(event) })), history.page && !history.loading ? thread : null);
+  return <>{error && <p role="alert">{error} <Button size="sm" onClick={() => { setError(''); void history.load('latest'); }}>Retry thread history</Button></p>}<MessageTimeline label="Thread messages" items={rows} page={history.page} loading={history.loading} latestVersion={history.latestVersion} load={history.load} pinned={pinned} trailing={history.page && renderOutgoing?.(messages)} footer={footer} busy={!history.page && !error} render={event => event.type === 'message.created' ? <>{renderMessage(event.payload, arrivals.has(arrivalId(event)))}{event.payload.id === rootId && replyCount > 0 && <ConversationReplyDivider count={replyCount} />}</> : event.type === 'task.event' ? <TaskActivity newArrival={arrivals.has(arrivalId(event))} event={event} profile={profile} onOpenWorkspace={() => onOpenWorkspace(event)} /> : null}>{!history.page && !error && <p role="status">Loading thread…</p>}</MessageTimeline></>;
 }

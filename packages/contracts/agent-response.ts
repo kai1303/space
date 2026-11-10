@@ -1,6 +1,6 @@
 import { AppError, record, text } from './validation.js';
 
-export type AgentText = { id: string; text: string; status: 'streaming' | 'complete' };
+export type AgentText = { id: string; text: string; status: 'streaming' | 'complete'; phase?: 'commentary' | 'final_answer' };
 export type AgentTool = { id: string; name: string; arguments: string; result?: string; status: 'calling' | 'running' | 'completed' | 'interrupted' };
 export type AgentComponent =
   | { id: string; type: 'card'; title: string; body: string }
@@ -70,7 +70,7 @@ export function parseAgentResponse(input: unknown): AgentResponse {
   const messages = unique(list(v.messages, 30, (item): AgentText => {
     const m = record(item, ['id', 'text', 'status', 'phase']);
     if (m.status !== 'streaming' && m.status !== 'complete') throw new AppError(400, 'invalid_agent_response');
-    return { id: text(m.id, 128), text: string(m.text, 16000), status: m.status };
+    return { id: text(m.id, 128), text: string(m.text, 16000), status: m.status, ...(m.phase === 'commentary' || m.phase === 'final_answer' ? { phase: m.phase } : {}) };
   }));
   const tools = unique(list(v.tools, 30, item => {
     const t = record(item, ['id', 'name', 'arguments', 'result', 'status', 'duration_ms', 'arguments_characters', 'result_characters']);

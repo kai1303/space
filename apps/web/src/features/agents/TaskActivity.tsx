@@ -8,14 +8,14 @@ import { Button } from '@space/ui/primitives';
 import { request } from '../../shared/api/request.js';
 import type { Profile } from '../profile/profile-types.js';
 
-export function TaskActivity({ event, profile, onThread, onOpenWorkspace }: { event: ChatEvent & { type: 'task.event' }; profile: Profile; onThread?: () => void; onOpenWorkspace: () => void }) {
+export function TaskActivity({ event, profile, onThread, onOpenWorkspace, newArrival }: { newArrival?: boolean; event: ChatEvent & { type: 'task.event' }; profile: Profile; onThread?: () => void; onOpenWorkspace: () => void }) {
   const [decision, setDecision] = useState<'pending' | 'approved' | 'rejected'>('pending');
   async function decide(action: 'approve' | 'reject') {
     await request(`/tasks/${event.payload.task_id}/${action}`, {});
     setDecision(action === 'approve' ? 'approved' : 'rejected');
   }
   const response = readAgentResponse(event.payload.data.response);
-  if (response) return <article className="chat-task"><AgentResponse response={response} fallback={String(event.payload.data.result ?? event.payload.data.text ?? '')} streaming={!/\.(completed|failed)$/.test(event.payload.type)} />
+  if (response) return <article className="chat-task"><AgentResponse newArrival={newArrival} response={response} fallback={String(event.payload.data.result ?? event.payload.data.text ?? '')} streaming={!/\.(completed|failed)$/.test(event.payload.type)} />
     {event.payload.type.endsWith('.failed') && <p role="alert">{String(event.payload.data.error ?? event.payload.data.code ?? 'The agent run failed.')}</p>}
     <div className="chat-actions"><Button size="sm" onClick={onOpenWorkspace}>Open agent session</Button>{onThread && <Button size="sm" variant="ghost" onClick={onThread}>Open thread</Button>}</div>
   </article>;

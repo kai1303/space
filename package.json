@@ -35,7 +35,8 @@
     "test:assets": "turbo run test:assets --filter=@space/tests",
     "test:workspace": "turbo run test:workspace --filter=@space/tests",
     "events": "turbo run start --filter=@space/event-service",
-    "mcp-gateway": "turbo run start --filter=@space/mcp-gateway"
+    "mcp-gateway": "turbo run start --filter=@space/mcp-gateway",
+    "storybook": "pnpm --filter @space/ui... build && pnpm --filter @space/web storybook"
   },
   "devDependencies": {
     "turbo": "^2.11.10"

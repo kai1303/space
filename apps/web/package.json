@@ -7,7 +7,8 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "storybook": "storybook dev --host 127.0.0.1 --port 6006 --no-open"
   },
   "dependencies": {
     "@fontsource/lato": "^5.3.0",
@@ -26,12 +27,14 @@
     "socket.io-client": "^4.8.4"
   },
   "devDependencies": {
+    "@storybook/react-vite": "10.6.6",
     "@testing-library/react": "^16.3.0",
     "@testing-library/user-event": "^14.6.1",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "jsdom": "^26.1.0",
     "quill": "2.0.3",
+    "storybook": "10.6.6",
     "typescript": "^7.0.2",
     "vite": "^8.3.5",
     "vitest": "^3.2.4"
