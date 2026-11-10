@@ -1,3 +1,4 @@
+import { messagePath } from '@space/contracts';
 import { createHash } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 import { createMcpHandler, McpServer } from '@modelcontextprotocol/server';
@@ -54,7 +55,7 @@ function memoryServer(store: MemoryStore, providers: Map<string, MemoryProvider>
       const evidence: { label: string; url?: string }[] = [];
       for (const messageId of messageIds) {
         const message = await store.message(c, channel, messageId);
-        evidence.push({ label: `${message.author.name} · ${message.created_at}`, url: `/chat?workspace=${channel.workspace_id}&channel=${channel.channel_id}&message=${message.id}` });
+        evidence.push({ label: `${message.author.name} · ${message.created_at}`, url: messagePath(channel.channel_id, message.id) });
       }
       for (const sourceId of sourceIds) {
         const source = current.sources.find(source => source.id === sourceId);

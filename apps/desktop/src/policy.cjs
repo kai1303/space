@@ -45,7 +45,10 @@ function desktopHandoff(value) {
       || link.searchParams.size !== 3 || !/^[a-zA-Z0-9_-]{1,100}$/.test(workspace || '') || !['codex', 'kiro', 'claude'].includes(provider)) return;
     const target = new URL(spaceUrl(origin));
     if (target.origin !== origin) return;
-    target.searchParams.set('workspace', workspace);
+    if (/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(workspace)) {
+      const key = Buffer.from(workspace.replaceAll('-', ''), 'hex').toString('base64url');
+      target.pathname = '/w/' + (/^[a-z0-9-]+$/.test(key) ? '~' : '') + key;
+    } else target.searchParams.set('workspace', workspace);
     target.searchParams.set('connectProvider', provider);
     return target;
   } catch { return; }

@@ -1,3 +1,4 @@
+import { workspacePath } from '@space/contracts';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { Avatar, Button, Dialog, Popover } from '@space/ui/primitives';
 import { ArrowLeft, Check, MagnifyingGlass, Plus, UserPlus } from '@phosphor-icons/react';
@@ -9,7 +10,7 @@ const initials = (name: string) => {
   const words = name.trim().split(/\s+/);
   return (words.length > 1 ? words.slice(0, 2).map(word => word[0]).join('') : name.trim().slice(0, 2)).toUpperCase() || 'W';
 };
-const address = (id: string) => `${window.location.host}/chat?workspace=${encodeURIComponent(id)}`;
+const address = (id: string) => `${window.location.host}${workspacePath(id)}`;
 
 export function WorkspaceIcon({ workspace, className = 'workspace-switcher-icon' }: { workspace: Pick<WorkspaceChoice, 'name' | 'icon_url'>; className?: string }) {
   return <span className={`${className} workspace-logo`} aria-hidden="true"><Avatar name={workspace.name} initials={initials(workspace.name)} image={workspace.icon_url}/></span>;

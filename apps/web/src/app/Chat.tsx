@@ -1,3 +1,4 @@
+import { workspacePath, workspaceIdFromPath } from '@space/contracts';
 import { ConversationLinkLoading } from './shell/ConversationLinkLoading.js';
 import { HuddleProvider } from '../features/huddles/Huddles.js';
 import { CallingProvider } from '../features/calling/Calling.js';
@@ -25,7 +26,10 @@ export function Chat() {
   if (error) return <AccessFrame screen="session-error" title="Let’s try that again."><p role="alert">Cannot check your session. Please try again.</p><Button onClick={() => void refetch()}>Try again</Button></AccessFrame>;
   if (!session) return <AuthScreen />;
   const invitation = new URLSearchParams(window.location.search).get('invite');
-  if(invitation) return <InviteAcceptance token={invitation} onAccepted={id=>window.location.assign(`/chat?workspace=${encodeURIComponent(id)}`)} onCancel={()=>window.location.assign('/chat')}/>;
-  if(window.location.pathname.startsWith('/w/')) return <WorkspaceAddress slug={decodeURIComponent(window.location.pathname.slice(3))} email={session.user.email}/>;
+  if(invitation) return <InviteAcceptance token={invitation} onAccepted={id=>window.location.assign(workspacePath(id))} onCancel={()=>window.location.assign('/chat')}/>;
+  if (location.pathname.startsWith('/w/') && !workspaceIdFromPath(location.pathname)) {
+    const slug = location.pathname.slice(3).replace(/\/$/, '').replace(/%([0-9a-f]{2})/gi, (_, hex: string) => String.fromCharCode(parseInt(hex, 16)));
+    return <WorkspaceAddress slug={slug} email={session.user.email}/>;
+  }
   return <SocketSession key={`${session.user.id}:${session.session.id}`}><CallingProvider actor={session.user.id}><HuddleProvider><ChatWorkspace profile={{ id: session.user.id, display_name: session.user.name }} /></HuddleProvider></CallingProvider></SocketSession>;
 }

@@ -112,7 +112,9 @@ beforeAll(() => {
     getClientRects: { configurable: true, value: () => [] },
   });
   HTMLDialogElement.prototype.showModal = function () { this.open = true; };
-  HTMLDialogElement.prototype.close = function () { this.open = false; };
+  HTMLDialogElement.prototype.close = function () {
+    if (this.open) { this.open = false; this.dispatchEvent(new Event('close')); }
+  };
 });
 afterAll(() => { Reflect.deleteProperty(Range.prototype, 'getBoundingClientRect'); Reflect.deleteProperty(Range.prototype, 'getClientRects'); });
 async function switchWorkspace(name: string) {
@@ -459,6 +461,45 @@ it('opens a copied thread in its workspace and restores the channel on browser B
   await within(panel).findByText('Shared discussion');
   expect(requests).toContain(`/v1/channels/${channel}/location?thread=${thread}`);
   expect(requests.some(url => url.includes('/first/channels'))).toBe(false);
+});
+
+it('opens an old workspace bookmark and shares its Activity view with a compact path', async () => {
+ const workspace='b232851a-61d8-44f5-a514-c7b0405694c2';
+ window.history.replaceState({spaceView:'Activity'},'', '/chat?workspace='+workspace);
+ mockPaginatedChat(()=>messagePage([]));
+ const fallback=vi.mocked(fetch).getMockImplementation()!;
+ vi.mocked(fetch).mockImplementation(async(input,init)=>String(input).startsWith('/v1/workspaces?')
+   ? {ok:true,json:async()=>({items:[{id:'other',name:'Other'},{id:workspace,name:'Target'}],next_cursor:null})} as Response : fallback(input,init));
+ const mounted=render(<Chat/>);
+ const path='/w/sjKFGmHYRPWlFMewQFaUwg/activity';
+ await waitFor(()=>expect(location.pathname+location.search).toBe(path));
+ mounted.unmount();
+ window.history.replaceState(null,'',path);
+ render(<Chat/>);
+ await screen.findByRole('button',{name:'Switch workspaces… (Target)'});
+ expect(location.pathname).toBe(path);
+});
+
+it.each(['legacy', 'compact'])('opens the exact message from a %s link and returns to the channel on close', async format => {
+ const room='550e8400-e29b-41d4-a716-446655440000', id='00000000-0000-4000-8000-000000000001';
+ const channelPath='/c/VQ6EAOKbQdSnFkRmVUQAAA', path=channelPath+'/message/AAAAAAAAQACAAAAAAAAAAQ';
+ window.history.replaceState(null,'',format==='compact' ? path : '/chat?workspace=workspace&channel='+room+'&message='+id);
+ const message={...paginatedMessage('Linked original','1',id),channel_id:room};
+ mockPaginatedChat(()=>messagePage([message]));
+ const fallback=vi.mocked(fetch).getMockImplementation()!;
+ vi.mocked(fetch).mockImplementation(async(input,init)=>{
+   const url=String(input);
+   if(url.startsWith('/v1/workspaces/workspace/channels?'))return {ok:true,json:async()=>({items:[{id:room,name:'design',workspace_id:'workspace',joined:true}],next_cursor:null})} as Response;
+   if(url===`/v1/channels/${room}/location`)return {ok:true,json:async()=>({workspace_id:'workspace'})} as Response;
+   if(url===`/v1/channels/${room}/messages/${id}`)return {ok:true,json:async()=>message} as Response;
+   return fallback(input,init);
+ });
+ render(<Chat/>);
+ const dialog=await screen.findByRole('dialog',{name:'Original message in #design'});
+ expect(await within(dialog).findByText('Linked original')).toBeTruthy();
+ expect(location.pathname+location.search).toBe(path);
+ await userEvent.click(within(dialog).getByRole('button',{name:'Close dialog'}));
+ await waitFor(()=>expect(location.pathname+location.search).toBe(channelPath));
 });
 
 it('opens memory from message actions and follows source links to the authorized original message', async () => {
@@ -1896,21 +1937,22 @@ it('opens agent sessions below direct messages, retains drafts, and refreshes si
  const user=userEvent.setup();
  mockPaginatedChat(()=>messagePage([paginatedMessage('Channel source','1')]));
  const fallback=vi.mocked(fetch).getMockImplementation()!;
- let session={working:false,id:'sidebar-session',channel_id:'first',channel_archived:false,workspace_id:'workspace',origin_thread_id:'session-thread',installation_id:'mine',title:'Launch checklist',state:'active',managed:true,created_by:'user',owner_id:'user',agent_name:'My Codex',created_at:'2026-11-04T00:00:00Z',skill:'codex.run',turn_count:0};
+ let session={working:false,id:'00000000-0000-4000-8000-000000000001',channel_id:'first',channel_archived:false,workspace_id:'workspace',origin_thread_id:'session-thread',installation_id:'mine',title:'Launch checklist',state:'active',managed:true,created_by:'user',owner_id:'user',agent_name:'My Codex',created_at:'2026-11-04T00:00:00Z',skill:'codex.run',turn_count:0};
  let items=[session];
  vi.mocked(fetch).mockImplementation(async(input,init)=>{
   const path=String(input);
   if(path==='/v1/workspaces/workspace/agent-sessions')return {ok:true,json:async()=>({items,next_cursor:null})} as Response;
-  if(path==='/v1/agent-sessions/sidebar-session' && init?.method==='PATCH'){
+  if(path===`/v1/agent-sessions/${session.id}` && init?.method==='PATCH'){
    const edit=JSON.parse(String(init.body));
    expect(edit.previous_title).toBe(session.title);
    session={...session,title:edit.title};items=[session];
    return {ok:true,json:async()=>session} as Response;
   }
-  if(path==='/v1/agent-sessions/sidebar-session')return {ok:true,json:async()=>({session,turns:[],next_cursor:null})} as Response;
+  if(path===`/v1/agent-sessions/${session.id}`)return {ok:true,json:async()=>({session,turns:[],next_cursor:null})} as Response;
+  if(path===`/v1/agent-sessions/${session.id}/location`)return {ok:true,json:async()=>session} as Response;
   return fallback(input,init);
  });
- render(<Chat/>);
+ const mounted=render(<Chat/>);
  const nav=await screen.findByRole('navigation',{name:'Workspace conversations'});
  const entry=await within(nav).findByRole('button',{name:'Launch checklist',exact:true});
  const headings=within(nav).getAllByRole('button').map(button=>button.textContent);
@@ -1959,6 +2001,14 @@ it('opens agent sessions below direct messages, retains drafts, and refreshes si
  await user.type(screen.getByRole('searchbox',{name:'Find a conversation'}),'Launch');
  expect(within(nav).queryByRole('button',{name:'New discussion',exact:true})).toBeNull();
  expect(within(nav).getByRole('button',{name:'Launch checklist',exact:true})).toBeTruthy();
+ const link=location.pathname;
+ expect(link).toBe('/s/AAAAAAAAQACAAAAAAAAAAQ');
+ mounted.unmount();
+ window.history.replaceState(null,'',link);
+ items=[];
+ render(<Chat/>);
+ await screen.findByRole('textbox',{name:'Message agent session'});
+ expect(location.pathname).toBe(link);
 });
 
 it('applies live post and reply capabilities independently without losing either draft', async () => {

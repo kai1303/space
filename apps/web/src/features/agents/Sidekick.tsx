@@ -1,3 +1,5 @@
+import { conversationPath, sessionPath } from '@space/contracts';
+import { usePublishedPath } from '../../shared/ui/conversation-location.js';
 import { useEffect, useRef, useState, type ComponentProps } from 'react';
 import type { SidekickAgent, SidekickSession, SidekickSource } from '@space/contracts';
 import { Button, Select } from '@space/ui/primitives';
@@ -13,6 +15,7 @@ type Page = { items: SidekickSession[]; next_cursor: string | null };
 export function Sidekick({ workspace, viewerId, source, onClose, ...draftProps }: DraftProps & { workspace: string; viewerId: string; source?: SidekickSource; onClose: () => void }) {
   const [agents,setAgents]=useState<SidekickAgent[]>([]),[choice,setChoice]=useState('');
   const [page,setPage]=useState<Page>({items:[],next_cursor:null}),[selected,setSelected]=useState<SidekickSession>();
+  usePublishedPath(selected ? sessionPath(selected.id) : source ? conversationPath(source.channel_id) : null);
   const [creating,setCreating]=useState(!!source),[loading,setLoading]=useState(true),[busy,setBusy]=useState(false),[error,setError]=useState(''),[retry,setRetry]=useState(0);
   const generation=useRef(0);
   const autoStarted=useRef(false);

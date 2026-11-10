@@ -1,4 +1,5 @@
-import { useConversationLocation } from '../../shared/ui/conversation-location.js';
+import { sessionPath, conversationPath } from '@space/contracts';
+import { usePublishedPath } from '../../shared/ui/conversation-location.js';
 import { RenameSessionDialog } from '../agents/RenameSessionDialog.js';
 import { AgentSessions } from '../agents/AgentSessions.js';
 import { useAgentSessionList } from '../agents/useAgentSessionList.js';
@@ -31,9 +32,10 @@ import { type UploadDrafts } from '../composer/useAttachmentUploads.js';
 
 type ChannelView = { channels: Channel[]; selected: string; direct?: DirectMessageSummary; agentSession?: AgentSessionReference; loaded: boolean; error: string };
 const emptyChannelView: ChannelView = { channels: [], selected: '', loaded: false, error: '' };
-export function WorkspaceChannels({ viewForChannel, onRequestedChannelConsumed, shortcut, onShortcut, content, onContentClose, onDirectMessage, onNewDirectMessage, uploads, profile, workspace, workspaces, workspaceControl, width, onWidthChange, requestedChannel, mentionTarget, onMentionOpened, onVisit, searchOpen, onSearchClose, onSearchAvailabilityChange, drafts, onDraftChange, onForgetChannel }: { viewForChannel:(id:string)=>Snapshot<ConversationView>; onRequestedChannelConsumed: () => void; shortcut?: HubView; onShortcut: (view: HubView) => void; content?: ReactNode; onContentClose: () => void; onDirectMessage: (id: string) => void; onNewDirectMessage: () => void; uploads: UploadDrafts; profile: Profile; workspace: string; workspaces: Workspace[]; workspaceControl: ReactNode; width: number; onWidthChange: (width: number) => void;  requestedChannel?: string; mentionTarget?: {channel_id:string;message_id:string;thread_id?:string}; onMentionOpened: () => void; onVisit: (channel?: Channel) => void; searchOpen: boolean; onSearchClose: () => void; onSearchAvailabilityChange: (available: boolean) => void; drafts: Record<string, RichDocument>; onDraftChange: (key: string, document: RichDocument) => void; onForgetChannel: (id: string) => void }) {
+export function WorkspaceChannels({ initialSession, onSessionRestored, viewForChannel, onRequestedChannelConsumed, shortcut, onShortcut, content, onContentClose, onDirectMessage, onNewDirectMessage, uploads, profile, workspace, workspaces, workspaceControl, width, onWidthChange, requestedChannel, mentionTarget, onMentionOpened, onVisit, searchOpen, onSearchClose, onSearchAvailabilityChange, drafts, onDraftChange, onForgetChannel }: { initialSession?: AgentSessionReference; onSessionRestored: () => void; viewForChannel:(id:string)=>Snapshot<ConversationView>; onRequestedChannelConsumed: () => void; shortcut?: HubView; onShortcut: (view: HubView) => void; content?: ReactNode; onContentClose: () => void; onDirectMessage: (id: string) => void; onNewDirectMessage: () => void; uploads: UploadDrafts; profile: Profile; workspace: string; workspaces: Workspace[]; workspaceControl: ReactNode; width: number; onWidthChange: (width: number) => void;  requestedChannel?: string; mentionTarget?: {channel_id:string;message_id:string;thread_id?:string}; onMentionOpened: () => void; onVisit: (channel?: Channel) => void; searchOpen: boolean; onSearchClose: () => void; onSearchAvailabilityChange: (available: boolean) => void; drafts: Record<string, RichDocument>; onDraftChange: (key: string, document: RichDocument) => void; onForgetChannel: (id: string) => void }) {
   const reduced = useReducedMotion();
-  const [views, setViews] = useState(() => new Map<string, ChannelView>());
+  const [views, setViews] = useState(() => new Map<string, ChannelView>(initialSession ? [[workspace, {...emptyChannelView, agentSession: initialSession}]] : []));
+  useEffect(() => { if (initialSession) onSessionRestored(); }, [initialSession, onSessionRestored]);
   const unread = useWorkspaceUnread(workspace);
   const typing = useDirectTyping(workspace, profile.id);
   const directs = useDirectMessageList(workspace);
@@ -153,7 +155,7 @@ export function WorkspaceChannels({ viewForChannel, onRequestedChannelConsumed, 
     finally { if (version === scope.current) setBusy(false); }
   }
   const channel = homeDirect ?? channels.find(c => c.id === selected);
-  useConversationLocation(content || requestedChannel || !loaded ? undefined : agentSession ? null : !channel?.joined ? channel?.id ?? null : undefined);
+  usePublishedPath(content || requestedChannel || !loaded ? undefined : agentSession ? sessionPath(agentSession.id) : !channel ? null : !channel.joined ? conversationPath(channel.id) : undefined);
   function forgetDirect(id: string, reason?: string) {
     if (currentHomeDirect.current?.id !== id) return;
     updateView(view => view.direct?.id === id ? { ...view, direct: undefined, error: reason ?? '' } : view);

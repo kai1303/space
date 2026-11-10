@@ -1,3 +1,4 @@
+import { messagePath } from '@space/contracts';
 import type { FastifyInstance } from 'fastify';
 import { fileURLToPath } from 'node:url';
 import { AppError, parseAgentMemoryContext, MAX_AGENT_MEMORY_CHARS, MAX_MEMORY_IMPORT_BYTES, memorySourceId, parseMemorySettings, parseMemorySource, parseMemoryWrite, record, text, uuid, type ChannelMemory } from '@space/contracts';
@@ -92,7 +93,7 @@ export function registerMemoryRoutes(app: FastifyInstance, store: MemoryStore, p
         const message = await store.message(c, channel, input.message_id);
         const attachments = message.attachments?.map(asset => `Attachment: ${asset.name} (file content not imported)`).join('\n');
         return provider.ingest(channel, { id: `message:${message.id}`, title: `Message from ${message.author.name} · ${message.created_at}`,
-          text: [message.text, attachments].filter(Boolean).join('\n'), url: `/chat?workspace=${channel.workspace_id}&channel=${channel.channel_id}&message=${message.id}` });
+          text: [message.text, attachments].filter(Boolean).join('\n'), url: messagePath(channel.channel_id, message.id) });
       }
       if (Buffer.byteLength(input.content, 'utf8') > MAX_MEMORY_IMPORT_BYTES) throw new AppError(413, 'memory_import_too_large');
       const now = new Date().toISOString();

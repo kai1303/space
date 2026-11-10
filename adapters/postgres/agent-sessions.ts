@@ -23,6 +23,18 @@ export class AgentSessionStore {
     if (!session || !await hasThreadAccess(c, actor, session.origin_thread_id)) throw notFound();
     return session;
   }
+  async location(actor: string, id: string) {
+    return this.db.transaction(async c => {
+      const session = await this.visible(c, actor, id);
+      const { rows: [location] } = await c.execute<{ channel_id:string; channel_archived:boolean; agent_name:string }>(sql`
+        SELECT ch.id AS channel_id, ch.archived_at IS NOT NULL AS channel_archived, d.name AS agent_name
+        FROM threads t JOIN channels ch ON ch.id=t.channel_id
+        JOIN agent_installations i ON i.id=${session.installation_id}
+        JOIN agent_definitions d ON d.id=i.definition_id WHERE t.id=${session.origin_thread_id}`);
+      if (!location) throw notFound();
+      return { id:session.id, workspace_id:session.workspace_id, origin_thread_id:session.origin_thread_id, ...location };
+    }, {isolationLevel:'repeatable read', accessMode:'read only'});
+  }
   private async summary(c: DbSession, id: string): Promise<AgentSessionSummary> {
     const result = await c.execute<AgentSessionSummary & Record<string, unknown>>(sql`SELECT ${summaryColumns} FROM agent_sessions a JOIN agent_installations i ON i.id=a.installation_id JOIN agent_definitions d ON d.id=i.definition_id WHERE a.id=${id}`);
     const row = result.rows[0];

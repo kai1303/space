@@ -1,4 +1,5 @@
-import { useConversationLocation } from '../../shared/ui/conversation-location.js';
+import { conversationPath, parseConversationPath, sessionPath } from '@space/contracts';
+import { usePublishedPath } from '../../shared/ui/conversation-location.js';
 import { useMemberProfile } from '../profile/MemberProfile.js';
 import { HuddleButton } from '../huddles/Huddles.js';
 import { Sidekick } from '../agents/Sidekick.js';
@@ -102,6 +103,10 @@ export function ChannelRoom({ viewState, requestedThread, onCloseDirect, readSta
   const [memoryOpen, setMemoryOpen] = useState(false), [memoryMessage, setMemoryMessage] = useState<{ id: string; text: string }>();
   const [sourceId, setSourceId] = useState(() => {
     const params = new URLSearchParams(window.location.search);
+    if (location.pathname.startsWith('/c/')) {
+      const link = parseConversationPath(location.pathname);
+      if (link.channel === channel.id && link.message) return link.message;
+    }
     return params.get('channel') === channel.id ? params.get('message') : null;
   });
   useEffect(() => { if (mentionTarget) { setSourceId(mentionTarget); onMentionOpened(); } }, [mentionTarget, onMentionOpened]);
@@ -342,7 +347,9 @@ export function ChannelRoom({ viewState, requestedThread, onCloseDirect, readSta
       />}
       <div inert={!!selection}><ConversationMessage message={m} previous={previous} viewerId={profile.id} arrival={arriving} onReact={channel.archived_at ? undefined : emoji => { void react(m, emoji); }} actions={{ delete: m.author.kind === 'human' && m.author.id === profile.id ? () => setDeleteId(m.id) : undefined, selectMessage:()=>setSelection(current=>[...new Set([...(current??[]),m.id])].slice(0,50)), discussWithAgent:()=>discuss({channel_id:channel.id,message_ids:[m.id]}), save: () => request(`/workspaces/${channel.workspace_id}/hub/saved/${m.id}`, { channel_id: channel.id, active: true }).then(() => {}), copyMessage: () => navigator.clipboard.writeText(m.text), ...(!direct ? { saveMemory: () => { setMemoryMessage({ id: m.id, text: m.text }); setMemoryOpen(true); } } : {}) }} onReply={inThread ? undefined : () => openThread(m.thread_id)} replyCount={!inThread ? m.reply_count ?? (replies[0]?.id === m.id ? replies.length - 1 : 0) : 0} onMentionClick={setSelectedMention} footer={!inThread && m.agent_sessions?.map(session => <button key={session.id} type="button" className="sp-thread-link chat-session-link" aria-label={`Agent session: ${session.title}`} title={session.title} onClick={() => openSessions(m.thread_id, session.id)}><Robot size={14} aria-hidden="true" />Agent session<span>{session.title}</span></button>)}/></div></div>;
   }
-  useConversationLocation(channel.id, requestedThread ?? thread);
+  const roomPath = conversationPath(channel.id, requestedThread ?? thread, sourceId ?? undefined);
+  usePublishedPath(sidekick ? undefined : sessionOpen && sessionView?.selected ? sessionPath(sessionView.selected)
+    : roomPath);
   const showDirectIntro = !!direct && ready && historyLoaded && history.page?.has_older === false;
   const loadingMessages = direct ? <ConversationLoadingStatus label="Loading messages" /> : <>
     <p className="sp-sr-only" role="status" aria-label="Loading messages">Loading messages…</p>
@@ -385,7 +392,7 @@ export function ChannelRoom({ viewState, requestedThread, onCloseDirect, readSta
     {direct ? <Dialog open={detailsOpen} title={channel.name} onClose={() => setDetailsOpen(false)}><p>Only the participants in this conversation can read and send messages.</p><ul className="dm-details-members">{direct.participants?.map(person => <li key={person.id}><button type="button" className="space-profile-trigger" aria-label={`View ${person.name}’s profile`} onClick={() => {setDetailsOpen(false); profiles?.open({kind:'user',id:person.id});}}><Avatar name={person.name} initials={person.name.slice(0, 2).toUpperCase()} size="sm" /><strong>{person.name}{person.id === profile.id ? ' (you)' : ''}</strong></button></li>)}</ul><Button onClick={onCloseDirect}>Close direct message</Button></Dialog> : <ChannelDetails permissions={permissions.snapshot} permissionsPending={!permissions.snapshot} channel={channel} viewer={profile.id} open={detailsOpen} initialTab={detailsTab} onClose={() => setDetailsOpen(false)} onChange={onChannelChange} onLeft={onLeft} />}
     {!direct && status !== 'Disconnected' && <ChannelMemory channel={channel.id} name={channel.name} open={memoryOpen} message={memoryMessage} onClose={() => { setMemoryOpen(false); setMemoryMessage(undefined); }} />}
     {selectedMention && status !== 'Disconnected' && <MentionDetails channel={channel.id} mention={selectedMention} onClose={() => setSelectedMention(undefined)} />}
-    {sourceId && status !== 'Disconnected' && <SourceMessage direct={!!direct} key={sourceId} channel={channel.id} name={channel.name} messageId={sourceId} onUnavailable={checkSourceAccess} onClose={() => { setSourceId(null); const url = new URL(window.location.href); url.searchParams.delete('message'); window.history.replaceState({}, '', url); }} />}
+    {sourceId && status !== 'Disconnected' && <SourceMessage direct={!!direct} key={sourceId} channel={channel.id} name={channel.name} messageId={sourceId} onUnavailable={checkSourceAccess} onClose={() => { setSourceId(null); }} />}
   </motion.div>;
 }
 function DeleteMessageDialog({ onClose, onConfirm }: { onClose: () => void; onConfirm: () => Promise<void> }) {

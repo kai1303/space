@@ -1,3 +1,4 @@
+import { messagePath } from '@space/contracts';
 import { useEffect, useRef, useState } from 'react';
 import { HUB_FILE_KINDS, type HubFile, type Page, type WorkspaceParticipant, type ChannelSummary } from '@space/contracts';
 import { Tabs, Select, Button, Dialog, IconButton, Menu, MultiSelectMenu } from '@space/ui/primitives';
@@ -78,7 +79,7 @@ function FileResults({ workspace, onOpen, query, filtered, starred, clear, onRev
   }
   function closePreview() { setPreview(null); queueMicrotask(() => opener.current?.isConnected && opener.current.focus()); }
   async function copy(file: HubFile) {
-    try { await navigator.clipboard.writeText(`${location.origin}/chat?workspace=${encodeURIComponent(workspace)}&channel=${encodeURIComponent(file.channel_id)}&message=${encodeURIComponent(file.message_id)}`); setCopied('Message link copied. Only people with access to the conversation can open it.'); }
+    try { await navigator.clipboard.writeText(`${location.origin}${messagePath(file.channel_id, file.message_id)}`); setCopied('Message link copied. Only people with access to the conversation can open it.'); }
     catch { setCopied('Could not copy the link. Open the source message to try again.'); }
   }
   const current = files.find(file => file.id === details);

@@ -1,3 +1,4 @@
+import { workspacePath, workspaceIdFromPath } from '@space/contracts';
 import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { AnimatePresence, useIsPresent } from 'motion/react';
@@ -23,7 +24,7 @@ export function ProfileProvider({ children, workspace, viewer, onMessage, onConn
   const [selection, setSelection] = useState<{workspace: string; target: ProfileTarget} | undefined>(() => {
     const params = new URLSearchParams(window.location.search), value = params.get('profile');
     const match = value?.match(/^(user|agent):([0-9a-f-]{36})$/i);
-    return params.get('workspace') === workspace && match ? {workspace, target:{kind:match[1] as ProfileTarget['kind'], id:match[2]!}} : undefined;
+    return (workspaceIdFromPath(location.pathname) ?? params.get('workspace')) === workspace && match ? {workspace, target:{kind:match[1] as ProfileTarget['kind'], id:match[2]!}} : undefined;
   });
   const trigger = useRef<HTMLElement | null>(null);
   const selected = selection?.workspace === workspace ? selection.target : undefined;
@@ -111,8 +112,8 @@ function ProfilePanel({workspace, viewer, target, onClose, onMessage, onConnecti
     try { await navigator.clipboard.writeText(value); if (alive.current) {setCopied(label); setActionError('');} }
     catch { if (alive.current) setActionError('Could not copy. Please try again.'); }
   }
-  const link = new URL('/chat', window.location.origin);
-  link.searchParams.set('workspace', workspace); link.searchParams.set('profile', `${target.kind}:${target.id}`);
+  const link = new URL(workspacePath(workspace), window.location.origin);
+  link.searchParams.set('profile', `${target.kind}:${target.id}`);
   const status = profile?.kind === 'user' ? visibleStatus(profile.status) : null;
   return <SidePanel ref={panel} className="space-profile-panel space-member-profile" role="region" aria-label="Profile">
     <header><strong>Profile</strong><button ref={closeButton} type="button" aria-label="Close profile" onClick={onClose}><X size={20}/></button></header>

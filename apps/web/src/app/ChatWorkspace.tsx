@@ -1,6 +1,6 @@
 import { ConversationLinkLoading } from './shell/ConversationLinkLoading.js';
 import { ConversationLocation } from '../shared/ui/conversation-location.js';
-import { conversationPath, parseConversationPath } from './navigation/conversation-link.js';
+import { parseConversationPath, parseSessionPath, workspaceIdFromPath, workspacePath, type AgentSessionReference } from '@space/contracts';
 import { DestinationTransition } from './navigation/DestinationTransition.js';
 import { WorkspaceMembers } from '../features/workspace/members/WorkspaceMembers.js';
 import { WorkspaceSettings } from '../features/workspace/settings/WorkspaceSettings.js';
@@ -67,11 +67,12 @@ function WorkspaceView({ profile: initialProfile, attachments, address }: {
   const reduced = useReducedMotion();
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]), [workspace, setWorkspace] = useState('');
   const [error, setError] = useState('');
+  const [initialSession, setInitialSession] = useState<AgentSessionReference>();
   const [agentSetup, setAgentSetup] = useState<{workspace:string;connector?:string}>();
   useEffect(() => {
     const query = new URLSearchParams(window.location.search);
     const provider = query.get('connectProvider');
-    if (window.spaceDesktop && workspace && workspace === query.get('workspace') && provider && ['codex', 'kiro', 'claude'].includes(provider)) {
+    if (window.spaceDesktop && workspace && workspace === (workspaceIdFromPath(location.pathname) ?? query.get('workspace')) && provider && ['codex', 'kiro', 'claude'].includes(provider)) {
       setAgentSetup({ workspace, connector: `${provider}.local` });
       const url = new URL(window.location.href);
       url.searchParams.delete('connectProvider');
@@ -107,17 +108,32 @@ function WorkspaceView({ profile: initialProfile, attachments, address }: {
     const controller = new AbortController();
     async function load() {
       const link = url.pathname.startsWith('/c/') ? parseConversationPath(url.pathname) : undefined;
-      const [items, target] = await Promise.all([
+      const session = url.pathname.startsWith('/s/') ? parseSessionPath(url.pathname) : undefined;
+      const [items, target, sessionLocation] = await Promise.all([
         listAll<Workspace>('/workspaces'),
         link && request<{workspace_id: string}>(`/channels/${link.channel}/location${link.thread ? `?thread=${link.thread}` : ''}`, undefined, undefined, 'POST', controller.signal),
+        session ? request<AgentSessionReference & { workspace_id: string }>(`/agent-sessions/${session}/location`, undefined, undefined, undefined, controller.signal) : undefined,
       ]);
       if (!active) return;
-      if (link && (!target || !items.some(item => item.id === target.workspace_id))) throw new Error('not_found');
-      const requested = target?.workspace_id ?? url.searchParams.get('workspace');
+      const workspaceLink = workspaceIdFromPath(url.pathname);
+      const requested = sessionLocation?.workspace_id ?? target?.workspace_id ?? workspaceLink ?? url.searchParams.get('workspace');
+      if ((link || session || requested) && !items.some(item => item.id === requested)) throw new Error('not_found');
+      if ((url.pathname === '/chat' || url.pathname === '/') && requested && !url.searchParams.has('channel')) {
+        const canonical = new URL(workspacePath(requested), url.origin);
+        if (canonical.pathname !== '/chat') {
+          url.searchParams.delete('workspace');
+          canonical.search = url.search;
+          canonical.hash = url.hash;
+          history.replaceState(history.state, '', canonical);
+          address.current = browserAddress();
+        }
+      }
       setWorkspaces(items);
       setWorkspace(items.find(item => item.id === requested)?.id ?? items[0]?.id ?? '');
-      const view = history.state?.spaceView;
-      if (link) {
+      const segment = workspaceLink && url.pathname.split('/')[3];
+      const view = segment === 'dms' ? 'DMs' : segment === 'activity' ? 'Activity' : segment || history.state?.spaceView;
+      if (sessionLocation) setInitialSession(sessionLocation);
+      else if (link) {
         if (view === 'DMs') openDirect(link.channel);
         else setRequestedChannel(link.channel);
         if (link.thread) setMentionTarget({channel_id: link.channel, message_id: '', thread_id: link.thread});
@@ -127,32 +143,32 @@ function WorkspaceView({ profile: initialProfile, attachments, address }: {
       setLoaded(true);
     }
     void load().catch(reason => {
-      if (active) setError(url.pathname.startsWith('/c/') && ['not_found','forbidden'].includes(reason?.message)
-        ? 'This conversation or thread is unavailable to your account.' : errorText(reason));
+      if (active) setError((url.pathname.startsWith('/c/') || url.pathname.startsWith('/s/') || url.pathname.startsWith('/w/')) && ['not_found','forbidden'].includes(reason?.message)
+        ? (url.pathname.startsWith('/s/') ? 'This agent session is unavailable to your account.' : url.pathname.startsWith('/w/') ? 'This workspace is unavailable to your account.' : 'This conversation or thread is unavailable to your account.') : errorText(reason));
     });
     return () => { active = false; controller.abort(); };
   }, [loadAttempt]);
 
   const view = hubView ?? (activityOpen ? 'Activity' : directOpen ? 'DMs' : 'Home');
   const firstView = useRef(true);
-  const publish = useCallback((channel: string | null, thread?: string) => {
+  const publish = useCallback((destination: string | null) => {
     if (!workspace || address.current.path !== location.pathname + location.search) return;
-    const path = channel ? conversationPath(channel, thread) : `/chat?workspace=${encodeURIComponent(workspace)}`;
-    if (!path) return;
+    const home = workspacePath(workspace);
+    const path = destination ?? (view !== 'Home' && home.startsWith('/w/') ? home + '/' + view.toLowerCase() : home);
     const initial = firstView.current;
     firstView.current = false;
-    // Legacy message, profile and desktop setup bookmarks own their initial URL.
-    if (initial && [...new URLSearchParams(location.search).keys()].some(key => !['workspace','channel'].includes(key))) return;
+    // Keep profile links and desktop handoffs until their owner consumes the query.
+    if (initial && [...new URLSearchParams(location.search).keys()].some(key => !['workspace','channel','message'].includes(key))) return;
     const state = { ...history.state, spaceView: view };
     if (path === address.current.path && address.current.view === view) return;
-    if (initial || (path === address.current.path && channel !== null)) history.replaceState(state, '', path);
+    if (initial || (path === address.current.path && destination !== null)) history.replaceState(state, '', path);
     else history.pushState(state, '', path);
     address.current = { path, view };
   }, [address, workspace, view]);
   useEffect(() => {
     if (loaded && (hubView || activityOpen)) publish(null);
   }, [loaded, hubView, activityOpen, publish]);
-  if (!loaded) return error ? <AccessFrame screen="workspace-error" title="Let’s try that again."><p role="alert">{error}</p><Button onClick={() => { setError(''); setLoadAttempt(attempt => attempt + 1); }}>Try again</Button>{location.pathname.startsWith('/c/') && <a href="/chat">Open workspace</a>}</AccessFrame> : location.pathname.startsWith('/c/') ? <ConversationLinkLoading /> : <AccessLoading message="Loading workspaces…" />;
+  if (!loaded) return error ? <AccessFrame screen="workspace-error" title="Let’s try that again."><p role="alert">{error}</p><Button onClick={() => { setError(''); setLoadAttempt(attempt => attempt + 1); }}>Try again</Button>{location.pathname !== '/chat' && <a href="/chat">Open workspace</a>}</AccessFrame> : location.pathname.startsWith('/c/') ? <ConversationLinkLoading /> : <AccessLoading message="Loading workspaces…" />;
   if (!workspace) return <WorkspaceSetup name={profile.display_name} onCreate={addWorkspace} />;
   const selectedWorkspace = workspaces.find(item => item.id === workspace);
   const recent = navigation.entries.map((entry, index) => ({ ...entry, index })).reverse().filter((entry, index, entries) => entries.findIndex(other => other.workspace === entry.workspace && other.channel === entry.channel) === index);
@@ -169,7 +185,7 @@ function WorkspaceView({ profile: initialProfile, attachments, address }: {
     {error && <p role="alert">{error}</p>}
     {navigationError && <p role="alert">{navigationError}</p>}
     <DestinationTransition destination={destination} scope={workspace}>
-    {workspace && hubView && !homeShortcuts.has(hubView) ? hubContent : workspace && activityOpen ? <Notifications viewState={pageViews.activity} key={`activity:${workspace}`} workspace={workspace} onOpen={item => void openMention(item)}/> : workspace && directOpen ? <DirectMessages viewState={pageViews.direct} key={`dms:${workspace}`} workspace={workspace} viewer={profile.id} requestedId={directId} compose={directCompose} width={sidebarWidth} drafts={draftState.current} onDraftChange={saveDraft} onVisit={visit} onSearchAvailabilityChange={setCanSearch} renderConversation={(dm, controls) => <ChannelRoom viewState={viewForChannel(dm.id)} key={`${dm.id}:${profileMessage}`} readState={controls.readState} uploads={uploads} profile={profile} channel={dm} onChannelChange={updated => controls.change(updated as DirectMessageSummary)} onLeft={() => void controls.close()} onCloseDirect={() => void controls.close()} drafts={draftState.current} onDraftChange={saveDraft} onAccessLost={() => forgetChannel(dm.id)} searchOpen={searchOpen} onSearchClose={() => setSearchOpen(false)} composeRequest={profileMessage} requestedThread={mentionTarget?.channel_id === dm.id ? mentionTarget.thread_id : undefined} mentionTarget={mentionTarget?.channel_id === dm.id ? mentionTarget.message_id : undefined} onMentionOpened={() => setMentionTarget(undefined)} />} /> : workspace ? <WorkspaceChannels viewForChannel={viewForChannel} onRequestedChannelConsumed={() => setRequestedChannel(undefined)} shortcut={hubView} onShortcut={navigateHub} content={hubContent} onContentClose={() => setHubView(undefined)} onDirectMessage={openChannel} onNewDirectMessage={newDirect} uploads={uploads} profile={profile} workspace={workspace} workspaces={workspaces} workspaceControl={<WorkspacePicker items={workspaces} value={workspace} onChange={changeWorkspace} onMembers={() => setMembersOpen(true)} />} width={sidebarWidth} onWidthChange={setSidebarWidth} requestedChannel={requestedChannel} mentionTarget={mentionTarget} onMentionOpened={() => setMentionTarget(undefined)} onVisit={visit} searchOpen={searchOpen} onSearchClose={() => setSearchOpen(false)} onSearchAvailabilityChange={setCanSearch} drafts={draftState.current} onDraftChange={saveDraft} onForgetChannel={forgetChannel} /> : null}
+    {workspace && hubView && !homeShortcuts.has(hubView) ? hubContent : workspace && activityOpen ? <Notifications viewState={pageViews.activity} key={`activity:${workspace}`} workspace={workspace} onOpen={item => void openMention(item)}/> : workspace && directOpen ? <DirectMessages viewState={pageViews.direct} key={`dms:${workspace}`} workspace={workspace} viewer={profile.id} requestedId={directId} compose={directCompose} width={sidebarWidth} drafts={draftState.current} onDraftChange={saveDraft} onVisit={visit} onSearchAvailabilityChange={setCanSearch} renderConversation={(dm, controls) => <ChannelRoom viewState={viewForChannel(dm.id)} key={`${dm.id}:${profileMessage}`} readState={controls.readState} uploads={uploads} profile={profile} channel={dm} onChannelChange={updated => controls.change(updated as DirectMessageSummary)} onLeft={() => void controls.close()} onCloseDirect={() => void controls.close()} drafts={draftState.current} onDraftChange={saveDraft} onAccessLost={() => forgetChannel(dm.id)} searchOpen={searchOpen} onSearchClose={() => setSearchOpen(false)} composeRequest={profileMessage} requestedThread={mentionTarget?.channel_id === dm.id ? mentionTarget.thread_id : undefined} mentionTarget={mentionTarget?.channel_id === dm.id ? mentionTarget.message_id : undefined} onMentionOpened={() => setMentionTarget(undefined)} />} /> : workspace ? <WorkspaceChannels initialSession={initialSession} onSessionRestored={() => setInitialSession(undefined)} viewForChannel={viewForChannel} onRequestedChannelConsumed={() => setRequestedChannel(undefined)} shortcut={hubView} onShortcut={navigateHub} content={hubContent} onContentClose={() => setHubView(undefined)} onDirectMessage={openChannel} onNewDirectMessage={newDirect} uploads={uploads} profile={profile} workspace={workspace} workspaces={workspaces} workspaceControl={<WorkspacePicker items={workspaces} value={workspace} onChange={changeWorkspace} onMembers={() => setMembersOpen(true)} />} width={sidebarWidth} onWidthChange={setSidebarWidth} requestedChannel={requestedChannel} mentionTarget={mentionTarget} onMentionOpened={() => setMentionTarget(undefined)} onVisit={visit} searchOpen={searchOpen} onSearchClose={() => setSearchOpen(false)} onSearchAvailabilityChange={setCanSearch} drafts={draftState.current} onDraftChange={saveDraft} onForgetChannel={forgetChannel} /> : null}
     </DestinationTransition>
   </ChatShell></motion.div></ProfileProvider></ConversationLocation.Provider>;
 }

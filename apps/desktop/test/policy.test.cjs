@@ -48,6 +48,8 @@ test('browser handoffs carry only a workspace and provider into a validated Spac
   const { desktopHandoff } = require('../src/policy.cjs');
   const link = 'space-desktop://connect?origin=https%3A%2F%2Fspace.example&workspace=w&provider=kiro';
   assert.equal(desktopHandoff(link).href, 'https://space.example/chat?workspace=w&connectProvider=kiro');
+  assert.equal(desktopHandoff(link.replace('workspace=w', 'workspace=b232851a-61d8-44f5-a514-c7b0405694c2')).href,
+    'https://space.example/w/sjKFGmHYRPWlFMewQFaUwg?connectProvider=kiro');
   for (const value of [link + '&code=secret', link + '#secret', link.replace('=kiro', '=shell'),
     link.replace('https%3A', 'file%3A'), link.replace('space.example', 'space.example%2Fpath'),
     link.replace('=w&', '=%2Fetc&'), link.replace('://connect', '://connect/run')]) {

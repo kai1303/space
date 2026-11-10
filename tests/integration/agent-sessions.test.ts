@@ -50,6 +50,9 @@ test('named sessions are independent, bounded, idempotent, scoped and validate t
   await api(a.owner_token, 'POST', `/threads/${a.thread_id}/agent-sessions`, { ...input, title: 'Changed' }, 409);
   const two = await session(a, 'Second'); assert.notEqual(one.id, two.id);
   assert.equal((await api(a.collaborator_token, 'GET', `/threads/${a.thread_id}/agent-sessions`)).items.length, 2);
+  const location = await api(a.collaborator_token, 'GET', `/agent-sessions/${one.id}/location`);
+  assert.deepEqual(location, {id:one.id, workspace_id:a.workspace_id, origin_thread_id:a.thread_id, channel_id:a.channel_id, channel_archived:false, agent_name:one.agent_name});
+  await api(foreign.owner_token, 'GET', `/agent-sessions/${one.id}/location`, undefined, 404);
   await api(foreign.owner_token, 'GET', `/agent-sessions/${one.id}`, undefined, 404);
   await api(foreign.owner_token, 'POST', `/threads/${a.thread_id}/agent-sessions`, input, 404);
   await api(a.owner_token, 'POST', `/threads/${a.thread_id}/agent-sessions`, { ...input, client_session_id: randomUUID(), title: '' }, 400);

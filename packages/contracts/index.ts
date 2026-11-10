@@ -1,3 +1,4 @@
+export * from './space-links.js';
 export * from './local-tools.js';
 export * from './sidekick.js';
 export * from './calling.js';
