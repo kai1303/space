@@ -1,10 +1,6 @@
 import { DatabaseSync } from "node:sqlite";
 
-export interface MessageInput {
-  key: string;
-  destination: string;
-  text: string;
-}
+import type { MessageInput } from "./template";
 
 export function createMailbox(path: string) {
   const db = new DatabaseSync(path);

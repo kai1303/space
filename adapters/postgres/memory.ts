@@ -177,7 +177,8 @@ export class MemoryStore {
     const [row] = await c.select().from(s.messages).where(and(eq(s.messages.id, uuid(messageId)), eq(s.messages.channel_id, channel.channel_id)));
     if (!row) throw new AppError(404, 'not_found');
     let name: string;
-    if (row.webhook_name) name = row.webhook_name;
+    if (row.workflow_name) name = row.workflow_name;
+    else if (row.webhook_name) name = row.webhook_name;
     else if (row.user_id) {
       const [author] = await c.select({ name: s.users.display_name }).from(s.users).where(eq(s.users.id, row.user_id));
       name = author!.name;

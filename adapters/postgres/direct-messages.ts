@@ -49,7 +49,7 @@ export class DirectMessageStore {
       JOIN users peer ON peer.id=CASE WHEN ch.direct_user_low=${actor}::uuid THEN ch.direct_user_high ELSE ch.direct_user_low END
       JOIN LATERAL (SELECT jsonb_agg(jsonb_build_object('id',u.id,'name',u.display_name,'image',u.image,'title',u.title,'presence',u.presence) ORDER BY u.id) AS participants
         FROM users u WHERE u.id IN (ch.direct_user_low,ch.direct_user_high)) p ON true
-      LEFT JOIN LATERAL (SELECT jsonb_build_object('text',m.text,'created_at',m.created_at,'author_name',u.display_name) AS last_message
+      LEFT JOIN LATERAL (SELECT jsonb_build_object('text',m.text,'created_at',m.created_at,'author_name',coalesce(m.workflow_name,u.display_name)) AS last_message
         FROM messages m JOIN users u ON u.id=m.user_id WHERE m.workspace_id=ch.workspace_id AND m.channel_id=ch.id ORDER BY m.sequence DESC LIMIT 1) l ON true
       WHERE v.workspace_id=${workspace} AND v.user_id=${actor} AND (${channel ?? null}::uuid IS NOT NULL OR NOT v.hidden)
         AND (${channel ?? null}::uuid IS NULL OR ch.id=${channel ?? null}::uuid)

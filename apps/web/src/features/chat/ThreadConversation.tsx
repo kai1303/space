@@ -24,7 +24,7 @@ export function ConversationComposer({typingIndicator,onBlurCapture,...props}:Co
 }
 type MessageIdentity = Pick<ChatMessage,'author'|'created_at'>;
 export function continuesMessageGroup(message:MessageIdentity,previous?:MessageIdentity) {
- if(!previous || message.author.id!==previous.author.id || message.author.kind!==previous.author.kind) return false;
+ if(message.author.kind === 'workflow' || !previous || message.author.id!==previous.author.id || message.author.kind!==previous.author.kind) return false;
  const current=new Date(message.created_at), prior=new Date(previous.created_at), elapsed=current.getTime()-prior.getTime();
  // Five minutes is Space's grouping window; Slack's exact cutoff wasn't observable.
  return elapsed>=0 && elapsed<5*60*1000 && current.toDateString()===prior.toDateString();
@@ -37,7 +37,7 @@ export function ConversationMessage({message,previous,viewerId,arrival,onReact,o
  const profiles = useMemberProfile();
  const deleted = !!message.deleted_at;
  const openMention = (mention:MentionReference) => { if(profiles && mention.kind !== 'broadcast') profiles.open({kind:mention.kind,id:mention.id}); else onMentionClick?.(mention); };
- return <Message app={message.author.kind === 'app'} onAuthorClick={profiles && message.author.kind !== 'app' ? () => profiles.open({kind:message.author.kind === 'agent' ? 'agent' : 'user',id:message.author.id}) : undefined} grouped={continuesMessageGroup(message,previous)} author={message.author.name} initials={message.author.name.slice(0,2).toUpperCase()} agent={message.author.kind==='agent'} tone={message.author.kind==='agent'?'green':message.author.id===viewerId?'blue':'purple'} arrival={arrival} time={new Date(message.created_at).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})} reactions={deleted ? [] : (message.reactions??[]).map(reaction=>({emoji:reaction.emoji,count:reaction.count,active:reaction.user_ids.includes(viewerId)}))} onReact={deleted ? undefined : onReact} onReply={onReply} replyCount={replyCount??message.reply_count} actions={deleted ? undefined : actions} footer={footer}>
+ return <Message workflow={message.author.kind === 'workflow'} app={message.author.kind === 'app'} onAuthorClick={profiles && message.author.kind !== 'app' && message.author.kind !== 'workflow' ? () => profiles.open({kind:message.author.kind === 'agent' ? 'agent' : 'user',id:message.author.id}) : undefined} grouped={continuesMessageGroup(message,previous)} author={message.author.name} initials={message.author.name.slice(0,2).toUpperCase()} agent={message.author.kind==='agent'} tone={message.author.kind==='agent'?'green':message.author.id===viewerId?'blue':'purple'} arrival={arrival} time={new Date(message.created_at).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})} reactions={deleted ? [] : (message.reactions??[]).map(reaction=>({emoji:reaction.emoji,count:reaction.count,active:reaction.user_ids.includes(viewerId)}))} onReact={deleted ? undefined : onReact} onReply={onReply} replyCount={replyCount??message.reply_count} actions={deleted ? undefined : actions} footer={footer}>
   {deleted ? <em className="chat-deleted-message">This message was deleted.</em> : <>{body??<><AgentMessageBody message={message} viewerId={viewerId} onMentionClick={openMention} streaming={streaming} newArrival={arrival} showActivity={showAgentActivity}/>{!!message.attachments?.length&&<AssetAttachments assets={message.attachments}/>}</>}{children}</>}
  </Message>;
 }

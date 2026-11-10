@@ -61,7 +61,7 @@ test("routes requests independently and resumes the matching claim after a worke
 test("retrying a post returns the original message", async () => {
   const mailbox = createMailbox(":memory:");
   try {
-    const input = { key: "request-1/post", destination: "#help", text: "VPN is down" };
+    const input = { target: "channel" as const, workflowName: helpRequest.name, key: "request-1/post", destination: "#help", text: "VPN is down" };
     assert.deepEqual(await mailbox.postMessageV1(input), await mailbox.postMessageV1(input));
     assert.equal(mailbox.list().length, 1);
   } finally {

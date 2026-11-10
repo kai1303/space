@@ -8,9 +8,18 @@ type Binding = { literal: string } | { from: "description" | "requester" | "clai
 type Step =
   | { type: "ifUrgent"; urgent: string; normal: string }
   | { type: "claim"; next: string }
-  | { type: "space.message.post@1"; destination: Binding; text: Binding; next?: string };
+  | { type: "space.message.post@1"; target?: "channel" | "person"; destination: Binding; text: Binding; next?: string };
+
+export interface MessageInput {
+  key: string;
+  destination: string;
+  target: "channel" | "person";
+  text: string;
+  workflowName: string;
+}
 
 export interface Template {
+  name: string;
   version: number;
   entry: string;
   steps: Record<string, Step>;
@@ -18,6 +27,7 @@ export interface Template {
 
 // This trusted fixture is passed by value to Temporal when a run starts.
 export const helpRequest: Template = {
+  name: "IT Help Request",
   version: 1,
   entry: "route",
   steps: {
@@ -32,7 +42,7 @@ export const helpRequest: Template = {
     },
     claim: { type: "claim", next: "notify" },
     notify: {
-      type: "space.message.post@1", destination: { from: "requester" },
+      type: "space.message.post@1", target: "person", destination: { from: "requester" },
       text: { from: "claimant", prefix: "Claimed by " }
     }
   }
@@ -40,3 +50,7 @@ export const helpRequest: Template = {
 
 export type { Binding };
 export const taskQueue = "space-help-request-demo";
+
+export function workerQueue(apiUrl: string | undefined) {
+  return apiUrl ? "space-help-request-chat" : taskQueue;
+}

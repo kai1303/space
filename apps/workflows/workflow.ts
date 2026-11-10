@@ -1,10 +1,10 @@
 import {
   ApplicationFailure, condition, defineUpdate, proxyActivities, setHandler, workflowInfo
 } from "@temporalio/workflow";
-import type { createMailbox } from "./mailbox";
+import type { spaceChatActivities } from "./space-chat";
 import type { Binding, RequestInput, Template } from "./template";
 
-const activities = proxyActivities<Pick<ReturnType<typeof createMailbox>, "postMessageV1">>({
+const activities = proxyActivities<ReturnType<typeof spaceChatActivities>>({
   startToCloseTimeout: "10 seconds", retry: { maximumAttempts: 3 }
 });
 const registry = { "space.message.post@1": activities.postMessageV1 };
@@ -46,6 +46,8 @@ export async function runTemplate(plan: Template, input: RequestInput) {
         break;
       case "space.message.post@1": {
         const message = await registry[step.type]({
+          workflowName: plan.name ?? "IT Help Request",
+          target: step.target ?? "channel",
           key: workflowInfo().workflowId + "/" + id,
           destination: resolve(step.destination), text: resolve(step.text)
         });

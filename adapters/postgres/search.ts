@@ -39,7 +39,7 @@ export class SearchStore {
   async hydrate(actor:string,workspace:string,candidates:SearchDocument[],threadsOnly=false):Promise<SearchHit[]> {
     if(!candidates.length)return [];
     const {rows}=await this.pool.query(`SELECT m.id,m.channel_id,CASE WHEN c.kind='direct' THEN coalesce(peer.display_name,c.name)||CASE WHEN c.direct_user_low=c.direct_user_high THEN ' (you)' ELSE '' END ELSE c.name END AS channel_name,c.kind AS channel_kind,m.thread_id,m.text,m.created_at,
-      coalesce(m.user_id,m.installation_id,m.webhook_id) AS author_id,coalesce(m.webhook_name,u.display_name,d.name,'Agent') AS author_name,
+      coalesce(m.user_id,m.installation_id,m.webhook_id) AS author_id,coalesce(m.webhook_name,m.workflow_name,u.display_name,d.name,'Agent') AS author_name,
       m.search_revision::text AS revision,
       EXISTS(SELECT 1 FROM messages earlier WHERE earlier.channel_id=m.channel_id AND earlier.thread_id=m.thread_id AND earlier.sequence<m.sequence AND earlier.agent_session_id IS NULL) AS is_reply,
       EXISTS(SELECT 1 FROM messages sibling WHERE sibling.channel_id=m.channel_id AND sibling.thread_id=m.thread_id AND sibling.id<>m.id AND sibling.agent_session_id IS NULL) AS has_thread

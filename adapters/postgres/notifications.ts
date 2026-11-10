@@ -21,7 +21,7 @@ const scope = (actor: string, workspace: string) => sql`n.user_id=${actor} AND n
       OR (n.kind='mention' AND wm.guest_type='none' AND EXISTS(SELECT 1 FROM channels visible WHERE visible.id=n.channel_id AND visible.kind='channel' AND NOT visible.private))))`;
 const selection = sql`n.id::text,n.kind,n.channel_id,
   CASE WHEN ch.kind='direct' THEN (SELECT u.display_name FROM users u WHERE u.id=CASE WHEN ch.direct_user_low=n.user_id THEN ch.direct_user_high ELSE ch.direct_user_low END) ELSE ch.name END AS channel_name,
-  ch.kind AS channel_kind,n.message_id,m.thread_id,u.display_name AS author_name,left(m.text,500) AS text,n.emoji,n.created_at,n.read_at,n.silent`;
+  ch.kind AS channel_kind,n.message_id,m.thread_id,CASE WHEN n.kind='reaction' THEN u.display_name ELSE coalesce(m.workflow_name,u.display_name) END AS author_name,left(m.text,500) AS text,n.emoji,n.created_at,n.read_at,n.silent`;
 const sources = sql`notifications n JOIN channels ch ON ch.id=n.channel_id
   JOIN messages m ON m.channel_id=n.channel_id AND m.id=n.message_id JOIN users u ON u.id=n.actor_id`;
 

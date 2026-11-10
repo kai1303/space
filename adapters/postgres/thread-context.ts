@@ -10,7 +10,7 @@ export async function assertContextThread(c: DbSession, channelId: string, threa
   if (!found.length) throw new AppError(404, 'thread_not_found');
 }
 // Only attachment metadata is returned. Files retain their existing authorized download flow.
-function message(row: ThreadContextMessage & { author_id: string; author_type: 'human' | 'agent' | 'app'; text_length: number }): ThreadContextMessage {
+function message(row: ThreadContextMessage & { author_id: string; author_type: 'human' | 'agent' | 'app' | 'workflow'; text_length: number }): ThreadContextMessage {
   // PostgreSQL counts code points; contracts count UTF-16 units. Never split an emoji.
   const excerpt = row.text.slice(0,1000).replace(/[\uD800-\uDBFF]$/, '');
   return { id: row.id, sequence: row.sequence, text: excerpt, text_truncated: row.text_length > 1000 || excerpt !== row.text, author: { id: row.author_id, kind: row.author_type }, attachments: row.attachments };

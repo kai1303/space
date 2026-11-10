@@ -7,7 +7,7 @@ export interface ThreadContextMessage {
   sequence: string;
   text: string;
   text_truncated: boolean;
-  author: { id: string; kind: 'human' | 'agent' | 'app' };
+  author: { id: string; kind: 'human' | 'agent' | 'app' | 'workflow' };
   attachments: AssetAttachment[];
 }
 export interface ThreadCheckpoint {
@@ -45,7 +45,7 @@ export function parseThreadContext(value: unknown): ThreadContext {
   const parseMessage = (value: unknown): ThreadContextMessage => {
     const m = record(value, ['id', 'sequence', 'text', 'text_truncated', 'author', 'attachments']);
     const author = record(m.author, ['id', 'kind']);
-    if (!['human', 'agent', 'app'].includes(author.kind as string) || typeof m.text !== 'string' || m.text.length > 1000 || m.text.includes('\0') || typeof m.text_truncated !== 'boolean' || !Array.isArray(m.attachments) || m.attachments.length > 20) throw new AppError(400, 'invalid_thread_message');
+    if (!['human', 'agent', 'app', 'workflow'].includes(author.kind as string) || typeof m.text !== 'string' || m.text.length > 1000 || m.text.includes('\0') || typeof m.text_truncated !== 'boolean' || !Array.isArray(m.attachments) || m.attachments.length > 20) throw new AppError(400, 'invalid_thread_message');
     const sequence = chatCursor(m.sequence);
     if (BigInt(sequence) > BigInt(through)) throw new AppError(400, 'invalid_thread_sequence');
     const attachments = m.attachments.map(raw => {
@@ -53,7 +53,7 @@ export function parseThreadContext(value: unknown): ThreadContext {
       if (!Number.isSafeInteger(a.size) || (a.size as number) < 0) throw new AppError(400, 'invalid_attachment');
       return { id: uuid(a.id), name: text(a.name, 255), size: a.size as number, type: text(a.type, 255) };
     });
-    return { id: uuid(m.id), sequence, text: m.text, text_truncated: m.text_truncated, author: { id: uuid(author.id), kind: author.kind as 'human' | 'agent' | 'app' }, attachments };
+    return { id: uuid(m.id), sequence, text: m.text, text_truncated: m.text_truncated, author: { id: uuid(author.id), kind: author.kind as 'human' | 'agent' | 'app' | 'workflow' }, attachments };
   };
   if (!Array.isArray(v.messages) || v.messages.length > 16 || typeof v.has_earlier_messages !== 'boolean') throw new AppError(400, 'invalid_thread_context');
   let checkpoint: ThreadCheckpoint | null = null;

@@ -177,11 +177,12 @@ export class ChatStore {
       await c.delete(s.channelMembers).where(and(eq(s.channelMembers.channel_id, id), eq(s.channelMembers.user_id, user)));
     });
   }
-  async send(actor: string, channelId: string, input: unknown, newMessageId?: string): Promise<ChatMessage> {
+  async send(actor: string, channelId: string, input: unknown, newMessageId?: string, workflow?: { name: string; workspace: string }): Promise<ChatMessage> {
     const request = parseMessageInput(input);
-    const hash = createHash('sha256').update(JSON.stringify({ channel_id: channelId, thread_id: request.thread_id, text: request.text, ...(request.document ? { document: request.document } : {}), ...(request.asset_ids?.length ? { asset_ids: request.asset_ids } : {}), ...(request.asset_descriptions ? { asset_descriptions: request.asset_descriptions } : {}) })).digest('hex');
+    const hash = createHash('sha256').update(JSON.stringify({ ...(workflow ? { workflow_name: workflow.name } : {}), channel_id: channelId, thread_id: request.thread_id, text: request.text, ...(request.document ? { document: request.document } : {}), ...(request.asset_ids?.length ? { asset_ids: request.asset_ids } : {}), ...(request.asset_descriptions ? { asset_descriptions: request.asset_descriptions } : {}) })).digest('hex');
     return sessionTransaction(this.db, async c => {
       const channel = await this.authorize(c, actor, channelId);
+      if (workflow && channel.workspace_id !== workflow.workspace) throw notFound();
       const [existing] = await c.select().from(s.messageIdentities).where(and(eq(s.messageIdentities.workspace_id, channel.workspace_id), eq(s.messageIdentities.user_id, actor), eq(s.messageIdentities.client_message_id, request.client_message_id)));
       if (existing) {
         if (existing.request_hash !== hash) throw new AppError(409, 'idempotency_conflict');
@@ -216,7 +217,7 @@ export class ChatStore {
         return { id: file.id, name: file.name, size: file.size, type: file.type, ...(request.asset_descriptions?.[id] ? { description: request.asset_descriptions[id] } : {}) };
       });
       await c.insert(s.messages).values({ id, workspace_id: channel.workspace_id, channel_id: channelId, thread_id: threadId,
-        author_type: 'human', user_id: actor, client_message_id: request.client_message_id, request_hash: hash, text: prepared.document ? prepared.document.ops.map(op => op.insert).join('').trim() : request.text, document: prepared.document ?? null, attachments });
+        workflow_name: workflow?.name, author_type: workflow ? 'workflow' : 'human', user_id: actor, client_message_id: request.client_message_id, request_hash: hash, text: prepared.document ? prepared.document.ops.map(op => op.insert).join('').trim() : request.text, document: prepared.document ?? null, attachments });
       await this.mentions.notify(c, actor, channel, id, prepared.refs, !!request.thread_id);
       await this.notifications.notify(c, actor, channel, id, threadId, prepared.refs, !!request.thread_id);
       if (files.length) {
@@ -325,7 +326,7 @@ export class ChatStore {
       const visible = sql`FROM threads t JOIN messages m ON m.workspace_id=t.workspace_id AND m.channel_id=t.channel_id AND m.thread_id=t.id
         LEFT JOIN users u ON u.id=m.user_id WHERE t.id=${thread} AND m.agent_session_id IS NULL
         AND m.deleted_at IS NULL AND m.retained_at IS NULL`;
-      const participant = sql`CASE WHEN m.author_type='agent' THEN 'agent' ELSE concat('participant: ', left(u.display_name, 80)) END`;
+      const participant = sql`CASE WHEN m.workflow_name IS NOT NULL THEN concat('workflow: ',m.workflow_name) WHEN m.author_type='agent' THEN 'agent' ELSE concat('participant: ', left(u.display_name, 80)) END`;
       const columns = sql`left(m.text, 1000) AS text, m.sequence::text AS sequence`;
       const recent = (await c.execute<Turn>(sql`
         SELECT CASE WHEN m.user_id=${actor} THEN 'me' ELSE ${participant} END AS speaker, ${columns}

@@ -20,7 +20,7 @@ export interface ChatMessage {
   document?: RichDocument | null;
   agent_response?: AgentResponse | null;
   attachments?: AssetAttachment[];
-  author: { kind: 'human' | 'agent' | 'app'; id: string; name: string };
+  author: { kind: 'human' | 'agent' | 'app' | 'workflow'; id: string; name: string };
 }
 export interface ChatTaskEvent {
   task_id: string; type: string; actor_id: string; installation_id: string; owner_id: string; data: Record<string, unknown>;

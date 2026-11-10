@@ -54,7 +54,7 @@ export function parseInvocation(value: unknown): InvocationRequest {
     if (working_memory && working_memory.thread_id !== uuid(ctx.thread_id)) throw new AppError(400, 'invalid_context_thread');
     context = { ...(ctx.handoff === undefined ? {} : {handoff: parseSidekickContext(ctx.handoff)}), ...(ctx.channel_memory === undefined ? {} : { channel_memory: parseAgentMemoryContext(ctx.channel_memory) }), ...(working_memory ? { working_memory } : {}), thread_id: uuid(ctx.thread_id), messages: ctx.messages.map(raw => {
       const m = record(raw, ['id', 'text', 'author_type']);
-      if (m.author_type !== 'human' && m.author_type !== 'agent' && m.author_type !== 'app') throw new AppError(400, 'invalid_context');
+      if (m.author_type !== 'human' && m.author_type !== 'agent' && m.author_type !== 'app' && m.author_type !== 'workflow') throw new AppError(400, 'invalid_context');
       return { id: uuid(m.id), text: text(m.text, 1000), author_type: m.author_type };
     }) };
   }

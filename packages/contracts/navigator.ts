@@ -28,7 +28,7 @@ export interface NavigationContext {
   retrievedMessages?: {id:string;text:string;truncated?:boolean}[];
   workingMemory?: Pick<import('./thread-context.js').ThreadContext, 'root' | 'checkpoint'>;
   pendingMessageIds?: string[];
-  messages: { id: string; text: string; truncated?:boolean; author?:{id:string;kind:'human'|'agent'|'app';name?:string} }[];
+  messages: { id: string; text: string; truncated?:boolean; author?:{id:string;kind:'human'|'agent'|'app'|'workflow';name?:string} }[];
   candidates: NavigatorCandidate[];
   rules: NavigatorRule[];
 }

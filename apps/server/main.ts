@@ -1,3 +1,4 @@
+import { workflowChatConfig } from './workflow-chat.js';
 import { huddleMedia } from './huddle-media.js';
 import {outboundOptions} from './outbound.js';
 import { typesenseConfig } from './typesense.js';
@@ -20,7 +21,7 @@ const pool = createPool(process.env.DATABASE_URL);
 const emailConfig = invitationEmailConfig();
 const invitationEmail = emailConfig ? {config:emailConfig,mailer:createInvitationMailer(emailConfig)} : undefined;
 const auth = createAuthentication(pool, { secret: process.env.BETTER_AUTH_SECRET, baseURL: process.env.BETTER_AUTH_URL, sendVerificationEmail:invitationEmail?.mailer.verification, trustedOrigins: process.env.AUTH_TRUSTED_ORIGINS?.split(',').filter(Boolean) });
-const app = createApi(new PostgresStore(pool), { monitoring: process.env.SPACE_MONITORING_ENABLED === 'true' ? { host: '0.0.0.0', port: 9464 } : undefined, huddles: huddleMedia(), outbound: outboundOptions(), search: typesenseConfig(), logger: true, auth, storage, invitationEmail, pairedConnectors, trustedProxies: process.env.TRUSTED_PROXY_CIDRS?.split(',').filter(Boolean), allowDevelopmentTokens: process.env.ALLOW_DEVELOPMENT_TOKENS === 'true', realtime: { adapter,
+const app = createApi(new PostgresStore(pool), { workflowChat: workflowChatConfig(), monitoring: process.env.SPACE_MONITORING_ENABLED === 'true' ? { host: '0.0.0.0', port: 9464 } : undefined, huddles: huddleMedia(), outbound: outboundOptions(), search: typesenseConfig(), logger: true, auth, storage, invitationEmail, pairedConnectors, trustedProxies: process.env.TRUSTED_PROXY_CIDRS?.split(',').filter(Boolean), allowDevelopmentTokens: process.env.ALLOW_DEVELOPMENT_TOKENS === 'true', realtime: { adapter,
   maxConnections: Number(process.env.REALTIME_MAX_CONNECTIONS ?? 1000), maxActorConnections: Number(process.env.REALTIME_MAX_ACTOR_CONNECTIONS ?? 8),
   workConcurrency: Number(process.env.REALTIME_WORK_CONCURRENCY ?? 4), workQueue: Number(process.env.REALTIME_WORK_QUEUE ?? 512) } });
 app.addHook('onClose', async () => { await pool.end(); });

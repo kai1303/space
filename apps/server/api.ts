@@ -1,3 +1,4 @@
+import { registerWorkflowChat, workflowMessagePath, type WorkflowChatConfig } from './workflow-chat.js';
 import { registerRequestMetrics, type MonitoringListener } from './request-metrics.js';
 import { HuddleStore } from '@space/postgres/huddles';
 import {ToolApprovalStore} from '@space/postgres/tool-approvals';
@@ -50,7 +51,7 @@ declare module 'fastify' {
   interface FastifyRequest { actorId: string }
 }
 
-export function createApi(store: PostgresStore, options: { monitoring?: MonitoringListener; huddles?: HuddleMedia; outbound?: OutboundOptions; search?: TypesenseOptions; invitationEmail?: {config:InvitationEmailConfig;mailer:ReturnType<typeof createInvitationMailer>}; pairedConnectors?: import('@space/contracts').PairedConnector[]; logger?: boolean; realtime?: RealtimeOptions; auth?: Authentication; allowDevelopmentTokens?: boolean; trustedProxies?: string[]; storage?: AssetStorage; memory?: MemoryOptions } = {}) {
+export function createApi(store: PostgresStore, options: { workflowChat?: WorkflowChatConfig; monitoring?: MonitoringListener; huddles?: HuddleMedia; outbound?: OutboundOptions; search?: TypesenseOptions; invitationEmail?: {config:InvitationEmailConfig;mailer:ReturnType<typeof createInvitationMailer>}; pairedConnectors?: import('@space/contracts').PairedConnector[]; logger?: boolean; realtime?: RealtimeOptions; auth?: Authentication; allowDevelopmentTokens?: boolean; trustedProxies?: string[]; storage?: AssetStorage; memory?: MemoryOptions } = {}) {
   if (options.allowDevelopmentTokens && process.env.NODE_ENV === 'production') throw new Error('Development tokens are forbidden in production');
   const authenticate = async (headers: IncomingHttpHeaders, socketToken?: unknown) => {
     const actor = await options.auth?.actor(headers);
@@ -80,7 +81,7 @@ export function createApi(store: PostgresStore, options: { monitoring?: Monitori
     if (request.routeOptions.url === MEMORY_MCP_PATH) return;
     if (request.routeOptions.url === HUDDLE_WEBHOOK) return;
     // This route authenticates a source-scoped token itself; it never grants actor access.
-    if (request.routeOptions.url === TODO_SYNC_PATH) return;
+    if (request.routeOptions.url === TODO_SYNC_PATH || request.routeOptions.url === workflowMessagePath) return;
     if (options.auth && request.routeOptions.url === '/v1/auth/*') return;
     if (request.method === 'POST' && request.routeOptions.url === '/v1/agent-pairings/claim') return;
     try {
@@ -154,6 +155,7 @@ export function createApi(store: PostgresStore, options: { monitoring?: Monitori
 
   const chat = new ChatStore(store.pool);
   registerChatRoutes(app, chat);
+  if (options.workflowChat) registerWorkflowChat(app, chat, options.workflowChat);
   registerNavigatorRoutes(app, new NavigatorStore(store.pool));
   const memory = new MemoryStore(store.pool), memoryProviders = createMemoryProviders(options.memory);
   store.memoryReader = createAgentMemoryReader(memory, memoryProviders);

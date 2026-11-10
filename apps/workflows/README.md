@@ -33,3 +33,26 @@ sqlite3 apps/workflows/workflow-demo.sqlite 'SELECT destination, text FROM messa
 ```
 
 The versioned fixture in `template.ts` is the supported template for this demo. Each run receives a snapshot. Both the channel post and the requester notification use the same registered Activity with different input bindings. Messages and claimant names are local test data. Use `TEMPORAL_ADDRESS` for a different local server address and `WORKFLOW_DEMO_DB` for a different mailbox path.
+
+## Send the workflow to Space chat
+
+Apply the Space database migrations and configure the Space API before starting it. Use an existing dedicated Space member for the sender and grant that member posting access to the two destination channels. Messages display the name from the workflow template and a **Workflow** badge.
+
+| Space API environment variable | Value |
+|---|---|
+| `SPACE_WORKFLOW_TOKEN` | A random secret shared with the worker, at least 32 characters. Generate one with `openssl rand -hex 32`. |
+| `SPACE_WORKFLOW_WORKSPACE_ID` | Workspace UUID |
+| `SPACE_WORKFLOW_ACTOR_ID` | Dedicated sender's Space user UUID |
+| `SPACE_WORKFLOW_HELP_CHANNEL_ID` | Channel UUID for normal requests |
+| `SPACE_WORKFLOW_ON_CALL_CHANNEL_ID` | Channel UUID for urgent requests |
+
+Run the standalone worker with `SPACE_WORKFLOW_API_URL` set to the Space API origin and `SPACE_WORKFLOW_TOKEN` set to the same secret. Use HTTPS when connecting across hosts. Set `TEMPORAL_ADDRESS` if Temporal runs elsewhere.
+
+In the CLI terminal, set the same `SPACE_WORKFLOW_API_URL` to select the chat task queue. The CLI only needs access to Temporal. Use the requester's Space user UUID to address the confirmation DM.
+
+```sh
+pnpm --filter @space/workflows demo start urgent "$REQUESTER_USER_ID" "VPN is down"
+pnpm --filter @space/workflows demo claim "$WORKFLOW_ID" sam
+```
+
+After the first command, open the configured on-call channel. After the claim, open the requester's DM with the dedicated sender. Both messages show **IT Help Request** with a **Workflow** badge. Previously started SQLite demos stay on the demo queue.
