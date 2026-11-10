@@ -11,7 +11,7 @@ import { migrate } from '@space/postgres/migrate';
 import { PostgresStore } from '@space/postgres/store';
 import { WorkspaceStore } from '@space/postgres/workspace';
 import { createApi } from '@space/server/api';
-import { parseThreadContext } from '@space/contracts';
+import { messagePath, parseThreadContext } from '@space/contracts';
 import type { MemoryProvider } from '@space/core/memory';
 
 if (!process.env.TEST_DATABASE_URL) throw new Error('TEST_DATABASE_URL is required');
@@ -58,7 +58,7 @@ test('a real MCP agent reads context, saves extracted knowledge, searches, updat
     const saved = data(await client.callTool({ name: 'memory_remember', arguments: entry }));
     assert.match(saved.content, /Use PostgreSQL for transactional storage/);
     assert.match(saved.content, /Navigator/);
-    assert.match(saved.content, new RegExp(message.id));
+    assert.ok(saved.content.includes(`[View original](${messagePath(a.channel_id, message.id)})`));
     assert.equal(data(await client.callTool({ name: 'memory_remember', arguments: entry })).sources.length, 1);
     assert.equal((await client.callTool({ name: 'memory_remember', arguments: { ...entry, content: 'Different claim' } })).isError, true);
     assert.ok(data(await client.callTool({ name: 'memory_search', arguments: { query: 'PostgreSQL' } })).items.length);

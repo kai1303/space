@@ -45,7 +45,10 @@ test('two API instances deliver durable invitations, scoped transient signaling,
  assert.equal((await command(b,'call.subscribe',{device_id:bd,call_id:id})).call.state,'accepted');
  await command(b,'call.heartbeat',{call_id:id});
  const ended=event<any>(a,'call.state',v=>v.call?.state==='ended');await command(b,'call.end',{call_id:id});assert.equal((await ended).call.reason,'completed');
- const missed=randomUUID();await command(a,'call.start',{id:missed,channel_id:dm.id,device_id:ad,mode:'audio'});
+ const missed=randomUUID();
+ const ringing=event<any>(b,'call.state',v=>v.call?.id===missed&&v.call.state==='ringing');
+ await command(a,'call.start',{id:missed,channel_id:dm.id,device_id:ad,mode:'audio'});
+ await ringing; // Let the callee observe this call before expiring it early.
  // Move only this fixture's deadline into the past, then exercise actual WAL -> broker -> deadline consumer.
  const expired=event<any>(b,'call.state',v=>v.call?.id===missed&&v.call.state==='ended');
  await pool.query("UPDATE dm_calls SET created_at=now()-interval '31 seconds' WHERE id=$1",[missed]);
