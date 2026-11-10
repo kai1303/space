@@ -6,7 +6,7 @@ import { AnimatePresence, LayoutGroup, motion, useReducedMotion } from 'motion/r
 import { IconButton, Menu } from '@space/ui/primitives';
 import { NavigationIcon } from '@space/ui/navigation';
 import { motionTransition, surfaceMotion, useSidebarMotion } from '@space/ui/motion';
-import { ArrowLeft, ArrowRight, BookOpen, CaretDown, Check, ClockCounterClockwise, House, ChatCircle, Bell, List, MagnifyingGlass, Moon, Sun, Users, X, Robot, Files, CheckCircle, Sparkle, GearSix } from '@phosphor-icons/react';
+import { ArrowLeft, ArrowRight, BookOpen, Globe, CaretDown, Check, ClockCounterClockwise, House, ChatCircle, Bell, List, MagnifyingGlass, Moon, Sun, Users, X, Robot, Files, CheckCircle, Sparkle, GearSix } from '@phosphor-icons/react';
 import { UserSettings } from '../../features/profile/UserProfile.js';
 import { SpaceLogo } from '../../shared/branding/SpaceLogo.js';
 import { WorkspaceIcon, WorkspaceSwitcher, type WorkspaceChoice } from './WorkspaceSwitcher.js';
@@ -79,7 +79,7 @@ export function ChatShell({ notificationDelivery, onNavigate, activeDestination,
       </div>
       <div className="chat-mobile-toggle" hidden={!!activeDestination || activityActive || directMessagesActive} ref={menu}><IconButton label={sidebarOpen ? 'Close conversations' : 'Open conversations'} aria-expanded={sidebarOpen} aria-controls="chat-conversations" onClick={() => setSidebarOpen(open => !open)}><List size={20} /></IconButton></div>
       <button className="chat-global-search" disabled={!onSearch} onClick={openSearch}><NavigationIcon name="search" size={17}/><span>Search {name}</span><kbd>⌘ K</kbd></button>
-      <div className="chat-topbar-end">{activity}<a className="chat-system-link" href="/design-system" aria-label="Open design system"><BookOpen size={19} /></a></div>
+      <div className="chat-topbar-end">{window.spaceDesktop?.openBrowser && <IconButton label="Open browser" onClick={() => window.spaceDesktop?.openBrowser?.()}><Globe size={19}/></IconButton>}{activity}<a className="chat-system-link" href="/design-system" aria-label="Open design system"><BookOpen size={19} /></a></div>
     </header>
     <div className="chat-body">
       <LayoutGroup id={railId}><nav className="chat-rail" aria-label="Main navigation">

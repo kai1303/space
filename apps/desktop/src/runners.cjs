@@ -100,4 +100,4 @@ function createRunners({ origin, userData, resources, login, notify }) {
     },
   };
 }
-module.exports = { createRunners, validatePair, recoverStoppedWorker };
+module.exports = { runnerPath, createRunners, validatePair, recoverStoppedWorker };

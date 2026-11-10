@@ -1,0 +1,85 @@
+@import "@space/ui/tokens.css";
+@import "@fontsource/lato/latin-400.css";
+@import "@fontsource/lato/latin-700.css";
+
+* { box-sizing: border-box }
+[hidden] { display: none !important }
+body {
+  height: 100vh;
+  margin: 0;
+  padding-left: 8px;
+  display: flex;
+  flex-direction: column;
+  font: var(--sp-text-sm)/1.3 var(--sp-font-sans);
+  color: var(--sp-text);
+  background: var(--sp-surface);
+}
+body.full { padding-left: 0 }
+#divider {
+  position: fixed; inset: 0 auto 0 0; width: 8px;
+  background: var(--sp-surface-subtle); cursor: col-resize; touch-action: none; user-select: none;
+}
+#divider::after { content: ''; position: absolute; left: 3px; height: 100%; width: 1px; background: var(--sp-border) }
+#divider:hover::after, #divider:focus-visible::after, #divider.dragging::after { width: 2px; background: var(--sp-accent) }
+
+header { flex: none; border-bottom: 1px solid var(--sp-border); background: var(--sp-surface); user-select: none }
+.row, nav, .tab, #feedback, #navigate, .action { display: flex; align-items: center; gap: 4px }
+button {
+  font: inherit; color: inherit; border: 0; border-radius: var(--sp-radius-sm);
+  padding: 3px 7px; background: transparent; cursor: pointer; white-space: nowrap;
+}
+button:hover:enabled { background: var(--sp-surface-hover) }
+button:disabled { opacity: .4; cursor: default }
+button:focus-visible, input:focus-visible { outline: 2px solid var(--sp-focus); outline-offset: -2px }
+.icon { display: grid; place-items: center; width: 24px; height: 24px; padding: 0; flex-shrink: 0 }
+svg { width: 15px; height: 15px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round }
+
+.strip {
+  height: 32px; padding: 3px 6px; gap: 2px;
+  background: var(--sp-chrome-gradient), var(--sp-chrome); color: var(--sp-chrome-muted);
+}
+.strip button:enabled:hover { background: color-mix(in srgb, var(--sp-chrome-text) 14%, transparent); color: var(--sp-white) }
+.strip button:focus-visible { outline-color: var(--sp-chrome-text) }
+.spacer { flex: 1 }
+nav { min-width: 0; overflow-x: auto; scrollbar-width: none; gap: 2px }
+.tab { flex: none; border-radius: var(--sp-radius-md); gap: 0 }
+.tab.current { color: var(--sp-white); background: color-mix(in srgb, var(--sp-chrome-text) 20%, transparent) }
+.tab button:first-child { max-width: 132px; overflow: hidden; text-overflow: ellipsis }
+.tab.current button:first-child { font-weight: 700 }
+.tab button:last-child { padding-inline: 5px; font-size: 15px; line-height: 18px }
+
+.navigation { height: 32px; padding: 3px 6px; color: var(--sp-text-secondary) }
+.history { gap: 0 }
+#address-slot, #goal, #address { min-width: 0; flex: 1 }
+#navigate, #goal {
+  color: var(--sp-text); background: var(--sp-surface-subtle);
+  border: 1px solid var(--sp-border); border-radius: var(--sp-radius-md);
+}
+#navigate { height: 26px; padding-inline: 7px; gap: 6px }
+#navigate:focus-within { border-color: var(--sp-focus); outline: 1px solid var(--sp-focus) }
+#address { color: inherit; font: inherit; border: 0; background: transparent; outline: none }
+input::placeholder, .site-icon { color: var(--sp-text-tertiary) }
+#visit { display: none }
+.action, .primary { font-weight: 700 }
+#ask { color: var(--sp-accent); background: var(--sp-accent-soft) }
+#ask:hover:enabled { background: color-mix(in srgb, var(--sp-accent) 16%, var(--sp-accent-soft)) }
+#stop, .primary, #visit { color: var(--sp-on-accent); background: var(--sp-accent) }
+#stop:hover, .primary:hover, #visit:hover { background: var(--sp-accent-hover) }
+
+#task { padding: 10px 12px; border-top: 1px solid var(--sp-border); background: var(--sp-surface-subtle) }
+#task label { display: block; margin-bottom: 6px; font-weight: 700 }
+#goal { height: 30px; padding-inline: 8px; background: var(--sp-surface); font: inherit }
+#task-scope { margin: 6px 0 0; font-size: var(--sp-text-xs); color: var(--sp-text-secondary) }
+#feedback { padding: 4px 8px; justify-content: space-between; background: var(--sp-surface-subtle) }
+#feedback.controlling { color: var(--sp-accent); background: var(--sp-accent-soft) }
+output { max-height: 62px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text }
+
+#start { flex: 1; display: grid; place-items: center; padding: 24px; background: var(--sp-surface) }
+.start-content { width: min(100%, 400px); text-align: center }
+.space-mark { display: block; margin: 0 auto }
+h1 { margin: 12px 0 20px; font-size: var(--sp-text-xl); line-height: var(--sp-leading-tight) }
+#start #navigate {
+  padding: 6px 7px 6px 12px; height: var(--sp-control-lg); border-radius: var(--sp-radius-lg);
+  gap: 8px; background: var(--sp-surface-raised); box-shadow: var(--sp-shadow); font-size: var(--sp-text-md);
+}
+#start #visit { display: grid; width: 28px; height: 28px }

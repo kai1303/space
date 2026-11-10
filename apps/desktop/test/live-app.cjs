@@ -59,7 +59,7 @@ app.whenReady().then(async () => {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email, password }),
     })).status, fixture.email, fixture.password);
     assert.equal(status, 200);
-    const loaded = once(win.webContents, 'did-finish-load'); win.reload(); await loaded;
+    const loaded = once(win.webContents, 'did-finish-load'); win.webContents.reload(); await loaded;
   }
   await waitForText(fixture.workspace.name);
   console.log(`QA (${process.env.SPACE_SMOKE_PHASE}): workspace loaded`);

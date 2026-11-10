@@ -1,19 +1,33 @@
-const { BrowserWindow, dialog, shell } = require('electron');
+const { BaseWindow, WebContentsView, dialog, shell } = require('electron');
+const { createBrowser } = require('./browser/browser.cjs');
 const { join } = require('node:path');
 const { navigationAction, spaceUrl, isAssetDownload, mediaPermissionAllowed } = require('./policy.cjs');
 
 function createSpaceWindow(configuredUrl, { show = true, pair } = {}) {
   const url = spaceUrl(configuredUrl);
-  const win = new BrowserWindow({
+  const win = new BaseWindow({
     title: 'Space', width: 1360, height: 900, minWidth: 800, minHeight: 600,
     icon: join(__dirname, '../assets/space-icon.png'),
     show: false, backgroundColor: '#19171d',
+  });
+  const workspace = new WebContentsView({
     webPreferences: {
       partition: 'persist:space',
-      ...(pair && { preload: join(__dirname, 'preload.cjs') }),
+      preload: join(__dirname, 'preload.cjs'),
       nodeIntegration: false, contextIsolation: true, sandbox: true,
       webSecurity: true, webviewTag: false,
     },
+  });
+  win.contentView.addChildView(workspace);
+  win.webContents = workspace.webContents;
+  win.spaceBrowser = createBrowser(win, url, workspace);
+  win.once('closed', () => { if (!workspace.webContents.isDestroyed()) workspace.webContents.close(); });
+  win.webContents.on('page-title-updated', (_event, title) => { if (!win.isDestroyed()) win.setTitle(title || 'Space'); });
+  win.webContents.ipc.on('space-browser-open', event => {
+    if (event.senderFrame === win.webContents.mainFrame && navigationAction(win.webContents.getURL(), url) === 'internal') void win.spaceBrowser.open();
+  });
+  win.webContents.ipc.on('space-browser-account', (event, actor) => {
+    if (event.senderFrame === win.webContents.mainFrame && navigationAction(win.webContents.getURL(), url) === 'internal') win.spaceBrowser.accountChanged(actor);
   });
   if (pair) {
     const contents = win.webContents;
@@ -85,10 +99,10 @@ function createSpaceWindow(configuredUrl, { show = true, pair } = {}) {
     }
     const action = navigationAction(target, url);
     if (action === 'external') openExternal(target);
-    if (action === 'internal') void win.loadURL(target).catch(() => {});
+    if (action === 'internal') void win.webContents.loadURL(target).catch(() => {});
     return { action: 'deny' };
   });
-  win.on('ready-to-show', () => { if (show) win.show(); });
+  win.webContents.once('dom-ready', () => { if (show) { win.show(); win.webContents.focus(); } });
   win.webContents.on('did-fail-load', async (_event, code, _description, _target, isMainFrame) => {
     if (!isMainFrame || code === -3 || win.isDestroyed() || !show) return;
     win.show();
@@ -98,10 +112,10 @@ function createSpaceWindow(configuredUrl, { show = true, pair } = {}) {
       buttons: ['Retry', 'Close'], defaultId: 0, cancelId: 1,
     });
     if (win.isDestroyed()) return;
-    if (response === 0) void win.loadURL(url).catch(() => {});
+    if (response === 0) void win.webContents.loadURL(url).catch(() => {});
     else win.close();
   });
-  void win.loadURL(url).catch(() => {}); // did-fail-load provides the recovery UI.
+  void win.webContents.loadURL(url).catch(() => {}); // did-fail-load provides the recovery UI.
   return win;
 }
 

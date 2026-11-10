@@ -3,7 +3,7 @@ const { once } = require('node:events');
 const { createServer } = require('node:http');
 const { readFileSync } = require('node:fs');
 const { join } = require('node:path');
-const { app, BrowserWindow } = require('electron');
+const { app, BaseWindow } = require('electron');
 const { createSpaceWindow } = require('../src/window.cjs');
 
 app.setPath('userData', process.env.SPACE_SMOKE_PROFILE);
@@ -50,7 +50,7 @@ app.whenReady().then(async () => {
   await loaded;
   assert.equal(new URL(win.webContents.getURL()).pathname, '/next');
   assert.equal(await win.webContents.executeJavaScript('window.open("file:///etc/passwd") === null'), true);
-  assert.equal(BrowserWindow.getAllWindows().length, 1);
+  assert.equal(BaseWindow.getAllWindows().length, 1);
 
   await win.webContents.session.cookies.set({ url, name: 'space-smoke', value: 'persisted', expirationDate: Date.now() / 1000 + 3600 });
   await win.webContents.session.cookies.flushStore();

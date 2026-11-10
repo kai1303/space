@@ -4,7 +4,8 @@
   "private": true,
   "type": "module",
   "files": [
-    "dist"
+    "dist",
+    "src/styles/tokens.css"
   ],
   "sideEffects": [
     "**/*.css"
@@ -15,7 +16,7 @@
       "import": "./dist/index.js"
     },
     "./styles.css": "./dist/styles.css",
-    "./tokens.css": "./dist/tokens.css",
+    "./tokens.css": "./src/styles/tokens.css",
     "./tokens.json": "./dist/tokens.json",
     "./primitives": {
       "types": "./dist/primitives/index.d.ts",

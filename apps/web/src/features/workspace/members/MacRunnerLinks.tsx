@@ -1,12 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { LocalProvider } from '@space/contracts';
 
-declare global {
-  interface Window {
-    spaceDesktop?: { pair(provider: LocalProvider, code: string): Promise<void> };
-  }
-}
-
 export function MacRunnerLinks({ workspace, provider }: { workspace: string; provider: LocalProvider }) {
   const [architectures, setArchitectures] = useState<string[]>([]);
   const download = import.meta.env.VITE_SPACE_MAC_DOWNLOAD_URL;

@@ -25,7 +25,10 @@ module.exports = {
     { name: '@electron-forge/maker-zip', platforms: ['darwin'] },
   ],
   hooks: {
-    generateAssets: () => require('./scripts/build-runner.cjs').buildRunner(),
+    generateAssets: () => Promise.all([
+      require('./scripts/build-runner.cjs').buildRunner(),
+      require('./scripts/build-browser-style.cjs').buildBrowserStyle(),
+    ]),
     postMake: async (_config, results) => {
       for (const result of results) {
         if (result.platform === 'darwin') result.artifacts.push(await makeDmg(result.arch));

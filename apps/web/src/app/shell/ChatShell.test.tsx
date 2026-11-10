@@ -9,6 +9,16 @@ vi.mock('motion/react',async original=>({...await original<typeof import('motion
 afterEach(()=>{cleanup();motionPreference.reduced=false;});
 const workspaces = [{ id: 'one', name: 'Team' }, { id: 'two', name: 'Another team' }];
 
+it('opens the personal browser from the desktop top bar', async () => {
+  const openBrowser = vi.fn();
+  vi.stubGlobal('spaceDesktop', { openBrowser });
+  try {
+    render(<ChatShell name="Team" user="Kai"><main>Conversation</main></ChatShell>);
+    await userEvent.click(screen.getByRole('button', { name: 'Open browser' }));
+    expect(openBrowser).toHaveBeenCalledOnce();
+  } finally { vi.unstubAllGlobals(); }
+});
+
 it('uses a keyboard-accessible workspace popover instead of a native select', async () => {
   const change = vi.fn(), members = vi.fn();
   render(<WorkspacePicker items={workspaces} value="one" onChange={change} onMembers={members} />);

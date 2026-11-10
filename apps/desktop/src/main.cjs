@@ -37,7 +37,7 @@ async function handoff(target) {
       configure(target.origin);
     }
     if (!win || win.isDestroyed()) win = createSpaceWindow(target.href, { pair: runners.start });
-    else { openWindow(); await win.loadURL(target.href); }
+    else { openWindow(); await win.webContents.loadURL(target.href); }
   } catch (error) { if (!quitting) dialog.showErrorBox('Cannot open Space Desktop', error.message); }
   finally { opening = false; }
 }
@@ -82,7 +82,13 @@ if (!app.requestSingleInstanceLock()) {
     configure(process.env.SPACE_DESKTOP_URL || config.url);
     Menu.setApplicationMenu(Menu.buildFromTemplate([
       { role: 'appMenu' },
-      { label: 'File', submenu: [{ label: 'Open Space', accelerator: 'CmdOrCtrl+1', click: openWindow }, { role: 'close' }] },
+      { label: 'File', submenu: [{ label: 'New Browser Tab', accelerator: 'CmdOrCtrl+T', click: () => {
+        if (!win || win.isDestroyed()) openWindow();
+        void win.spaceBrowser.open(true);
+      } }, { label: 'Toggle Browser Panel', accelerator: 'CmdOrCtrl+Shift+B', click: () => {
+        if (!win || win.isDestroyed()) openWindow();
+        void win.spaceBrowser.togglePanel();
+      } }, { label: 'Open Space', accelerator: 'CmdOrCtrl+1', click: () => { openWindow(); win.spaceBrowser.hide(); } }, { role: 'close' }] },
       { role: 'editMenu' },
       { label: 'View', submenu: [{ role: 'reload' }, { role: 'toggleDevTools' }, { type: 'separator' }, { role: 'resetZoom' }, { role: 'zoomIn' }, { role: 'zoomOut' }, { role: 'togglefullscreen' }] },
       { role: 'windowMenu' },

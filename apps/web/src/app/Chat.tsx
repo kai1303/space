@@ -17,6 +17,10 @@ import '../features/composer/composer-drafts.css';
 export function Chat() {
   useEffect(() => { document.title = 'Space — Chat'; }, []);
   const { data: session, isPending, error, refetch } = authClient.useSession();
+  const browserActor = session?.user.id ?? null;
+  useEffect(() => {
+    if (!isPending) window.spaceDesktop?.browserAccountChanged?.(error ? null : browserActor);
+  }, [browserActor, error, isPending]);
   useEffect(() => {
     const expired = () => { void refetch(); };
     window.addEventListener('space:session-expired', expired);

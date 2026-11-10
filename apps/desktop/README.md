@@ -6,6 +6,14 @@ The app keeps each paired provider running when you close the workspace window. 
 
 In a Mac browser, **Open Space Desktop** carries the workspace and selected provider into the app. Sign in to Space Desktop if prompted and confirm pairing there. Opening a different server requires native confirmation. Switching servers stops the previous server’s runners.
 
+## Personal browser
+
+Open the globe in the Space top bar or press **⌘T** to open a browser tab. The browser opens beside chat. Drag the vertical divider to resize the panes, or focus it and use the left and right arrow keys. **Enter full view** expands the selected tab, and **Enter split view** brings chat back. **⌘⇧B** shows or hides the panel, or returns from full view to split view. **⌘1** returns to chat. Tabs stay open when you return to Space. Site cookies and local storage persist on this Mac in a browser profile specific to the signed-in Space account and server. Sites control when their sessions expire.
+
+Choose **Ask Codex** on an open page, enter a task and select **Start task**. This uses the locally installed Codex CLI and its sign-in. Space sends the task, visible page text and control labels to Codex. It can follow links within the site, expand sections, switch tabs within a page, change select filters, fill search fields and scroll. **Take over**, switching browser tabs, returning to Space and closing the tab cancel control. Sign-in and payment fields require manual interaction.
+
+Run `pnpm --filter @space/desktop test:browser` for the two-launch Electron test. Set `SPACE_BROWSER_TEST_REAL_AGENT=1` to exercise the installed Codex CLI against the synthetic dashboard.
+
 ## Run locally
 
 From the repository root:
