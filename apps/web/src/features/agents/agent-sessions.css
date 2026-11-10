@@ -31,3 +31,7 @@
 .agent-session .sp-agent-streaming{display:none}
 
 .agent-session-sidebar-notice{margin:4px 12px 8px;font-size:12px;line-height:1.5;color:var(--sp-sidebar-text)}
+
+.agent-session-header-title { display:flex; align-items:center; gap:4px; min-width:0; font-size:13px; }
+.agent-session-header-title > span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.agent-session-header-title > button { flex-shrink:0; }

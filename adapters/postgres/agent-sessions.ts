@@ -73,7 +73,7 @@ export class AgentSessionStore {
       const installation = await this.tasks.eligible(c, { thread_id: threadId, workspace_id: thread.workspace_id, installation_id: input.installation_id, requester_id: actor, skill }, true);
       await c.insert(s.agentSessions).values({ id: input.client_session_id, workspace_id: thread.workspace_id, installation_id: installation.id, origin_thread_id: threadId, title: input.title, managed: true, created_by: actor, skill }).onConflictDoNothing({ target: s.agentSessions.id });
       const [existing] = await c.select().from(s.agentSessions).where(eq(s.agentSessions.id, input.client_session_id));
-      if (!existing || !existing.managed || existing.origin_thread_id !== threadId || existing.installation_id !== input.installation_id || existing.title !== input.title || existing.created_by !== actor || existing.skill !== skill) throw new AppError(409, 'idempotency_conflict');
+      if (!existing || !existing.managed || existing.origin_thread_id !== threadId || existing.installation_id !== input.installation_id || (existing.creation_title ?? existing.title) !== input.title || existing.created_by !== actor || existing.skill !== skill) throw new AppError(409, 'idempotency_conflict');
       return this.summary(c, input.client_session_id);
     });
   }
@@ -141,14 +141,31 @@ export class AgentSessionStore {
     };
     return { target, commit };
   }
+  private async manageable(c: DbSession, actor: string, id: string) {
+    const session = await this.visible(c, actor, id);
+    if (!session.managed) throw new AppError(409, 'session_unmanaged');
+    const [installation] = await c.select().from(s.agentInstallations).where(eq(s.agentInstallations.id, session.installation_id));
+    if (actor !== session.created_by && actor !== installation?.owner_id) throw new AppError(403, 'session_control_not_authorized');
+    return session;
+  }
+  async rename(actor: string, id: string, raw: unknown) {
+    const input = record(raw, ['title', 'previous_title']);
+    const title = text(input.title, 160).trim(), previous = text(input.previous_title, 160);
+    return sessionTransaction(this.db, async c => {
+      const session = await this.manageable(c, actor, id);
+      if (session.title !== title) {
+        if (session.title !== previous) throw new AppError(409, 'session_title_changed');
+        await c.update(s.agentSessions).set({ title, creation_title: session.creation_title ?? session.title })
+          .where(eq(s.agentSessions.id, id));
+      }
+      return this.summary(c, id);
+    });
+  }
   async control(actor: string, id: string, operation: 'stop' | 'end'): Promise<AgentSessionSummary> {
     return sessionTransaction(this.db, c => this.controlIn(c, actor, id, operation));
   }
   async controlIn(c: DbSession, actor: string, id: string, operation: 'stop' | 'end'): Promise<AgentSessionSummary> {
-      const session = await this.visible(c, actor, id);
-      if (!session.managed) throw new AppError(409, 'session_unmanaged');
-      const [installation] = await c.select().from(s.agentInstallations).where(eq(s.agentInstallations.id, session.installation_id));
-      if (actor !== session.created_by && actor !== installation?.owner_id) throw new AppError(403, 'session_control_not_authorized');
+      const session = await this.manageable(c, actor, id);
       const cancelled=await c.execute(sql`UPDATE navigator_followups SET status='cancelled',reason='session_stopped' WHERE session_id=${id} AND status='pending' RETURNING id`);
       const active = await c.select().from(s.tasks).where(and(eq(s.tasks.session_id, id), sql`${s.tasks.status} IN ('awaiting_approval','queued','running')`)).orderBy(s.tasks.id);
       for (const task of active) await this.tasks.stopTaskIn(c, task, actor);

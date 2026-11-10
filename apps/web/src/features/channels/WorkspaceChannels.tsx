@@ -1,4 +1,5 @@
 import { useConversationLocation } from '../../shared/ui/conversation-location.js';
+import { RenameSessionDialog } from '../agents/RenameSessionDialog.js';
 import { AgentSessions } from '../agents/AgentSessions.js';
 import { useAgentSessionList } from '../agents/useAgentSessionList.js';
 import type { Snapshot } from '../../shared/ui/view-state.js';
@@ -35,6 +36,18 @@ export function WorkspaceChannels({ viewForChannel, onRequestedChannelConsumed, 
   const sessions = useAgentSessionList(workspace);
   const starred = useStarredChannels(workspace, undefined, profile.id);
   const starredSessions = useStarredChannels(workspace, undefined, profile.id, 'starred-sessions');
+  const [renameId,setRenameId] = useState<string>();
+  const sessionRows = [
+    ...starredSessions.conversations.flatMap(item => item.session ? [{
+      id:item.id, title:item.name, thread:item.session.origin_thread_id, agentName:item.session.agent_name,
+      section:'starred' as const, canRename:item.can_rename,
+    }] : []),
+    ...sessions.items.filter(item => !starredSessions.ids.includes(item.id)).map(item => ({
+      id:item.id, title:item.title, thread:item.origin_thread_id, agentName:item.agent_name,
+      section:'sessions' as const, canRename:item.created_by===profile.id || item.owner_id===profile.id,
+    })),
+  ];
+  const renameTarget = sessionRows.find(item => item.id === renameId && item.canRename);
   const { channels, selected, loaded, error } = views.get(workspace) ?? emptyChannelView;
   const homeDirect = views.get(workspace)?.direct;
   const agentSession = views.get(workspace)?.agentSession;
@@ -60,6 +73,7 @@ export function WorkspaceChannels({ viewForChannel, onRequestedChannelConsumed, 
   useEffect(() => {
     let active = true, initialized = false;
     scope.current++;
+    setRenameId(undefined);
     setName(''); setPrivate(false); setBusy(false); setCreateOpen(false); setComposeRequest(0);
     updateView(view => ({ ...view, error: '' }));
     async function load() {
@@ -181,7 +195,7 @@ export function WorkspaceChannels({ viewForChannel, onRequestedChannelConsumed, 
         loading={!loaded && !error} showEmptySections onNewMessage={onNewDirectMessage}
         selectedShortcut={shortcut} onThreads={() => onShortcut('threads')} onHuddles={() => onShortcut('huddles')} onDrafts={() => onShortcut('drafts')} onSaved={() => onShortcut('saved')} onDirectories={() => onShortcut('directories')}
         workspaceControl={workspaceControl}
-        channels={[...starred.conversations.map(c => ({id:c.id,name:c.name,section:'starred' as const,private:c.private})), ...channels.filter(c => !starred.ids.includes(c.id)).map(c => ({ id: c.id, name: c.archived_at ? `${c.name} (archived)` : c.name, private: c.private, unread: c.joined ? unread.channels.find(item => item.channel_id === c.id)?.unread_count : 0, section: 'channels' as const })), ...starredSessions.conversations.map(item=>({id:`session:${item.id}`,name:item.name,agentName:item.session?.agent_name,section:'starred' as const})), ...sessions.items.filter(session=>!starredSessions.ids.includes(session.id)).map(session => ({id:`session:${session.id}`,name:session.title,agentName:session.agent_name,section:'sessions' as const})), ...directs.items.filter(dm => !starred.ids.includes(dm.id)).map(dm => ({ id: dm.id, name: dm.name, section: 'direct' as const, initials: (dm.participants.find(person => person.id !== profile.id) ?? dm.participants[0])?.name.slice(0, 2).toUpperCase(), image: (dm.participants.find(person => person.id !== profile.id) ?? dm.participants[0])?.image, online: (dm.participants.find(person => person.id !== profile.id) ?? dm.participants[0])?.presence === 'active', unread: unread.channels.find(item => item.channel_id === dm.id)?.unread_count ?? 0 }))]} selectedId={shortcut ? '' : agentSession ? `session:${agentSession.id}` : homeDirect?.id ?? selected}
+        channels={[...starred.conversations.map(c => ({id:c.id,name:c.name,section:'starred' as const,private:c.private})), ...channels.filter(c => !starred.ids.includes(c.id)).map(c => ({ id: c.id, name: c.archived_at ? `${c.name} (archived)` : c.name, private: c.private, unread: c.joined ? unread.channels.find(item => item.channel_id === c.id)?.unread_count : 0, section: 'channels' as const })), ...sessionRows.map(item => ({ id:`session:${item.id}`, name:item.title, agentName:item.agentName, section:item.section, onRename:item.canRename ? () => setRenameId(item.id) : undefined })), ...directs.items.filter(dm => !starred.ids.includes(dm.id)).map(dm => ({ id: dm.id, name: dm.name, section: 'direct' as const, initials: (dm.participants.find(person => person.id !== profile.id) ?? dm.participants[0])?.name.slice(0, 2).toUpperCase(), image: (dm.participants.find(person => person.id !== profile.id) ?? dm.participants[0])?.image, online: (dm.participants.find(person => person.id !== profile.id) ?? dm.participants[0])?.presence === 'active', unread: unread.channels.find(item => item.channel_id === dm.id)?.unread_count ?? 0 }))]} selectedId={shortcut ? '' : agentSession ? `session:${agentSession.id}` : homeDirect?.id ?? selected}
         onSelect={id => { onContentClose(); const session = sessions.items.find(item => `session:${item.id}` === id) ?? starredSessions.conversations.find(item=>`session:${item.id}`===id)?.session; if (session) { updateView(view => ({...view,agentSession:session})); onSearchClose(); return; } closeSession(); if (directs.items.some(dm => dm.id === id) || starred.conversations.some(c => c.id === id && c.kind === 'direct')) { const dm = directs.items.find(item => item.id === id); if (dm) { updateView(view => ({ ...view, direct: dm })); onVisit(dm); onSearchClose(); } else onDirectMessage(id); return; } updateView(view => ({ ...view, selected: id, direct: undefined })); onVisit(channels.find(channel => channel.id === id)); setComposeRequest(0); onSearchClose(); }} onCreateChannel={() => setCreateOpen(true)}
         sectionFooters={{starred:<>
           {starredSessions.next&&<Button size="sm" onClick={starredSessions.loadMore}>More starred sessions</Button>}
@@ -198,6 +212,8 @@ export function WorkspaceChannels({ viewForChannel, onRequestedChannelConsumed, 
       {error && channel?.joined && <p role="alert">{error}</p>}
     </div>
     {content ?? (agentSession ? <main id="chat-messages" tabIndex={-1} className="chat-channel" aria-label="Agent session"><AgentSessions key={agentSession.id} thread={agentSession.origin_thread_id} channel={agentSession.channel_id} initialSessionId={agentSession.id} viewerId={profile.id} archived={agentSession.channel_archived} drafts={drafts} onDraftChange={onDraftChange} attempt={uploads.attempt} acknowledged={uploads.acknowledged} onAccepted={(key,document)=>uploads.sent(key,document,[])} onClose={closeSession} onAccessLost={()=>{const key=`session:${agentSession.channel_id}:${agentSession.id}`;delete drafts[key];onDraftChange(key,{ops:[]});closeSession();void sessions.refresh();}}/></main> : !loaded && !error ? <ConversationLoading label="Loading workspace" /> : channel?.joined ? <ChannelRoom viewState={viewForChannel(channel.id)} readState={unread.channels.find(item => item.channel_id === channel.id)} requestedThread={mentionTarget?.channel_id === channel.id ? mentionTarget.thread_id : undefined} mentionTarget={mentionTarget?.channel_id === channel.id ? mentionTarget.message_id : undefined} onMentionOpened={onMentionOpened} key={channel.id} uploads={uploads} profile={profile} channel={channel} onChannelChange={updated => homeDirect ? updateView(view => ({ ...view, direct: updated as DirectMessageSummary })) : channelChanged(updated)} onCloseDirect={homeDirect ? () => void closeHomeDirect() : undefined} onLeft={() => leftChannel(channel)} drafts={drafts} onDraftChange={onDraftChange} onAccessLost={() => { onForgetChannel(channel.id); if (homeDirect) forgetDirect(channel.id, 'This conversation is unavailable'); }} searchOpen={searchOpen} onSearchClose={onSearchClose} composeRequest={composeRequest} /> : <motion.main initial={reduced ? false : { opacity: .65 }} animate={{ opacity: 1 }} transition={motionTransition(reduced)} id="chat-messages" tabIndex={-1} className="chat-empty"><div className="chat-empty-icon">{channel?.private ? <Lock size={32} /> : <Hash size={32} />}</div><h1>{channel ? channel.name : 'A place for every conversation'}</h1><p>{channel ? channel.archived_at ? 'Join this archived channel to read its message history.' : 'Join this channel to read and send messages with your team.' : loaded ? 'Create your first channel and bring your team together.' : 'Loading your channels…'}</p>{channel ? <Button variant="primary" loading={busy} onClick={() => void join()}>Join channel</Button> : loaded && <Button variant="primary" onClick={() => setCreateOpen(true)}><Plus size={17} /> Create channel</Button>}{error && <p role="alert">{error}</p>}</motion.main>)}
+    {renameTarget && <RenameSessionDialog key={renameTarget.id} id={renameTarget.id} title={renameTarget.title}
+      workspace={workspace} thread={renameTarget.thread} viewerId={profile.id} onClose={()=>setRenameId(undefined)}/>}
     <Dialog open={createOpen} title="Create a channel" onClose={() => setCreateOpen(false)}><form className="chat-form" onSubmit={create}><p>Channels bring the right people and conversations together.</p><label>Channel name<input maxLength={80} placeholder="e.g. product" value={name} required onChange={e => setName(e.target.value)} /></label><label className="chat-checkbox"><input type="checkbox" checked={isPrivate} onChange={e => setPrivate(e.target.checked)} /><span>Make private<small>Only added members can read and send messages.</small></span></label>{error && <p role="alert">{error}</p>}<div className="chat-form-actions"><Button disabled={busy} onClick={() => setCreateOpen(false)}>Cancel</Button><Button variant="primary" type="submit" loading={busy}>Create channel</Button></div></form></Dialog>
   </div>;
 }

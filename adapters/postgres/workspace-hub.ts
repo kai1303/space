@@ -53,6 +53,7 @@ export class WorkspaceHubStore {
       await requireWorkspaceAccess(c,actor,workspace);
       const result=await c.execute<StarredAgentSession & Record<string,unknown>>(sql`
         SELECT a.id,a.title AS name,'agent_session' AS kind,c.private,
+          (a.created_by IS NOT DISTINCT FROM ${actor}::uuid OR i.owner_id=${actor}) AS can_rename,
           jsonb_build_object('id',a.id,'agent_name',d.name,'origin_thread_id',a.origin_thread_id,
             'channel_id',c.id,'channel_archived',c.archived_at IS NOT NULL) AS session
         FROM hub_starred_agent_sessions star

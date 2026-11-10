@@ -20,7 +20,7 @@ let origin = '';
 const sockets: Socket[] = [];
 before(async () => { await admin.query(`CREATE SCHEMA ${schema}`); await migrate(pool); origin = await app.listen({ host: '127.0.0.1', port: 0 }); });
 after(async () => { sockets.forEach(socket => socket.disconnect()); await app.close(); await pool.end(); await admin.query(`DROP SCHEMA ${schema} CASCADE`); await admin.end(); });
-async function api(token: string, method: 'GET' | 'POST', path: string, payload?: object, status = 200, key = randomUUID()) {
+async function api(token: string, method: 'GET' | 'POST' | 'PATCH', path: string, payload?: object, status = 200, key = randomUUID()) {
   const response = await app.inject({ method, url: `/v1${path}`, headers: { authorization: `Bearer ${token}`, 'idempotency-key': key }, ...(payload ? { payload } : {}) });
   assert.equal(response.statusCode, status, `${path}: ${response.body}`);
   return response.json();
@@ -55,6 +55,36 @@ test('named sessions are independent, bounded, idempotent, scoped and validate t
   await api(a.owner_token, 'POST', `/threads/${a.thread_id}/agent-sessions`, { ...input, client_session_id: randomUUID(), title: '' }, 400);
   const revisions = await pool.query('SELECT revision FROM resource_update_revisions WHERE resource=$1', [`thread:${a.thread_id}`]);
   assert.ok(Number(revisions.rows[0]?.revision) >= 2);
+});
+
+test('renaming a session preserves creation retries and rejects unauthorized or stale edits', async () => {
+  const a = await fixture(), foreign = await fixture();
+  const input = { client_session_id: randomUUID(), installation_id: a.installation_id, title: 'First' };
+  const createPath = `/threads/${a.thread_id}/agent-sessions`;
+  const one = await api(a.owner_token, 'POST', createPath, input, 201);
+  const path = `/agent-sessions/${one.id}`;
+  const stars = `/workspaces/${a.workspace_id}/hub/starred-sessions`;
+  await api(a.collaborator_token, 'POST', `${stars}/${one.id}`, {active:true});
+  const edit = { previous_title: 'First', title: ' Roadmap ' };
+  await api(a.collaborator_token, 'PATCH', path, edit, 403);
+  await api(foreign.owner_token, 'PATCH', path, edit, 404);
+  await api(a.owner_token, 'PATCH', path, { ...edit, title: ' ' }, 400);
+  assert.equal((await api(a.owner_token, 'PATCH', path, edit)).title, 'Roadmap');
+  assert.equal((await api(a.owner_token, 'PATCH', path, edit)).title, 'Roadmap');
+  await api(a.owner_token, 'PATCH', path, { ...edit, title: 'Stale edit' }, 409);
+  const starred = (await api(a.collaborator_token, 'GET', stars)).items[0];
+  assert.equal(starred.name, 'Roadmap');
+  assert.equal(starred.can_rename, false);
+  assert.equal((await api(a.collaborator_token, 'GET', path)).session.title, 'Roadmap');
+  assert.equal((await api(a.owner_token, 'POST', createPath, input, 201)).title, 'Roadmap');
+  await api(a.owner_token, 'POST', createPath, { ...input, title: 'Roadmap' }, 409);
+  const race = await Promise.all(['April', 'May'].map(title => app.inject({
+    method:'PATCH', url:`/v1${path}`, headers:{authorization:`Bearer ${a.owner_token}`},
+    payload:{title,previous_title:'Roadmap'},
+  })));
+  assert.deepEqual(race.map(result=>result.statusCode).sort(), [200,409]);
+  assert.equal((await api(a.owner_token, 'GET', path)).session.title,
+    race.find(result=>result.statusCode===200)!.json().title);
 });
 
 test('turns preserve retry identity, serialize sends, reuse owner approval and stay out of human history', async () => {

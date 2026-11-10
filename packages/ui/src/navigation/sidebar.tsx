@@ -4,6 +4,7 @@ import { LayoutGroup, motion, useReducedMotion } from "motion/react";
 import { motionTransition } from "../motion/motion.js";
 import { Reveal } from "../motion/reveal.js";
 import {
+  DotsThree,
   CaretRight,
   Hash,
   Lock,
@@ -17,7 +18,7 @@ import {
   BookmarkSimple,
   AddressBook,
 } from "@phosphor-icons/react";
-import { Avatar, ChannelItem, IconButton } from "../primitives/primitives.js";
+import { Avatar, ChannelItem, IconButton, Menu } from "../primitives/primitives.js";
 export type SidebarChannel = {
   id: string;
   name: string;
@@ -27,6 +28,7 @@ export type SidebarChannel = {
   initials?: string;
   image?: string | null;
   agentName?: string;
+  onRename?: () => void;
   online?: boolean;
 };
 type SidebarState = { query: string; expanded: Record<string, boolean> };
@@ -203,6 +205,13 @@ export function WorkspaceSidebar({
               <Reveal open={isOpen} clip={false}>
                 {items.map((c) => (
                   <motion.div key={c.id} initial={false}
+                    className={c.onRename ? "sp-sidebar-action-row" : undefined}
+                    onContextMenu={c.onRename ? event => {
+                      event.preventDefault();
+                      const trigger = event.currentTarget.querySelector<HTMLElement>("summary");
+                      trigger?.focus();
+                      if (trigger?.getAttribute("aria-expanded") === "false") trigger.click();
+                    } : undefined}
                     layout={reduced ? false : "position"}
                     layoutId={reduced ? undefined : `conversation:${workspaceId}:${c.id}`}
                     transition={{ layout: moveTransition }}>
@@ -227,6 +236,8 @@ export function WorkspaceSidebar({
                       )
                     }
                   />
+                  {c.onRename && <Menu label={`Actions for ${c.name}`} className="sp-sidebar-row-menu" floating
+                    trigger={<DotsThree size={18} weight="bold"/>} items={[{label:"Rename…",icon:<PencilSimple size={16}/>,onSelect:c.onRename}]}/>}
                   </motion.div>
                 ))}
                 {sectionFooters?.[section]}

@@ -1856,11 +1856,17 @@ it('opens agent sessions below direct messages, retains drafts, and refreshes si
  const user=userEvent.setup();
  mockPaginatedChat(()=>messagePage([paginatedMessage('Channel source','1')]));
  const fallback=vi.mocked(fetch).getMockImplementation()!;
- const session={id:'sidebar-session',channel_id:'first',channel_archived:false,workspace_id:'workspace',origin_thread_id:'session-thread',installation_id:'mine',title:'Launch checklist',state:'active',managed:true,created_by:'user',owner_id:'user',agent_name:'My Codex',created_at:'2026-11-04T00:00:00Z',skill:'codex.run',turn_count:0};
+ let session={id:'sidebar-session',channel_id:'first',channel_archived:false,workspace_id:'workspace',origin_thread_id:'session-thread',installation_id:'mine',title:'Launch checklist',state:'active',managed:true,created_by:'user',owner_id:'user',agent_name:'My Codex',created_at:'2026-11-04T00:00:00Z',skill:'codex.run',turn_count:0};
  let items=[session];
  vi.mocked(fetch).mockImplementation(async(input,init)=>{
   const path=String(input);
   if(path==='/v1/workspaces/workspace/agent-sessions')return {ok:true,json:async()=>({items,next_cursor:null})} as Response;
+  if(path==='/v1/agent-sessions/sidebar-session' && init?.method==='PATCH'){
+   const edit=JSON.parse(String(init.body));
+   expect(edit.previous_title).toBe(session.title);
+   session={...session,title:edit.title};items=[session];
+   return {ok:true,json:async()=>session} as Response;
+  }
   if(path==='/v1/agent-sessions/sidebar-session')return {ok:true,json:async()=>({session,turns:[],next_cursor:null})} as Response;
   return fallback(input,init);
  });
@@ -1870,10 +1876,28 @@ it('opens agent sessions below direct messages, retains drafts, and refreshes si
  const headings=within(nav).getAllByRole('button').map(button=>button.textContent);
  expect(headings.indexOf('Agent sessions')).toBeGreaterThan(headings.indexOf('Direct messages'));
  expect(headings.indexOf('Agent sessions')).toBeLessThan(headings.indexOf('Apps'));
+ fireEvent.contextMenu(entry);
+ await user.click(await screen.findByRole('menuitem',{name:'Rename…'}));
+ const rename=within(await screen.findByRole('dialog',{name:'Rename session'}));
+ const title=rename.getByRole('textbox',{name:'Session title'});
+ await user.clear(title);
+ expect((rename.getByRole('button',{name:'Save'}) as HTMLButtonElement).disabled).toBe(true);
+ await user.type(title,'Launch plan');
+ await user.click(rename.getByRole('button',{name:'Save'}));
+ await within(nav).findByRole('button',{name:'Launch plan',exact:true});
+ expect(entry.getAttribute('aria-current')).toBeNull();
  await user.click(entry);
  expect(entry.getAttribute('aria-current')).toBe('page');
  await screen.findByRole('heading',{name:'My Codex',exact:true,level:1});
  await user.type(await screen.findByRole('textbox',{name:'Message agent session'}),'Remember this draft');
+ await user.click(screen.getByRole('button',{name:'Rename session'}));
+ const headerRename=within(await screen.findByRole('dialog',{name:'Rename session'}));
+ const headerTitle=headerRename.getByRole('textbox',{name:'Session title'});
+ expect((headerTitle as HTMLInputElement).value).toBe('Launch plan');
+ await user.clear(headerTitle);
+ await user.type(headerTitle,'Launch checklist');
+ await user.click(headerRename.getByRole('button',{name:'Save'}));
+ await within(nav).findByRole('button',{name:'Launch checklist',exact:true});
  await user.click(within(nav).getByRole('button',{name:'first',exact:true}));
  await screen.findByRole('textbox',{name:'Message first'});
  await user.click(entry);

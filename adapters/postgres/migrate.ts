@@ -17,7 +17,7 @@ export const migrationFiles = [
   '029_resource_updates.sql', '030_agent_sessions.sql', '031_agent_session_revisions.sql', '032_event_stream.sql', '033_thread_agent_session_entries.sql', '034_inline_agent_session_links.sql', '035_session_request_documents.sql', '036_local_agent_providers.sql', '037_agent_connector_capabilities.sql', '038_agent_memory_grants.sql', '039_direct_messages.sql', '040_notifications.sql', '041_workspace_hub.sql', '042_file_library.sql', '043_workspace_todos.sql', '044_workspace_settings.sql', '045_workspace_invitations.sql', '046_workspace_membership.sql', '047_workspace_retention.sql', '048_todo_sync.sql',
   '049_realtime_targets.sql', '050_message_search.sql', '051_dm_calls.sql', '052_sidekick_sessions.sql', '053_session_sidebar.sql', '054_agent_session_stars.sql', '055_claude_provider.sql', '056_direct_codex_turns.sql', '057_navigator_orchestration.sql', '058_personal_outbound_mcp.sql',
   '059_channel_huddles.sql', '060_tool_approvals.sql', '061_channel_permissions.sql', '062_message_event_operation.sql', '063_message_deletion.sql',
-  '064_session_refresh.sql', '065_notification_sounds.sql',
+  '064_session_refresh.sql', '065_notification_sounds.sql', '066_agent_session_creation_title.sql',
 ] as const;
 
 export async function migrate(pool: Pool): Promise<void> {
