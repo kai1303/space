@@ -10,7 +10,7 @@ beforeAll(()=>{HTMLDialogElement.prototype.showModal=function(){this.open=true;}
 afterEach(()=>{cleanup();vi.resetAllMocks();});
 const settings={...workspacePreferenceDefaults,workspace_id:'space',name:'Design',role:'owner',created_at:'2026-01-01T00:00:00.000Z'};
 function setup(role='owner') {
- api.request.mockImplementation(async(path:string,body?:object)=>path.includes('/channels')?{items:[{id:'public',name:'general',private:false,archived_at:null},{id:'private',name:'secret',private:true,archived_at:null}],next_cursor:null}:{...settings,role,...body});
+ api.request.mockImplementation(async(_path:string,body?:object)=>({...settings,role,...body}));
 }
 it('requires confirmation for finite retention and cancellation keeps the unsaved settings',async()=>{
  setup();render(<WorkspaceSettings workspace="space" open onClose={()=>{}} onRenamed={()=>{}}/>);
@@ -63,15 +63,15 @@ it('makes settings readable but not editable to ordinary members',async()=>{
  expect(screen.getByLabelText('Workspace description').closest('fieldset')?.disabled).toBe(true);
  expect(screen.queryByRole('button',{name:'Save settings'})).toBeNull();
 });
-it('persists settings across tabs and excludes private channels from defaults',async()=>{
+it('persists settings across tabs',async()=>{
  setup();render(<WorkspaceSettings workspace="space" open onClose={()=>{}} onRenamed={()=>{}}/>);
  await userEvent.type(await screen.findByLabelText('Workspace description'),'Design together');
- await userEvent.click(await screen.findByLabelText('#general'));expect(screen.queryByLabelText('#secret')).toBeNull();
+ expect(screen.queryByRole('heading',{name:'Default channels'})).toBeNull();
  await userEvent.click(screen.getByRole('tab',{name:'Permissions'}));
  await userEvent.click(screen.getByLabelText('Who can invite people?')); await userEvent.click(await screen.findByRole('option', { name: 'All members', exact: true }));
  await userEvent.type(screen.getByLabelText('Domains allowed to join'),'example.com, company.org');
  await userEvent.click(screen.getByRole('button',{name:'Save settings'}));
- await waitFor(()=>expect(api.request).toHaveBeenCalledWith('/workspaces/space/settings',expect.objectContaining({revision:'0',description:'Design together',default_channel_ids:['public'],invite_permission:'members',approved_email_domains:['example.com','company.org']}),undefined,'PATCH'));
+ await waitFor(()=>expect(api.request).toHaveBeenCalledWith('/workspaces/space/settings',expect.objectContaining({revision:'0',description:'Design together',invite_permission:'members',approved_email_domains:['example.com','company.org']}),undefined,'PATCH'));
  expect(await screen.findByRole('status')).toHaveProperty('textContent','Workspace settings saved.');
 });
 it('keeps an unsaved edit when the server rejects a stale revision and allows reload',async()=>{
@@ -85,11 +85,11 @@ it('keeps an unsaved edit when the server rejects a stale revision and allows re
  await waitFor(()=>expect(screen.getByLabelText('Workspace description')).toHaveProperty('value',''));
 });
 it('sends only editable preference fields when the server includes membership and retention metadata',async()=>{
- setup();api.request.mockResolvedValueOnce({...settings,guest_type:'none',retention_version:'0'});
+ setup();api.request.mockResolvedValueOnce({...settings,guest_type:'none',retention_version:'0',default_channel_ids:['general']});
  render(<WorkspaceSettings workspace="space" open onClose={()=>{}} onRenamed={()=>{}}/>);
  await userEvent.type(await screen.findByLabelText('Workspace description'),'Saved through the API');
  await userEvent.click(screen.getByRole('button',{name:'Save settings'}));
  const patch=api.request.mock.calls.find(call=>call[3]==='PATCH')?.[1];
- expect(patch).toBeTruthy();expect(patch).not.toHaveProperty('guest_type');expect(patch).not.toHaveProperty('retention_version');
+ expect(patch).toBeTruthy();expect(patch).not.toHaveProperty('default_channel_ids');expect(patch).not.toHaveProperty('guest_type');expect(patch).not.toHaveProperty('retention_version');
  const {parseWorkspaceSettingsUpdate}=await import('@space/contracts');expect(()=>parseWorkspaceSettingsUpdate(patch)).not.toThrow();
 });

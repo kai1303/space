@@ -7,14 +7,12 @@ import '../members/workspace-administration.css';
 import './workspace-settings.css';
 import '../workspace-dialog-tabs.css';
 type Props = {workspace:string;open:boolean;onClose:()=>void;onRenamed:(name:string)=>void;onManageMembers?:()=>void};
-type Channel = {id:string;name:string;private:boolean;archived_at:string|null;kind?:string};
 const languageNames:Record<string,string> = {en:'English',vi:'Tiếng Việt',fr:'Français',de:'Deutsch',es:'Español',pt:'Português',ja:'日本語',ko:'한국어',zh:'中文'};
 export function WorkspaceSettings(props:Props) {return props.open ? <SettingsDialog key={props.workspace} {...props}/> : null;}
 function SettingsDialog({workspace,onClose,onRenamed,onManageMembers}:Props) {
   const [settings,setSettings] = useState<Settings>(), [draft,setDraft] = useState<Settings>();
   const [name,setName] = useState(''), [tab,setTab] = useState('settings'), [editing,setEditing] = useState(false);
   const [error,setError] = useState(''), [busy,setBusy] = useState(false), [notice,setNotice] = useState('');
-  const [channels,setChannels] = useState<Channel[]>([]), [cursor,setCursor] = useState<string|null>(null), [channelError,setChannelError] = useState('');
   const [domains,setDomains] = useState('');
   const [pendingRetention,setPendingRetention] = useState<WorkspaceSettingsUpdate>();
   const active = useRef(true), generation = useRef(0), saving = useRef(false), dirty = useRef(false);
@@ -34,18 +32,11 @@ function SettingsDialog({workspace,onClose,onRenamed,onManageMembers}:Props) {
       }
     } catch(reason) {if (active.current && attempt === generation.current) setError(reason instanceof Error ? reason.message.replaceAll('_',' ') : 'Unable to load settings');}
   }
-  async function loadChannels(after?:string) {
-    try {
-      const page = await request<{items:Channel[];next_cursor:string|null}>(`/workspaces/${workspace}/channels?limit=100${after ? `&after=${encodeURIComponent(after)}` : ''}`);
-      if (active.current) {setChannels(previous => after ? [...previous,...page.items] : page.items);setCursor(page.next_cursor);setChannelError('');}
-    } catch {if (active.current) setChannelError('Unable to load channels.');}
-  }
   useEffect(()=>{
     active.current=true;
     const stop=subscribeUpdates('workspace',workspace,()=>refresh(),()=>{generation.current++;setSettings(undefined);setDraft(undefined);setPendingRetention(undefined);setEditing(false);setError('You no longer have access to this workspace.');});
     return()=>{active.current=false;generation.current++;stop();};
   },[workspace]);
-  useEffect(()=>{if(manager)void loadChannels();},[manager,workspace]);
   function change<K extends keyof Settings>(key:K,value:Settings[K]) {dirty.current=true;setNotice('');setDraft(previous=>previous ? {...previous,[key]:value} : previous);}
   async function save(patch:WorkspaceSettingsUpdate, renamed=false) {
     if(saving.current || !manager)return;
@@ -64,8 +55,8 @@ function SettingsDialog({workspace,onClose,onRenamed,onManageMembers}:Props) {
   }
   function savePreferences() {
     if (!draft || !settings || !manager || saving.current) return;
-    const {revision,icon_url,slug,description,default_channel_ids,language,display_name_guidelines,email_visibility,invite_permission,create_channel_permission,retention_days}=draft;
-    const update:WorkspaceSettingsUpdate = {revision,icon_url,slug,description,default_channel_ids,language,display_name_guidelines,email_visibility,invite_permission,create_channel_permission,retention_days,approved_email_domains:domains.split(/[,\n]/).map(value=>value.trim()).filter(Boolean)};
+    const {revision,icon_url,slug,description,language,display_name_guidelines,email_visibility,invite_permission,create_channel_permission,retention_days}=draft;
+    const update:WorkspaceSettingsUpdate = {revision,icon_url,slug,description,language,display_name_guidelines,email_visibility,invite_permission,create_channel_permission,retention_days,approved_email_domains:domains.split(/[,\n]/).map(value=>value.trim()).filter(Boolean)};
     if (draft.retention_days !== null && (settings.retention_days === null || draft.retention_days < settings.retention_days)) {
       setPendingRetention(update);
       return;
@@ -90,10 +81,6 @@ function SettingsDialog({workspace,onClose,onRenamed,onManageMembers}:Props) {
             <section className="workspace-settings-row"><h3>Workspace icon</h3><div className="workspace-icon-control">{draft.icon_url?<img src={draft.icon_url} width="64" height="64" alt="Workspace icon"/>:<span className="workspace-icon-placeholder" aria-hidden="true">{settings.name.slice(0,1).toUpperCase()}</span>}<label>Upload workspace icon<input type="file" accept="image/png,image/jpeg,image/webp" onChange={event=>void uploadIcon(event.target.files?.[0])}/></label>{draft.icon_url&&<Button size="sm" onClick={()=>change('icon_url',null)}>Remove icon</Button>}</div><p>PNG, JPEG or WebP, up to 145 KB.</p></section>
             <section className="workspace-settings-row"><h3>Workspace address</h3><label>URL slug<input maxLength={63} value={draft.slug??''} onChange={event=>change('slug',event.target.value||null)} placeholder="your-workspace"/></label><p>Use 3–63 letters, numbers and hyphens. Your workspace address: <code>{draft.slug?`/w/${draft.slug}`:`/chat?workspace=${workspace}`}</code></p></section>
             <section className="workspace-settings-row"><h3>Description</h3><label>Workspace description<textarea maxLength={2000} rows={3} value={draft.description} onChange={event=>change('description',event.target.value)}/></label></section>
-            <section className="workspace-settings-row"><h3>Default channels</h3><p>New members automatically join these public channels. Existing memberships stay as they are.</p>
-              <div className="workspace-default-channels">{channels.filter(channel=>!channel.private&&!channel.archived_at&&channel.kind!=='direct').map(channel=><label key={channel.id}><input type="checkbox" checked={draft.default_channel_ids.includes(channel.id)} onChange={event=>change('default_channel_ids',event.target.checked?[...draft.default_channel_ids,channel.id]:draft.default_channel_ids.filter(id=>id!==channel.id))} disabled={busy||!manager||(!draft.default_channel_ids.includes(channel.id)&&draft.default_channel_ids.length>=25)}/>#{channel.name}</label>)}</div>
-              {!manager&&<p>{draft.default_channel_ids.length} default channels configured.</p>}{channelError&&<p role="alert">{channelError} <Button size="sm" onClick={()=>void loadChannels()}>Retry channels</Button></p>}{cursor&&<Button size="sm" onClick={()=>void loadChannels(cursor)}>More channels</Button>}
-            </section>
             <section className="workspace-settings-row"><h3>Language and names</h3><label>Workspace language<Select aria-label="Workspace language" value={draft.language} onChange={event=>change('language',event.target.value)}>{workspaceLanguages.map(language=><option key={language} value={language}>{languageNames[language]}</option>)}</Select></label><p>The shared language for this workspace. Interface text currently remains in English.</p><label>Display name guidelines<textarea rows={3} maxLength={2000} value={draft.display_name_guidelines} onChange={event=>change('display_name_guidelines',event.target.value)} placeholder="For example, use your first and last name."/></label></section>
             <section className="workspace-settings-row"><h3>Message retention</h3><label>Keep messages<Select aria-label="Keep messages" value={draft.retention_days===null?'forever':'days'} onChange={event=>change('retention_days',event.target.value==='forever'?null:90)}><option value="forever">Forever</option><option value="days">For a set number of days</option></Select></label>{draft.retention_days!==null&&<label>Retention days<input type="number" min={1} max={36500} required value={draft.retention_days} onChange={event=>change('retention_days',Number(event.target.value))}/></label>}<p>Message content and shared files older than this period are removed automatically; task audit records are retained. Changing this setting can permanently delete message history.</p></section>
           </>:<>
