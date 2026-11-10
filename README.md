@@ -53,6 +53,7 @@ Mention a teammate’s Codex, Kiro, or Claude agent and follow its work in a sha
 - [Quick start](#quick-start)
 - [macOS app](#macos-app)
 - [How Space works](#how-space-works)
+  - [Workflows](#workflows)
 - [Connect a local agent](#connect-a-local-agent)
 - [MCP connections](#mcp-connections)
 - [Architecture](#architecture)
@@ -233,7 +234,7 @@ for tested workflows and remaining checks.
 ## How Space works
 
 <p align="center">
-  <img src="docs/images/how-space-works.png" alt="A Space workspace sends a request to the agent owner’s local Codex, Kiro, or Claude connector, which streams the reply back. Coding uses an owner-approved project. The workspace also supports channels, threads, DMs, files, channel memory, huddles, incoming webhooks, and personal or workspace MCP tool grants." width="1064" />
+  <img src="docs/images/how-space-works.png" alt="A Space workspace sends a request to the agent owner’s local Codex, Kiro, or Claude connector, which streams the reply back. Coding uses an owner-approved project. The workspace also supports channels, threads, DMs, files, channel memory, huddles, incoming webhooks, and personal or workspace MCP tool grants. A Temporal workflow posts a help request to a channel and sends the requester a DM after a claim." width="1064" />
 </p>
 
 1. **Start with a conversation.** Post in a channel, reply in a thread, or message a
@@ -252,9 +253,22 @@ for tested workflows and remaining checks.
    access to individual external tools. [Coding sessions](#coding-sessions) · [MCP connections](#mcp-connections)
 5. **Bring updates back to chat.** A channel manager can open **Channel details →
    Integrations** and create an incoming webhook. A service can then post a message
-   to that channel. The optional Temporal help-request demo also posts requests
-   to a configured channel and sends the requester a DM when someone claims one.
-   [Run the workflow demo](apps/workflows/README.md)
+   to that channel.
+
+### Workflows
+
+The **IT Help Request** workflow routes a request to the team and tells the
+requester who picked it up. With the optional Temporal worker connected to Space,
+a request takes three steps.
+
+1. Start a request from the CLI. The workflow posts a normal request to the
+   configured help channel or an urgent request to the on-call channel.
+2. A teammate claims the request from the CLI using its workflow ID.
+3. The requester gets a DM naming the claimant. Both the channel post and the DM
+   carry the **Workflow** badge.
+
+[Set up the worker and try the help-request workflow](apps/workflows/README.md#send-the-workflow-to-space-chat)
+
 
 ---
 
@@ -418,7 +432,7 @@ These are the connections implemented in this checkout and their current boundar
 | **Local agents** | Codex, Kiro, and Claude | Persistent sessions with streamed replies and tool activity. Select a project for file tools or opt into [coding sessions](#coding-sessions) for approved commands. |
 | **External tools** | Outbound MCP gateway | Personal accounts and shared workspace servers with per-agent tool grants, encrypted credentials and revocation. [Setup](#mcp-connections). |
 | **Incoming webhooks** | Channel-specific secret URL | Send a JSON POST such as `{"text":"Build passed"}` to publish in one channel. Channel managers can revoke the URL. |
-| **Workflow demo** | Optional Temporal worker | Routes help requests by urgency and sends a claim confirmation by DM when configured for Space chat. [Setup](apps/workflows/README.md). |
+| **Workflows** | Optional Temporal worker | Routes help requests by urgency and sends a claim confirmation by DM when configured for Space chat. [Setup](apps/workflows/README.md). |
 | **Channel huddles** | Optional LiveKit SFU | Audio, camera and screen sharing in authorized channel rooms; separate media service and webhook configuration. [Setup](docs/architecture/channel-huddles.md). |
 | **Agent context** | Memory MCP | Revocable, channel-scoped keys for reading and updating enabled channel memory. Separate from the local project file server. |
 | **Authentication** | Better Auth | Email/password accounts and cookie sessions. Human social login and MFA are planned separately. |
