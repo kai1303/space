@@ -6,9 +6,8 @@
 
 <h1>Space: A shared workplace for people and AI agents</h1>
 
-<p>Each teammate can bring their own Codex, Kiro, or Claude agent into the same workspace.<br />
-Chat in channels and threads, share files, and keep channel notes in Markdown<br />
-from your browser or the macOS desktop app.</p>
+<p>Talk in channels, threads, and direct messages from the web or macOS app.<br />
+Mention a teammate’s Codex, Kiro, or Claude agent and follow its work in a shared session.</p>
 
 <p align="center">
   <a href="https://github.com/kai1303/space/actions/workflows/ci.yaml?query=branch%3Amain"><img src="https://img.shields.io/github/actions/workflow/status/kai1303/space/ci.yaml?branch=main&amp;style=for-the-badge&amp;label=CI" alt="CI checks status" /></a>
@@ -38,12 +37,9 @@ from your browser or the macOS desktop app.</p>
 
 ---
 
-> **Early development.** Chat, files, channel memory, and local connector pairing
-> are implemented. Codex, Kiro, and Claude support persistent agent sessions, streamed
-> responses, and opt-in project file tools. Personal outbound MCP connections add
-> explicitly granted external tools through a separate gateway; see [MCP setup](#personal-mcp-connections).
-> Channel huddles are available with an optional LiveKit service.
-> The task flow also supports a mock connector and an optional AG-UI backend.
+> **Early development.** You can run chat, files, and shared channel notes without a model API key.
+> Pair a local agent to work on a project, configure LiveKit for channel huddles,
+> or connect external tools through the [MCP gateway](#mcp-connections).
 
 <p align="center">
   <img src="docs/images/space-desktop-chat.jpg" alt="Space on macOS: the Orbit Studio sample workspace with channel conversations, a shared checklist, and a thread open alongside the chat" width="1064" />
@@ -58,7 +54,7 @@ from your browser or the macOS desktop app.</p>
 - [macOS app](#macos-app)
 - [How Space works](#how-space-works)
 - [Connect a local agent](#connect-a-local-agent)
-- [Personal MCP connections](#personal-mcp-connections)
+- [MCP connections](#mcp-connections)
 - [Architecture](#architecture)
 - [Integrations](#integrations)
 - [Project status](#project-status)
@@ -102,20 +98,14 @@ Team decisions live in conversations. Agents need that context too, along with
 clear boundaries around what they can access and do. Space is being built to put
 people and independently operated agents in the same workplace.
 
-- **Conversations with context.** Channels, threaded replies, rich messages, and
-  saved history keep work together.
-- **Knowledge the team can maintain.** Save useful messages to channel memory,
-  edit shared notes, and import or export Markdown.
-- **Persistent agent conversations.** Mention an enabled agent to start a session
-  linked to a thread, then follow up in its own panel with streamed text and tools.
-- **Your own infrastructure.** PostgreSQL stores chat history, SeaweedFS stores
-  files, and channel memory lives on your filesystem.
-- **A desktop home on macOS.** Run the existing UI in an Electron window with a
-  persistent session, native menus, and authenticated file downloads.
-- **Personal integrations.** Connect multiple MCP accounts, select tools for your
-  own agents, and review recent tool calls without sharing account credentials.
-- **Explicit access.** Workspace roles, channel membership, and per-agent tool
-  grants define access boundaries.
+- **Pick up a conversation.** Follow a thread, check Activity for mentions and replies,
+  or use workspace message search to find an earlier decision. [Search setup](docs/architecture/message-search.md)
+- **Keep the decision with the channel.** Save a message to channel memory with a
+  link back to the discussion. Teammates can edit the note and export it as Markdown.
+- **Bring your own agent.** Each teammate pairs their own provider. The team can see
+  the agent’s replies and tool activity, and the computer owner approves coding turns.
+- **Connect the tools your team uses.** A service can post updates to a channel
+  through a webhook. An agent can call selected tools from a personal or workspace MCP server.
 
 ---
 
@@ -229,9 +219,9 @@ pnpm desktop:make      # DMG and ZIP
 
 On Apple Silicon, the installer is written to
 `apps/desktop/out/make/Space-arm64.dmg`. The app loads your configured web
-deployment; it does not start the server or local agent connector. Sessions
-persist across restarts, external links open in your browser, and file downloads
-use the signed-in desktop session.
+deployment and includes a local connector. Once you pair a provider, its runner
+stays active when you close the window and stops when you quit Space. Project
+folders and coding mode require the connector CLI. [Pair a local agent](#connect-a-local-agent).
 
 These are **unsigned, unnotarized development builds**. There is no published
 installer or automatic updater configured. See the [desktop guide](apps/desktop/README.md)
@@ -243,43 +233,28 @@ for tested workflows and remaining checks.
 ## How Space works
 
 <p align="center">
-  <img src="docs/images/how-space-works.png" alt="People send messages in Space channels and threads. Linked agent sessions send approved requests to local Codex or Kiro and stream text and tool activity back. Space holds files and opt-in channel memory; agents can read and edit an explicitly selected local project folder. Sessions retain context across turns." width="1064" />
+  <img src="docs/images/how-space-works.png" alt="A Space workspace sends a request to the agent owner’s local Codex, Kiro, or Claude connector, which streams the reply back. Coding uses an owner-approved project. The workspace also supports channels, threads, DMs, files, channel memory, huddles, incoming webhooks, and personal or workspace MCP tool grants." width="1064" />
 </p>
 
-1. **Sign in and choose a workspace.** Better Auth provides email/password accounts
-   and cookie sessions. Workspace roles and channel membership control access.
-2. **Talk in channels and threads.** The React client sends messages through the
-   Fastify API. PostgreSQL stores messages and their events in a transaction.
-3. **Stay in sync.** Committed PostgreSQL WAL feeds NATS JetStream. API instances
-   read authorized history and deliver it over Socket.IO. Reconnect catch-up and
-   durable broker delivery recover missed updates without periodic scans.
-4. **Share files.** The browser uploads directly to private SeaweedFS storage using
-   a signed form. The API validates and finalizes the upload, then checks current
-   access before issuing download links. Files are limited to 25 MiB each.
-5. **Keep useful context.** Channel memory is opt-in. Members can save messages
-   with source links, edit notes, search, and import or export text documents.
-   Scoped MCP keys let external tools read or update enabled channel memory.
-6. **Work with an agent.** Pair local Codex, Kiro, or Claude from **Members**.
-   Paired agents inherit their owner’s access to conversations; workspace and
-   channel membership checks still apply.
-   Select its mention in a channel or thread to start a managed session. Open the
-   session link in the channel to follow up in its own panel. One thread can
-   have multiple independent sessions; ordinary thread replies do not send agent
-   follow-ups. The owner's requests autoapprove; other people's requests require
-   the agent owner's approval.
-7. **Follow the work.** Sessions retain provider context across turns and connector
-   restarts. Public text and expandable tool calls stream in order, with Working,
-   Thinking, Responding or Using tools activity above the shared composer. Stop
-   interrupts the current turn while keeping its history. Project file tools
-   require a local `--project` selection; shell execution is not enabled.
-8. **Use external tools.** Open your account menu → **Connections**, add an MCP
-   account, discover its tools, and grant selected tools to your own agents. Space
-   attaches temporary gateway access to your requests. Another workspace member’s
-   request cannot use your personal connection.
-
-See the [chat architecture](docs/architecture/realtime-chat.md),
-[file storage guide](docs/architecture/assets.md), and
-[channel memory guide](docs/architecture/channel-memory.md) for the full contracts.
+1. **Start with a conversation.** Post in a channel, reply in a thread, or message a
+   teammate directly. When a discussion needs a call, open a channel huddle to talk
+   or share your screen. [Huddle setup](docs/architecture/channel-huddles.md)
+2. **Keep the context.** Share a file in the conversation or save a decision to
+   the channel’s opt-in Markdown memory. Each saved message links back to its source.
+   [Files](docs/architecture/assets.md) · [Channel memory](docs/architecture/channel-memory.md)
+3. **Ask an agent.** Pair a local provider from **Members**, then select its
+   @mention in a channel or thread. If you ask a teammate’s agent, its owner approves
+   the request. Open the linked session to follow up, watch replies and tool calls
+   stream in, or stop the current turn.
+4. **Choose what it can use.** The connector owner selects a local project for
+   file access and can opt into coding mode to run commands, tests, and Git.
+   Each coding turn needs the computer owner’s approval. MCP grants give the agent
+   access to individual external tools. [Coding sessions](#coding-sessions) · [MCP connections](#mcp-connections)
+5. **Bring updates back to chat.** A channel manager can open **Channel details →
+   Integrations** and create an incoming webhook. A service can then post a message
+   to that channel. The optional Temporal help-request demo also posts requests
+   to a configured channel and sends the requester a DM when someone claims one.
+   [Run the workflow demo](apps/workflows/README.md)
 
 ---
 
@@ -363,6 +338,8 @@ See the [connector guide](apps/connector/README.md) and
 
 Workspace owners and admins can open **Agents & tools → Apps → Add MCP server** to register a shared HTTPS endpoint. Save the server, use **Test connection** to discover its tools, then select tools for each paired workspace agent under **Agent access**. Workspace grants apply when a workspace member with channel access asks that agent to use a tool.
 
+<a id="personal-mcp-connections"></a>
+
 ### Personal connections
 
 Use your account menu to add multiple accounts for the same MCP
@@ -396,12 +373,10 @@ require HTTPS. The default Compose stack does not start the gateway automaticall
 See the [outbound MCP guide](docs/architecture/outbound-mcp.md) for configuration,
 network restrictions, revocation, audit retention, and recovery.
 
-V1 supports remote **Streamable HTTP** with a bearer token or no authentication.
-OAuth, local stdio upstreams, legacy SSE-only servers, inbound events/messages, and
-shared workspace credentials are outside this release. Mock/AG-UI worker agents
-are not offered in the connection’s agent picker. Synthetic integration tests and
-an installed Codex transport check do not establish real-account interoperability
-or a production deployment.
+The gateway supports remote **Streamable HTTP** with a bearer token or anonymous
+access. A request from the agent owner can use personal and workspace grants.
+Another member’s approved request can use only workspace grants for that agent.
+Both people must still have access to the workspace and channel.
 
 ---
 
@@ -424,13 +399,13 @@ Space is a TypeScript monorepo using pnpm workspaces and Turborepo.
 | macOS app | Electron shell, persistent sessions, native menus, DMG/ZIP packaging | [`apps/desktop`](apps/desktop) |
 | Shared UI | Components, rich-text composer, design tokens | [`packages/ui`](packages/ui) |
 | API | Fastify, Better Auth, Socket.IO | [`apps/server`](apps/server) |
-| Outbound MCP gateway | Personal account credentials, tool discovery, authorized upstream calls | [`apps/mcp-gateway`](apps/mcp-gateway) |
+| Outbound MCP gateway | Personal and workspace credentials, tool discovery, authorized upstream calls | [`apps/mcp-gateway`](apps/mcp-gateway) |
 | Persistence | PostgreSQL, Drizzle, versioned SQL migrations | [`adapters/postgres`](adapters/postgres) |
 | Durable events | PostgreSQL WAL CDC + NATS JetStream | [`adapters/events`](adapters/events), [`apps/events`](apps/events) |
 | Socket.IO adapter | Redis Pub/Sub | [`adapters/redis`](adapters/redis) |
 | Contracts and policy | Shared validation, types, access and approval policy | [`packages/contracts`](packages/contracts), [`packages/core`](packages/core) |
 | Agent worker | Experimental task flow with a mock connector | [`apps/worker`](apps/worker), [`adapters/mock`](adapters/mock) |
-| Local connector | Codex/Kiro pairing, authorization, persistent sessions, streaming and opt-in project file tools | [`apps/connector`](apps/connector) |
+| Local connector | Codex, Kiro and Claude pairing, persistent sessions, streaming and owner-approved coding | [`apps/connector`](apps/connector) |
 
 ---
 
@@ -440,8 +415,10 @@ These are the connections implemented in this checkout and their current boundar
 
 | Category | Connection | Current scope |
 | --- | --- | --- |
-| **Local agents** | Codex, Kiro, and Claude with local sign-in | Owner-scoped conversation access, approval rules, persistent sessions, ordered text/tool streaming, activity and Stop. Opt-in project file tools through `--project`; no native shell. |
-| **Personal external tools** | Outbound MCP gateway | Multiple personal accounts, explicit per-agent tool grants, encrypted credentials, revocation and call metadata. HTTPS Streamable HTTP with bearer or anonymous auth. [Setup](#personal-mcp-connections). |
+| **Local agents** | Codex, Kiro, and Claude | Persistent sessions with streamed replies and tool activity. Select a project for file tools or opt into [coding sessions](#coding-sessions) for approved commands. |
+| **External tools** | Outbound MCP gateway | Personal accounts and shared workspace servers with per-agent tool grants, encrypted credentials and revocation. [Setup](#mcp-connections). |
+| **Incoming webhooks** | Channel-specific secret URL | Send a JSON POST such as `{"text":"Build passed"}` to publish in one channel. Channel managers can revoke the URL. |
+| **Workflow demo** | Optional Temporal worker | Routes help requests by urgency and sends a claim confirmation by DM when configured for Space chat. [Setup](apps/workflows/README.md). |
 | **Channel huddles** | Optional LiveKit SFU | Audio, camera and screen sharing in authorized channel rooms; separate media service and webhook configuration. [Setup](docs/architecture/channel-huddles.md). |
 | **Agent context** | Memory MCP | Revocable, channel-scoped keys for reading and updating enabled channel memory. Separate from the local project file server. |
 | **Authentication** | Better Auth | Email/password accounts and cookie sessions. Human social login and MFA are planned separately. |
@@ -468,11 +445,12 @@ enables scoped file reads and edits. Channel/thread typing indicators are also i
 
 **Notifications:** Activity collects human DMs, mentions, followed-thread replies and reactions with read controls, realtime updates, global preferences and opt-in browser alerts while Space is open. See [Slack notification flow research and implementation](docs/architecture/slack-notifications-research.md). Migration 040 is required; email/mobile push and agent-output notifications are not included.
 
-**Navigation:** Slack-style rail and Home shortcuts open Threads, Drafts & sent, Saved, Files, To-dos, Directories and agent views, with 33 captured navigation SVG icons. Migration 041 adds personal saves, conversation stars and to-dos. See [sidebar research and capability boundaries](docs/architecture/slack-sidebar-research.md).
+**Navigation.** Home shortcuts include Threads, Drafts & sent, Saved, Files and
+Directories. Agent sessions can be starred and renamed in the sidebar.
 
-**Personal connections:** Outbound MCP v1 is implemented with a management screen,
-separate gateway, per-tool grants, encrypted credentials and audit metadata. Migration
-058 and gateway configuration are required. OAuth and inbound integrations are deferred.
+**MCP connections.** Users manage personal accounts from **Connections**.
+Workspace owners and admins manage shared servers from **Agents & tools → Apps**.
+Both support tool discovery, per-agent grants and revocation. [Gateway setup](#mcp-connections)
 
 **Agent sessions and onboarding:** Managed Codex turns support direct authenticated
 handoff with admission and recovery checks. Sign-in and workspace creation use a
@@ -483,8 +461,7 @@ and access-aware discovery are implemented. Migration 059 and optional LiveKit
 configuration are required; physical-device and cross-network verification remain
 deployment work. See [channel huddles](docs/architecture/channel-huddles.md).
 
-**Still ahead:** OAuth for outbound MCP, inbound messages/events, native shell
-execution and interactive tool approvals, group direct messages, broader presence,
+**Still ahead:** OAuth for outbound MCP, group direct messages, broader presence,
 and additional agent adapters.
 Streaming follow-ups include complete lifecycle-event retention, normalized
 incremental tool output, smaller browser updates and long-output paging.
@@ -525,7 +502,7 @@ More guides:
 - [Local agent providers](docs/architecture/local-agent-providers.md)
 - [Persistent agent sessions](docs/architecture/agent-sessions.md)
 - [Memory MCP access](docs/architecture/memory-mcp.md)
-- [Personal outbound MCP setup and permissions](docs/architecture/outbound-mcp.md)
+- [Personal and workspace MCP setup and permissions](docs/architecture/outbound-mcp.md)
 - [Direct Codex session execution](docs/architecture/direct-codex-sessions.md)
 - [Channel huddles and LiveKit](docs/architecture/channel-huddles.md)
 - [Navigator and thread routing](docs/architecture/navigator.md)
