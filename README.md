@@ -234,7 +234,7 @@ for tested workflows and remaining checks.
 ## How Space works
 
 <p align="center">
-  <img src="docs/images/how-space-works.png" alt="A Space workspace sends a request to the agent owner’s local Codex, Kiro, or Claude connector, which streams the reply back. Coding uses an owner-approved project. The workspace also supports channels, threads, DMs, files, channel memory, huddles, incoming webhooks, and personal or workspace MCP tool grants. A Temporal workflow posts a help request to a channel and sends the requester a DM after a claim." width="1064" />
+  <img src="docs/images/how-space-works.png" alt="The shared workspace contains conversations, files, channel memory, agent sessions, huddles, incoming webhooks, and Temporal workflows. It connects to MCP tools through personal and workspace grants. On the agent owner’s computer, a Codex, Kiro, or Claude connector receives requests and streams replies back." width="1064" />
 </p>
 
 1. **Start with a conversation.** Post in a channel, reply in a thread, or message a
