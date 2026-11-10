@@ -53,6 +53,8 @@ jobs:
         run: |
           docker exec "$POSTGRES_CONTAINER" psql -U postgres -d workplace_test -c "ALTER SYSTEM SET wal_level='logical'"
           docker exec "$POSTGRES_CONTAINER" psql -U postgres -d workplace_test -c "ALTER SYSTEM SET max_replication_slots=20"
+          # Four integration workers can drop their partitioned test schemas concurrently.
+          docker exec "$POSTGRES_CONTAINER" psql -U postgres -d workplace_test -c "ALTER SYSTEM SET max_locks_per_transaction=256"
           docker restart "$POSTGRES_CONTAINER"
           docker run -d --name space-typesense --tmpfs /data -p 58108:8108 typesense/typesense:30.2 --data-dir=/data --api-key=space_local_search
           docker run -d --name space-nats -p 4222:4222 -v "$PWD/config/nats.conf:/etc/nats/space.conf:ro" nats:2.15.2-alpine -c /etc/nats/space.conf

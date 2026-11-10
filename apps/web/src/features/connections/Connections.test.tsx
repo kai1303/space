@@ -113,7 +113,8 @@ it('keeps edits after a failed save but never renders a secret echoed in an erro
 it('refreshes through actor events, never polls, and unsubscribes on close', async () => {
   const fetcher = setup(); await open();
   const before = fetcher.mock.calls.length;
-  vi.useFakeTimers();
+  // Advance application timers while Motion keeps its real frame clock for dialog cleanup.
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
   await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
   expect(fetcher.mock.calls.length).toBe(before);
   await act(async () => { await updates.get('actor:user')?.(); });

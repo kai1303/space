@@ -17,6 +17,24 @@ CANARY = "private-message-and-token-canary"
 PROJECT = "space-log-test-" + uuid4().hex[:10]
 
 
+def await_collector(port):
+    # Empty Fluent Forward batch ["probe", [], {"chunk": "ready"}] and its MessagePack ACK.
+    probe = b"\x93\xa5probe\x90\x81\xa5chunk\xa5ready"
+    ack = b"\x81\xa3ack\xa5ready"
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=1) as conn:
+                conn.sendall(probe)
+                with conn.makefile("rb") as response:
+                    if response.read(len(ack)) == ack:
+                        return
+        except (TimeoutError, ConnectionError):
+            pass
+        time.sleep(0.25)
+    raise TimeoutError("Fluent Forward receiver did not acknowledge the readiness probe")
+
+
 def main():
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
@@ -77,6 +95,7 @@ def main():
             def await_events(expected):
                 query = urlencode({"query": '{service_name=~".+"}'})
                 deadline = time.monotonic() + 45
+                actual = set()
                 while True:
                     try:
                         with urlopen(f"{endpoint}/loki/api/v1/query_range?{query}", timeout=3) as response:
@@ -90,9 +109,10 @@ def main():
                     except (URLError, TimeoutError, ConnectionError):
                         pass
                     if time.monotonic() >= deadline:
-                        raise TimeoutError("Expected operational events did not reach Loki")
+                        raise TimeoutError(f"Missing operational events in Loki: {expected - actual}")
                     time.sleep(1)
 
+            await_collector(port)
             run("up", "-d", "--no-deps", *inputs)
             for service, lines in inputs.items():
                 emit(service, *lines)
@@ -115,8 +135,7 @@ def main():
             emit("server", CANARY)
             emit("events", CANARY)
             run("start", "log-collector")
-            with socket.create_connection(("127.0.0.1", port), timeout=5):
-                pass
+            await_collector(port)
             emit("server", json.dumps({"msg": "shutdown_failed"}))
             emit("events", "CDC ready")
             await_events(expected | {("space-server", "shutdown_failed"), ("space-events", "cdc_ready")})
