@@ -234,7 +234,7 @@ for tested workflows and remaining checks.
 ## How Space works
 
 <p align="center">
-  <img src="docs/images/how-space-works.png" alt="The shared workspace contains conversations, files, channel memory, agent sessions, huddles, incoming webhooks, and Temporal workflows. It connects to MCP tools through personal and workspace grants. On the agent owner’s computer, a Codex, Kiro, or Claude connector receives requests and streams replies back." width="1064" />
+  <img src="docs/images/how-space-works.png" alt="The shared workspace contains conversations, files, channel memory, agent sessions, huddles, incoming webhooks, and workflows. Agent sessions connect to MCP tools through personal and workspace grants. On the agent owner’s computer, a Codex, Kiro, or Claude connector receives requests and streams replies back." width="1064" />
 </p>
 
 1. **Start with a conversation.** Post in a channel, reply in a thread, or message a
@@ -258,7 +258,7 @@ for tested workflows and remaining checks.
 ### Workflows
 
 The **IT Help Request** workflow routes a request to the team and tells the
-requester who picked it up. With the optional Temporal worker connected to Space,
+requester who picked it up. With the optional workflow worker connected to Space,
 a request takes three steps.
 
 1. Start a request from the CLI. The workflow posts a normal request to the
@@ -432,7 +432,7 @@ These are the connections implemented in this checkout and their current boundar
 | **Local agents** | Codex, Kiro, and Claude | Persistent sessions with streamed replies and tool activity. Select a project for file tools or opt into [coding sessions](#coding-sessions) for approved commands. |
 | **External tools** | Outbound MCP gateway | Personal accounts and shared workspace servers with per-agent tool grants, encrypted credentials and revocation. [Setup](#mcp-connections). |
 | **Incoming webhooks** | Channel-specific secret URL | Send a JSON POST such as `{"text":"Build passed"}` to publish in one channel. Channel managers can revoke the URL. |
-| **Workflows** | Optional Temporal worker | Routes help requests by urgency and sends a claim confirmation by DM when configured for Space chat. [Setup](apps/workflows/README.md). |
+| **Workflows** | Optional workflow worker | Routes help requests by urgency and sends a claim confirmation by DM when configured for Space chat. [Setup](apps/workflows/README.md). |
 | **Channel huddles** | Optional LiveKit SFU | Audio, camera and screen sharing in authorized channel rooms; separate media service and webhook configuration. [Setup](docs/architecture/channel-huddles.md). |
 | **Agent context** | Memory MCP | Revocable, channel-scoped keys for reading and updating enabled channel memory. Separate from the local project file server. |
 | **Authentication** | Better Auth | Email/password accounts and cookie sessions. Human social login and MFA are planned separately. |

@@ -3,17 +3,20 @@
 The root README uses `how-space-works.png`. The November 10, 2026 edit used the
 November 4 illustration as its visual reference.
 
-## Edit prompt
+## Diagram layout
 
-Edit the previous “How Space works” illustration into an updated README infographic. Match its deep plum engineering grid, subtle gradient to mint in one corner, black rounded tiles, white outline symbols and bold white type. Wide landscape, fully opaque, crisp at GitHub column width. Recompose into just TWO zones with ONE simple round-trip in the gap. Keep typography large and lines clear. Top title “How Space works”. Subtitle “From a team conversation to a local agent session”.
-Left zone titled “Shared workspace”. Stack three dark cards: “Channels, threads & DMs” (chat bubbles), “Files & channel memory” (document), “Agent sessions” (conversation). Directly below, inside the same panel, two compact labels “Channel huddles” and “Incoming webhooks”.
-Right zone titled “Agent owner’s computer”. Stack two dark cards: “Local connector” with one line listing “Codex · Kiro · Claude”, and a folder card labeled “Selected project” with subtitle “Owner-approved coding”. Use simple outline icons. No cloud imagery or invented logos.
-In the gutter a right-pointing dotted arrow from Agent sessions to the Local connector, labeled “Request”, and a left-pointing arrow back labeled “Streamed reply”. Align zones to avoid crossed connectors. A separate small footer tile beneath the shared workspace titled “MCP tools” with the line “Personal and workspace grants”. No other text. Preserve obvious hierarchy, generous margins and breathing room.
+Use the title “How Space works” and subtitle “Team conversations, local agents and
+workflows”. Preserve the plum grid, mint glow, black cards and white labels.
 
-## Workflow and MCP layout
+Inside “Shared workspace”, stack “Channels, threads & DMs”, “Files & channel
+memory”, and “Workflow”. Give Workflow the caption “Channel post → Claim →
+Requester DM”. Below it, place “Channel huddles” and “Incoming webhooks” side by
+side, then “Agent sessions” on the bottom row.
 
-The subtitle reads “Team conversations, local agents and workflows”. Include a
-“Temporal workflows” row inside the Shared workspace panel, with the caption
-“Channel post → Claim → Requester DM”. Place “MCP tools” in its own block below
-the computer panel. Label it “Personal and workspace grants” and draw a dotted
-line between that block and the outer border of Shared workspace.
+In “Agent owner’s computer”, show “Local connector” with “Codex · Kiro · Claude”
+and “Selected project” with “Owner-approved coding”. Draw the “Request” and
+“Streamed reply” arrows between the workspace and the computer.
+
+Place the separate “MCP tools” block opposite Agent sessions, with the subtitle
+“Personal and workspace grants”. Draw a horizontal dotted line from the edge of
+the Agent sessions card directly to MCP tools.
