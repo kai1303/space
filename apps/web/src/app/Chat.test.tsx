@@ -1334,7 +1334,7 @@ it('opens the current profile for a stored mention and sends selected mentions w
  await waitFor(()=>expect(latestChatSocket().requests.some((r:any)=>r.name==='message.send'&&r.data.document.ops.some((op:any)=>op.attributes?.mention?.id===person.id))).toBe(true));
 });
 
-it('fades a live thread reply without animating the loaded thread history', async () => {
+it('glides a live thread reply into place and shows loaded thread history immediately', async () => {
   const root = paginatedMessage('Existing thread root', '1');
   mockPaginatedChat(() => messagePage([root]), '1');
   render(<Chat />);
@@ -1347,7 +1347,11 @@ it('fades a live thread reply without animating the loaded thread history', asyn
   await act(async () => { latestChatSocket().receive('chat.events', { channel_id: 'first', cursor: '2', events: [{ type: 'message.created', channel_id: 'first', thread_id: 'thread', sequence: '2', occurred_at: reply.created_at, payload: reply }] }, vi.fn()); });
   const row = within(thread).getByText(reply.text).closest('article')!;
   expect(Number(row.style.opacity)).toBeLessThan(1);
-  expect(row.style.transform).not.toMatch(/translate|scale/);
+  expect(row.style.transform).toMatch(/^translateX\(-/);
+  await waitFor(() => {
+    expect(row.style.transform).toBe('none');
+    expect(row.style.opacity).toBe('1');
+  });
 });
 
 function sendReviewChannels() {
