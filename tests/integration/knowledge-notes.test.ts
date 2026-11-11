@@ -171,7 +171,7 @@ test('knowledge tools over a real MCP client: contribute adds, write edits, the 
     await api(a.owner_token, 'POST', `/channels/${a.channel_id}/memory/settings`, { enabled: true });
     await api(a.owner_token, 'POST', `/channels/${a.channel_id}/memory/knowledge`, { enabled: false });
     assert.ok(!(await contribute.listTools()).tools.some(t => t.name.startsWith('knowledge_')));
-    assert.ok((await contribute.callTool({ name: 'knowledge_add', arguments: { ...args, id: randomUUID(), title: 'Later' } })).isError);
+    await assert.rejects(contribute.callTool({ name: 'knowledge_add', arguments: { ...args, id: randomUUID(), title: 'Later' } }), /not found/);
     // With both switches off, the endpoint refuses the key.
     await api(a.owner_token, 'POST', `/channels/${a.channel_id}/memory/settings`, { enabled: false });
     await assert.rejects(contribute.callTool({ name: 'knowledge_list', arguments: {} }), /memory_disabled/);
