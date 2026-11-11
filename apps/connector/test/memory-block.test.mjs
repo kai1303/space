@@ -22,3 +22,21 @@ test('instructions name the base revisions from the supplied context', () => {
   assert.match(text, /session base_revision 0/);
   assert.equal(memoryInstructions(undefined), '');
 });
+
+test('instructions describe notes only when knowledge_notes is supplied', () => {
+  const base = { thread_id: 't', messages: [], working_memory: { checkpoint: null } };
+  assert.doesNotMatch(memoryInstructions(base), /"notes"/);
+  const text = memoryInstructions({ ...base, knowledge_notes: { channel_id: 'c', notes: [{ title: 'Duplicate charge fix' }], truncated: true } });
+  assert.match(text, /"notes":\[/);
+  assert.match(text, /At most 3 notes/);
+  assert.match(text, /Reuse a title/);
+  assert.match(text, /search knowledge first/);
+});
+
+test('notes in the block stay hidden from people', () => {
+  const progress = new AgentProgress();
+  const block = '<space-memory>{"notes":[{"kind":"fact","title":"T","content":"C"}]}</space-memory>';
+  const final = progress.snapshot([{ id: 'm', text: `Answer.\n${block}`, status: 'complete' }], true);
+  assert.equal(final.messages[0].text, 'Answer.');
+  assert.equal(final.memory.notes[0].title, 'T');
+});
