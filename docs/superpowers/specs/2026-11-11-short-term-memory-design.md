@@ -76,7 +76,7 @@ Every layer returns the same envelope, so an agent can move down and up:
 ```
 
 - `content` is at most 6,000 characters. `summary` is 1–280 characters and required. `source_message_ids` holds 1–32 IDs from the same thread or session at or before the watermark.
-- The write uses an optimistic check: the insert succeeds only when `revision` is still the latest. Otherwise it returns `409 checkpoint_conflict`. The writer inserts `revision + 1`, and the partial unique indexes make the check atomic. No explicit or distributed locks are used.
+- The write uses an optimistic check: the insert succeeds only when `revision` is still the latest. Otherwise it returns `409 thread_checkpoint_conflict` or `409 session_checkpoint_conflict`. The writer inserts `revision + 1`, and the partial unique indexes make the check atomic. No explicit or distributed locks are used.
 - Space never writes or invents a summary or checkpoint and runs no model for memory.
 
 ## Compaction
@@ -88,7 +88,7 @@ Every layer returns the same envelope, so an agent can move down and up:
 
 ## Agent tools
 
-These are added to the existing `/mcp/memory` endpoint. A key is bound to one channel. A `ref` outside that channel returns `404`.
+These are added to the existing `/mcp/memory` endpoint. A key is bound to one channel. A `ref` outside that channel returns the tool error `unauthorized`.
 
 | Tool | Arguments | Returns |
 | --- | --- | --- |
@@ -98,7 +98,7 @@ These are added to the existing `/mcp/memory` endpoint. A key is bound to one ch
 | `session_checkpoint` | Same as `thread_checkpoint` | New revision |
 | `thread_context`, `thread_messages`, `thread_message`, `thread_checkpoint` | Unchanged, except that `thread_checkpoint` now requires `summary` | Unchanged |
 
-Thread-scoped keys keep their current behavior. They cannot call `channel_memory`, and they can open only their own thread.
+The new tools use channel keys, so they follow the existing channel-key rule: the key is issued only while the channel's Markdown notes are enabled. Thread-scoped keys keep their current behavior. They cannot call `channel_memory`, and they can open only their own thread.
 
 ## Task context
 
@@ -117,7 +117,7 @@ Each layer is checked separately. A layer the agent cannot read is left out. All
 | --- | --- |
 | `channel_memory` | The requester and the agent owner are current members of the key's channel |
 | `thread_memory` | Same as above, and the thread is in that channel |
-| `session_memory` for its own session | The caller is the session's agent installation, or a member of the session |
+| `session_memory` for its own session | The key is bound to the session's agent installation (`memory_connections.installation_id = agent_sessions.installation_id`) |
 | `session_memory` for another session | Never. Returns `403 session_private`. The session still appears in `thread_memory` with its title, agent and state |
 
 Membership and key revocation are checked again on every call and before results are returned. Private agent-session messages never appear in `channel_memory` or `thread_memory`.
@@ -126,10 +126,10 @@ Membership and key revocation are checked again on every call and before results
 
 | Case | Result |
 | --- | --- |
-| Stale revision | `409 checkpoint_conflict` |
+| Stale revision | `409 thread_checkpoint_conflict` (existing code) or `409 session_checkpoint_conflict` |
 | `content` over 6,000 characters | `413 checkpoint_too_large` |
 | Missing or invalid `summary` | `400 invalid_summary` |
-| `ref` outside the key's channel | `404`, without saying whether the thread exists |
+| `ref` outside the key's channel | Tool error `unauthorized` (the existing 404 → 401 mapping), without saying whether the thread exists |
 | Another agent's session | `403 session_private` |
 | Thread idle more than 7 days | Left out of the index. Still readable with `thread_memory` |
 | Ended session | Listed with `state: ended`. Its content is no longer given out |
