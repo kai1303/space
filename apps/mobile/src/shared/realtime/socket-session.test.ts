@@ -21,18 +21,15 @@ class FakeSocket {
 function fakeAuth() {
   const listeners = { renewed: new Set<() => void>(), expired: new Set<() => void>() };
   const state = { cookie: 'a=1', refreshResult: true };
-  const auth = {
-    get cookie() { return state.cookie; }, set cookie(value: string) { state.cookie = value; },
-    get refreshResult() { return state.refreshResult; },
+  return {
     headers: () => ({ origin: 'https://space.test', cookie: state.cookie }),
     refresh: jest.fn(async (): Promise<boolean> => {
-      if (auth.refreshResult) { auth.cookie = 'a=2'; listeners.renewed.forEach(listener => listener()); }
-      return auth.refreshResult;
+      if (state.refreshResult) { state.cookie = 'a=2'; listeners.renewed.forEach(listener => listener()); }
+      return state.refreshResult;
     }),
     expire: jest.fn(async () => { listeners.expired.forEach(listener => listener()); }),
     on: (event: 'renewed' | 'expired', listener: () => void) => { listeners[event].add(listener); return () => { listeners[event].delete(listener); }; },
   };
-  return auth;
 }
 const settle = () => new Promise(resolve => setTimeout(resolve, 0));
 function setup() {
