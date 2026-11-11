@@ -637,7 +637,7 @@
 .sp-graph-node.is-pinned .sp-graph-dot { stroke-dasharray: 4 2; }
 .sp-graph-node.is-faded, .sp-graph-link.is-faded { opacity: 0.35; }
 .sp-graph-ring-item { cursor: pointer; outline: none; }
-.sp-graph-ring-item path { fill: color-mix(in srgb, var(--sp-surface-raised) 85%, var(--sp-text) 15%); stroke: var(--sp-border); stroke-width: 1; }
+.sp-graph-ring-item path { fill: color-mix(in srgb, var(--sp-text) 22%, var(--sp-surface)); fill-opacity: 0.88; stroke: var(--sp-surface); stroke-width: 1; }
 .sp-graph-ring-item:hover path, .sp-graph-ring-item:focus-visible path { fill: color-mix(in srgb, var(--sp-accent) 30%, var(--sp-surface-raised)); }
 .sp-graph-ring-item text { font-size: 12px; fill: var(--sp-text); pointer-events: none; }
 .sp-graph-details { position: absolute; top: 8px; right: 8px; width: min(300px, 45%); max-height: calc(100% - 16px); overflow: auto; display: flex; flex-direction: column; gap: 6px; padding: 8px; border: 1px solid var(--sp-border); border-radius: var(--sp-radius-md); background: color-mix(in srgb, var(--sp-surface-raised) 94%, transparent); box-shadow: 0 6px 24px rgb(0 0 0 / 0.18); }

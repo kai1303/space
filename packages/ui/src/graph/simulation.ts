@@ -3,7 +3,8 @@ import { NODE_RADIUS, type Point } from './layout.js';
 
 // Live force layout. It pre-computes most of the settling, animates the rest on animation
 // frames, and stops once cool, so an idle graph schedules nothing.
-export const ALPHA_MIN = 0.05, VELOCITY_DECAY = 0.4, PRECOMPUTE_TICKS = 300, TICKS_PER_FRAME = 1;
+// Several ticks per frame so dragged neighbours keep up with the pointer.
+export const ALPHA_MIN = 0.05, VELOCITY_DECAY = 0.4, PRECOMPUTE_TICKS = 300, TICKS_PER_FRAME = 3;
 export const REHEAT_ALPHA = 0.3, DRAG_ALPHA_TARGET = 0.09;
 
 type SimNode = SimulationNodeDatum & { id: string };
