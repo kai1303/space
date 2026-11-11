@@ -12,6 +12,7 @@
     "desktop": "pnpm --filter @space/desktop start",
     "desktop:package": "pnpm --filter @space/desktop package",
     "desktop:make": "pnpm --filter @space/desktop make",
+    "mobile": "pnpm --filter @space/mobile start",
     "build": "turbo run build",
     "typecheck": "turbo run typecheck",
     "test": "turbo run test",
