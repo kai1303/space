@@ -60,3 +60,62 @@ test('migration: one live note per title, notify payloads, visibility follows th
     assert.ok(payloads.includes('reconcile'), 'switch change asks the worker to reconcile');
   } finally { listener.release(); }
 });
+
+import { addNote, listNoteTitles, removeNote, saveNoteByTitle, updateNote } from '@space/postgres/knowledge-notes';
+
+const codex = { id: 'codex-installation', name: 'Codex' };
+const draft = (message: string, title = 'Duplicate charge fix', content = 'Dedupe on idempotency_key.') => ({ kind: 'decision' as const, title, content, message_ids: [message] });
+
+test('same-title saves make revisions, repeats change nothing, concurrent saves keep one note', async () => {
+  const a = await bootstrap(pool);
+  const root = await post(a.owner_token, a.channel_id, 'Dedupe on idempotency_key');
+  const scope = { workspaceId: a.workspace_id, channelId: a.channel_id };
+  assert.equal(await saveNoteByTitle(db(), scope, draft(root.id), codex), 'saved');
+  assert.equal(await saveNoteByTitle(db(), scope, draft(root.id), codex), 'unchanged');
+  assert.equal(await saveNoteByTitle(db(), scope, draft(root.id, 'duplicate CHARGE fix', 'Dedupe in Postgres.'), codex), 'saved');
+  await Promise.all([
+    saveNoteByTitle(db(), scope, draft(root.id, 'Duplicate charge fix', 'A'), codex),
+    saveNoteByTitle(db(), scope, draft(root.id, 'Duplicate charge fix', 'B'), codex),
+  ]);
+  const notes = (await pool.query('SELECT id, revision FROM knowledge_notes WHERE channel_id=$1 AND removed_at IS NULL', [a.channel_id])).rows;
+  assert.equal(notes.length, 1);
+  assert.equal(notes[0].revision, 4);
+  const revisions = (await pool.query('SELECT revision FROM knowledge_note_revisions WHERE note_id=$1 ORDER BY revision', [notes[0].id])).rows;
+  assert.deepEqual(revisions.map(r => r.revision), [1, 2, 3, 4]);
+});
+
+test('MCP-style add, update and remove use ids, fingerprints and revisions', async () => {
+  const a = await bootstrap(pool), b = await bootstrap(pool);
+  const root = await post(a.owner_token, a.channel_id, 'Evidence');
+  const foreign = await post(b.owner_token, b.channel_id, 'Other channel');
+  const scope = { workspaceId: a.workspace_id, channelId: a.channel_id };
+  const id = randomUUID();
+  const added = await addNote(db(), scope, id, draft(root.id), codex);
+  assert.equal(added.revision, 1);
+  assert.equal((await addNote(db(), scope, id, draft(root.id), codex)).id, id, 'same id and input is a retry');
+  await assert.rejects(addNote(db(), scope, id, draft(root.id, 'Other'), codex), (e: any) => e.code === 'note_id_conflict');
+  await assert.rejects(addNote(db(), scope, randomUUID(), draft(root.id), codex), (e: any) => e.code === 'title_taken');
+  await assert.rejects(addNote(db(), scope, randomUUID(), draft(foreign.id, 'New'), codex), (e: any) => e.code === 'foreign_evidence');
+  const second = await addNote(db(), scope, randomUUID(), draft(root.id, 'Retry budget'), codex);
+  await assert.rejects(updateNote(db(), a.channel_id, id, 5, { content: 'x' }, codex), (e: any) => e.code === 'note_conflict');
+  await assert.rejects(updateNote(db(), a.channel_id, id, 1, { title: 'retry BUDGET' }, codex), (e: any) => e.code === 'title_taken');
+  await assert.rejects(updateNote(db(), a.channel_id, randomUUID(), 1, { content: 'x' }, codex), (e: any) => e.code === 'note_not_found');
+  const updated = await updateNote(db(), a.channel_id, id, 1, { content: 'Dedupe in Postgres.' }, codex);
+  assert.equal(updated.revision, 2);
+  const removed = await removeNote(db(), a.channel_id, second.id, 1, codex);
+  assert.equal(removed.revision, 2);
+  const last = (await pool.query('SELECT removed FROM knowledge_note_revisions WHERE note_id=$1 ORDER BY revision DESC LIMIT 1', [second.id])).rows[0];
+  assert.equal(last.removed, true);
+  await assert.rejects(removeNote(db(), a.channel_id, second.id, 2, codex), (e: any) => e.code === 'note_not_found');
+});
+
+test('title list returns the newest 20 live notes', async () => {
+  const a = await bootstrap(pool);
+  const root = await post(a.owner_token, a.channel_id, 'Evidence');
+  const scope = { workspaceId: a.workspace_id, channelId: a.channel_id };
+  for (let i = 0; i < 25; i++) await saveNoteByTitle(db(), scope, draft(root.id, `Note ${i}`), codex);
+  const list = await listNoteTitles(db(), a.channel_id);
+  assert.equal(list.notes.length, 20);
+  assert.equal(list.truncated, true);
+  assert.equal(list.notes[0]!.title, 'Note 24');
+});

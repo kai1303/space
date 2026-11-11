@@ -79,6 +79,10 @@
       "types": "./dist/navigator.d.ts",
       "default": "./dist/navigator.js"
     },
+    "./knowledge-notes": {
+      "types": "./dist/knowledge-notes.d.ts",
+      "default": "./dist/knowledge-notes.js"
+    },
     "./layered-memory": {
       "types": "./dist/layered-memory.d.ts",
       "default": "./dist/layered-memory.js"
