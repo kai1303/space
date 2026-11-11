@@ -1,8 +1,9 @@
 import { AppError, record } from './validation.js';
 import { CHECKPOINT_LIMIT, SUMMARY_LIMIT } from './thread-context.js';
+import { parseBlockNotes, type NoteDraft } from './knowledge-notes.js';
 
 export interface AgentMemoryPart { base_revision: number; summary: string; content: string }
-export interface AgentMemoryUpdate { session?: AgentMemoryPart; thread?: AgentMemoryPart }
+export interface AgentMemoryUpdate { session?: AgentMemoryPart; thread?: AgentMemoryPart; notes?: NoteDraft[] }
 
 const OPEN = '<space-memory>', CLOSE = '</space-memory>';
 
@@ -14,9 +15,12 @@ function parsePart(value: unknown): AgentMemoryPart {
   return { base_revision: p.base_revision as number, summary: p.summary.trim(), content: p.content.trim() };
 }
 export function parseAgentMemoryUpdate(value: unknown): AgentMemoryUpdate {
-  const v = record(value, ['session', 'thread']);
-  if (v.session === undefined && v.thread === undefined) throw new AppError(400, 'invalid_memory_update');
-  return { ...(v.session === undefined ? {} : { session: parsePart(v.session) }), ...(v.thread === undefined ? {} : { thread: parsePart(v.thread) }) };
+  const v = record(value, ['session', 'thread', 'notes']);
+  let notes: NoteDraft[] = [];
+  // A bad notes list never costs the checkpoints.
+  if (v.notes !== undefined) { try { notes = parseBlockNotes(v.notes); } catch { notes = []; } }
+  if (v.session === undefined && v.thread === undefined && !notes.length) throw new AppError(400, 'invalid_memory_update');
+  return { ...(v.session === undefined ? {} : { session: parsePart(v.session) }), ...(v.thread === undefined ? {} : { thread: parsePart(v.thread) }), ...(notes.length ? { notes } : {}) };
 }
 
 // While streaming, also hold back a trailing partial "<space-memory" so it never flashes on screen.

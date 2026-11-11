@@ -2,6 +2,7 @@ import { parseSidekickContext } from './sidekick.js';
 import { AppError, record, text, uuid } from './validation.js';
 import { parseAgentMemoryContext } from './memory.js';
 import { parseThreadContext } from './thread-context.js';
+import { parseKnowledgeNotesContext } from './knowledge-notes.js';
 import { parseChannelMemoryPage, parseMemoryConflicts, parseSessionMemory } from './layered-memory.js';
 import type { AgentCapabilities, AgentSession, ControlFeature, Execution, InvocationRequest } from './index.js';
 export interface DefinitionInput { name: string; capabilities: AgentCapabilities }
@@ -49,7 +50,7 @@ export function parseInvocation(value: unknown): InvocationRequest {
   if (uuid(v.idempotency_key) !== execution_id) throw new AppError(400, 'invalid_idempotency_key');
   let context:InvocationRequest['context'];
   if (v.context !== undefined) {
-    const ctx = record(v.context, ['thread_id', 'messages', 'working_memory', 'channel_notes', 'channel_memory', 'agent_session_memory', 'memory_conflicts', 'handoff']);
+    const ctx = record(v.context, ['thread_id', 'messages', 'working_memory', 'channel_notes', 'channel_memory', 'agent_session_memory', 'memory_conflicts', 'knowledge_notes', 'handoff']);
     if (!Array.isArray(ctx.messages) || ctx.messages.length > 16) throw new AppError(400, 'invalid_context');
     const working_memory = ctx.working_memory === undefined ? undefined : parseThreadContext(ctx.working_memory);
     if (working_memory && working_memory.thread_id !== uuid(ctx.thread_id)) throw new AppError(400, 'invalid_context_thread');
@@ -58,6 +59,7 @@ export function parseInvocation(value: unknown): InvocationRequest {
       ...(ctx.channel_memory === undefined ? {} : { channel_memory: parseChannelMemoryPage(ctx.channel_memory) }),
       ...(ctx.agent_session_memory === undefined ? {} : { agent_session_memory: parseSessionMemory(ctx.agent_session_memory) }),
       ...(ctx.memory_conflicts === undefined ? {} : { memory_conflicts: parseMemoryConflicts(ctx.memory_conflicts) }),
+      ...(ctx.knowledge_notes === undefined ? {} : { knowledge_notes: parseKnowledgeNotesContext(ctx.knowledge_notes) }),
       ...(working_memory ? { working_memory } : {}), thread_id: uuid(ctx.thread_id), messages: ctx.messages.map(raw => {
       const m = record(raw, ['id', 'text', 'author_type']);
       if (m.author_type !== 'human' && m.author_type !== 'agent' && m.author_type !== 'app' && m.author_type !== 'workflow') throw new AppError(400, 'invalid_context');

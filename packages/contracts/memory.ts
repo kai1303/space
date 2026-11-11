@@ -23,7 +23,7 @@ export function parseAgentMemoryAccess(input: unknown): AgentMemoryAccess {
 }
 export type MemoryMatch = { text: string; line: number };
 export type ChannelMemory = {
-  enabled: boolean; provider: string; can_manage: boolean;
+  enabled: boolean; provider: string; can_manage: boolean; knowledge_enabled: boolean;
   providers: { id: string; name: string }[]; document: MemoryDocument | null;
 };
 export function memoryContent(input: unknown): string {
@@ -62,4 +62,9 @@ export function parseMemorySource(input: unknown): { message_id: string } | { so
   if (!/\.(md|txt|markdown)$/i.test(name) || /[\r\n\u0000-\u001f]/.test(name)) throw new AppError(400, 'invalid_memory_document');
   const content = text(v.content, MAX_MEMORY_IMPORT_BYTES);
   return { source_id: uuid(v.source_id), name, content };
+}
+export function parseKnowledgeSettings(input: unknown): { enabled: boolean } {
+  const v = record(input, ['enabled']);
+  if (typeof v.enabled !== 'boolean') throw new AppError(400, 'invalid_knowledge_settings');
+  return { enabled: v.enabled };
 }
