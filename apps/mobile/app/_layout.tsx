@@ -1,5 +1,12 @@
 import { Stack } from 'expo-router';
+import { StatusBar } from 'expo-status-bar';
+import { AuthProvider } from '../src/features/auth/AuthProvider';
 
 export default function RootLayout() {
-  return <Stack />;
+  return (
+    <AuthProvider>
+      <StatusBar style="auto" />
+      <Stack screenOptions={{ headerShown: false }} />
+    </AuthProvider>
+  );
 }
