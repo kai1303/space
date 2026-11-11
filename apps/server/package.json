@@ -40,6 +40,10 @@
       "types": "./dist/memory.d.ts",
       "default": "./dist/memory.js"
     },
+    "./memory-index": {
+      "types": "./dist/memory-index.d.ts",
+      "default": "./dist/memory-index.js"
+    },
     "./markdown-memory": {
       "types": "./dist/markdown-memory.d.ts",
       "default": "./dist/markdown-memory.js"

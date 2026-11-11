@@ -30,12 +30,12 @@ function MemoryView({ channel, name, message, onDirtyChange, onAccessLost, asTab
   const [confirmDelete, setConfirmDelete] = useState(false);
   // Saving a message is a Notes action, so that entry opens on Notes.
   const [view, setView] = useState<'graph' | 'notes'>(message ? 'notes' : 'graph');
-  const [selection, setSelection] = useState<MemorySelection>(), [graphDirty, setGraphDirty] = useState(false);
+  const [selection, setSelection] = useState<MemorySelection>();
   const active = useRef(false), pending = useRef(false), generation = useRef(0);
   const path = `/channels/${channel}/memory`, dirty = data?.document != null && draft !== data.document.content;
   // A message saved while this view is already open still lands on Notes.
   useEffect(() => { if (message) { setView('notes'); setMessageSaved(false); } }, [message?.id]);
-  useEffect(() => { onDirtyChange?.(dirty || graphDirty); }, [dirty, graphDirty, onDirtyChange]);
+  useEffect(() => { onDirtyChange?.(dirty); }, [dirty, onDirtyChange]);
   useEffect(() => () => onDirtyChange?.(false), [onDirtyChange]);
   useEffect(() => {
     if (!dirty) return;
@@ -105,7 +105,7 @@ function MemoryView({ channel, name, message, onDirtyChange, onAccessLost, asTab
     ]} />
     {view === 'graph' && <div id={`memory-${channel}-graph`} role="tabpanel" aria-label="Graph" className="memory-graph-view">
       <MemoryGraph channel={channel} name={name} onSelect={setSelection} onAccessLost={() => onAccessLost?.()} onOpenThread={openThread} onOpenSession={openSession}
-        details={<MemoryInspector channel={channel} selection={selection} canManage={!!data?.can_manage} onDirtyChange={setGraphDirty} onOpenThread={openThread} onOpenSession={openSession} />} />
+        details={<MemoryInspector channel={channel} selection={selection} onOpenThread={openThread} onOpenSession={openSession} />} />
     </div>}
     {view === 'notes' && <div id={`memory-${channel}-notes`} role="tabpanel" aria-label="Notes">
     <div className="channel-memory">

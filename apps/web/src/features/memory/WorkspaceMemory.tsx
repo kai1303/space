@@ -20,7 +20,6 @@ const CONCURRENCY = 4;
 const palette = { channel: 'var(--sp-accent)', thread: 'var(--sp-success)', session: 'var(--sp-info)' };
 const key = (kind: string, id: string) => `${kind}:${id}`;
 const failure = (reason: unknown, fallback: string) => reason instanceof Error ? reason.message.replaceAll('_', ' ') : fallback;
-const noop = () => {};
 
 export function WorkspaceMemory({ channels, onOpenChannel, loadMore, loadingMore }: Props) {
   const joined = useMemo(() => channels.filter(channel => channel.joined).slice(0, MAX_CHANNELS), [channels]);
@@ -98,7 +97,7 @@ export function WorkspaceMemory({ channels, onOpenChannel, loadMore, loadingMore
   const layerFor = (channel: string) => layers?.find(layer => layer.channel.id === channel);
   const details = !selection ? <aside className="memory-inspector" aria-label="Memory details"><p>Select a node to see its memory.</p></aside>
     : selection.kind === 'channel' ? <ChannelDetails layer={layerFor(selection.channel)} onOpen={() => onOpenChannel(selection.channel)} />
-    : <MemoryInspector channel={selection.channel} canManage={false} onDirtyChange={noop}
+    : <MemoryInspector channel={selection.channel}
       selection={selection.kind === 'thread' ? { kind: 'thread', node: selection.node } : { kind: 'session', node: selection.node, threadId: selection.threadId }} />;
 
   if (!joined.length) return <section className="wd-empty workspace-memory-empty"><span className="wd-empty-icon"><BookOpen size={32} /></span>

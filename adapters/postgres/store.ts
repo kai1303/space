@@ -9,7 +9,7 @@ import * as s from './schema.js';
 import { tokenHash } from './bootstrap.js';
 import { hasThreadAccess } from './access.js';
 import { readThreadContext } from './thread-context.js';
-import { readChannelMemory, readPendingMemory, readSessionMemory, saveTurnMemory } from './layered-memory.js';
+import { readChannelMemory, readSessionMemory } from './layered-memory.js';
 import { readKnowledgeContext, saveTurnNotes } from './knowledge-notes.js';
 import { sessionTransaction, SessionConflict } from './session-concurrency.js';
 import { traceTool, traceToolChanges, traceTurn } from './turn-trace.js';
@@ -265,8 +265,6 @@ export class PostgresStore implements DeliveryStore {
         });
         if (own) context.agent_session_memory = own;
       }
-      const conflicts = await readPendingMemory(c, task.installation_id, task.thread_id, task.session_id ?? null);
-      if (conflicts.length) context.memory_conflicts = conflicts;
       const [session] = await c.select().from(s.agentSessions).where(eq(s.agentSessions.id, task.session_id!));
       if (session?.handoff_context) context.handoff = session.handoff_context;
       const priorReady = session?.managed && (await c.execute(sql`SELECT 1 FROM tasks previous JOIN task_events e ON e.correlation_id=previous.id AND e.payload->>'session_ready'='true' WHERE previous.session_id=${task.session_id} AND previous.id<>${task.id} LIMIT 1`)).rows.length > 0;
@@ -352,8 +350,6 @@ export class PostgresStore implements DeliveryStore {
         const memory = event.payload.response?.memory;
         if (memory) {
           const [definition] = (await c.execute<{ name: string }>(sql`SELECT d.name FROM agent_installations i JOIN agent_definitions d ON d.id=i.definition_id WHERE i.id=${installationId}`)).rows;
-          const outcomes = await saveTurnMemory(c, { channelId: thread.channel_id, threadId: task.thread_id, sessionId: task.session_id ?? null, installationId, producer: { id: installationId, name: definition?.name ?? 'Agent' }, memory });
-          for (const { scope, outcome } of outcomes) traceTurn(c, task.id, 'memory', `${scope}:${outcome}`);
           if (memory.notes?.length) {
             const [human] = (await c.execute<{ id: string }>(sql`SELECT id FROM messages WHERE channel_id=${thread.channel_id} AND thread_id=${task.thread_id} AND author_type='human' AND deleted_at IS NULL ORDER BY sequence DESC LIMIT 1`)).rows;
             const notes = await saveTurnNotes(c, { channelId: thread.channel_id, installationId, producer: { id: installationId, name: definition?.name ?? 'Agent' }, notes: memory.notes, fallbackMessageId: human?.id ?? null });

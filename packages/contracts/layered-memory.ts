@@ -1,5 +1,5 @@
 import { AppError, record, text, uuid } from './validation.js';
-import { MEMORY_LIMIT, SUMMARY_LIMIT, parseMemoryInput, parseThreadContextMessage, type MemoryRecord, type ThreadContext, type ThreadContextMessage } from './thread-context.js';
+import { SUMMARY_LIMIT, parseThreadContextMessage, type ThreadContext, type ThreadContextMessage } from './thread-context.js';
 
 export type MemoryNodeKind = 'channel' | 'thread' | 'session';
 export interface MemoryRef { kind: MemoryNodeKind; id: string }
@@ -14,10 +14,9 @@ export interface MemoryNode {
   state?: 'active' | 'ended';
 }
 export interface ChannelMemoryPage { channel_id: string; nodes: MemoryNode[]; next_cursor: string | null }
-export interface ThreadMemory { node: MemoryNode; context: ThreadContext; sessions: MemoryNode[]; memory_chars: number; limit: number }
-export interface SessionMemory { node: MemoryNode; memory: MemoryRecord | null; messages: ThreadContextMessage[]; memory_chars: number; limit: number }
+export interface ThreadMemory { node: MemoryNode; context: ThreadContext; sessions: MemoryNode[]; related: ThreadContextMessage[] }
+export interface SessionMemory { node: MemoryNode; messages: ThreadContextMessage[]; related: ThreadContextMessage[] }
 export interface ChannelCursor { as_of: string; created_at: string; thread_id: string }
-export interface MemoryConflict { scope: 'session' | 'thread'; base_revision: number; current_revision: number; summary: string; content: string }
 
 export const CHANNEL_MEMORY_DAYS = 7;
 export const CHANNEL_PAGE_DEFAULT = 20;
@@ -66,20 +65,7 @@ export function parseChannelMemoryPage(value: unknown): ChannelMemoryPage {
   return { channel_id: uuid(p.channel_id), nodes: p.nodes.map(parseNode), next_cursor: p.next_cursor as string | null };
 }
 export function parseSessionMemory(value: unknown): SessionMemory {
-  const s = record(value, ['node', 'memory', 'messages', 'memory_chars', 'limit']);
-  if (!Array.isArray(s.messages) || s.messages.length > 16 || !Number.isSafeInteger(s.memory_chars) || s.limit !== MEMORY_LIMIT) throw new AppError(400, 'invalid_session_memory');
-  let memory: MemoryRecord | null = null;
-  if (s.memory !== null) {
-    const p = record(s.memory, ['revision', 'through_sequence', 'content', 'summary', 'source_message_ids', 'producer_id', 'producer_name', 'created_at']);
-    memory = { ...parseMemoryInput({ revision: p.revision, through_sequence: p.through_sequence, content: p.content, summary: p.summary, source_message_ids: p.source_message_ids }), producer_id: uuid(p.producer_id), producer_name: text(p.producer_name, 100), created_at: text(p.created_at, 64) };
-  }
-  return { node: parseNode(s.node), memory, messages: s.messages.map(parseThreadContextMessage), memory_chars: s.memory_chars as number, limit: MEMORY_LIMIT };
-}
-export function parseMemoryConflicts(value: unknown): MemoryConflict[] {
-  if (!Array.isArray(value) || value.length > 2) throw new AppError(400, 'invalid_memory_conflicts');
-  return value.map(raw => {
-    const v = record(raw, ['scope', 'base_revision', 'current_revision', 'summary', 'content']);
-    if ((v.scope !== 'session' && v.scope !== 'thread') || !Number.isSafeInteger(v.base_revision) || !Number.isSafeInteger(v.current_revision)) throw new AppError(400, 'invalid_memory_conflicts');
-    return { scope: v.scope, base_revision: v.base_revision as number, current_revision: v.current_revision as number, summary: text(v.summary, SUMMARY_LIMIT), content: text(v.content, MEMORY_LIMIT) };
-  });
+  const s = record(value, ['node', 'messages', 'related']);
+  if (!Array.isArray(s.messages) || s.messages.length > 16 || !Array.isArray(s.related) || s.related.length > 16) throw new AppError(400, 'invalid_session_memory');
+  return { node: parseNode(s.node), messages: s.messages.map(parseThreadContextMessage), related: s.related.map(parseThreadContextMessage) };
 }

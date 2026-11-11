@@ -34,7 +34,7 @@ test('event timestamps reject calendar dates normalized by Date.parse', () => {
 
 test('invocation working memory preserves source references and rejects unbounded or foreign-thread context', () => {
   const execution_id = randomUUID(), thread_id = randomUUID();
-  const working_memory = { thread_id, through_sequence: '0', root: null, messages: [], memory: null, has_earlier_messages: false };
+  const working_memory = { thread_id, through_sequence: '0', root: null, messages: [], has_earlier_messages: false };
   const invocation = { schema_version: '1.0', task_id: randomUUID(), execution_id, session_id: randomUUID(), idempotency_key: execution_id, goal: 'Review', skill: 'demo.echo', context: { thread_id, messages: [], working_memory } };
   assert.deepEqual(parseInvocation(invocation), invocation);
   for (const invalid of [{ ...working_memory, thread_id: randomUUID() }, { ...working_memory, injected: true }, { ...working_memory, has_earlier_messages: 'yes' }]) {

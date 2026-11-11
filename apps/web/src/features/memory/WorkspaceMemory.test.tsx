@@ -17,8 +17,8 @@ function stub(threads: Record<number, unknown[]>, failing: number[] = []) {
       if (failing.includes(n)) return response({ error: 'memory_disabled' }, 409);
       return response({ channel_id: match[1], nodes: threads[n] ?? [], next_cursor: null });
     }
-    if (path.includes('/threads/')) return response({ node: thread(11, 1), context: { thread_id: uuid(11), through_sequence: '1', root: null, messages: [], memory: null, has_earlier_messages: false },
-      sessions: [{ ref: { kind: 'session', id: uuid(900) }, parent: { kind: 'thread', id: uuid(11) }, summary: 'Run', updated_at: 'x', children: null, title: 'Run', agent: 'Codex', state: 'active' }], memory_chars: 0, limit: 6000 });
+    if (path.includes('/threads/')) return response({ node: thread(11, 1), context: { thread_id: uuid(11), through_sequence: '1', root: null, messages: [], has_earlier_messages: false },
+      sessions: [{ ref: { kind: 'session', id: uuid(900) }, parent: { kind: 'thread', id: uuid(11) }, summary: 'Run', updated_at: 'x', children: null, title: 'Run', agent: 'Codex', state: 'active' }], related: [] });
     return response({}, 404);
   });
   vi.stubGlobal('fetch', fetch);

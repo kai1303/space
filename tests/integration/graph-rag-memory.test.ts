@@ -57,3 +57,42 @@ test('graph_source_messages carries memory and knowledge flags', async () => {
   const [knowledgeOnly] = (await pool.query('SELECT memory, knowledge FROM graph_source_messages WHERE id=$1', [m.id])).rows;
   assert.deepEqual([knowledgeOnly.memory, knowledgeOnly.knowledge], [false, true]);
 });
+
+// Needs a knowledge database with memory-graph.sql applied (MEMORY_GRAPH_URL, writer role) and local Ollama.
+test('graphMemoryIndex ranks by meaning inside the asked thread, session or channel only', { skip: !process.env.MEMORY_GRAPH_URL }, async () => {
+  const { graphMemoryIndex } = await import('@space/server/memory-index');
+  const graph = new Pool({ connectionString: process.env.MEMORY_GRAPH_URL });
+  const embed = async (texts: string[]) => (await (await fetch('http://127.0.0.1:11434/api/embed', { method: 'POST', body: JSON.stringify({ model: 'all-minilm:22m', input: texts }) })).json()).embeddings as number[][];
+  const ws = randomUUID(), channel = randomUUID(), other = randomUUID(), t1 = randomUUID(), t2 = randomUUID(), t3 = randomUUID(), session = randomUUID();
+  const messages = [
+    { id: randomUUID(), thread: t1, text: 'Customers were charged twice after checkout retried' },
+    { id: randomUUID(), thread: t1, text: 'Lunch is at noon on Friday' },
+    { id: randomUUID(), thread: t2, text: 'Duplicate charges again in another thread' },
+    { id: randomUUID(), thread: t3, text: 'Charged twice in a different channel' },
+    { id: randomUUID(), thread: t1, text: 'Agent turn: I fixed the duplicate charge bug', session },
+  ];
+  try {
+    await graph.query('INSERT INTO kb.m_channels(id,workspace_id,name,is_private,memory_enabled,version) VALUES($1,$3,$4,false,true,1),($2,$3,$4,false,true,1)', [channel, other, ws, 'c']);
+    await graph.query('INSERT INTO kb.m_threads(id,workspace_id,channel_id,version) VALUES($1,$4,$5,1),($2,$4,$5,1),($3,$4,$6,1)', [t1, t2, t3, ws, channel, other]);
+    await graph.query(`INSERT INTO kb.m_sessions(id,workspace_id,thread_id,title,state,version) VALUES($1,$2,$3,'Fix','active',1)`, [session, ws, t1]);
+    const vectors = await embed(messages.map(m => m.text));
+    for (const [i, m] of messages.entries()) {
+      await graph.query(`INSERT INTO kb.m_messages(id,workspace_id,thread_id,sequence,revision,created_at,memory,knowledge,body,embedding,version)
+        VALUES($1,$2,$3,$4,1,now(),true,false,$5,$6,1)`, [m.id, ws, m.thread, i + 1, m.text, JSON.stringify(vectors[i])]);
+      if (m.session) await graph.query('INSERT INTO kb.m_session_turns(id,workspace_id,session_id,message_id) VALUES($1,$2,$3,$1)', [m.id, ws, m.session]);
+    }
+    await graph.query("SELECT pgcontext.upsert_points('kb_memory', $1::text[])", [messages.map(m => m.id)]);
+    const index = graphMemoryIndex(process.env.MEMORY_GRAPH_URL)!;
+    const inThread = await index.related({ channelId: channel, threadId: t1 }, 'charged twice', 5);
+    assert.equal(inThread[0], messages[0]!.id, 'the matching message of this thread ranks first');
+    assert.ok(!inThread.includes(messages[2]!.id) && !inThread.includes(messages[3]!.id), 'no other thread or channel');
+    assert.ok(!inThread.includes(messages[4]!.id), 'session turns stay out of thread memory');
+    assert.deepEqual(await index.related({ channelId: channel, threadId: t1, sessionId: session }, 'duplicate charge', 5), [messages[4]!.id]);
+    const inChannel = await index.related({ channelId: channel }, 'charged twice', 5);
+    assert.ok(inChannel.includes(messages[2]!.id) && !inChannel.includes(messages[3]!.id), 'channel scope stops at the channel');
+  } finally {
+    await graph.query("SELECT pgcontext.delete_points('kb_memory', $1::text[])", [messages.map(m => m.id)]).catch(() => {});
+    await graph.query('DELETE FROM kb.m_channels WHERE id = ANY($1::text[])', [[channel, other]]);
+    await graph.end();
+  }
+});

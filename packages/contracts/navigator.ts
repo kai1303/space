@@ -26,7 +26,7 @@ export interface NavigationDecision {
 export interface NavigationContext {
   workState?: NavigationWorkState;
   retrievedMessages?: {id:string;text:string;truncated?:boolean}[];
-  workingMemory?: Pick<import('./thread-context.js').ThreadContext, 'root' | 'memory'>;
+  workingMemory?: Pick<import('./thread-context.js').ThreadContext, 'root'>;
   pendingMessageIds?: string[];
   messages: { id: string; text: string; truncated?:boolean; author?:{id:string;kind:'human'|'agent'|'app'|'workflow';name?:string} }[];
   candidates: NavigatorCandidate[];

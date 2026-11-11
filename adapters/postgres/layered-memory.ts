@@ -1,58 +1,110 @@
 import { sql } from 'drizzle-orm';
 import {
-  AppError, uuid, chatCursor, encodeChannelCursor, parseChannelCursor, parseMemoryInput,
-  CHANNEL_MEMORY_DAYS, CHANNEL_PAGE_DEFAULT, CHANNEL_PAGE_MAX, MEMORY_LIMIT,
-  type ChannelMemoryPage, type MemoryNode, type SessionMemory, type ThreadMemory, type MemoryConflict, type AgentMemoryUpdate,
-  type MemoryRecord, type MemoryInput, type ThreadContextMessage,
+  AppError, uuid, encodeChannelCursor, parseChannelCursor,
+  CHANNEL_MEMORY_DAYS, CHANNEL_PAGE_DEFAULT, CHANNEL_PAGE_MAX, SUMMARY_LIMIT,
+  type ChannelMemoryPage, type MemoryNode, type SessionMemory, type ThreadMemory, type ThreadContextMessage,
 } from '@space/contracts';
 import type { DbSession } from './database.js';
-import { assertMemorySources, assertContextThread, memoryColumns, readThreadContext, rows, writeThreadMemory } from './thread-context.js';
+import { contextMessage, messageColumns, readThreadContext, rows, type MessageRow } from './thread-context.js';
 
-export async function readChannelMemory(c: DbSession, channelId: string, after?: string, limit = CHANNEL_PAGE_DEFAULT): Promise<ChannelMemoryPage> {
+// Memory is built from messages. The three layers are read from Space's own messages, which always work,
+// and are ranked by meaning when the Graph RAG store is configured. The store only proposes message ids;
+// every text shown here is read from `messages` in the requested channel, thread or session, so a stale or
+// wrong id can never show anything outside the scope the caller already passed the access check for.
+export interface MemoryScope { channelId: string; threadId?: string; sessionId?: string }
+export interface MemoryIndex {
+  related(scope: MemoryScope, query: string, limit: number): Promise<string[]>;
+}
+let index: MemoryIndex | undefined;
+export function useMemoryIndex(next: MemoryIndex | undefined) { index = next; }
+
+export const MEMORY_QUERY_LIMIT = 500;
+const RELATED_LIMIT = 8;
+function checkedQuery(query: string | undefined): string | undefined {
+  if (query === undefined) return undefined;
+  const trimmed = query.trim();
+  if (!trimmed || trimmed.length > MEMORY_QUERY_LIMIT || trimmed.includes('\0')) throw new AppError(400, 'invalid_memory_query');
+  return trimmed;
+}
+async function ranked(scope: MemoryScope, query: string | undefined, limit: number): Promise<string[]> {
+  if (!index || query === undefined) return [];
+  try { return [...new Set(await index.related(scope, query, limit))].filter(id => /^[0-9a-f-]{36}$/.test(id)).slice(0, limit); }
+  catch { return []; }   // ranking is an enhancement; memory still reads without it
+}
+const firstLine = sql`left(split_part(btrim(text), E'\n', 1), ${SUMMARY_LIMIT})`;
+const live = sql`deleted_at IS NULL AND retained_at IS NULL`;
+
+type ThreadRow = { thread_id: string; title: string; last_at: string; sessions: number };
+function threadNode(row: ThreadRow, channelId: string): MemoryNode {
+  return { ref: { kind: 'thread', id: row.thread_id }, parent: { kind: 'channel', id: channelId }, summary: row.title, updated_at: row.last_at, children: { kind: 'session', count: row.sessions } };
+}
+
+export async function readChannelMemory(c: DbSession, channelId: string, after?: string, limit = CHANNEL_PAGE_DEFAULT, query?: string): Promise<ChannelMemoryPage> {
   if (!Number.isInteger(limit) || limit < 1 || limit > CHANNEL_PAGE_MAX) throw new AppError(400, 'invalid_memory_limit');
+  const asked = checkedQuery(query);
   const cursor = after === undefined ? null : parseChannelCursor(after);
   const asOf = cursor?.as_of ?? (await rows<{ now: string }>(c, sql`SELECT now()::text AS now`))[0]!.now;
-  // Snapshot at as_of so a memory written between pages cannot move a thread across the cursor.
-  const found = await rows<{ thread_id: string; summary: string; created_at: string; sessions: number }>(c, sql`
-    SELECT latest.thread_id, latest.summary, latest.created_at::text AS created_at,
-      (SELECT count(*)::int FROM agent_sessions a WHERE a.origin_thread_id = latest.thread_id) AS sessions
-    FROM (
-      SELECT DISTINCT ON (cp.thread_id) cp.thread_id, cp.summary, cp.created_at
-      FROM memory_revisions cp
-      WHERE cp.channel_id = ${channelId} AND cp.session_id IS NULL
-        AND cp.created_at <= ${asOf}::timestamptz
-        AND cp.created_at > ${asOf}::timestamptz - make_interval(days => ${CHANNEL_MEMORY_DAYS})
-      ORDER BY cp.thread_id, cp.revision DESC
-    ) latest
-    WHERE ${cursor ? sql`(latest.created_at, latest.thread_id) < (${cursor.created_at}::timestamptz, ${cursor.thread_id}::uuid)` : sql`true`}
-    ORDER BY latest.created_at DESC, latest.thread_id DESC
-    LIMIT ${limit + 1}`);
+  const select = (where: ReturnType<typeof sql>, order: ReturnType<typeof sql>, count: number) => rows<ThreadRow>(c, sql`
+    WITH active AS (
+      SELECT thread_id, max(created_at) AS last_at FROM messages
+      WHERE channel_id = ${channelId} AND agent_session_id IS NULL AND ${live}
+        AND created_at <= ${asOf}::timestamptz AND created_at > ${asOf}::timestamptz - make_interval(days => ${CHANNEL_MEMORY_DAYS})
+      GROUP BY thread_id)
+    SELECT a.thread_id, ${sql.raw('root.title')} AS title, a.last_at::text AS last_at,
+      (SELECT count(*)::int FROM agent_sessions s WHERE s.origin_thread_id = a.thread_id) AS sessions
+    FROM active a JOIN LATERAL (
+      SELECT ${firstLine} AS title FROM messages WHERE channel_id = ${channelId} AND thread_id = a.thread_id AND ${live} ORDER BY sequence LIMIT 1) root ON true
+    WHERE ${where} ORDER BY ${order} LIMIT ${count}`);
+  if (asked !== undefined && index) {
+    const hits = await ranked({ channelId }, asked, 50);
+    if (hits.length) {
+      const owners = await rows<{ id: string; thread_id: string }>(c, sql`SELECT id, thread_id FROM messages WHERE channel_id = ${channelId} AND id = ANY(${sql.param(hits)}::uuid[]) AND ${live}`);
+      const threadOf = new Map(owners.map(o => [o.id, o.thread_id]));
+      const order = new Map<string, number>();
+      for (const id of hits) { const t = threadOf.get(id); if (t && !order.has(t)) order.set(t, order.size); }
+      const found = await select(sql`a.thread_id = ANY(${sql.param([...order.keys()])}::uuid[])`, sql`a.last_at DESC, a.thread_id DESC`, 50);
+      found.sort((a, b) => (order.get(a.thread_id) ?? 99) - (order.get(b.thread_id) ?? 99));
+      return { channel_id: channelId, nodes: found.slice(0, limit).map(row => threadNode(row, channelId)), next_cursor: null };
+    }
+  }
+  // Snapshot at as_of so a message written between pages cannot move a thread across the cursor.
+  const found = await select(cursor ? sql`(a.last_at, a.thread_id) < (${cursor.created_at}::timestamptz, ${cursor.thread_id}::uuid)` : sql`true`, sql`a.last_at DESC, a.thread_id DESC`, limit + 1);
   const page = found.slice(0, limit);
   const last = page.at(-1);
   return {
     channel_id: channelId,
-    nodes: page.map(row => ({ ref: { kind: 'thread', id: row.thread_id }, parent: { kind: 'channel', id: channelId }, summary: row.summary, updated_at: row.created_at, children: { kind: 'session', count: row.sessions } })),
-    next_cursor: found.length > limit && last ? encodeChannelCursor({ as_of: asOf, created_at: last.created_at, thread_id: last.thread_id }) : null,
+    nodes: page.map(row => threadNode(row, channelId)),
+    next_cursor: found.length > limit && last ? encodeChannelCursor({ as_of: asOf, created_at: last.last_at, thread_id: last.thread_id }) : null,
   };
 }
 
 async function sessionNodes(c: DbSession, threadId: string): Promise<MemoryNode[]> {
-  const found = await rows<{ id: string; title: string; state: 'active' | 'ended'; agent: string; summary: string | null; updated_at: string }>(c, sql`
+  const found = await rows<{ id: string; title: string; state: 'active' | 'ended'; agent: string; updated_at: string }>(c, sql`
     SELECT a.id, a.title, a.state, d.name AS agent,
-      (SELECT cp.summary FROM memory_revisions cp WHERE cp.session_id = a.id ORDER BY cp.revision DESC LIMIT 1) AS summary,
-      coalesce((SELECT max(cp.created_at) FROM memory_revisions cp WHERE cp.session_id = a.id), a.created_at)::text AS updated_at
+      coalesce((SELECT max(m.created_at) FROM messages m WHERE m.agent_session_id = a.id), a.created_at)::text AS updated_at
     FROM agent_sessions a JOIN agent_installations i ON i.id = a.installation_id JOIN agent_definitions d ON d.id = i.definition_id
     WHERE a.origin_thread_id = ${threadId} ORDER BY a.created_at DESC, a.id DESC LIMIT 50`);
-  return found.map(row => ({ ref: { kind: 'session', id: row.id }, parent: { kind: 'thread', id: threadId }, summary: row.summary ?? row.title, updated_at: row.updated_at, children: null, title: row.title, agent: row.agent, state: row.state }));
+  return found.map(row => ({ ref: { kind: 'session', id: row.id }, parent: { kind: 'thread', id: threadId }, summary: row.title, updated_at: row.updated_at, children: null, title: row.title, agent: row.agent, state: row.state }));
 }
 
-export async function readThreadMemory(c: DbSession, channelId: string, threadId: string): Promise<ThreadMemory> {
+async function relatedMessages(c: DbSession, scope: MemoryScope, query: string | undefined, exclude: Set<string>): Promise<ThreadContextMessage[]> {
+  const ids = (await ranked(scope, query, RELATED_LIMIT + exclude.size)).filter(id => !exclude.has(id));
+  if (!ids.length) return [];
+  const where = scope.sessionId ? sql`agent_session_id = ${scope.sessionId}` : sql`thread_id = ${scope.threadId} AND agent_session_id IS NULL`;
+  const found = await rows<MessageRow>(c, sql`SELECT ${messageColumns} FROM messages WHERE channel_id = ${scope.channelId} AND ${where} AND ${live} AND id = ANY(${sql.param(ids)}::uuid[])`);
+  const byId = new Map(found.map(row => [row.id, contextMessage(row)]));
+  return ids.flatMap(id => byId.get(id) ?? []).slice(0, RELATED_LIMIT);
+}
+
+export async function readThreadMemory(c: DbSession, channelId: string, threadId: string, query?: string): Promise<ThreadMemory> {
+  const asked = checkedQuery(query);
   const context = await readThreadContext(c, channelId, uuid(threadId), undefined, { includeSessions: false });
   const sessions = await sessionNodes(c, context.thread_id);
-  const cp = context.memory;
+  const [last] = await rows<{ last_at: string }>(c, sql`SELECT max(created_at)::text AS last_at FROM messages WHERE channel_id = ${channelId} AND thread_id = ${context.thread_id} AND agent_session_id IS NULL AND ${live}`);
+  const shown = new Set([context.root?.id, ...context.messages.map(m => m.id)].filter((id): id is string => Boolean(id)));
   return {
-    node: { ref: { kind: 'thread', id: context.thread_id }, parent: { kind: 'channel', id: channelId }, summary: cp?.summary ?? context.root?.text.slice(0, 280) ?? '', updated_at: cp?.created_at ?? '', children: { kind: 'session', count: sessions.length } },
-    context, sessions, memory_chars: cp?.content.length ?? 0, limit: MEMORY_LIMIT,
+    node: { ref: { kind: 'thread', id: context.thread_id }, parent: { kind: 'channel', id: channelId }, summary: (context.root?.text ?? '').split('\n')[0]!.trim().slice(0, SUMMARY_LIMIT), updated_at: last?.last_at ?? '', children: { kind: 'session', count: sessions.length } },
+    context, sessions, related: await relatedMessages(c, { channelId, threadId: context.thread_id }, asked, shown),
   };
 }
 
@@ -65,120 +117,29 @@ async function sessionRow(c: DbSession, channelId: string, sessionId: string) {
   if (!row) throw new AppError(404, 'session_not_found');
   return row;
 }
-async function sessionMemoryRow(c: DbSession, sessionId: string): Promise<MemoryRecord | null> {
-  const [row] = await rows<MemoryRecord>(c, sql`SELECT ${memoryColumns} FROM memory_revisions WHERE session_id = ${sessionId} ORDER BY revision DESC LIMIT 1`);
-  return row ?? null;
-}
 function ownSession(session: { installation_id: string; state: string }, installationId: string | null) {
   if (installationId === null || session.installation_id !== installationId) throw new AppError(403, 'session_private');
   if (session.state === 'ended') throw new AppError(409, 'session_ended');
 }
 
 // installationId is the caller's bound installation; null means an unbound key.
-export async function readSessionMemory(c: DbSession, channelId: string, sessionId: string, installationId: string | null): Promise<SessionMemory> {
+export async function readSessionMemory(c: DbSession, channelId: string, sessionId: string, installationId: string | null, query?: string): Promise<SessionMemory> {
   const session = await sessionRow(c, channelId, sessionId);
   ownSession(session, installationId);
-  return sessionMemoryFor(c, channelId, session);
+  return sessionMemoryFor(c, channelId, session, checkedQuery(query));
 }
 // People: the route authorizes thread access first. Ended sessions stay readable as history.
-export async function readSessionMemoryForPerson(c: DbSession, channelId: string, sessionId: string): Promise<SessionMemory> {
-  return sessionMemoryFor(c, channelId, await sessionRow(c, channelId, sessionId));
+export async function readSessionMemoryForPerson(c: DbSession, channelId: string, sessionId: string, query?: string): Promise<SessionMemory> {
+  return sessionMemoryFor(c, channelId, await sessionRow(c, channelId, sessionId), checkedQuery(query));
 }
-async function sessionMemoryFor(c: DbSession, channelId: string, session: Awaited<ReturnType<typeof sessionRow>>): Promise<SessionMemory> {
-  const memory = await sessionMemoryRow(c, session.id);
-  const recent = await rows<{ id: string; sequence: string; text: string; text_length: number; author_id: string; attachments: ThreadContextMessage['attachments'] }>(c, sql`
-    SELECT id, sequence::text, left(text, 1000) AS text, length(text) AS text_length, installation_id AS author_id, attachments
-    FROM messages WHERE channel_id = ${channelId} AND thread_id = ${session.thread_id} AND agent_session_id = ${session.id}
+async function sessionMemoryFor(c: DbSession, channelId: string, session: Awaited<ReturnType<typeof sessionRow>>, query: string | undefined): Promise<SessionMemory> {
+  const recent = await rows<MessageRow>(c, sql`SELECT ${messageColumns} FROM messages
+    WHERE channel_id = ${channelId} AND thread_id = ${session.thread_id} AND agent_session_id = ${session.id} AND ${live}
     ORDER BY sequence DESC LIMIT 16`);
-  const messages: ThreadContextMessage[] = recent.reverse().map(row => {
-    const text = row.text.replace(/[\uD800-\uDBFF]$/, '');
-    return { id: row.id, sequence: row.sequence, text, text_truncated: row.text_length > 1000 || text !== row.text, author: { id: row.author_id, kind: 'agent' }, attachments: row.attachments };
-  });
+  const messages = recent.reverse().map(contextMessage);
+  const [last] = await rows<{ last_at: string }>(c, sql`SELECT max(created_at)::text AS last_at FROM messages WHERE channel_id = ${channelId} AND agent_session_id = ${session.id}`);
   return {
-    node: { ref: { kind: 'session', id: session.id }, parent: { kind: 'thread', id: session.thread_id }, summary: memory?.summary ?? session.title, updated_at: memory?.created_at ?? session.created_at, children: null, title: session.title, agent: session.agent, state: session.state },
-    memory, messages, memory_chars: memory?.content.length ?? 0, limit: MEMORY_LIMIT,
+    node: { ref: { kind: 'session', id: session.id }, parent: { kind: 'thread', id: session.thread_id }, summary: session.title, updated_at: last?.last_at ?? session.created_at, children: null, title: session.title, agent: session.agent, state: session.state },
+    messages, related: await relatedMessages(c, { channelId, threadId: session.thread_id, sessionId: session.id }, query, new Set(messages.map(m => m.id))),
   };
-}
-
-// Optimistic concurrency: the partial unique index on (session_id, revision) rejects a competing insert.
-export async function writeSessionMemory(c: DbSession, channelId: string, sessionId: string, installationId: string | null, input: MemoryInput, producer: { id: string; name: string }): Promise<MemoryRecord> {
-  const session = await sessionRow(c, channelId, sessionId);
-  ownSession(session, installationId);
-  return insertSessionMemory(c, channelId, session, input, producer);
-}
-async function insertSessionMemory(c: DbSession, channelId: string, session: Awaited<ReturnType<typeof sessionRow>>, input: MemoryInput, producer: { id: string; name: string }): Promise<MemoryRecord> {
-  if (session.state === 'ended') throw new AppError(409, 'session_ended');
-  await assertContextThread(c, channelId, session.thread_id);
-  const current = await sessionMemoryRow(c, session.id);
-  if ((current?.revision ?? 0) !== input.revision) throw new AppError(409, 'session_memory_conflict');
-  if (current && BigInt(chatCursor(input.through_sequence)) < BigInt(current.through_sequence)) throw new AppError(409, 'session_memory_watermark_conflict');
-  await assertMemorySources(c, channelId, session.thread_id, input, 'session');
-  const [saved] = await rows<MemoryRecord>(c, sql`INSERT INTO memory_revisions(thread_id,session_id,channel_id,revision,through_sequence,content,summary,source_message_ids,producer_id,producer_name)
-    VALUES(${session.thread_id},${session.id},${channelId},${input.revision + 1},${input.through_sequence}::bigint,${input.content},${input.summary},${sql.param(input.source_message_ids)}::uuid[],${producer.id},${producer.name})
-    ON CONFLICT (session_id, revision) WHERE session_id IS NOT NULL DO NOTHING
-    RETURNING ${memoryColumns}`);
-  if (!saved) throw new AppError(409, 'session_memory_conflict');
-  return saved;
-}
-
-type TurnScope = 'session' | 'thread';
-export type TurnMemoryOutcome = { scope: TurnScope; outcome: 'saved' | 'pending' | 'skipped' };
-const conflictCodes = new Set(['thread_memory_conflict', 'session_memory_conflict', 'thread_memory_watermark_conflict', 'session_memory_watermark_conflict']);
-
-// Called inside the execution.completed transaction. It never throws for a bad or stale update,
-// so memory problems cannot fail the agent's turn. The writers raise AppError before any SQL error,
-// and their inserts use ON CONFLICT DO NOTHING, so the surrounding transaction stays usable.
-export async function saveTurnMemory(c: DbSession, input: { channelId: string; threadId: string; sessionId: string | null; installationId: string; producer: { id: string; name: string }; memory: AgentMemoryUpdate }): Promise<TurnMemoryOutcome[]> {
-  const [last] = await rows<{ id: string; sequence: string }>(c, sql`SELECT id, sequence::text FROM messages WHERE channel_id=${input.channelId} AND thread_id=${input.threadId} ORDER BY sequence DESC LIMIT 1`);
-  const results: TurnMemoryOutcome[] = [];
-  for (const scope of ['session', 'thread'] as const) {
-    const part = input.memory[scope];
-    if (!part) continue;
-    if (!last || (scope === 'session' && !input.sessionId)) { results.push({ scope, outcome: 'skipped' }); continue; }
-    const key = scope === 'session' ? `session:${input.sessionId}` : `thread:${input.threadId}`;
-    const memory = { revision: part.base_revision, through_sequence: last.sequence, content: part.content, summary: part.summary, source_message_ids: [last.id] };
-    try {
-      if (scope === 'session') await writeSessionMemory(c, input.channelId, input.sessionId!, input.installationId, memory, input.producer);
-      else await writeThreadMemory(c, input.channelId, input.threadId, memory, input.producer);
-      await c.execute(sql`DELETE FROM memory_pending WHERE installation_id=${input.installationId} AND scope_key=${key}`);
-      results.push({ scope, outcome: 'saved' });
-    } catch (error) {
-      if (!(error instanceof AppError)) throw error;
-      if (!conflictCodes.has(error.code)) { results.push({ scope, outcome: 'skipped' }); continue; }
-      await c.execute(sql`INSERT INTO memory_pending(installation_id,scope_key,base_revision,summary,content)
-        VALUES(${input.installationId},${key},${part.base_revision},${part.summary},${part.content})
-        ON CONFLICT (installation_id, scope_key) DO UPDATE SET base_revision=EXCLUDED.base_revision, summary=EXCLUDED.summary, content=EXCLUDED.content, created_at=now()`);
-      results.push({ scope, outcome: 'pending' });
-    }
-  }
-  return results;
-}
-
-export async function readPendingMemory(c: DbSession, installationId: string, threadId: string, sessionId: string | null): Promise<MemoryConflict[]> {
-  const keys = [`thread:${threadId}`, ...(sessionId ? [`session:${sessionId}`] : [])];
-  return rows<MemoryConflict>(c, sql`
-    SELECT split_part(p.scope_key, ':', 1) AS scope, p.base_revision, p.summary, p.content,
-      CASE WHEN p.scope_key LIKE 'thread:%'
-        THEN coalesce((SELECT max(cp.revision) FROM memory_revisions cp WHERE cp.thread_id = ${threadId} AND cp.session_id IS NULL), 0)
-        ELSE coalesce((SELECT max(cp.revision) FROM memory_revisions cp WHERE cp.session_id::text = split_part(p.scope_key, ':', 2)), 0)
-      END AS current_revision
-    FROM memory_pending p WHERE p.installation_id=${installationId} AND p.scope_key = ANY(${sql.param(keys)}::text[])
-    ORDER BY p.scope_key`);
-}
-
-export interface PersonMemoryInput { revision: number; summary: string; content: string }
-
-// Person edits anchor to the thread's latest message, like turn-end saves.
-async function personInput(c: DbSession, channelId: string, threadId: string, input: PersonMemoryInput): Promise<MemoryInput> {
-  const [last] = await rows<{ id: string; sequence: string }>(c, sql`SELECT id, sequence::text FROM messages WHERE channel_id=${channelId} AND thread_id=${threadId} ORDER BY sequence DESC LIMIT 1`);
-  if (!last) throw new AppError(409, 'thread_empty');
-  return parseMemoryInput({ revision: input.revision, through_sequence: last.sequence, summary: input.summary, content: input.content, source_message_ids: [last.id] });
-}
-export async function writeThreadMemoryForPerson(c: DbSession, channelId: string, threadId: string, input: PersonMemoryInput, person: { id: string; name: string }): Promise<MemoryRecord> {
-  await assertContextThread(c, channelId, threadId);
-  return writeThreadMemory(c, channelId, threadId, await personInput(c, channelId, threadId, input), person);
-}
-export async function writeSessionMemoryForPerson(c: DbSession, channelId: string, sessionId: string, input: PersonMemoryInput, person: { id: string; name: string }): Promise<MemoryRecord> {
-  const session = await sessionRow(c, channelId, sessionId);
-  return insertSessionMemory(c, channelId, session, await personInput(c, channelId, session.thread_id, input), person);
 }
