@@ -47,3 +47,23 @@ The worker splits sealed UTF-8 .md and .markdown files into passages. For legacy
 Apply Space migration 088 and install `notes.sql` once in the provider database after `schema.sql`. Give the worker login membership in `space_note_collection` and SELECT/INSERT/UPDATE/DELETE on `kb.notes`. In Space, give the ingestion login SELECT on `knowledge_note_sources` and the provider lookup login EXECUTE on `knowledge_visible_notes(uuid,uuid,uuid,uuid[])`. Restart the worker and provider and refresh tool discovery.
 
 The worker and provider detect `kb.notes` at startup; without it they behave as before. The worker copies notes from every channel with the Knowledge switch on, whatever its thread opt-in. It embeds the title and content, keeps only the highest revision, and removes notes that were removed, archived or switched off. Search uses `filters.source=notes`; each hit cites the note's first evidence message. Run `node notes-smoke.mjs` with the same three database URLs as `thread-smoke.mjs` to check indexing, live updates, removal while the worker is stopped, and restart recovery.
+
+## Knowledge graph from change data capture
+
+`graph-reader.mjs` reads committed changes from a logical replication slot and keeps the `space_knowledge` pgGraph graph current. It adds `filters.related` to `knowledge_search`: `note/<uuid>` returns other knowledge that cites the same conversations.
+
+The Space database needs `wal_level=logical`, PostgreSQL 15 or newer (column-list publications), and `max_slot_wal_keep_size` set so a stopped reader cannot fill the disk. If the slot passes the cap, the reader drops it and rebuilds the graph from a snapshot on its next start.
+
+1. Apply `graph.sql` to the knowledge database after `schema.sql` and `threads.sql`.
+2. Run one reader per Space schema:
+
+```sh
+GRAPH_SOURCE_URL=... GRAPH_REPLICATION_URL=... GRAPH_INDEX_URL=... GRAPH_SOURCE_SCHEMA=public \
+  node apps/mcp-gateway/providers/pg-knowledge/graph-reader.mjs
+```
+
+`GRAPH_SOURCE_URL` may create the publication and slot and must read `messages`, `channels` and `agent_sessions`. `GRAPH_REPLICATION_URL` needs the REPLICATION attribute. `GRAPH_INDEX_URL` writes `kb.g_*`. Restart the reader after any failure; it exits on error and the slot keeps unconfirmed changes.
+
+pgGraph refuses `build_graph` while a source write is open, so the reader runs graph writes and publishes one at a time.
+
+Checks: `node --test apps/mcp-gateway/providers/pg-knowledge/graph-plan.test.mjs`, and `graph-smoke.mjs` with `TEST_DATABASE_URL`, `THREAD_INDEX_URL` and `KNOWLEDGE_DATABASE_URL` pointing at disposable databases.
