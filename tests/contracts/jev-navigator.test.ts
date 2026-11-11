@@ -78,7 +78,7 @@ test('bounded history may omit earlier pending messages while retaining the last
 test('Jev receives working memory as reference data while keeping the last message as its target', async () => {
   let request:any;
   const p=new JevNavigatorProvider({apiKey:'fixture',fetch:async(_url,init)=>{request=JSON.parse(init!.body as string);return new Response(JSON.stringify(response()));}});
-  const workingMemory={root:null,checkpoint:{revision:1,through_sequence:'1',content:'# Decision\nPrepare a launch summary.',summary:'Prepare a launch summary',source_message_ids:['m1'],producer_id:'fixture',producer_name:'Writer',created_at:new Date().toISOString()}};
+  const workingMemory={root:null,memory:{revision:1,through_sequence:'1',content:'# Decision\nPrepare a launch summary.',summary:'Prepare a launch summary',source_message_ids:['m1'],producer_id:'fixture',producer_name:'Writer',created_at:new Date().toISOString()}};
   await p.decide({...context,workingMemory},1,new AbortController().signal);
   assert.deepEqual(request.state.working_memory,workingMemory);
   assert.equal(request.state.last_message.id,'m3');

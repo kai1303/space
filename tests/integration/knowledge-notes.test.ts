@@ -202,7 +202,7 @@ function agentEvent(executionId: string, sequence: number, type: AgentEvent['typ
   return { id: randomUUID(), schema_version: '1.0', execution_id: executionId, sequence, type, occurred_at: new Date().toISOString(), payload };
 }
 
-test('a completed turn saves block notes in the same transaction as checkpoints', async () => {
+test('a completed turn saves block notes in the same transaction as memories', async () => {
   const a = await bootstrap(pool);
   const path = `/channels/${a.channel_id}/memory`;
   await api(a.owner_token, 'POST', `${path}/knowledge`, { enabled: true });

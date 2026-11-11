@@ -16,7 +16,7 @@ test('progress snapshots hide the block and attach memory only when terminal', (
 });
 
 test('instructions name the base revisions from the supplied context', () => {
-  const text = memoryInstructions({ thread_id: 't', messages: [], working_memory: { checkpoint: { revision: 3 } }, agent_session_memory: { checkpoint: null } });
+  const text = memoryInstructions({ thread_id: 't', messages: [], working_memory: { memory: { revision: 3 } }, agent_session_memory: { memory: null } });
   assert.match(text, /<space-memory>/);
   assert.match(text, /thread base_revision 3/);
   assert.match(text, /session base_revision 0/);
@@ -24,7 +24,7 @@ test('instructions name the base revisions from the supplied context', () => {
 });
 
 test('instructions describe notes only when knowledge_notes is supplied', () => {
-  const base = { thread_id: 't', messages: [], working_memory: { checkpoint: null } };
+  const base = { thread_id: 't', messages: [], working_memory: { memory: null } };
   assert.doesNotMatch(memoryInstructions(base), /"notes"/);
   const text = memoryInstructions({ ...base, knowledge_notes: { channel_id: 'c', notes: [{ title: 'Duplicate charge fix' }], truncated: true } });
   assert.match(text, /"notes":\[/);

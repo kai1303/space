@@ -201,7 +201,7 @@ test('semantic context is bounded by the selected batch before a later explicit 
  await send(s,`@agent-${s.installation_id} second request`);
  for(let i=0;i<18;i++)await send(s,`Later context ${i}`);
  await pool.query('UPDATE navigator_threads SET available_at=now() WHERE thread_id=$1',[s.thread_id]);await semantic.processOne();
- assert.equal(observed.workingMemory.root.id,first.id);assert.equal(observed.workingMemory.checkpoint,null);assert.deepEqual(observed.pendingMessageIds,[first.id]);assert.ok(observed.messages.some((m:any)=>m.id===first.id));assert.ok(!observed.messages.some((m:any)=>m.text.includes('later unrelated')));
+ assert.equal(observed.workingMemory.root.id,first.id);assert.equal(observed.workingMemory.memory,null);assert.deepEqual(observed.pendingMessageIds,[first.id]);assert.ok(observed.messages.some((m:any)=>m.id===first.id));assert.ok(!observed.messages.some((m:any)=>m.text.includes('later unrelated')));
  await pool.query("UPDATE navigator_threads SET available_at='infinity' WHERE thread_id=$1",[s.thread_id]);
 });
 

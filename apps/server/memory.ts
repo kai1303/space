@@ -6,7 +6,7 @@ import type { AgentMemoryContext, Task } from '@space/contracts';
 import type { MemoryProvider } from '@space/core/memory';
 import { MemoryStore, type MemoryChannel } from '@space/postgres/memory';
 import { readThreadContext } from '@space/postgres/thread-context';
-import { readChannelMemory, readThreadMemory, readSessionMemoryForPerson, writeThreadCheckpointForPerson, writeSessionCheckpointForPerson } from '@space/postgres/layered-memory';
+import { readChannelMemory, readThreadMemory, readSessionMemoryForPerson, writeThreadMemoryForPerson, writeSessionMemoryForPerson } from '@space/postgres/layered-memory';
 import { sql } from 'drizzle-orm';
 import { MarkdownMemoryProvider } from './markdown-memory.js';
 
@@ -92,7 +92,7 @@ export function registerMemoryRoutes(app: FastifyInstance, store: MemoryStore, p
     const input = layerBody(r.body);
     return store.channel(r.actorId, r.params.channelId, async (channel, c) => {
       manager(channel);
-      return writeThreadCheckpointForPerson(c, channel.channel_id, uuid(r.params.threadId), input, await person(c, r.actorId));
+      return writeThreadMemoryForPerson(c, channel.channel_id, uuid(r.params.threadId), input, await person(c, r.actorId));
     });
   });
   app.get<{ Params: { channelId: string; sessionId: string } }>('/v1/channels/:channelId/agent-sessions/:sessionId/memory', async r => {
@@ -106,7 +106,7 @@ export function registerMemoryRoutes(app: FastifyInstance, store: MemoryStore, p
     await visibleSession(r.actorId, channelId, sessionId);
     return store.channel(r.actorId, channelId, async (channel, c) => {
       manager(channel);
-      return writeSessionCheckpointForPerson(c, channel.channel_id, sessionId, input, await person(c, r.actorId));
+      return writeSessionMemoryForPerson(c, channel.channel_id, sessionId, input, await person(c, r.actorId));
     });
   });
   const path = '/v1/channels/:channelId/memory';

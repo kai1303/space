@@ -121,7 +121,7 @@ export function MemoryGraph({ channel, name, onSelect, onAccessLost, onOpenThrea
     {!loaded && <p role="status">Loading memory graph…</p>}
     {loaded && <GraphCanvas label={`Memory graph for #${name}`} nodes={nodes} links={links} palette={palette}
       selectedId={selected} expandedIds={expandedIds} onSelect={select} onToggleExpand={id => void toggle(id)} menu={menu} details={details} />}
-    {loaded && !threads.length && !error && <p className="memory-graph-empty">No thread has a checkpoint in the last 7 days.</p>}
+    {loaded && !threads.length && !error && <p className="memory-graph-empty">No thread has a memory in the last 7 days.</p>}
     <div className="memory-graph-actions">
       {cursor && <Button size="sm" loading={more} onClick={() => void loadMore()}>Load more threads</Button>}
       {hidden.size > 0 && <Button size="sm" variant="ghost" onClick={() => setHidden(new Set())}>Show hidden ({hidden.size})</Button>}

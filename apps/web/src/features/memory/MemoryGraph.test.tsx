@@ -16,8 +16,8 @@ function stub(pages: { nodes: unknown[]; next_cursor: string | null }[]) {
   let summary = 'Thread 1';
   const fetch = vi.fn(async (path: string) => {
     if (path.includes('/memory/layers')) return response({ channel_id: ch, ...(path.includes('after=') ? pages[1] : { ...pages[0], nodes: pages[0]!.nodes.map((n: any, i) => i === 0 ? { ...n, summary } : n) }) });
-    if (path.includes('/threads/')) return response({ node: thread(1), context: { thread_id: uuid(1), through_sequence: '1', root: null, messages: [], checkpoint: null, has_earlier_messages: false },
-      sessions: [{ ref: { kind: 'session', id: uuid(900) }, parent: { kind: 'thread', id: uuid(1) }, summary: 'Run', updated_at: 'x', children: null, title: 'Run', agent: 'Codex', state: 'ended' }], checkpoint_chars: 0, limit: 6000 });
+    if (path.includes('/threads/')) return response({ node: thread(1), context: { thread_id: uuid(1), through_sequence: '1', root: null, messages: [], memory: null, has_earlier_messages: false },
+      sessions: [{ ref: { kind: 'session', id: uuid(900) }, parent: { kind: 'thread', id: uuid(1) }, summary: 'Run', updated_at: 'x', children: null, title: 'Run', agent: 'Codex', state: 'ended' }], memory_chars: 0, limit: 6000 });
     return response({}, 404);
   });
   vi.stubGlobal('fetch', fetch);

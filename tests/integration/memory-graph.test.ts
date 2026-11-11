@@ -38,7 +38,7 @@ async function agentSave(a: { channel_id: string; installation_id: string }, thr
     memory: { [part]: { base_revision: revision, summary, content: `# ${summary}` } } });
 }
 
-test('a checkpoint insert enqueues one channel metadata delivery', async () => {
+test('a memory insert enqueues one channel metadata delivery', async () => {
   const a = await bootstrap(pool);
   const root = await post(a.owner_token, a.channel_id, 'Start');
   const count = async () => (await pool.query(`SELECT count(*)::int AS n FROM chat_delivery_outbox WHERE channel_id=$1 AND resource_scope='metadata'`, [a.channel_id])).rows[0].n as number;
@@ -47,24 +47,24 @@ test('a checkpoint insert enqueues one channel metadata delivery', async () => {
   assert.equal(await count() - before, 1);
 });
 
-import { readSessionMemoryForPerson, writeThreadCheckpointForPerson, writeSessionCheckpointForPerson } from '@space/postgres/layered-memory';
+import { readSessionMemoryForPerson, writeThreadMemoryForPerson, writeSessionMemoryForPerson } from '@space/postgres/layered-memory';
 
 test('person variants read any session and write with the person as producer', async () => {
   const a = await bootstrap(pool);
   const root = await post(a.owner_token, a.channel_id, 'Start');
   const session = await addSession(a, root.thread_id);
   const person = { id: a.owner_id, name: 'Demo owner' };
-  const thread = await writeThreadCheckpointForPerson(db(), a.channel_id, root.thread_id, { revision: 0, summary: 'Edited', content: '# Fixed by a person' }, person);
+  const thread = await writeThreadMemoryForPerson(db(), a.channel_id, root.thread_id, { revision: 0, summary: 'Edited', content: '# Fixed by a person' }, person);
   assert.equal(thread.revision, 1);
   assert.equal(thread.producer_name, 'Demo owner');
-  const own = await writeSessionCheckpointForPerson(db(), a.channel_id, session, { revision: 0, summary: 'Session edit', content: 'x' }, person);
+  const own = await writeSessionMemoryForPerson(db(), a.channel_id, session, { revision: 0, summary: 'Session edit', content: 'x' }, person);
   assert.equal(own.revision, 1);
   const read = await readSessionMemoryForPerson(db(), a.channel_id, session);
-  assert.equal(read.checkpoint?.summary, 'Session edit');
-  await assert.rejects(writeThreadCheckpointForPerson(db(), a.channel_id, root.thread_id, { revision: 0, summary: 'Stale', content: 'y' }, person), (e: any) => e.code === 'thread_checkpoint_conflict');
+  assert.equal(read.memory?.summary, 'Session edit');
+  await assert.rejects(writeThreadMemoryForPerson(db(), a.channel_id, root.thread_id, { revision: 0, summary: 'Stale', content: 'y' }, person), (e: any) => e.code === 'thread_memory_conflict');
   await pool.query(`UPDATE agent_sessions SET state='ended' WHERE id=$1`, [session]);
   assert.equal((await readSessionMemoryForPerson(db(), a.channel_id, session)).node.state, 'ended');
-  await assert.rejects(writeSessionCheckpointForPerson(db(), a.channel_id, session, { revision: 1, summary: 'Late', content: 'z' }, person), (e: any) => e.code === 'session_ended');
+  await assert.rejects(writeSessionMemoryForPerson(db(), a.channel_id, session, { revision: 1, summary: 'Late', content: 'z' }, person), (e: any) => e.code === 'session_ended');
 });
 
 test('routes: members read, managers edit, conflicts and access are enforced', async () => {
@@ -87,7 +87,7 @@ test('routes: members read, managers edit, conflicts and access are enforced', a
   assert.equal(saved.producer_name, 'Demo owner');
   const stale = await app.inject({ method: 'POST', url: `/v1${base}/threads/${root.thread_id}/memory`, headers: { authorization: `Bearer ${a.owner_token}` }, payload: { revision: 1, summary: 'Old', content: 'y' } });
   assert.equal(stale.statusCode, 409);
-  assert.match(stale.body, /thread_checkpoint_conflict/);
+  assert.match(stale.body, /thread_memory_conflict/);
   await api(a.owner_token, 'POST', `${base}/threads/${root.thread_id}/memory`, { revision: 2, summary: 'x'.repeat(281), content: 'y' }, 400);
   await api(a.owner_token, 'POST', `${base}/agent-sessions/${session}/memory`, { revision: 0, summary: 'Session fixed', content: 'ok' });
 

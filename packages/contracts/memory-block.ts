@@ -1,5 +1,5 @@
 import { AppError, record } from './validation.js';
-import { CHECKPOINT_LIMIT, SUMMARY_LIMIT } from './thread-context.js';
+import { MEMORY_LIMIT, SUMMARY_LIMIT } from './thread-context.js';
 import { parseBlockNotes, type NoteDraft } from './knowledge-notes.js';
 
 export interface AgentMemoryPart { base_revision: number; summary: string; content: string }
@@ -11,13 +11,13 @@ function parsePart(value: unknown): AgentMemoryPart {
   const p = record(value, ['base_revision', 'summary', 'content']);
   if (!Number.isSafeInteger(p.base_revision) || (p.base_revision as number) < 0) throw new AppError(400, 'invalid_memory_update');
   if (typeof p.summary !== 'string' || !p.summary.trim() || p.summary.trim().length > SUMMARY_LIMIT) throw new AppError(400, 'invalid_memory_update');
-  if (typeof p.content !== 'string' || !p.content.trim() || p.content.trim().length > CHECKPOINT_LIMIT || p.content.includes('\0')) throw new AppError(400, 'invalid_memory_update');
+  if (typeof p.content !== 'string' || !p.content.trim() || p.content.trim().length > MEMORY_LIMIT || p.content.includes('\0')) throw new AppError(400, 'invalid_memory_update');
   return { base_revision: p.base_revision as number, summary: p.summary.trim(), content: p.content.trim() };
 }
 export function parseAgentMemoryUpdate(value: unknown): AgentMemoryUpdate {
   const v = record(value, ['session', 'thread', 'notes']);
   let notes: NoteDraft[] = [];
-  // A bad notes list never costs the checkpoints.
+  // A bad notes list never costs the memories.
   if (v.notes !== undefined) { try { notes = parseBlockNotes(v.notes); } catch { notes = []; } }
   if (v.session === undefined && v.thread === undefined && !notes.length) throw new AppError(400, 'invalid_memory_update');
   return { ...(v.session === undefined ? {} : { session: parsePart(v.session) }), ...(v.thread === undefined ? {} : { thread: parsePart(v.thread) }), ...(notes.length ? { notes } : {}) };

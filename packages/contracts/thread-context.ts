@@ -10,7 +10,7 @@ export interface ThreadContextMessage {
   author: { id: string; kind: 'human' | 'agent' | 'app' | 'workflow' };
   attachments: AssetAttachment[];
 }
-export interface ThreadCheckpoint {
+export interface MemoryRecord {
   revision: number;
   through_sequence: string;
   content: string;
@@ -25,25 +25,25 @@ export interface ThreadContext {
   through_sequence: string;
   root: ThreadContextMessage | null;
   messages: ThreadContextMessage[];
-  checkpoint: ThreadCheckpoint | null;
+  memory: MemoryRecord | null;
   has_earlier_messages: boolean;
 }
-export interface ThreadCheckpointInput {
+export interface MemoryInput {
   revision: number;
   through_sequence: string;
   content: string;
   summary: string;
   source_message_ids: string[];
 }
-export const CHECKPOINT_LIMIT = 6000;
+export const MEMORY_LIMIT = 6000;
 export const SUMMARY_LIMIT = 280;
 
-export function parseThreadCheckpoint(value: unknown): ThreadCheckpointInput {
+export function parseMemoryInput(value: unknown): MemoryInput {
   const v = record(value, ['revision', 'through_sequence', 'content', 'summary', 'source_message_ids']);
-  if (!Number.isSafeInteger(v.revision) || (v.revision as number) < 0 || !Array.isArray(v.source_message_ids) || v.source_message_ids.length < 1 || v.source_message_ids.length > 32) throw new AppError(400, 'invalid_thread_checkpoint');
-  if (typeof v.content === 'string' && v.content.trim().length > CHECKPOINT_LIMIT) throw new AppError(413, 'checkpoint_too_large');
+  if (!Number.isSafeInteger(v.revision) || (v.revision as number) < 0 || !Array.isArray(v.source_message_ids) || v.source_message_ids.length < 1 || v.source_message_ids.length > 32) throw new AppError(400, 'invalid_thread_memory');
+  if (typeof v.content === 'string' && v.content.trim().length > MEMORY_LIMIT) throw new AppError(413, 'memory_content_too_large');
   if (typeof v.summary !== 'string' || !v.summary.trim() || v.summary.trim().length > SUMMARY_LIMIT || v.summary.includes('\0')) throw new AppError(400, 'invalid_summary');
-  return { revision: v.revision as number, through_sequence: chatCursor(v.through_sequence), content: text(v.content, CHECKPOINT_LIMIT), summary: v.summary.trim(), source_message_ids: [...new Set(v.source_message_ids.map(uuid))] };
+  return { revision: v.revision as number, through_sequence: chatCursor(v.through_sequence), content: text(v.content, MEMORY_LIMIT), summary: v.summary.trim(), source_message_ids: [...new Set(v.source_message_ids.map(uuid))] };
 }
 
 export function parseThreadContextMessage(value: unknown): ThreadContextMessage {
@@ -59,7 +59,7 @@ export function parseThreadContextMessage(value: unknown): ThreadContextMessage 
 }
 
 export function parseThreadContext(value: unknown): ThreadContext {
-  const v = record(value, ['thread_id', 'through_sequence', 'root', 'messages', 'checkpoint', 'has_earlier_messages']);
+  const v = record(value, ['thread_id', 'through_sequence', 'root', 'messages', 'memory', 'has_earlier_messages']);
   const through = chatCursor(v.through_sequence);
   const parseMessage = (value: unknown): ThreadContextMessage => {
     const parsed = parseThreadContextMessage(value);
@@ -67,12 +67,12 @@ export function parseThreadContext(value: unknown): ThreadContext {
     return parsed;
   };
   if (!Array.isArray(v.messages) || v.messages.length > 16 || typeof v.has_earlier_messages !== 'boolean') throw new AppError(400, 'invalid_thread_context');
-  let checkpoint: ThreadCheckpoint | null = null;
-  if (v.checkpoint !== null) {
-    const p = record(v.checkpoint, ['revision', 'through_sequence', 'content', 'summary', 'source_message_ids', 'producer_id', 'producer_name', 'created_at']);
-    const parsed = parseThreadCheckpoint({ revision: p.revision, through_sequence: p.through_sequence, content: p.content, summary: p.summary, source_message_ids: p.source_message_ids });
-    if (parsed.revision < 1 || BigInt(parsed.through_sequence) > BigInt(through) || typeof p.created_at !== 'string' || !Number.isFinite(Date.parse(p.created_at))) throw new AppError(400, 'invalid_thread_checkpoint');
-    checkpoint = { ...parsed, producer_id: uuid(p.producer_id), producer_name: text(p.producer_name, 100), created_at: p.created_at };
+  let memory: MemoryRecord | null = null;
+  if (v.memory !== null) {
+    const p = record(v.memory, ['revision', 'through_sequence', 'content', 'summary', 'source_message_ids', 'producer_id', 'producer_name', 'created_at']);
+    const parsed = parseMemoryInput({ revision: p.revision, through_sequence: p.through_sequence, content: p.content, summary: p.summary, source_message_ids: p.source_message_ids });
+    if (parsed.revision < 1 || BigInt(parsed.through_sequence) > BigInt(through) || typeof p.created_at !== 'string' || !Number.isFinite(Date.parse(p.created_at))) throw new AppError(400, 'invalid_thread_memory');
+    memory = { ...parsed, producer_id: uuid(p.producer_id), producer_name: text(p.producer_name, 100), created_at: p.created_at };
   }
-  return { thread_id: uuid(v.thread_id), through_sequence: through, root: v.root === null ? null : parseMessage(v.root), messages: v.messages.map(parseMessage), checkpoint, has_earlier_messages: v.has_earlier_messages };
+  return { thread_id: uuid(v.thread_id), through_sequence: through, root: v.root === null ? null : parseMessage(v.root), messages: v.messages.map(parseMessage), memory, has_earlier_messages: v.has_earlier_messages };
 }

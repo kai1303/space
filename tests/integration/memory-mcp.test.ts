@@ -51,7 +51,7 @@ test('a real MCP agent reads context, saves extracted knowledge, searches, updat
   const message = await api(a.owner_token, 'POST', `/channels/${a.channel_id}/messages`, { client_message_id: randomUUID(), text: 'We decided to use PostgreSQL because we need transactions.' }, 201);
   const client = await connect(grant.token);
   try {
-    assert.deepEqual((await client.listTools()).tools.map(tool => tool.name).sort(), ['channel_memory', 'memory_context', 'memory_forget', 'memory_read', 'memory_remember', 'memory_search', 'memory_write', 'session_checkpoint', 'session_memory', 'thread_memory']);
+    assert.deepEqual((await client.listTools()).tools.map(tool => tool.name).sort(), ['channel_memory', 'memory_context', 'memory_forget', 'memory_read', 'memory_remember', 'memory_search', 'memory_write', 'session_memory', 'session_memory_save', 'thread_memory']);
     const context = data(await client.callTool({ name: 'memory_context', arguments: {} }));
     assert.equal(context.messages[0].id, message.id);
     const entry = { id: randomUUID(), kind: 'decision', title: 'Database choice', content: 'Use PostgreSQL for transactional storage.', message_ids: [message.id] };
@@ -165,22 +165,22 @@ test('thread-scoped MCP works with channel memory off and preserves source-backe
   const grant = await api(a.owner_token, 'POST', `${path}/connections`, { name: 'Thread agent', access: 'write' }, 201);
   const client = await connect(grant.token);
   try {
-    assert.deepEqual((await client.listTools()).tools.map(t => t.name).sort(), ['thread_checkpoint', 'thread_context', 'thread_message', 'thread_messages']);
+    assert.deepEqual((await client.listTools()).tools.map(t => t.name).sort(), ['thread_context', 'thread_memory_save', 'thread_message', 'thread_messages']);
     const initial = data(await client.callTool({ name: 'thread_context', arguments: {} }));
     assert.equal(initial.root.id, root.id);
     assert.equal(initial.root.text_truncated, true);
     assert.equal(data(await client.callTool({ name: 'thread_message', arguments: { message_id: root.id } })).text, root.text);
-    assert.equal(initial.checkpoint, null);
-    const checkpoint = { revision: 0, through_sequence: initial.through_sequence, content: '# Decisions\nUse TypeScript.\n\n# Open questions\nWho is the audience?', summary: 'Decisions', source_message_ids: [root.id] };
-    const saved = data(await client.callTool({ name: 'thread_checkpoint', arguments: checkpoint }));
+    assert.equal(initial.memory, null);
+    const memory = { revision: 0, through_sequence: initial.through_sequence, content: '# Decisions\nUse TypeScript.\n\n# Open questions\nWho is the audience?', summary: 'Decisions', source_message_ids: [root.id] };
+    const saved = data(await client.callTool({ name: 'thread_memory_save', arguments: memory }));
     assert.equal(saved.revision, 1);
     assert.deepEqual(saved.source_message_ids, [root.id]);
-    assert.equal((await client.callTool({ name: 'thread_checkpoint', arguments: checkpoint })).isError, true);
+    assert.equal((await client.callTool({ name: 'thread_memory_save', arguments: memory })).isError, true);
     for (let i = 0; i < 18; i++) await api(a.owner_token, 'POST', `/channels/${a.channel_id}/messages`, { client_message_id: randomUUID(), thread_id: root.thread_id, text: `Feedback ${i}` }, 201);
     const current = data(await client.callTool({ name: 'thread_context', arguments: {} }));
     assert.equal(current.root.id, root.id);
     assert.equal(current.messages.length, 16);
-    assert.equal(current.checkpoint.content, checkpoint.content);
+    assert.equal(current.memory.content, memory.content);
     assert.equal(current.has_earlier_messages, true);
     const first = data(await client.callTool({ name: 'thread_messages', arguments: { limit: 2 } }));
     assert.equal(first.messages[0].id, root.id);
@@ -191,16 +191,16 @@ test('thread-scoped MCP works with channel memory off and preserves source-backe
     assert.equal((await client.callTool({ name: 'thread_context', arguments: { thread_id: randomUUID() } })).isError, true);
     const foreign = await api(a.owner_token, 'POST', `/channels/${a.channel_id}/messages`, { client_message_id: randomUUID(), text: 'Other thread' }, 201);
     assert.equal((await client.callTool({ name: 'thread_message', arguments: { message_id: foreign.id } })).isError, true);
-    assert.equal((await client.callTool({ name: 'thread_checkpoint', arguments: { ...checkpoint, revision: 1, source_message_ids: [foreign.id] } })).isError, true);
-    assert.equal((await client.callTool({ name: 'thread_checkpoint', arguments: { ...checkpoint, revision: 1, through_sequence: '999999999999' } })).isError, true);
+    assert.equal((await client.callTool({ name: 'thread_memory_save', arguments: { ...memory, revision: 1, source_message_ids: [foreign.id] } })).isError, true);
+    assert.equal((await client.callTool({ name: 'thread_memory_save', arguments: { ...memory, revision: 1, through_sequence: '999999999999' } })).isError, true);
     const human = await api(a.owner_token, 'GET', path);
-    assert.equal(human.checkpoint.revision, 1);
+    assert.equal(human.memory.revision, 1);
     await api(a.owner_token, 'POST', `/channels/${a.channel_id}/memory/connections/${grant.connection.id}/revoke`, {});
     await assert.rejects(client.callTool({ name: 'thread_context', arguments: {} }));
   } finally { await client.close(); }
 });
 
-test('thread MCP read grants cannot checkpoint and inaccessible threads cannot be granted', async () => {
+test('thread MCP read grants cannot save memory and inaccessible threads cannot be granted', async () => {
   const a = await bootstrap(pool), b = await bootstrap(pool);
   const root = await api(a.owner_token, 'POST', `/channels/${a.channel_id}/messages`, { client_message_id: randomUUID(), text: 'Request' }, 201);
   const path = `/channels/${a.channel_id}/threads/${root.thread_id}/context`;
@@ -210,14 +210,14 @@ test('thread MCP read grants cannot checkpoint and inaccessible threads cannot b
   const client = await connect(grant.token);
   try {
     assert.deepEqual((await client.listTools()).tools.map(t => t.name).sort(), ['thread_context', 'thread_message', 'thread_messages']);
-    await assert.rejects(client.callTool({ name: 'thread_checkpoint', arguments: {} }), /not found/);
+    await assert.rejects(client.callTool({ name: 'thread_memory_save', arguments: {} }), /not found/);
     data(await client.callTool({ name: 'thread_context', arguments: {} }));
     await pool.query('DELETE FROM channel_members WHERE channel_id=$1 AND user_id=$2', [a.channel_id, a.owner_id]);
     await assert.rejects(client.callTool({ name: 'thread_context', arguments: {} }));
   } finally { await client.close(); }
 });
 
-test('checkpoint races reject stale writes and earlier context excludes future summaries', async () => {
+test('memory races reject stale writes and earlier context excludes future summaries', async () => {
   const a = await bootstrap(pool);
   const root = await api(a.owner_token, 'POST', `/channels/${a.channel_id}/messages`, { client_message_id: randomUUID(), text: 'Start' }, 201);
   const path = `/channels/${a.channel_id}/threads/${root.thread_id}/context`;
@@ -228,11 +228,11 @@ test('checkpoint races reject stale writes and earlier context excludes future s
     const later = await api(a.owner_token, 'POST', `/channels/${a.channel_id}/messages`, { client_message_id: randomUUID(), thread_id: root.thread_id, text: 'Later decision' }, 201);
     const current = data(await client.callTool({ name: 'thread_context', arguments: {} }));
     const input = { revision: 0, through_sequence: current.through_sequence, content: '# Decision\nLater decision', summary: 'Decisions', source_message_ids: [later.id] };
-    const results = await Promise.all([client.callTool({ name: 'thread_checkpoint', arguments: input }), client.callTool({ name: 'thread_checkpoint', arguments: { ...input, content: 'Conflicting summary' } })]);
+    const results = await Promise.all([client.callTool({ name: 'thread_memory_save', arguments: input }), client.callTool({ name: 'thread_memory_save', arguments: { ...input, content: 'Conflicting summary' } })]);
     assert.equal(results.filter(r => !r.isError).length, 1);
     const { readThreadContext } = await import('@space/postgres/thread-context');
     const earlier = await readThreadContext(new PostgresStore(pool).db, a.channel_id, root.thread_id, initial.through_sequence);
-    assert.equal(earlier.checkpoint, null);
+    assert.equal(earlier.memory, null);
     assert.equal(earlier.messages.length, 1);
     assert.equal(earlier.messages[0]!.id, root.id);
   } finally { await client.close(); }

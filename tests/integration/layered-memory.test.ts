@@ -10,7 +10,7 @@ import { bootstrap } from '@space/postgres/bootstrap';
 import { migrate } from '@space/postgres/migrate';
 import { PostgresStore } from '@space/postgres/store';
 import { createApi } from '@space/server/api';
-import { readChannelMemory, readThreadMemory, readSessionMemory, writeSessionCheckpoint, saveTurnMemory, readPendingMemory } from '@space/postgres/layered-memory';
+import { readChannelMemory, readThreadMemory, readSessionMemory, writeSessionMemory, saveTurnMemory, readPendingMemory } from '@space/postgres/layered-memory';
 
 if (!process.env.TEST_DATABASE_URL) throw new Error('TEST_DATABASE_URL is required');
 const schema = `layered_memory_${randomBytes(6).toString('hex')}`;
@@ -40,14 +40,14 @@ function code(result: any) { assert.equal(result.isError, true, JSON.stringify(r
 test('migration backfills summary and channel_id and allows session rows', async () => {
   const a = await bootstrap(pool);
   const root = await post(a.owner_token, a.channel_id, 'Start');
-  const columns = (await pool.query(`SELECT column_name, is_nullable FROM information_schema.columns WHERE table_schema=$1 AND table_name='thread_checkpoints'`, [schema])).rows;
+  const columns = (await pool.query(`SELECT column_name, is_nullable FROM information_schema.columns WHERE table_schema=$1 AND table_name='memory_revisions'`, [schema])).rows;
   const byName = Object.fromEntries(columns.map(c => [c.column_name, c.is_nullable]));
   assert.equal(byName.summary, 'NO');
   assert.equal(byName.channel_id, 'NO');
   assert.equal(byName.session_id, 'YES');
-  await pool.query(`INSERT INTO thread_checkpoints(thread_id,channel_id,revision,through_sequence,content,summary,source_message_ids,producer_id,producer_name)
+  await pool.query(`INSERT INTO memory_revisions(thread_id,channel_id,revision,through_sequence,content,summary,source_message_ids,producer_id,producer_name)
     VALUES($1,$2,1,$3,'# A\nB','A',ARRAY[$4]::uuid[],$5,'x')`, [root.thread_id, a.channel_id, root.sequence, root.id, a.owner_id]);
-  await assert.rejects(pool.query(`INSERT INTO thread_checkpoints(thread_id,channel_id,revision,through_sequence,content,summary,source_message_ids,producer_id,producer_name)
+  await assert.rejects(pool.query(`INSERT INTO memory_revisions(thread_id,channel_id,revision,through_sequence,content,summary,source_message_ids,producer_id,producer_name)
     VALUES($1,$2,1,$3,'dup','dup',ARRAY[$4]::uuid[],$5,'x')`, [root.thread_id, a.channel_id, root.sequence, root.id, a.owner_id]), /duplicate key/);
 });
 
@@ -55,7 +55,7 @@ async function threadKey(token: string, channel: string, thread: string, access:
   return (await api(token, 'POST', `/channels/${channel}/threads/${thread}/context/connections`, { name: `Agent ${randomUUID().slice(0, 8)}`, access }, 201)).token as string;
 }
 
-test('concurrent thread checkpoints: one wins, the other gets 409, both revisions stay readable', async () => {
+test('concurrent thread memories: one wins, the other gets 409, both revisions stay readable', async () => {
   const a = await bootstrap(pool);
   const root = await post(a.owner_token, a.channel_id, 'Start');
   const client = await connect(await threadKey(a.owner_token, a.channel_id, root.thread_id));
@@ -63,35 +63,35 @@ test('concurrent thread checkpoints: one wins, the other gets 409, both revision
     const context = data(await client.callTool({ name: 'thread_context', arguments: {} }));
     const input = { revision: 0, through_sequence: context.through_sequence, content: '# Decisions\nA', summary: 'A', source_message_ids: [root.id] };
     const results = await Promise.all([
-      client.callTool({ name: 'thread_checkpoint', arguments: input }),
-      client.callTool({ name: 'thread_checkpoint', arguments: { ...input, content: '# Decisions\nB', summary: 'B' } }),
+      client.callTool({ name: 'thread_memory_save', arguments: input }),
+      client.callTool({ name: 'thread_memory_save', arguments: { ...input, content: '# Decisions\nB', summary: 'B' } }),
     ]);
     assert.equal(results.filter(r => !r.isError).length, 1);
-    assert.equal(code(results.find(r => r.isError)), 'thread_checkpoint_conflict');
-    const second = data(await client.callTool({ name: 'thread_checkpoint', arguments: { ...input, revision: 1, summary: 'C' } }));
+    assert.equal(code(results.find(r => r.isError)), 'thread_memory_conflict');
+    const second = data(await client.callTool({ name: 'thread_memory_save', arguments: { ...input, revision: 1, summary: 'C' } }));
     assert.equal(second.revision, 2);
-    const stored = await pool.query('SELECT revision FROM thread_checkpoints WHERE thread_id=$1 AND session_id IS NULL ORDER BY revision', [root.thread_id]);
+    const stored = await pool.query('SELECT revision FROM memory_revisions WHERE thread_id=$1 AND session_id IS NULL ORDER BY revision', [root.thread_id]);
     assert.deepEqual(stored.rows.map(r => r.revision), [1, 2]);
   } finally { await client.close(); }
 });
 
-test('thread checkpoint validates summary and size with stable codes', async () => {
+test('thread memory validates summary and size with stable codes', async () => {
   const a = await bootstrap(pool);
   const root = await post(a.owner_token, a.channel_id, 'Start');
   const client = await connect(await threadKey(a.owner_token, a.channel_id, root.thread_id));
   try {
     const context = data(await client.callTool({ name: 'thread_context', arguments: {} }));
     const input = { revision: 0, through_sequence: context.through_sequence, content: 'ok', summary: 'ok', source_message_ids: [root.id] };
-    assert.equal(code(await client.callTool({ name: 'thread_checkpoint', arguments: { ...input, content: 'x'.repeat(6001) } })), 'checkpoint_too_large');
-    assert.equal(code(await client.callTool({ name: 'thread_checkpoint', arguments: { ...input, summary: 'x'.repeat(281) } })), 'invalid_summary');
-    assert.equal(code(await client.callTool({ name: 'thread_checkpoint', arguments: { ...input, revision: 5 } })), 'thread_checkpoint_conflict');
+    assert.equal(code(await client.callTool({ name: 'thread_memory_save', arguments: { ...input, content: 'x'.repeat(6001) } })), 'memory_content_too_large');
+    assert.equal(code(await client.callTool({ name: 'thread_memory_save', arguments: { ...input, summary: 'x'.repeat(281) } })), 'invalid_summary');
+    assert.equal(code(await client.callTool({ name: 'thread_memory_save', arguments: { ...input, revision: 5 } })), 'thread_memory_conflict');
   } finally { await client.close(); }
 });
 
 const db = () => new PostgresStore(pool).db;
-async function seedCheckpoint(channel: string, thread: string, message: { id: string; sequence: string }, owner: string, summary: string, at?: string) {
-  await pool.query(`INSERT INTO thread_checkpoints(thread_id,channel_id,revision,through_sequence,content,summary,source_message_ids,producer_id,producer_name,created_at)
-    VALUES($1,$2,coalesce((SELECT max(revision) FROM thread_checkpoints WHERE thread_id=$1 AND session_id IS NULL),0)+1,$3,$4,$4,ARRAY[$5]::uuid[],$6,'seed',coalesce($7::timestamptz,now()))`,
+async function seedMemory(channel: string, thread: string, message: { id: string; sequence: string }, owner: string, summary: string, at?: string) {
+  await pool.query(`INSERT INTO memory_revisions(thread_id,channel_id,revision,through_sequence,content,summary,source_message_ids,producer_id,producer_name,created_at)
+    VALUES($1,$2,coalesce((SELECT max(revision) FROM memory_revisions WHERE thread_id=$1 AND session_id IS NULL),0)+1,$3,$4,$4,ARRAY[$5]::uuid[],$6,'seed',coalesce($7::timestamptz,now()))`,
     [thread, channel, message.sequence, summary, message.id, owner, at ?? null]);
 }
 async function addSession(a: { workspace_id: string; installation_id: string }, thread: string, installation = a.installation_id, title = 'Run') {
@@ -105,17 +105,17 @@ test('channel index: 7-day window, newest first, stable keyset paging under writ
   const roots = [];
   for (let i = 0; i < 60; i++) {
     const root = await post(a.owner_token, a.channel_id, `Thread ${i}`);
-    await seedCheckpoint(a.channel_id, root.thread_id, root, a.owner_id, `S${i}`, new Date(Date.now() - (60 - i) * 60_000).toISOString());
+    await seedMemory(a.channel_id, root.thread_id, root, a.owner_id, `S${i}`, new Date(Date.now() - (60 - i) * 60_000).toISOString());
     roots.push(root);
   }
   const old = await post(a.owner_token, a.channel_id, 'Old');
-  await seedCheckpoint(a.channel_id, old.thread_id, old, a.owner_id, 'Old', new Date(Date.now() - 8 * 86_400_000).toISOString());
+  await seedMemory(a.channel_id, old.thread_id, old, a.owner_id, 'Old', new Date(Date.now() - 8 * 86_400_000).toISOString());
   const first = await readChannelMemory(db(), a.channel_id, undefined, 50);
   assert.equal(first.nodes.length, 50);
   assert.equal(first.nodes[0]!.summary, 'S59');
   assert.equal(first.nodes[0]!.parent?.kind, 'channel');
   assert.ok(first.next_cursor);
-  await seedCheckpoint(a.channel_id, roots[0]!.thread_id, roots[0]!, a.owner_id, 'S0 updated');
+  await seedMemory(a.channel_id, roots[0]!.thread_id, roots[0]!, a.owner_id, 'S0 updated');
   const second = await readChannelMemory(db(), a.channel_id, first.next_cursor!, 50);
   const ids = [...first.nodes, ...second.nodes].map(n => n.ref.id);
   assert.equal(ids.length, 60);
@@ -140,10 +140,10 @@ test('thread memory lists sessions without content; session memory checks the in
   assert.equal(thread.sessions[0]!.title, 'Fix fixture');
   assert.equal(thread.sessions[0]!.state, 'active');
   assert.ok(!thread.context.messages.some(m => m.id === turn.id));
-  const saved = await writeSessionCheckpoint(db(), a.channel_id, session, a.installation_id, { revision: 0, through_sequence: turn.sequence, content: '# Progress\nStep 3 failed', summary: 'Step 3 failed', source_message_ids: [turn.id] }, { id: a.installation_id, name: 'Codex' });
+  const saved = await writeSessionMemory(db(), a.channel_id, session, a.installation_id, { revision: 0, through_sequence: turn.sequence, content: '# Progress\nStep 3 failed', summary: 'Step 3 failed', source_message_ids: [turn.id] }, { id: a.installation_id, name: 'Codex' });
   assert.equal(saved.revision, 1);
   const own = await readSessionMemory(db(), a.channel_id, session, a.installation_id);
-  assert.equal(own.checkpoint?.summary, 'Step 3 failed');
+  assert.equal(own.memory?.summary, 'Step 3 failed');
   assert.equal(own.messages[0]!.id, turn.id);
   assert.equal(own.node.parent?.id, root.thread_id);
   await assert.rejects(readSessionMemory(db(), a.channel_id, session, randomUUID()), (e: any) => e.code === 'session_private');
@@ -164,7 +164,7 @@ async function channelKey(token: string, channel: string, access: 'read' | 'cont
 test('agent walks channel → thread → session over MCP and is fenced at each step', async () => {
   const a = await bootstrap(pool), b = await bootstrap(pool);
   const root = await post(a.owner_token, a.channel_id, 'Dedupe fix');
-  await seedCheckpoint(a.channel_id, root.thread_id, root, a.owner_id, 'Dedupe fix · in progress');
+  await seedMemory(a.channel_id, root.thread_id, root, a.owner_id, 'Dedupe fix · in progress');
   const secondInstallation = randomUUID();
   await pool.query(`INSERT INTO agent_installations(id,workspace_id,owner_id,definition_id,connector_id)
     SELECT $1,workspace_id,owner_id,definition_id,connector_id FROM agent_installations WHERE id=$2`, [secondInstallation, a.installation_id]);
@@ -174,7 +174,7 @@ test('agent walks channel → thread → session over MCP and is fenced at each 
   const client = await connect(await channelKey(a.owner_token, a.channel_id, 'contribute', a.installation_id));
   try {
     const names = (await client.listTools()).tools.map(t => t.name);
-    for (const name of ['channel_memory', 'thread_memory', 'session_memory', 'session_checkpoint']) assert.ok(names.includes(name), name);
+    for (const name of ['channel_memory', 'thread_memory', 'session_memory', 'session_memory_save']) assert.ok(names.includes(name), name);
     const index = data(await client.callTool({ name: 'channel_memory', arguments: {} }));
     assert.equal(index.nodes[0].summary, 'Dedupe fix · in progress');
     const thread = data(await client.callTool({ name: 'thread_memory', arguments: { thread_id: index.nodes[0].ref.id } }));

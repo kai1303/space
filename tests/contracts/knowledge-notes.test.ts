@@ -22,7 +22,7 @@ test('block notes are optional evidence, 2,000 characters, at most 3, and a bad 
   const update = parseAgentMemoryUpdate({ notes: [{ kind: 'fact', title: 'A', content: 'B' }, { kind: 'fact', title: 'C', content: 'x'.repeat(2001) }] });
   assert.deepEqual(update.notes, [{ kind: 'fact', title: 'A', content: 'B', message_ids: [] }]);
   const many = parseAgentMemoryUpdate({ thread: { base_revision: 0, summary: 's', content: 'c' }, notes: [1, 2, 3, 4].map(i => ({ kind: 'fact', title: `T${i}`, content: 'c' })) });
-  assert.equal(many.notes, undefined, 'too many notes drops the list but keeps the checkpoint');
+  assert.equal(many.notes, undefined, 'too many notes drops the list but keeps the memory');
   assert.equal(many.thread?.summary, 's');
   assert.throws(() => parseAgentMemoryUpdate({ notes: [{ kind: 'bad', title: 'A', content: 'B' }] }), (e: any) => e.code === 'invalid_memory_update');
   const block = '<space-memory>{"notes":[{"kind":"decision","title":"T","content":"C"}]}</space-memory>';

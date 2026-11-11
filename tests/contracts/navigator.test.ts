@@ -100,7 +100,7 @@ test('continue and stop require an active known session and exact latest pending
 });
 test('read_context reads at most eight unique known IDs once, including the working memory root', () => {
   const root = {id:'root',sequence:'1',text:'Root',text_truncated:true,author:{id:'human',kind:'human' as const},attachments:[]};
-  const source = {...managedContext, workingMemory:{root,checkpoint:null}};
+  const source = {...managedContext, workingMemory:{root,memory:null}};
   const read = {action:'read_context',readMessageIds:['root','message-1'],capabilities:[],evidenceMessageIds:['message-1'],reason:'Resolve truncated context.'};
   assert.deepEqual(parseNavigationDecision(read, source), read);
   for (const value of [{...read,readMessageIds:[]},{...read,readMessageIds:undefined},{...read,readMessageIds:['unknown']},{...read,readMessageIds:['root','root']},{...read,readMessageIds:Array(9).fill('root')},{...read,targetSessionId:'session-1'},{...read,capabilities:['code']},{...read,evidenceMessageIds:[]}]) assert.throws(() => parseNavigationDecision(value, source));
