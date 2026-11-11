@@ -7,6 +7,7 @@ import { request } from '../../shared/api/request.js';
 import './memory.css';
 import './memory-graph.css';
 import { MemoryConnections } from './MemoryConnections.js';
+import { KnowledgeSwitch } from './KnowledgeSwitch.js';
 import { MemoryGraph, type MemorySelection } from './MemoryGraph.js';
 import { MemoryInspector } from './MemoryInspector.js';
 
@@ -120,6 +121,9 @@ function MemoryDialog({ channel, name, message, onClose, onOpenThread, onOpenSes
             {!data.enabled ? <Button variant="primary" loading={busy} onClick={() => void configure(true)}>Enable memory</Button>
               : <><Button disabled={busy || dirty} onClick={() => void configure(false)}>Disable memory</Button>{provider !== data.provider && <Button variant="primary" disabled={busy || dirty} onClick={() => void configure(true)}>Use selected provider</Button>}</>}
           </div>
+          <KnowledgeSwitch path={path} enabled={data.knowledge_enabled} onChange={result => {
+            if (active.current) setData(previous => previous ? { ...previous, knowledge_enabled: result.knowledge_enabled } : previous);
+          }} />
           {provider !== data.provider && <small>Changing providers keeps existing memory in the previous provider. Content is not copied automatically.</small>}
         </div>}
         {data.enabled && data.document && <>
