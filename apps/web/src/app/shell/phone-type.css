@@ -1,0 +1,19 @@
+/* Phone typography, after Slack's mobile app and iOS reading sizes:
+   body near 16px, bold names and channel titles, black screen headings, and 44px tap rows.
+   Lato ships 400, 700 and 900 only; other weights would be synthesized. */
+@media (max-width:720px) {
+  .chat-app .sp-message-text { font-size: 16px; line-height: 23px; }
+  .chat-app .sp-message-meta strong { font-size: 16px; font-weight: 700; }
+  .chat-app .sp-message-time { font-size: 12px; }
+  .chat-app .sp-conversation-date, .chat-app .chat-date-divider { font-size: 12px; }
+  .chat-app .chat-channel-header :is(h1, h2) { font-size: 17px; font-weight: 700; }
+  .chat-app .chat-global-search { font-size: 15px; }
+  .chat-app .chat-rail .chat-rail-item { font-size: 11px; font-weight: 700; }
+  /* Conversation list rows */
+  .chat-app .chat-sidebar .sp-channel { min-height: 44px; font-size: 16px; }
+  .chat-app .chat-sidebar .sp-sidebar-utilities button { min-height: 44px; font-size: 16px; }
+  .chat-app .chat-sidebar .chat-workspace-picker > summary { font-size: 20px; font-weight: 900; }
+  /* Screen headings share one size */
+  .chat-app .dm-heading h2, .chat-app .notification-heading h1 { font-size: 20px; font-weight: 900; }
+  .chat-app .notification-tabs button { font-size: 14px; }
+}

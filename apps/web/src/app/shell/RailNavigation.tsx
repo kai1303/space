@@ -4,6 +4,7 @@ import { animate, AnimatePresence, motion, useIsPresent, useMotionValue, useRedu
 import { NavigationIcon } from '@space/ui/navigation';
 import { motionTransition } from '@space/ui/motion';
 import './rail-navigation.css';
+import './phone-type.css';
 
 export type RailDestination = 'spacebot' | 'files' | 'todos' | 'agents';
 export type RailPreview = 'spacebot' | 'dms' | 'activity' | 'files' | 'todos';
