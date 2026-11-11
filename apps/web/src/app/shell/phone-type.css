@@ -1,17 +1,30 @@
 /* Phone typography, after Slack's mobile app and iOS reading sizes:
-   body near 16px, bold names and channel titles, black screen headings, and 44px tap rows.
+   body near 16px, bold names and channel titles, black screen headings, and compact 36px list rows.
    Lato ships 400, 700 and 900 only; other weights would be synthesized. */
 @media (max-width:720px) {
-  .chat-app .sp-message-text { font-size: 16px; line-height: 23px; }
-  .chat-app .sp-message-meta strong { font-size: 16px; font-weight: 700; }
+  .chat-app .sp-message-text { font-size: 16px; line-height: 21px; }
+  .chat-app .sp-message-meta { min-height: 20px; }
+  .chat-app .sp-message-meta strong { font-size: 16px; line-height: 20px; font-weight: 700; }
   .chat-app .sp-message-time { font-size: 12px; }
   .chat-app .sp-conversation-date, .chat-app .chat-date-divider { font-size: 12px; }
   .chat-app .chat-channel-header :is(h1, h2) { font-size: 17px; font-weight: 700; }
   .chat-app .chat-global-search { font-size: 15px; }
   .chat-app .chat-rail .chat-rail-item { font-size: 11px; font-weight: 700; }
   /* Conversation list rows */
-  .chat-app .chat-sidebar .sp-channel { min-height: 44px; font-size: 16px; }
-  .chat-app .chat-sidebar .sp-sidebar-utilities button { min-height: 44px; font-size: 16px; }
+  /* Tighter, like Slack's list. 36px still leaves a comfortable tap row. */
+  .chat-app .chat-sidebar .sp-channel { min-height: 36px; padding-block: 4px; font-size: 16px; line-height: 22px; }
+  /* Slack's Home shows shortcuts as a scrollable row of tiles above the list. */
+  .chat-app .chat-sidebar .sp-sidebar-utilities {
+    display: flex; flex-direction: row; gap: 8px; overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: none;
+    padding: 10px 12px 12px; margin: 0;
+  }
+  .chat-app .chat-sidebar .sp-sidebar-utilities::-webkit-scrollbar { display: none; }
+  .chat-app .chat-sidebar .sp-sidebar-utilities button {
+    flex: 0 0 auto; flex-direction: column; align-items: flex-start; justify-content: space-between; gap: 6px;
+    width: 92px; min-height: 64px; padding: 10px; border: 1px solid var(--sp-sidebar-outline); border-radius: 12px;
+    background: var(--sp-sidebar-item-hover); font-size: 13px; font-weight: 700; line-height: 16px; white-space: normal; text-align: left;
+  }
+  .chat-app .chat-sidebar .sp-sidebar-utilities button svg { width: 20px; height: 20px; }
   .chat-app .chat-sidebar .chat-workspace-picker > summary { font-size: 20px; font-weight: 900; }
   /* Screen headings share one size */
   .chat-app .dm-heading h2, .chat-app .notification-heading h1 { font-size: 20px; font-weight: 900; }
