@@ -26,14 +26,15 @@ it('renders accessible nodes with captions inside the circle and named links', (
   const caption = node(/^Dedupe fix/).querySelector('.sp-graph-caption')!;
   expect(caption.getAttribute('y')).toBeNull();
   const spans = [...caption.querySelectorAll('tspan')];
-  expect(spans.length).toBe(2);
+  expect(spans.length).toBe(3);
   for (const span of spans) expect(Math.abs(Number(span.getAttribute('y')))).toBeLessThan(NODE_RADIUS);
   expect(spans.at(-1)!.textContent!.endsWith('…')).toBe(true);
 });
 
 it('captionLines wraps to two short lines and cuts with an ellipsis', () => {
   expect(captionLines('Codex')).toEqual(['Codex']);
-  expect(captionLines('Dedupe fix in progress')).toEqual(['Dedupe fix', 'in…']);
+  expect(captionLines('Thread 9 · in progress')).toEqual(['Thread 9', 'in', 'progress']);
+  expect(captionLines('Dedupe fix in progress and more')).toEqual(['Dedupe fix', 'in', 'progress…']);
   expect(captionLines('Supercalifragilistic')).toEqual(['Supercali…']);
 });
 

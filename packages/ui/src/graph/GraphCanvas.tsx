@@ -16,28 +16,34 @@ export type GraphCanvasProps = {
   label: string;
 };
 export const MAX_GRAPH_NODES = 500;
-const MIN_SCALE = 0.2, MAX_SCALE = 4, VIEW_W = 800, VIEW_H = 600, RING_WIDTH = 26;
+const MIN_SCALE = 0.2, MAX_SCALE = 4, VIEW_W = 800, VIEW_H = 600, RING_WIDTH = 22;
 const clamp = (v: number) => Math.min(MAX_SCALE, Math.max(MIN_SCALE, v));
 const pairKey = (a: string, b: string) => (a < b ? `${a}|${b}` : `${b}|${a}`);
 const reducedMotion = () => typeof window === 'undefined' || typeof window.matchMedia !== 'function' || window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
-// Up to two short lines inside the circle; the full caption stays in the accessible name.
-export function captionLines(text: string, perLine = 10): string[] {
-  const words = text.split(/\s+/).filter(Boolean), lines: string[] = [];
-  let line = '';
+// Up to three short lines inside the circle; the full caption stays in the accessible name.
+// Separator dots and dashes are dropped so they never take a line on their own.
+export function captionLines(text: string, perLine = 10, maxLines = 3): string[] {
+  const words = text.split(/\s+/).filter(w => w && !/^[·•\-–—|]$/.test(w));
+  const lines: string[] = [];
+  let line = '', used = 0;
   for (const word of words) {
     const next = line ? `${line} ${word}` : word;
-    if (next.length <= perLine) { line = next; continue; }
+    if (next.length <= perLine) { line = next; used++; continue; }
     if (line) lines.push(line);
-    line = word;
-    if (lines.length === 2) break;
+    if (lines.length === maxLines) { line = ''; break; }
+    line = word; used++;
   }
-  if (lines.length < 2 && line) lines.push(line);
-  const used = lines.join(' ').length;
-  const out = lines.slice(0, 2).map(l => l.length > perLine ? `${l.slice(0, perLine - 1)}…` : l);
-  if (used < text.trim().length && out.length) { const last = out.length - 1; out[last] = `${out[last]!.replace(/…$/, '').slice(0, perLine - 1)}…`; }
+  if (line) lines.push(line);
+  const out = lines.map(l => l.length > perLine ? `${l.slice(0, perLine - 1)}…` : l);
+  if (used < words.length && out.length) {
+    const last = out.length - 1;
+    if (!out[last]!.endsWith('…')) out[last] = `${out[last]!.slice(0, perLine - 1)}…`;
+  }
   return out;
 }
+// Below this zoom, link labels are unreadable clutter, so only the lines are drawn.
+export const LABEL_MIN_SCALE = 0.75;
 
 export function GraphCanvas({ nodes, links, palette, selectedId, expandedIds, onSelect, onToggleExpand, menu, details, label }: GraphCanvasProps) {
   const [positions, setPositions] = useState(new Map<string, Point>());
@@ -147,10 +153,10 @@ export function GraphCanvas({ nodes, links, palette, selectedId, expandedIds, on
             return <g key={l.id} data-link-id={l.id} className={`sp-graph-link${faded ? ' is-faded' : ''}`}>
               <path d={linkPath(from, to, index, group.length)} markerEnd="url(#sp-graph-arrow)" />
               {/* The label sits in a gap cut out of the line, always upright. */}
-              <g transform={`translate(${anchor.x},${anchor.y}) rotate(${anchor.angle})`}>
+              {view.k >= LABEL_MIN_SCALE && <g transform={`translate(${anchor.x},${anchor.y}) rotate(${anchor.angle})`}>
                 <rect className="sp-graph-link-gap" x={-width / 2} y={-7} width={width} height={14} rx={3} />
                 <text textAnchor="middle" dominantBaseline="central">{l.label}</text>
-              </g>
+              </g>}
             </g>;
           })}
           {nodes.map(n => {
@@ -165,10 +171,10 @@ export function GraphCanvas({ nodes, links, palette, selectedId, expandedIds, on
               onClick={event => { event.stopPropagation(); if (!endDrag()) onSelect(n.id); }}
               onDoubleClick={event => { event.stopPropagation(); onToggleExpand(n.id); }}
               onKeyDown={event => onNodeKey(event, n.id)}>
-              {selectedId === n.id && <circle className="sp-graph-halo" r={NODE_RADIUS + 5} />}
-              <circle className="sp-graph-dot" r={NODE_RADIUS} style={{ fill: `color-mix(in srgb, ${color} 72%, white)`, stroke: `color-mix(in srgb, ${color} 70%, black)` }} />
+              {selectedId === n.id && <circle className="sp-graph-halo" r={NODE_RADIUS + 4} />}
+              <circle className="sp-graph-dot" r={NODE_RADIUS} style={{ fill: `color-mix(in srgb, ${color} 88%, white)`, stroke: `color-mix(in srgb, ${color} 62%, black)` }} />
               <text className="sp-graph-caption" textAnchor="middle" dominantBaseline="central">
-                {lines.map((line, i) => <tspan key={i} x={0} y={(i - (lines.length - 1) / 2) * 12}>{line}</tspan>)}
+                {lines.map((line, i) => <tspan key={i} x={0} y={(i - (lines.length - 1) / 2) * 11}>{line}</tspan>)}
               </text>
             </g>;
           })}
