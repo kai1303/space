@@ -100,11 +100,11 @@ it('reports unsaved edits so the channel can ask before leaving the Memory tab',
 
 it('shows as a channel tab panel and moves to Notes when a message is saved while open', async () => {
   vi.stubGlobal('fetch', vi.fn(async () => response(state(true))));
-  const view = render(<ChannelMemory channel="first" name="general" />);
+  const view = render(<ChannelMemory asTab channel="first" name="general" />);
   expect(screen.getByRole('tabpanel', { name: 'Memory in #general' }).id).toBe('channel-memory');
   expect(screen.queryByRole('dialog')).toBeNull();
   expect(screen.getByRole('tab', { name: 'Graph' }).getAttribute('aria-selected')).toBe('true');
-  view.rerender(<ChannelMemory channel="first" name="general" message={{ id: 'message', text: 'Use PostgreSQL.' }} />);
+  view.rerender(<ChannelMemory asTab channel="first" name="general" message={{ id: 'message', text: 'Use PostgreSQL.' }} />);
   expect((await screen.findByRole('tab', { name: 'Notes' })).getAttribute('aria-selected')).toBe('true');
   expect(await screen.findByRole('button', { name: 'Save message to memory' })).toBeTruthy();
 });

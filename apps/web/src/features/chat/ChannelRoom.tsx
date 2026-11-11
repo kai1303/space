@@ -434,7 +434,7 @@ export function ChannelRoom({ viewState, requestedThread, onCloseDirect, readSta
     {error && <p className="chat-error" role="alert">{error}{!historyLoaded && status !== 'Disconnected' && <Button size="sm" disabled={!!history.loading} onClick={() => { setError(''); history.clear(); setHistoryAttempt(value => value + 1); }}>Retry loading messages</Button>}</p>}
     {readError && <p role="status">{readError}</p>}
     {pins.open && <ChannelPins pins={pins} archived={!!channel.archived_at} onMessage={id => { pins.close(); fileMessage(id); }}/>}
-    {!direct && memoryOpen && status !== 'Disconnected' && <ChannelMemory channel={channel.id} name={channel.name} message={memoryMessage} onDirtyChange={trackMemoryDirty}
+    {!direct && memoryOpen && status !== 'Disconnected' && <ChannelMemory asTab channel={channel.id} name={channel.name} message={memoryMessage} onDirtyChange={trackMemoryDirty}
       onAccessLost={() => { memoryDirty.current = false; setMemoryOpen(false); setMemoryMessage(undefined); }}
       onOpenThread={id => openThread(id)} onOpenSession={(thread, session) => openSessions(thread, session)} />}
     <div className="channel-message-view" hidden={pins.open || (!direct && (filesOpen || memoryOpen))}>

@@ -14,12 +14,14 @@ import { MemoryInspector } from './MemoryInspector.js';
 type Props = { channel: string; name: string; message?: { id: string; text: string };
   // The channel asks before leaving this view while either editor has unsaved edits.
   onDirtyChange?: (dirty: boolean) => void; onAccessLost?: () => void;
+  // Set when shown as the channel's Memory tab; the workspace Memory page leaves it off.
+  asTab?: boolean;
   onOpenThread?: (threadId: string) => void; onOpenSession?: (threadId: string, sessionId: string) => void };
 // The Memory channel tab: shown in place of the messages, like Pins and Files.
 export function ChannelMemory(props: Props) {
   return <MemoryView key={props.channel} {...props} />;
 }
-function MemoryView({ channel, name, message, onDirtyChange, onAccessLost, onOpenThread, onOpenSession }: Props) {
+function MemoryView({ channel, name, message, onDirtyChange, onAccessLost, asTab, onOpenThread, onOpenSession }: Props) {
   const [data, setData] = useState<MemoryState>(), [draft, setDraft] = useState('');
   const [busy, setBusy] = useState(false), [error, setError] = useState(''), [notice, setNotice] = useState('');
   const [provider, setProvider] = useState('markdown'), [conflict, setConflict] = useState(false), [comparison, setComparison] = useState(false);
@@ -95,7 +97,7 @@ function MemoryView({ channel, name, message, onDirtyChange, onAccessLost, onOpe
   }
   // Threads and sessions open beside this view, so the graph stays where it was.
   const openThread = onOpenThread, openSession = onOpenSession;
-  return <section id="channel-memory" role="tabpanel" className="channel-memory-page" aria-label={`Memory in #${name}`}>
+  return <section id={asTab ? 'channel-memory' : undefined} role={asTab ? 'tabpanel' : 'region'} className="channel-memory-page" aria-label={`Memory in #${name}`}>
     <header className="channel-memory-page-header"><h2>Memory in #{name}</h2><p>Shared knowledge for this channel, with links to its sources.</p></header>
     <Tabs label="Memory views" value={view} onChange={id => setView(id as 'graph' | 'notes')} items={[
       { id: 'graph', label: 'Graph', panelId: `memory-${channel}-graph` },
