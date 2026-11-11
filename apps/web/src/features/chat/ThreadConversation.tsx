@@ -4,7 +4,8 @@ import type {ChatMessage,ManagedChannelTab,MentionReference} from '@space/contra
 import { IconButton, Tabs } from '@space/ui/primitives';
 import { Message } from '@space/ui/conversation';
 import { RichComposer } from '@space/ui/composer';
-import {ArrowLeft,ChatCircle,X} from '@phosphor-icons/react';
+import {ArrowLeft,CaretLeft,ChatCircle,X} from '@phosphor-icons/react';
+import { usePhoneLayout } from '../../shared/ui/conversation-list.js';
 import {channelTabIcons,channelTabNames} from '../channels/ChannelTabs.js';
 import {AgentMessageBody} from '../agents/AgentMessageBody.js';
 import {AssetAttachments} from '../files/AssetAttachments.js';
@@ -12,7 +13,13 @@ import {AssetAttachments} from '../files/AssetAttachments.js';
 export function ConversationHeader({title,channel,icon=<ChatCircle size={20}/>,status,actions,onBack,onClose,backLabel='Back to thread',heading,topic}: {
  title:string;channel?:string;icon?:ReactNode;status?:string;actions?:ReactNode;onBack?:()=>void;onClose?:()=>void;backLabel?:string;heading?:ReactNode;topic?:ReactNode;
 }) {
- return <header className="chat-channel-header">{heading??<div className="chat-thread-title">{icon}<h2>{title}</h2>{channel&&<span>#{channel}</span>}{status&&<span role="status" className="chat-thread-status">{status}</span>}</div>}{topic}<div className="chat-header-actions">{onBack&&<IconButton label={backLabel} onClick={onBack}><ArrowLeft size={20}/></IconButton>}{actions}{onClose&&<IconButton label={`Close ${title.toLowerCase()}`} onClick={onClose}><X size={20}/></IconButton>}</div></header>;
+ // Phones: panels open full screen, so closing reads as going back, with Slack's back arrow on the left.
+ // One back per screen: the nearer step (onBack) wins over closing the panel.
+ const phone = usePhoneLayout();
+ const step = !phone ? null : onBack ? { label: backLabel, go: onBack } : onClose ? { label: channel ? `Back to #${channel}` : `Close ${title.toLowerCase()}`, go: onClose } : null;
+ const back = step && <IconButton className="chat-conversation-back" label={step.label} onClick={step.go}><CaretLeft size={20} weight="bold"/></IconButton>;
+ if (step) { onBack = undefined; onClose = undefined; }
+ return <header className="chat-channel-header">{back}{heading??<div className="chat-thread-title">{icon}<h2>{title}</h2>{channel&&<span>#{channel}</span>}{status&&<span role="status" className="chat-thread-status">{status}</span>}</div>}{topic}<div className="chat-header-actions">{onBack&&<IconButton label={backLabel} onClick={onBack}><ArrowLeft size={20}/></IconButton>}{actions}{onClose&&<IconButton label={`Close ${title.toLowerCase()}`} onClick={onClose}><X size={20}/></IconButton>}</div></header>;
 }
 export function ConversationNavigation({children, order, view, onChange, onReorder}: {
   children: ReactNode; order: readonly ManagedChannelTab[]; view: string; onChange: (id: string) => void;
