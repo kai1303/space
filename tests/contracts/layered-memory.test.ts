@@ -24,3 +24,28 @@ test('channel cursors round-trip and reject tampering', () => {
     assert.throws(() => parseChannelCursor(bad), (e: any) => e.code === 'invalid_memory_cursor');
   }
 });
+
+import { visibleText, extractMemoryBlock, parseAgentResponse } from '@space/contracts';
+
+const block = '<space-memory>{"session":{"base_revision":2,"summary":"Step 3 fixed","content":"# Progress\\nStep 3 fixed"}}</space-memory>';
+
+test('the memory block is hidden from people while streaming and when final', () => {
+  assert.equal(visibleText(`Done.\n${block}`, true), 'Done.');
+  assert.equal(visibleText('Done.\n<space-mem', false), 'Done.\n');
+  assert.equal(visibleText('a < b', true), 'a < b');
+  assert.equal(visibleText('a <', false), 'a ');
+});
+
+test('extractMemoryBlock parses a valid block and drops a bad one', () => {
+  assert.deepEqual(extractMemoryBlock(`x ${block}`), { session: { base_revision: 2, summary: 'Step 3 fixed', content: '# Progress\nStep 3 fixed' } });
+  assert.equal(extractMemoryBlock('<space-memory>{bad</space-memory>'), undefined);
+  assert.equal(extractMemoryBlock('<space-memory>{"thread":{"base_revision":0,"summary":"","content":"x"}}</space-memory>'), undefined);
+  assert.equal(extractMemoryBlock('no block'), undefined);
+});
+
+test('an invalid memory field never fails the whole response', () => {
+  const response = parseAgentResponse({ messages: [], tools: [], components: [], memory: { session: { base_revision: -1, summary: 'x', content: 'y' } } });
+  assert.equal(response.memory, undefined);
+  const ok = parseAgentResponse({ messages: [], tools: [], components: [], memory: { thread: { base_revision: 0, summary: 's', content: 'c' } } });
+  assert.equal(ok.memory?.thread?.summary, 's');
+});

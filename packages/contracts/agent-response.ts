@@ -1,4 +1,5 @@
 import { AppError, record, text } from './validation.js';
+import { parseAgentMemoryUpdate, type AgentMemoryUpdate } from './memory-block.js';
 
 export type AgentText = { id: string; text: string; status: 'streaming' | 'complete'; phase?: 'commentary' | 'final_answer' };
 export type AgentTool = { id: string; name: string; arguments: string; result?: string; status: 'calling' | 'running' | 'completed' | 'interrupted' };
@@ -12,7 +13,7 @@ export type AgentSessionOutputs = {
 };
 export type AgentActivity = 'working' | 'thinking' | 'responding' | 'using_tools';
 export type AgentResponseItem = { type: 'message' | 'tool'; id: string };
-export type AgentResponse = { messages: AgentText[]; tools: AgentTool[]; components: AgentComponent[]; items?: AgentResponseItem[]; activity?: AgentActivity; step?: string; outputs?: AgentSessionOutputs };
+export type AgentResponse = { messages: AgentText[]; tools: AgentTool[]; components: AgentComponent[]; items?: AgentResponseItem[]; activity?: AgentActivity; step?: string; outputs?: AgentSessionOutputs; memory?: AgentMemoryUpdate };
 
 function parseOutputs(input: unknown): AgentSessionOutputs {
   const v = record(input, ['preview', 'files', 'changes']);
@@ -65,7 +66,7 @@ export function parseAgentComponent(input: unknown): AgentComponent {
 }
 // Accept fields already saved by the reverted turn presentation; project them into the original response shape.
 export function parseAgentResponse(input: unknown): AgentResponse {
-  const v = record(input, ['messages', 'tools', 'components', 'items', 'activity', 'step', 'outputs', 'metadata']);
+  const v = record(input, ['messages', 'tools', 'components', 'items', 'activity', 'step', 'outputs', 'metadata', 'memory']);
   if (v.activity !== undefined && !['working', 'thinking', 'responding', 'using_tools'].includes(v.activity as string)) throw new AppError(400, 'invalid_agent_activity');
   const messages = unique(list(v.messages, 30, (item): AgentText => {
     const m = record(item, ['id', 'text', 'status', 'phase']);
@@ -92,5 +93,9 @@ export function parseAgentResponse(input: unknown): AgentResponse {
   }
   const result = { messages, tools, components, ...(items === undefined ? {} : { items }), ...(v.activity === undefined ? {} : { activity: v.activity as AgentActivity }), ...(v.step === undefined ? {} : { step: text(v.step, 200) }), ...(v.outputs === undefined ? {} : { outputs: parseOutputs(v.outputs) }) };
   if (messages.map(message => message.text).join('\n\n').length > 16000 || JSON.stringify(result).length > 64000) throw new AppError(400, 'agent_response_too_large');
+  // A bad memory block is dropped and never fails the turn. Its own size is bounded by parseAgentMemoryUpdate.
+  if (v.memory !== undefined) {
+    try { return { ...result, memory: parseAgentMemoryUpdate(v.memory) }; } catch { /* dropped */ }
+  }
   return result;
 }
