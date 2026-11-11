@@ -2,11 +2,11 @@ import { sql } from 'drizzle-orm';
 import {
   AppError, uuid, chatCursor, encodeChannelCursor, parseChannelCursor,
   CHANNEL_MEMORY_DAYS, CHANNEL_PAGE_DEFAULT, CHANNEL_PAGE_MAX, CHECKPOINT_LIMIT,
-  type ChannelMemoryPage, type MemoryNode, type SessionMemory, type ThreadMemory,
+  type ChannelMemoryPage, type MemoryNode, type SessionMemory, type ThreadMemory, type MemoryConflict, type AgentMemoryUpdate,
   type ThreadCheckpoint, type ThreadCheckpointInput, type ThreadContextMessage,
 } from '@space/contracts';
 import type { DbSession } from './database.js';
-import { assertCheckpointSources, assertContextThread, checkpointColumns, readThreadContext, rows } from './thread-context.js';
+import { assertCheckpointSources, assertContextThread, checkpointColumns, readThreadContext, rows, writeThreadCheckpoint } from './thread-context.js';
 
 export async function readChannelMemory(c: DbSession, channelId: string, after?: string, limit = CHANNEL_PAGE_DEFAULT): Promise<ChannelMemoryPage> {
   if (!Number.isInteger(limit) || limit < 1 || limit > CHANNEL_PAGE_MAX) throw new AppError(400, 'invalid_memory_limit');
@@ -108,4 +108,49 @@ export async function writeSessionCheckpoint(c: DbSession, channelId: string, se
     RETURNING ${checkpointColumns}`);
   if (!saved) throw new AppError(409, 'session_checkpoint_conflict');
   return saved;
+}
+
+type TurnScope = 'session' | 'thread';
+export type TurnMemoryOutcome = { scope: TurnScope; outcome: 'saved' | 'pending' | 'skipped' };
+const conflictCodes = new Set(['thread_checkpoint_conflict', 'session_checkpoint_conflict', 'thread_checkpoint_watermark_conflict', 'session_checkpoint_watermark_conflict']);
+
+// Called inside the execution.completed transaction. It never throws for a bad or stale update,
+// so memory problems cannot fail the agent's turn. The writers raise AppError before any SQL error,
+// and their inserts use ON CONFLICT DO NOTHING, so the surrounding transaction stays usable.
+export async function saveTurnMemory(c: DbSession, input: { channelId: string; threadId: string; sessionId: string | null; installationId: string; producer: { id: string; name: string }; memory: AgentMemoryUpdate }): Promise<TurnMemoryOutcome[]> {
+  const [last] = await rows<{ id: string; sequence: string }>(c, sql`SELECT id, sequence::text FROM messages WHERE channel_id=${input.channelId} AND thread_id=${input.threadId} ORDER BY sequence DESC LIMIT 1`);
+  const results: TurnMemoryOutcome[] = [];
+  for (const scope of ['session', 'thread'] as const) {
+    const part = input.memory[scope];
+    if (!part) continue;
+    if (!last || (scope === 'session' && !input.sessionId)) { results.push({ scope, outcome: 'skipped' }); continue; }
+    const key = scope === 'session' ? `session:${input.sessionId}` : `thread:${input.threadId}`;
+    const checkpoint = { revision: part.base_revision, through_sequence: last.sequence, content: part.content, summary: part.summary, source_message_ids: [last.id] };
+    try {
+      if (scope === 'session') await writeSessionCheckpoint(c, input.channelId, input.sessionId!, input.installationId, checkpoint, input.producer);
+      else await writeThreadCheckpoint(c, input.channelId, input.threadId, checkpoint, input.producer);
+      await c.execute(sql`DELETE FROM memory_pending WHERE installation_id=${input.installationId} AND scope_key=${key}`);
+      results.push({ scope, outcome: 'saved' });
+    } catch (error) {
+      if (!(error instanceof AppError)) throw error;
+      if (!conflictCodes.has(error.code)) { results.push({ scope, outcome: 'skipped' }); continue; }
+      await c.execute(sql`INSERT INTO memory_pending(installation_id,scope_key,base_revision,summary,content)
+        VALUES(${input.installationId},${key},${part.base_revision},${part.summary},${part.content})
+        ON CONFLICT (installation_id, scope_key) DO UPDATE SET base_revision=EXCLUDED.base_revision, summary=EXCLUDED.summary, content=EXCLUDED.content, created_at=now()`);
+      results.push({ scope, outcome: 'pending' });
+    }
+  }
+  return results;
+}
+
+export async function readPendingMemory(c: DbSession, installationId: string, threadId: string, sessionId: string | null): Promise<MemoryConflict[]> {
+  const keys = [`thread:${threadId}`, ...(sessionId ? [`session:${sessionId}`] : [])];
+  return rows<MemoryConflict>(c, sql`
+    SELECT split_part(p.scope_key, ':', 1) AS scope, p.base_revision, p.summary, p.content,
+      CASE WHEN p.scope_key LIKE 'thread:%'
+        THEN coalesce((SELECT max(cp.revision) FROM thread_checkpoints cp WHERE cp.thread_id = ${threadId} AND cp.session_id IS NULL), 0)
+        ELSE coalesce((SELECT max(cp.revision) FROM thread_checkpoints cp WHERE cp.session_id::text = split_part(p.scope_key, ':', 2)), 0)
+      END AS current_revision
+    FROM memory_pending p WHERE p.installation_id=${installationId} AND p.scope_key = ANY(${sql.param(keys)}::text[])
+    ORDER BY p.scope_key`);
 }

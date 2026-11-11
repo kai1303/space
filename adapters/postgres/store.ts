@@ -9,7 +9,7 @@ import * as s from './schema.js';
 import { tokenHash } from './bootstrap.js';
 import { hasThreadAccess } from './access.js';
 import { readThreadContext } from './thread-context.js';
-import { readChannelMemory, readSessionMemory } from './layered-memory.js';
+import { readChannelMemory, readPendingMemory, readSessionMemory, saveTurnMemory } from './layered-memory.js';
 import { sessionTransaction, SessionConflict } from './session-concurrency.js';
 import { traceTool, traceToolChanges, traceTurn } from './turn-trace.js';
 import { directTurnTarget, runTurn, type AdmitLocalTurn, type TurnPlan } from './direct-turn-admission.js';
@@ -262,6 +262,8 @@ export class PostgresStore implements DeliveryStore {
         });
         if (own) context.agent_session_memory = own;
       }
+      const conflicts = await readPendingMemory(c, task.installation_id, task.thread_id, task.session_id ?? null);
+      if (conflicts.length) context.memory_conflicts = conflicts;
       const [session] = await c.select().from(s.agentSessions).where(eq(s.agentSessions.id, task.session_id!));
       if (session?.handoff_context) context.handoff = session.handoff_context;
       const priorReady = session?.managed && (await c.execute(sql`SELECT 1 FROM tasks previous JOIN task_events e ON e.correlation_id=previous.id AND e.payload->>'session_ready'='true' WHERE previous.session_id=${task.session_id} AND previous.id<>${task.id} LIMIT 1`)).rows.length > 0;
@@ -344,6 +346,12 @@ export class PostgresStore implements DeliveryStore {
         const thread = (await c.select().from(s.threads).where(eq(s.threads.id, task.thread_id)))[0]!;
         if (!managed) await c.insert(s.messages).values({ id: randomUUID(), channel_id: thread.channel_id, workspace_id: task.workspace_id, thread_id: task.thread_id, task_id: task.id, installation_id: installationId, text: event.payload.text, agent_response: event.payload.response });
         await this.append(c, task, 'task.completed', installationId, { result: event.payload.text, ...(event.payload.response ? { response: event.payload.response } : {}) }, event.id);
+        const memory = event.payload.response?.memory;
+        if (memory) {
+          const [definition] = (await c.execute<{ name: string }>(sql`SELECT d.name FROM agent_installations i JOIN agent_definitions d ON d.id=i.definition_id WHERE i.id=${installationId}`)).rows;
+          const outcomes = await saveTurnMemory(c, { channelId: thread.channel_id, threadId: task.thread_id, sessionId: task.session_id ?? null, installationId, producer: { id: installationId, name: definition?.name ?? 'Agent' }, memory });
+          for (const { scope, outcome } of outcomes) traceTurn(c, task.id, 'memory', `${scope}:${outcome}`);
+        }
       } else if (next === 'failed') await this.append(c, task, 'task.failed', installationId, { error: event.payload.text, ...(event.payload.response ? { response: event.payload.response } : {}) }, event.id);
     });
   }

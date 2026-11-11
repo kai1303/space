@@ -10,7 +10,7 @@ import { bootstrap } from '@space/postgres/bootstrap';
 import { migrate } from '@space/postgres/migrate';
 import { PostgresStore } from '@space/postgres/store';
 import { createApi } from '@space/server/api';
-import { readChannelMemory, readThreadMemory, readSessionMemory, writeSessionCheckpoint } from '@space/postgres/layered-memory';
+import { readChannelMemory, readThreadMemory, readSessionMemory, writeSessionCheckpoint, saveTurnMemory, readPendingMemory } from '@space/postgres/layered-memory';
 
 if (!process.env.TEST_DATABASE_URL) throw new Error('TEST_DATABASE_URL is required');
 const schema = `layered_memory_${randomBytes(6).toString('hex')}`;
@@ -199,4 +199,30 @@ test('thread keys do not get the channel layer tools', async () => {
     assert.ok(!names.includes('channel_memory'));
     assert.ok(!names.includes('session_memory'));
   } finally { await client.close(); }
+});
+
+test('turn-end memory saves both layers, keeps a conflict as pending, and clears it on the next save', async () => {
+  const a = await bootstrap(pool);
+  await post(a.owner_token, a.channel_id, 'Start');
+  const root = await post(a.owner_token, a.channel_id, 'Thread for memory');
+  const session = await addSession(a, root.thread_id);
+  const base = { channelId: a.channel_id, threadId: root.thread_id, sessionId: session, installationId: a.installation_id, producer: { id: a.installation_id, name: 'Codex' } };
+  const first = await saveTurnMemory(db(), { ...base, memory: { session: { base_revision: 0, summary: 'S1', content: 'session one' }, thread: { base_revision: 0, summary: 'T1', content: 'thread one' } } });
+  assert.deepEqual(first, [{ scope: 'session', outcome: 'saved' }, { scope: 'thread', outcome: 'saved' }]);
+  const stale = await saveTurnMemory(db(), { ...base, memory: { thread: { base_revision: 0, summary: 'T-stale', content: 'stale' } } });
+  assert.deepEqual(stale, [{ scope: 'thread', outcome: 'pending' }]);
+  const pending = await readPendingMemory(db(), a.installation_id, root.thread_id, session);
+  assert.equal(pending.length, 1);
+  assert.equal(pending[0]!.scope, 'thread');
+  assert.equal(pending[0]!.current_revision, 1);
+  assert.equal(pending[0]!.summary, 'T-stale');
+  await saveTurnMemory(db(), { ...base, memory: { thread: { base_revision: 1, summary: 'T2', content: 'merged' } } });
+  assert.equal((await readPendingMemory(db(), a.installation_id, root.thread_id, session)).length, 0);
+  await saveTurnMemory(db(), { ...base, memory: { thread: { base_revision: 0, summary: 'T-stale-2', content: 'stale again' } } });
+  const pendingNow = await readPendingMemory(db(), a.installation_id, root.thread_id, session);
+  assert.equal(pendingNow[0]!.current_revision, 2);
+  await pool.query(`UPDATE agent_sessions SET state='ended' WHERE id=$1`, [session]);
+  assert.deepEqual(await saveTurnMemory(db(), { ...base, memory: { session: { base_revision: 1, summary: 'S2', content: 'late' } } }), [{ scope: 'session', outcome: 'skipped' }]);
+  const channel = await readChannelMemory(db(), a.channel_id);
+  assert.equal(channel.nodes.find(n => n.ref.id === root.thread_id)?.summary, 'T2');
 });
