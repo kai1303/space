@@ -55,6 +55,13 @@ MCP keys, and creating a key does not automatically install it in an agent's con
 | `thread_memory` | Read | One thread's checkpoint, recent messages and session list |
 | `session_memory` | Read | Own session only (installation-bound key); others return `session_private` |
 | `session_checkpoint` | Contribute/Write | Revision-checked session checkpoint with summary |
+| `knowledge_list` | Read | Newest 20 live notes in this channel (id, kind, title, revision) |
+| `knowledge_add` | Contribute/Write | Save a note with a caller UUID and 1–20 channel message IDs; a used title returns `title_taken` |
+| `knowledge_update` | Write | Revision-checked change to a note; stale revisions return `note_conflict` |
+| `knowledge_remove` | Write | Revision-checked removal; old versions stay stored |
+
+Knowledge tools appear only while the channel's Knowledge switch is on. A channel key
+can be created while memory or Knowledge is on.
 
 Read-only connections do not advertise write tools, and write permission is checked
 again when tools execute. Tools never accept a channel or workspace ID: the key
@@ -104,16 +111,16 @@ not automatically remove other notes derived from it.
 Channel managers issue/revoke up to 20 named keys per channel. Keys are opaque,
 stored only as SHA-256 hashes and never appear in list responses or application
 request logs. Any current channel manager can revoke a key, including while memory
-is disabled. Issuing requires enabled memory. A lost creation response cannot be
+is disabled. Issuing requires enabled memory or enabled Knowledge notes. A lost creation response cannot be
 recovered; revoke that named connection and create a replacement.
 
-Every HTTP request and tool invocation rechecks the key, creator's current channel
-membership, channel opt-in and access level under the same PostgreSQL channel lock
-used for human memory operations. Revoked keys fail with 401; disabled memory blocks
-calls immediately. Offboarding the creator blocks their keys. Re-adding that same
-identity restores its membership eligibility unless a manager revoked the keys.
-Already executing operations finish before a waiting disable/revoke obtains the
-channel lock. There is no promise to recall content already read by an agent.
+Every HTTP request and tool invocation rechecks the key, the creator's current channel
+membership, channel opt-in and access level before and after the work. Channel keys
+take no lock; a settings change during a call returns `memory_settings_changed`.
+Revoked keys fail with 401; disabled memory blocks calls immediately. Offboarding the
+creator blocks their keys. Re-adding that same identity restores its membership
+eligibility unless a manager revoked the keys. There is no promise to recall content
+already read by an agent.
 
 MCP keys cannot authenticate to human APIs or the local connector namespace. Responses
 use `Cache-Control: no-store`. Tool failures expose stable error codes, not provider
