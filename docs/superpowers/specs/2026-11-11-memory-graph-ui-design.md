@@ -4,7 +4,7 @@
 
 Let people see the layered short-term memory (`docs/superpowers/specs/2026-11-11-short-term-memory-design.md`) as a graph. Channel managers can also correct a checkpoint.
 
-The look follows the Neo4j Browser graph view: circle nodes, named arrows, a force layout, double-click to expand, a ring menu and a right-hand details panel. **All code is written for Space.** Neo4j Browser is GPL-3.0 and Space is MIT, so no Neo4j source, logo, icons or name is copied. Only the interaction design is reused. The layout uses `d3-force`, `d3-zoom`, `d3-drag` and `d3-selection` (ISC).
+The look follows the Neo4j Browser graph view: circle nodes, named arrows, a force layout, double-click to expand, a ring menu and a right-hand details panel. **All code is written for Space.** Neo4j Browser is GPL-3.0 and Space is MIT, so no Neo4j source, logo, icons or name is copied. Only the interaction design is reused. The layout uses `d3-force` (ISC), computed synchronously before paint. React draws the SVG and handles zoom and drag, so no other d3 module is needed.
 
 Out of scope: a Knowledge graph view, graph search, and editing the Markdown notes (the existing editor stays as it is).
 

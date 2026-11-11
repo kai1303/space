@@ -176,6 +176,28 @@ Verified on 2026-11-03:
 These checks use local test data; no external memory service or agent inference was
 invoked, and no production, load or deployment verification is implied.
 
+## Memory graph
+
+The Memory dialog opens on a **Graph** view. **Notes** holds the Markdown editor described above. The graph works while Markdown notes are off and needs only channel membership.
+
+```
+(#channel) ──HAS──► (thread) ──HAS_SESSION──► (agent session)
+```
+
+- Click a node to see its summary, revision, writer, checkpoint text, sources and size in the right panel.
+- Double-click a thread to show or hide its sessions. The ring menu offers Expand/Collapse, Open and Hide.
+- Threads with a checkpoint in the last 7 days appear, 20 at first and 50 per **Load more threads**.
+- Channel managers can edit a thread or session checkpoint. A save is a normal revision, so a stale save returns `409`, keeps the draft and shows the newer text. Ended sessions can't be edited.
+- Every checkpoint insert sends a channel live update (migration `087_memory_updates.sql`), so open graphs refresh without polling.
+
+| Method | Path | Rule |
+| --- | --- | --- |
+| GET | `/v1/channels/:channelId/memory/layers?after=&limit=` | Member |
+| GET / POST | `/v1/channels/:channelId/threads/:threadId/memory` | Member reads, manager saves |
+| GET / POST | `/v1/channels/:channelId/agent-sessions/:sessionId/memory` | Member who can open the session reads, manager saves |
+
+Save bodies are `{ revision, summary, content }`. The server anchors the save to the thread's latest message and records the person as the writer. The view is drawn by `@space/ui/graph` (`GraphCanvas`), which uses `d3-force` for layout. Its look follows Neo4j Browser's graph view, but none of Neo4j's GPL code is used.
+
 ## Thread working memory
 
 [Thread working memory](./thread-working-memory.md) is available independently of
