@@ -152,9 +152,9 @@ it('Spacebot routes to a real channel with an installed agent and does not invok
 
 it.each([
   ['offline', 'Offline', /This agent is offline/],
-  ['auth_required', 'Sign-in required', /Sign in to this agent/],
-  ['error', 'Connection needs attention', /connection needs attention before/],
-  [undefined, 'Status unavailable', /availability could not be confirmed/],
+  ['auth_required', 'Sign in', /Sign in to this agent/],
+  ['error', 'Needs attention', /connection needs attention before/],
+  [undefined, 'Unknown', /availability could not be confirmed/],
 ])('Spacebot gives an honest connection action for status %s', async (status, label, guidance) => {
   api.request.mockImplementation(async (path: string) => path.includes('/participants')
     ? { items: people.map(person => person.kind === 'agent' ? { ...person, status } : person), next_cursor: null } : response(path));
@@ -336,9 +336,12 @@ it('updates the agent status badge from presence and keeps disabled agents disti
   enabled = false;
   await act(async () => { await updates.get('workspace')?.refresh(); });
   expect(screen.getByRole('status').textContent).toBe('Disabled');
+  expect(screen.getByRole('status').querySelector('.sp-status-dot')).toBeNull();
   enabled = true; status = undefined;
   await act(async () => { await updates.get('workspace')?.refresh(); });
-  expect(screen.getByRole('status').textContent).toBe('Status unavailable');
+  expect(screen.getByRole('status').textContent).toBe('Unknown');
+  expect(screen.getByRole('status').getAttribute('data-state')).toBe('unknown');
+  expect(screen.getByRole('status').querySelector('.sp-status-dot')).toBeTruthy();
 });
 
 it('manages workspace MCP servers and drops credentials when the viewer loses the admin role', async () => {
