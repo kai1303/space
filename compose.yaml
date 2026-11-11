@@ -91,7 +91,7 @@ services:
       NATS_URL: nats://nats:4222
       TYPESENSE_URL: http://typesense:8108
       TYPESENSE_API_KEY: ${TYPESENSE_API_KEY:-space_local_search}
-      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      XAI_API_KEY: ${XAI_API_KEY:-}
       CALL_STUN_URLS: ${CALL_STUN_URLS:-}
       CALL_TURN_URLS: ${CALL_TURN_URLS:-}
       CALL_TURN_SECRET: ${CALL_TURN_SECRET:-}

@@ -19,34 +19,45 @@ const summaries: { summary: string; messages: { speaker: string; text: string }[
 let replySummary = '';
 let onSummarize = async () => {};
 let onGenerate = async () => {};
+function completedText(text: string) {
+  return Response.json({
+    status: 'completed',
+    output: [
+      { type: 'reasoning', summary: [] },
+      { type: 'message', role: 'assistant', content: [{ type: 'output_text', text }] },
+    ],
+  });
+}
+
 before(async () => {
   assert.ok(url);
   await admin.query(`CREATE SCHEMA ${schema}`);
   await migrate(pool);
-  process.env.GROQ_API_KEY = 'test-groq-key';
+  process.env.XAI_API_KEY = 'test-xai-key';
   const realFetch = globalThis.fetch;
   mock.method(globalThis, 'fetch', async (...[input, init]: Parameters<typeof fetch>) => {
-    if (String(input) !== 'https://api.groq.com/openai/v1/chat/completions') {
+    if (String(input) !== 'https://api.x.ai/v1/responses') {
       if (init?.headers && new Headers(init.headers).has('authorization')) throw new Error('unexpected provider endpoint');
       return realFetch(input, init);
     }
     const body = String(init?.body), payload = JSON.parse(body);
-    assert.equal(new Headers(init?.headers).get('authorization'), 'Bearer test-groq-key');
-    assert.equal(payload.model, 'openai/gpt-oss-20b');
-    assert.equal(payload.reasoning_effort, 'low');
-    assert.equal(payload.max_completion_tokens, 256);
+    assert.equal(new Headers(init?.headers).get('authorization'), 'Bearer test-xai-key');
+    assert.equal(payload.model, 'grok-4.3');
+    assert.deepEqual(payload.reasoning, { effort: 'none' });
+    assert.equal(payload.store, false);
+    assert.equal(payload.max_output_tokens, 256);
     assert.ok(Buffer.byteLength(body) <= 12288);
-    const data = JSON.parse(payload.messages[1].content);
-    if (payload.messages[0].content.startsWith('Summarize')) {
+    const data = JSON.parse(payload.input[1].content);
+    if (payload.input[0].content.startsWith('Summarize')) {
       const number = summaries.push(data);
       await onSummarize();
-      return Response.json({ choices: [{ finish_reason: 'stop', message: { content: 'Earlier decision ' + number } }] });
+      return completedText('Earlier decision ' + number);
     }
     replySummary = data.summary ?? '';
     context = data.messages ?? data;
     calls++;
     await onGenerate();
-    return Response.json({ choices: [{ finish_reason: 'stop', message: { content: 'Can you send the link?' } }] });
+    return completedText('Can you send the link?');
   });
   app = createApi(new PostgresStore(pool), { allowDevelopmentTokens: true });
 });
@@ -107,13 +118,31 @@ test('suggests from the newest 50 visible thread messages and checks access acro
 test('requires a hosted key and fits all 50 long messages into the prompt budget', async () => {
   assert.equal(replySuggestionProvider({}), undefined);
   onGenerate = async () => {};
-  const generate = replySuggestionProvider({ GROQ_API_KEY: 'test-groq-key' })!;
+  const generate = replySuggestionProvider({ XAI_API_KEY: 'test-xai-key' });
+  assert.ok(generate, 'an xAI key enables hosted suggestions');
   const messages = Array.from({ length: 50 }, (_, index) => ({
     speaker: 'Member ' + index, text: index + '💬'.repeat(500),
   }));
   assert.ok(await generate(messages, new AbortController().signal));
   assert.equal(context.length, 50);
   context.forEach((item, index) => assert.ok(item.text.startsWith(String(index))));
+});
+
+test('withholds incomplete and refused xAI replies', async t => {
+  const generate = replySuggestionProvider({ XAI_API_KEY: 'test-xai-key' })!;
+  for (const [status, content] of [
+    ['incomplete', [{ type: 'output_text', text: 'Partial reply' }]],
+    ['completed', [{ type: 'refusal', refusal: 'Declined' }]],
+  ] as const) {
+    const fetch = t.mock.method(globalThis, 'fetch', () => Response.json({
+      status, output: [{ type: 'message', role: 'assistant', content }],
+    }));
+    try {
+      assert.equal(await generate([{ speaker: 'me', text: 'Hello' }], new AbortController().signal), null);
+    } finally {
+      fetch.mock.restore();
+    }
+  }
 });
 
 test('starts at 51, preserves a long first message, and discards an in-flight summary after erasure', async () => {

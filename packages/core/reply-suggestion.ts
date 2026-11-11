@@ -6,9 +6,10 @@ const summaryInstructions = 'Summarize earlier workplace thread messages for use
 const budget = 12 * 1024;
 
 function prompt(instructions: string, data: unknown) {
-  return JSON.stringify({ model: 'openai/gpt-oss-20b', stream: false,
-    reasoning_effort: 'low', include_reasoning: false, max_completion_tokens: 256,
-    messages: [{ role: 'system', content: instructions }, { role: 'user', content: JSON.stringify(data) }] });
+  return JSON.stringify({
+    model: 'grok-4.3', store: false, reasoning: { effort: 'none' }, max_output_tokens: 256,
+    input: [{ role: 'system', content: instructions }, { role: 'user', content: JSON.stringify(data) }],
+  });
 }
 
 function excerpts(messages: Turn[], limit: number) {
@@ -19,16 +20,24 @@ function excerpts(messages: Turn[], limit: number) {
 }
 
 async function complete(apiKey: string, body: string, signal: AbortSignal, maxLength: number) {
-  const endpoint = 'https://api.groq.com/openai/v1/chat/completions';
+  const endpoint = 'https://api.x.ai/v1/responses';
   const result = await postNavigatorJson({ endpoint, apiKey, body, signal, timeoutMs: 10000, fetcher: fetch });
-  const choice = result?.choices?.[0];
-  if (choice?.finish_reason !== 'stop' || typeof choice.message?.content !== 'string') return null;
-  const content = choice.message.content.trim();
+  if (result?.status !== 'completed' || !Array.isArray(result.output)) return null;
+  const chunks: string[] = [];
+  for (const item of result.output) {
+    if (item?.type !== 'message' || item.role !== 'assistant') continue;
+    if (!Array.isArray(item.content)) return null;
+    for (const part of item.content) {
+      if (part?.type !== 'output_text' || typeof part.text !== 'string') return null;
+      chunks.push(part.text);
+    }
+  }
+  const content = chunks.join('').trim();
   return content && content.length <= maxLength && !/[\x00-\x08\x0b\x0c\x0e-\x1f]/.test(content) ? content : null;
 }
 
 export function replySuggestionProvider(env: NodeJS.ProcessEnv) {
-  const apiKey = env.GROQ_API_KEY?.trim();
+  const apiKey = env.XAI_API_KEY?.trim();
   if (!apiKey) return undefined;
   return async (messages: Turn[], signal: AbortSignal, summary = '', viewer = '') => {
     for (let limit = 1000; limit > 0; limit = Math.floor(limit / 2)) {
@@ -41,7 +50,7 @@ export function replySuggestionProvider(env: NodeJS.ProcessEnv) {
 }
 
 export function threadSummaryProvider(env: NodeJS.ProcessEnv) {
-  const apiKey = env.GROQ_API_KEY?.trim();
+  const apiKey = env.XAI_API_KEY?.trim();
   if (!apiKey) return undefined;
   return async (messages: Turn[], previous: string, signal: AbortSignal) => {
     // Compact a chronological prefix that fits. The next batch resumes at the first unconsumed turn.

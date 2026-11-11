@@ -62,7 +62,7 @@
       "persistent": true,
       "interruptible": true,
       "passThroughEnv": [
-        "GROQ_API_KEY",
+        "XAI_API_KEY",
         "DATABASE_URL",
         "HOST",
         "PORT",
@@ -102,7 +102,7 @@
       "cache": false,
       "persistent": true,
       "passThroughEnv": [
-        "GROQ_API_KEY",
+        "XAI_API_KEY",
         "DATABASE_URL",
         "HOST",
         "PORT",

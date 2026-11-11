@@ -22,7 +22,7 @@ ownership retain their existing deterministic routing.
 
 ## Suggested replies in long threads
 
-The thread composer requests a draft when it needs a suggestion. With Groq configured,
+The thread composer requests a draft when it needs a suggestion. With `XAI_API_KEY` configured on the API server,
 threads with up to 50 visible messages use recent message excerpts directly. In longer
 threads the API first folds older text into a rolling summary, then sends the summary
 and the latest 50 turns to the reply model. Private agent-session messages, deleted
