@@ -1,0 +1,25 @@
+{
+  "name": "@space/capacitor",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "sync": "cap sync",
+    "ios": "cap sync ios && cap run ios",
+    "android": "cap sync android && cap run android",
+    "open:ios": "cap open ios",
+    "open:android": "cap open android",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "@capacitor/android": "^8.6.0",
+    "@capacitor/core": "^8.6.0",
+    "@capacitor/ios": "^8.6.0"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^8.6.0",
+    "@types/node": "22",
+    "typescript": "^5.9"
+  }
+}
