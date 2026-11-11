@@ -2,7 +2,7 @@
 .dm-layout > .dm-inbox { width: clamp(320px, var(--chat-sidebar-width), 440px); min-width: 320px; background-image: linear-gradient(var(--sp-sidebar-surface), var(--sp-sidebar-surface)), var(--sp-chrome-gradient); background-attachment: fixed; color: var(--sp-sidebar-content); border-right: 1px solid var(--sp-sidebar-outline); overflow-y: auto; }
 .dm-inbox .dm-heading { color: var(--sp-sidebar-title); }
 .dm-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 56px; padding: 8px 14px; }
-.dm-heading h2 { margin: 0; font-size: 18px; letter-spacing: -.3px; flex: 1; white-space: nowrap; }
+.dm-heading h2 { margin: 0; font-size: 18px; letter-spacing: -.3px; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dm-filter, .dm-recipient-search { display: flex; align-items: center; gap: 9px; border: 1px solid var(--sp-border, #555); border-radius: 7px; padding: 9px 12px; }
 .dm-filter { margin: 0 14px 10px; padding: 6px 10px; font-size: 13px; background: var(--sp-sidebar-item-hover); border-color: var(--sp-sidebar-outline); }
 .dm-filter input, .dm-recipient-search input { min-width: 0; width: 100%; border: 0; outline: 0; background: transparent; color: inherit; font: inherit; }

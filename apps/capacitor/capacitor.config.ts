@@ -8,9 +8,8 @@ const config: CapacitorConfig = {
   appId: 'dev.space.app',
   appName: 'Space',
   webDir: 'www',
+  // The web app pads itself with env(safe-area-inset-*), so the web view runs edge to edge.
   server: { url: server.url, cleartext: server.cleartext, errorPath: 'offline.html' },
-  // Keep the web app below the status bar and above the home indicator.
-  ios: { contentInset: 'always' },
 };
 
 export default config;

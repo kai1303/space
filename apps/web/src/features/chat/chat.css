@@ -248,3 +248,10 @@
 .chat-channel-tabs [data-drop-side]::before { content:''; position:absolute; top:6px; bottom:6px; width:3px; border-radius:2px; background:var(--sp-info); }
 .chat-channel-tabs [data-drop-side=before]::before { left:-6px; }
 .chat-channel-tabs [data-drop-side=after]::before { right:-6px; }
+/* Phones: keep clear of the notch, status bar and home indicator (index.html sets viewport-fit=cover). */
+.chat-app{padding:env(safe-area-inset-top) env(safe-area-inset-right) 0 env(safe-area-inset-left);box-sizing:border-box}
+.chat-rail{padding-bottom:max(12px,env(safe-area-inset-bottom))}
+.chat-main-area{padding-bottom:env(safe-area-inset-bottom);background:var(--sp-surface)}
+/* iOS zooms into any focused field below 16px, which pushes the layout past the screen edge. */
+@media(pointer:coarse){.chat-app input,.chat-app textarea,.chat-app select,.chat-app [contenteditable=true],.chat-login input{font-size:16px}}
+@media(max-width:720px){.chat-sidebar{top:calc(40px + env(safe-area-inset-top));left:calc(52px + env(safe-area-inset-left));bottom:env(safe-area-inset-bottom)}}
