@@ -51,7 +51,7 @@ test('a real MCP agent reads context, saves extracted knowledge, searches, updat
   const message = await api(a.owner_token, 'POST', `/channels/${a.channel_id}/messages`, { client_message_id: randomUUID(), text: 'We decided to use PostgreSQL because we need transactions.' }, 201);
   const client = await connect(grant.token);
   try {
-    assert.deepEqual((await client.listTools()).tools.map(tool => tool.name).sort(), ['memory_context', 'memory_forget', 'memory_read', 'memory_remember', 'memory_search', 'memory_write']);
+    assert.deepEqual((await client.listTools()).tools.map(tool => tool.name).sort(), ['channel_memory', 'memory_context', 'memory_forget', 'memory_read', 'memory_remember', 'memory_search', 'memory_write', 'session_checkpoint', 'session_memory', 'thread_memory']);
     const context = data(await client.callTool({ name: 'memory_context', arguments: {} }));
     assert.equal(context.messages[0].id, message.id);
     const entry = { id: randomUUID(), kind: 'decision', title: 'Database choice', content: 'Use PostgreSQL for transactional storage.', message_ids: [message.id] };
@@ -80,7 +80,7 @@ test('read-only keys cannot write, cross-channel evidence is denied, and revocat
   const read = await api(a.owner_token, 'POST', `${a.path}/connections`, { name: 'Reader', access: 'read' }, 201);
   const client = await connect(read.token);
   try {
-    assert.deepEqual((await client.listTools()).tools.map(tool => tool.name).sort(), ['memory_context', 'memory_read', 'memory_search']);
+    assert.deepEqual((await client.listTools()).tools.map(tool => tool.name).sort(), ['channel_memory', 'memory_context', 'memory_read', 'memory_search', 'session_memory', 'thread_memory']);
     await assert.rejects(client.callTool({ name: 'memory_write', arguments: { content: 'not allowed', revision: '0'.repeat(64) } }), /not found/);
     assert.equal((await client.callTool({ name: 'memory_read', arguments: { channel_id: b.channel_id } })).isError, true);
     await api(a.owner_token, 'POST', `${a.path}/connections/${read.connection.id}/revoke`, {});

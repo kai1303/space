@@ -153,3 +153,50 @@ test('thread memory lists sessions without content; session memory checks the in
   await pool.query(`UPDATE agent_sessions SET state='ended' WHERE id=$1`, [session]);
   await assert.rejects(readSessionMemory(db(), a.channel_id, session, a.installation_id), (e: any) => e.code === 'session_ended');
 });
+
+async function channelKey(token: string, channel: string, access: 'read' | 'contribute' | 'write', installation?: string) {
+  const path = `/channels/${channel}/memory`;
+  await api(token, 'POST', `${path}/settings`, { enabled: true });
+  if (installation) await api(token, 'POST', `${path}/agents/${installation}`, { access: access === 'read' ? 'read' : 'contribute' });
+  return (await api(token, 'POST', `${path}/connections`, { name: `Key ${randomUUID().slice(0, 8)}`, access, ...(installation ? { installation_id: installation } : {}) }, 201)).token as string;
+}
+
+test('agent walks channel → thread → session over MCP and is fenced at each step', async () => {
+  const a = await bootstrap(pool), b = await bootstrap(pool);
+  const root = await post(a.owner_token, a.channel_id, 'Dedupe fix');
+  await seedCheckpoint(a.channel_id, root.thread_id, root, a.owner_id, 'Dedupe fix · in progress');
+  const secondInstallation = randomUUID();
+  await pool.query(`INSERT INTO agent_installations(id,workspace_id,owner_id,definition_id,connector_id)
+    SELECT $1,workspace_id,owner_id,definition_id,connector_id FROM agent_installations WHERE id=$2`, [secondInstallation, a.installation_id]);
+  const mine = await addSession(a, root.thread_id);
+  const theirs = await addSession(a, root.thread_id, secondInstallation);
+  const foreign = await post(b.owner_token, b.channel_id, 'Other workspace');
+  const client = await connect(await channelKey(a.owner_token, a.channel_id, 'contribute', a.installation_id));
+  try {
+    const names = (await client.listTools()).tools.map(t => t.name);
+    for (const name of ['channel_memory', 'thread_memory', 'session_memory', 'session_checkpoint']) assert.ok(names.includes(name), name);
+    const index = data(await client.callTool({ name: 'channel_memory', arguments: {} }));
+    assert.equal(index.nodes[0].summary, 'Dedupe fix · in progress');
+    const thread = data(await client.callTool({ name: 'thread_memory', arguments: { thread_id: index.nodes[0].ref.id } }));
+    assert.equal(thread.sessions.length, 2);
+    data(await client.callTool({ name: 'session_memory', arguments: { session_id: mine } }));
+    assert.equal(code(await client.callTool({ name: 'session_memory', arguments: { session_id: theirs } })), 'session_private');
+    // store.connected maps any 404 inside work to 401, so a foreign ref reveals nothing about existence.
+    assert.equal(code(await client.callTool({ name: 'thread_memory', arguments: { thread_id: foreign.thread_id } })), 'unauthorized');
+    assert.equal(code(await client.callTool({ name: 'session_memory', arguments: { session_id: randomUUID() } })), 'unauthorized');
+    await pool.query('DELETE FROM channel_members WHERE channel_id=$1 AND user_id=$2', [a.channel_id, a.owner_id]);
+    const removed = await client.callTool({ name: 'channel_memory', arguments: {} }).catch(error => ({ isError: true, content: [{ text: String(error) }] }));
+    assert.equal(removed.isError, true);
+  } finally { await client.close(); }
+});
+
+test('thread keys do not get the channel layer tools', async () => {
+  const a = await bootstrap(pool);
+  const root = await post(a.owner_token, a.channel_id, 'Start');
+  const client = await connect(await threadKey(a.owner_token, a.channel_id, root.thread_id, 'read'));
+  try {
+    const names = (await client.listTools()).tools.map(t => t.name);
+    assert.ok(!names.includes('channel_memory'));
+    assert.ok(!names.includes('session_memory'));
+  } finally { await client.close(); }
+});
