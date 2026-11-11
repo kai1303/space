@@ -116,3 +116,10 @@
   .notification-tabs .sp-tab-indicator{display:none}
   .notification-tabs.sp-tabs button[aria-selected=true]{background:var(--sp-text);color:var(--sp-surface);border-color:var(--sp-text)}
 }
+/* Phones: one slim row, like Slack's Activity: the Unreads switch and an icon-only Mark all as read. */
+@media(max-width:720px){
+  .notification-toolbar{padding:4px 16px 8px;gap:8px}
+  .notification-toolbar>span{display:none}
+  .notification-toolbar .sp-button{margin-left:auto;width:36px;min-width:36px;padding:0;font-size:0;gap:0;justify-content:center}
+  .notification-toolbar .sp-button svg{width:20px;height:20px}
+}
