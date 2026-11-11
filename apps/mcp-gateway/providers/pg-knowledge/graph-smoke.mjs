@@ -13,6 +13,7 @@ import { bootstrap } from '@space/postgres/bootstrap';
 import { ChatStore } from '@space/postgres/chat';
 import { listNoteTitles, saveNoteByTitle } from '@space/postgres/knowledge-notes';
 import { searchRelated } from './graph-related.mjs';
+import { searchThreads } from './thread-search.mjs';
 import { embed } from './graph-source.mjs';
 
 const schema = 'graph_test_' + randomUUID().replaceAll('-', '');
@@ -82,6 +83,15 @@ try {
   await until(async () => (await count('m_messages')) === 4);
   assert.equal(await count('m_messages', `id='${replyC.id}'`), 1);
   await until(async () => (await index.query('SELECT lsn=published_lsn AS same FROM kb.graph_position WHERE slot=$1', [slot])).rows[0].same);
+
+  await source.query('INSERT INTO knowledge_thread_channels(workspace_id,channel_id) VALUES($1,$2)', [seed.workspace_id, seed.channel_id]);   // thread search opt-in
+  await until(async () => (await count('m_messages', 'knowledge')) === 4);
+  const [question] = await embed(['why are customers charged twice on retry']);
+  const found = await searchThreads(reader, source, ctx(seed.owner_id), 'why are customers charged twice on retry', question, 3);
+  assert.ok(found.some(h => h.ref.recordId === 'message/' + rootA.id), 'knowledge thread search reads the merged store');
+  assert.deepEqual(await searchThreads(reader, source, ctx(randomUUID()), 'charged twice', question, 3), [], 'and keeps its own access check');
+  await source.query('DELETE FROM knowledge_thread_channels WHERE channel_id=$1', [seed.channel_id]);
+  await until(async () => (await count('m_messages', 'knowledge')) === 0);
 
   await source.query('UPDATE channels SET memory_enabled=false WHERE id=$1', [seed.channel_id]);   // switch off: messages leave
   await until(async () => (await count('m_messages')) === 0);

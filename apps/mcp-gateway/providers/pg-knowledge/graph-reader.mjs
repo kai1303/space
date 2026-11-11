@@ -37,7 +37,8 @@ async function prepare() {
     ${q('channels')} (id, workspace_id, name, private, kind, memory_enabled, knowledge_enabled),
     ${q('messages')} (id, workspace_id, channel_id, thread_id, agent_session_id, search_revision, deleted_at, retained_at),
     ${q('knowledge_notes')} (id, workspace_id, channel_id, kind, title, evidence, revision, removed_at),
-    ${q('agent_sessions')} (id, workspace_id, origin_thread_id, title, state)`);
+    ${q('agent_sessions')} (id, workspace_id, origin_thread_id, title, state),
+    ${q('knowledge_thread_channels')}`);
   let { rows: [state] } = await source.query('SELECT wal_status FROM pg_replication_slots WHERE slot_name=$1', [slot]);
   if (state?.wal_status === 'lost') {
     console.error('Replication slot was lost; rebuilding the graph');
@@ -57,15 +58,17 @@ async function prepare() {
 
 // Channels whose switches differ from the stored copy need their messages brought in line.
 async function channelsToResync(batch) {
+  // A thread-search opt-in or opt-out changes the knowledge flag of every message in that channel.
+  const optIns = batch.filter(c => c.table === 'knowledge_thread_channels').map(c => ({ id: c.row.channel_id, version: lsnToVersion(c.lsn) }));
   const channels = batch.filter(c => c.table === 'channels' && c.op !== 'delete' && c.row.kind === 'channel');
-  if (!channels.length) return [];
+  if (!channels.length) return optIns;
   const { rows } = await index.query('SELECT id, memory_enabled, knowledge_enabled FROM kb.m_channels WHERE id=ANY($1::text[])', [channels.map(c => c.row.id)]);
   const known = new Map(rows.map(r => [r.id, r]));
-  return channels.filter(c => {
+  return [...optIns, ...channels.filter(c => {
     const k = known.get(c.row.id);
     return k ? k.memory_enabled !== c.row.memory_enabled || k.knowledge_enabled !== c.row.knowledge_enabled
              : c.row.memory_enabled || c.row.knowledge_enabled;
-  }).map(c => ({ id: c.row.id, version: lsnToVersion(c.lsn) }));
+  }).map(c => ({ id: c.row.id, version: lsnToVersion(c.lsn) }))];
 }
 
 async function flush(position) {
@@ -95,7 +98,7 @@ function schedulePublish() {
 async function onMessage(replication, lsn, message) {
   if (message.tag === 'begin') buffer = [];
   else if ((message.tag === 'insert' || message.tag === 'update' || message.tag === 'delete')
-      && message.relation.schema === schema && TABLES.includes(message.relation.name)) {
+      && message.relation.schema === schema && (TABLES.includes(message.relation.name) || message.relation.name === 'knowledge_thread_channels')) {
     buffer.push({ table: message.relation.name, op: message.tag, lsn, row: message.tag === 'delete' ? (message.old ?? message.key) : message.new });
     if (buffer.length >= CHUNK) await flush();            // partial chunk: guarded writes, position unchanged
   } else if (message.tag === 'commit') {
