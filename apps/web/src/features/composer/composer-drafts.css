@@ -3,3 +3,15 @@
 .sp-workspace-sidebar .sp-sidebar-utilities{flex:0 0 auto;overflow:visible;padding:4px 8px 12px}.sp-sidebar-utilities button[aria-current=page]{background:var(--sp-sidebar-selection);color:var(--sp-sidebar-content-active)}
 
 .composer-drafts>.sp-tabs{padding-inline:24px}
+.scheduled-messages{list-style:none;padding:0 24px;margin:16px 0}
+.scheduled-messages>li{margin-bottom:12px}
+.scheduled-message{display:flex;flex-direction:column;gap:8px;padding:16px 18px;border:1px solid var(--sp-border);border-radius:8px;background:var(--sp-surface);color:var(--sp-text)}
+.scheduled-message-target{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px;padding:0;border:0;background:none;color:inherit;font:inherit;text-align:left;cursor:pointer}
+.scheduled-message-when{display:inline-flex;align-items:center;gap:5px;color:var(--sp-text-secondary);font-size:13px}
+.scheduled-message-when.is-failed{color:var(--sp-danger)}
+.scheduled-message-files{margin:0;color:var(--sp-text-secondary);font-size:13px}
+.scheduled-message-actions,.scheduled-message-edit{display:flex;flex-wrap:wrap;align-items:flex-end;gap:8px}
+.scheduled-message-edit label{display:flex;flex-direction:column;gap:6px;font-size:13px;font-weight:700}
+.scheduled-message-edit input{font:16px var(--sp-font-sans);padding:6px 8px;border:1px solid var(--sp-border-strong);border-radius:6px;background:var(--sp-surface);color:var(--sp-text)}
+.scheduled-message-edit p{flex-basis:100%;margin:0;color:var(--sp-danger);font-size:13px}
+@media(max-width:720px){.scheduled-messages{padding:0 12px}.scheduled-message{padding:12px}}

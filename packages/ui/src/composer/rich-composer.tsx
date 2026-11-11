@@ -8,6 +8,7 @@ import { emojiCompletion, emojiDocument, emojiNative, emojiPreferences } from ".
 import type Quill from "quill";
 import { Reveal } from "../motion/reveal.js";
 import { isDefaultComposerSendKey } from "./composer-keyboard.js";
+import { ScheduleSend, openScheduleMenu } from "./schedule-send.js";
 import { MAX_ASSET_BYTES, MAX_MESSAGE_ASSETS, MAX_MESSAGE_DOCUMENT_BYTES } from "@space/contracts";
 import {
   PaperPlaneRight,
@@ -52,6 +53,7 @@ export function RichComposer({
   onDraftChange,
   onAttachmentsChange,
   onSend,
+  onSchedule,
   mentions = [],
   findMentions,
   plainText = false,
@@ -82,6 +84,8 @@ export function RichComposer({
     attachments: Attachment[],
     options?: { broadcast_confirmed: boolean },
   ) => void | Promise<void>;
+  /** Shows Slack's schedule menu beside Send. Resolves once the server has stored the schedule. */
+  onSchedule?: (text: string, document: RichDocument, attachments: Attachment[], at: Date) => Promise<void>;
   mentions?: string[];
   findMentions?: FindMentions;
   plainText?: boolean;
@@ -97,8 +101,8 @@ export function RichComposer({
 }) {
   const mount = useRef<HTMLDivElement>(null);
   const editor = useRef<Quill | null>(null);
-  const callbacks = useRef({ onDraftChange, onAttachmentsChange, onSend });
-  callbacks.current = { onDraftChange, onAttachmentsChange, onSend };
+  const callbacks = useRef({ onDraftChange, onAttachmentsChange, onSend, onSchedule });
+  callbacks.current = { onDraftChange, onAttachmentsChange, onSend, onSchedule };
   const initial = useRef(defaultValue);
   const labels = useRef({ channel, placeholder });
   labels.current = { channel, placeholder };
@@ -202,7 +206,12 @@ export function RichComposer({
   const mentionKeys = useRef(mentionsUI.key); mentionKeys.current = mentionsUI.key;
   const [broadcastWarning, setBroadcastWarning] = useState(false);
   const sendRef = useRef<() => void>(() => {});
-  async function send(confirmed = false) {
+  // Touch long-press on Send opens the schedule menu; the click that ends the press must not also send.
+  const holdTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const heldSend = useRef(false);
+  useEffect(() => () => clearTimeout(holdTimer.current), []);
+  // A scheduled send passes `at`; it shares validation, clearing and error handling with Send now.
+  async function send(confirmed = false, at?: Date) {
     const q = editor.current;
     if (!q || pending.current || blocked || filesRef.current.some(file => file.status === "uploading" || file.status === "error")) return;
     const raw = q.getText();
@@ -221,14 +230,15 @@ export function RichComposer({
     }
     // Keep stored drafts identical to the submitted document while navigating during send.
     if (JSON.stringify(normalizeDocument(q.getContents())) !== JSON.stringify(document)) q.setContents(document.ops, "user");
-    if (!confirmed && mentionsUI.memberCount >= 6 && findMentions && documentMentions(document).some(ref => ref.kind === 'broadcast') && scope === 'channel') { setBroadcastWarning(true); return; }
+    if (!confirmed && !at && mentionsUI.memberCount >= 6 && findMentions && documentMentions(document).some(ref => ref.kind === 'broadcast') && scope === 'channel') { setBroadcastWarning(true); return; }
     pending.current = true;
     setSending(true);
     setError("");
     q.disable();
     try {
       const plainText = document.ops.map(op => op.insert).join("").trim();
-      if (confirmed) await callbacks.current.onSend(plainText, document, filesRef.current, { broadcast_confirmed: true });
+      if (at && callbacks.current.onSchedule) await callbacks.current.onSchedule(plainText, document, filesRef.current, at);
+      else if (confirmed) await callbacks.current.onSend(plainText, document, filesRef.current, { broadcast_confirmed: true });
       else await callbacks.current.onSend(plainText, document, filesRef.current);
       if (editor.current !== q) return;
       q.setText("");
@@ -599,10 +609,20 @@ export function RichComposer({
             className="sp-send-rich"
             disabled={!ready || sending || blocked || filesPending || (!text.trim() && !files.length)}
             data-send-disabled={sending && ready && !filesPending && Boolean(text.trim() || files.length) || undefined}
-            onClick={() => void send()}
+            onClick={() => { if (heldSend.current) { heldSend.current = false; return; } void send(); }}
+            onPointerDown={onSchedule ? event => {
+              if (event.pointerType !== "touch") return;
+              const group = event.currentTarget.parentElement;
+              clearTimeout(holdTimer.current);
+              holdTimer.current = setTimeout(() => { heldSend.current = true; openScheduleMenu(group); }, 450);
+            } : undefined}
+            onPointerUp={() => clearTimeout(holdTimer.current)}
+            onPointerLeave={() => clearTimeout(holdTimer.current)}
+            onContextMenu={onSchedule ? event => event.preventDefault() : undefined}
           >
             {submitLabel ?? <PaperPlaneRight size={19} weight="fill" />}
           </IconButton>
+          {onSchedule && <ScheduleSend disabled={!ready || sending || blocked || filesPending || (!text.trim() && !files.length)} onSchedule={at => void send(false, at)} />}
           </div>
         </div>
       </div>

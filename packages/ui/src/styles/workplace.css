@@ -658,8 +658,7 @@
 .sp-graph-ring-item:hover .sp-graph-ring-slice, .sp-graph-ring-item:focus-visible .sp-graph-ring-slice { fill: #6b7079; }
 .sp-graph-ring-icon { fill: none; stroke: #fff; stroke-width: 1.6px; stroke-linecap: round; stroke-linejoin: round; pointer-events: none; }
 .sp-graph-ring-item text { font-size: 14px; fill: #fff; pointer-events: none; }
-@media (prefers-reduced-motion: no-preference) { .sp-graph-ring { animation: sp-graph-ring-in 200ms ease-out; } }
-@keyframes sp-graph-ring-in { from { opacity: 0; } to { opacity: 1; } }
+
 .sp-graph-details { position: absolute; top: 8px; right: 8px; width: min(300px, 45%); max-height: calc(100% - 16px); overflow: auto; display: flex; flex-direction: column; gap: 6px; padding: 8px; border: 1px solid var(--sp-border); border-radius: var(--sp-radius-md); background: color-mix(in srgb, var(--sp-surface-raised) 94%, transparent); box-shadow: 0 6px 24px rgb(0 0 0 / 0.18); }
 .sp-graph-details.is-collapsed { width: auto; }
 .sp-graph-details-toggle { align-self: flex-end; border: 0; background: transparent; color: var(--sp-text-secondary); font-size: 12px; cursor: pointer; }
