@@ -46,6 +46,10 @@
       "types": "./dist/emoji/index.d.ts",
       "import": "./dist/emoji/index.js"
     },
+    "./graph": {
+      "types": "./dist/graph/index.d.ts",
+      "import": "./dist/graph/index.js"
+    },
     "./motion": {
       "types": "./dist/motion/index.d.ts",
       "import": "./dist/motion/index.js"
@@ -145,6 +149,7 @@
     "@phosphor-icons/react": "^2.1.10",
     "@space/contracts": "workspace:^",
     "@yusufceng1z/ding-react": "0.0.4",
+    "d3-force": "^3.0.0",
     "motion": "^14.9.0",
     "quill": "2.0.3",
     "react-markdown": "^10.1.0",
@@ -154,6 +159,7 @@
   "devDependencies": {
     "@testing-library/react": "^16.3.0",
     "@testing-library/user-event": "^14.6.1",
+    "@types/d3-force": "^3.0.10",
     "@types/hast": "3.0.5",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
