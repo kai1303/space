@@ -119,3 +119,18 @@ test('title list returns the newest 20 live notes', async () => {
   assert.equal(list.truncated, true);
   assert.equal(list.notes[0]!.title, 'Note 24');
 });
+
+test('managers turn knowledge notes on with their own route; grants and keys work with only Knowledge on', async () => {
+  const a = await bootstrap(pool);
+  const path = `/channels/${a.channel_id}/memory`;
+  assert.equal((await api(a.owner_token, 'GET', path)).knowledge_enabled, false);
+  await api(a.collaborator_token, 'POST', `${path}/knowledge`, { enabled: true }, 403);
+  await api(a.owner_token, 'POST', `${path}/knowledge`, { enabled: 'yes' }, 400);
+  const state = await api(a.owner_token, 'POST', `${path}/knowledge`, { enabled: true });
+  assert.equal(state.knowledge_enabled, true);
+  assert.equal(state.enabled, false, 'the memory switch is untouched');
+  await api(a.owner_token, 'POST', `${path}/agents/${a.installation_id}`, { access: 'contribute' });
+  await api(a.owner_token, 'POST', `${path}/connections`, { name: 'Notes key', access: 'contribute', installation_id: a.installation_id }, 201);
+  await api(a.owner_token, 'POST', `${path}/knowledge`, { enabled: false });
+  await api(a.owner_token, 'POST', `${path}/connections`, { name: 'Late key', access: 'read' }, 409);
+});

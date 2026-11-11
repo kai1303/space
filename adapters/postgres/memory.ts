@@ -9,7 +9,20 @@ import { sessionTransaction } from './session-concurrency.js';
 import { tokenHash } from './bootstrap.js';
 import { assertContextThread } from './thread-context.js';
 
-export type MemoryChannel = MemoryScope & { enabled: boolean; provider: string; can_manage: boolean };
+export type MemoryChannel = MemoryScope & { enabled: boolean; provider: string; can_manage: boolean; knowledge_enabled: boolean };
+export async function agentMemoryAccess(c: DbSession, channel: MemoryScope, installationId: string): Promise<{ access: AgentMemoryAccess; revision: number } | undefined> {
+  const rows = await c.execute<{ access: AgentMemoryAccess; revision: number; owner_id: string }>(sql`
+    SELECT g.access,g.revision,i.owner_id FROM agent_memory_grants g
+    JOIN agent_installations i ON i.id=g.installation_id AND i.workspace_id=g.workspace_id
+    LEFT JOIN agent_connections ac ON ac.installation_id=i.id
+    WHERE g.channel_id=${channel.channel_id} AND g.workspace_id=${channel.workspace_id} AND g.installation_id=${installationId}
+      AND g.access<>'none' AND i.enabled AND ac.revoked_at IS NULL
+      AND (ac.installation_id IS NOT NULL OR EXISTS (SELECT 1 FROM agent_grants ag JOIN agent_definitions d ON d.id=i.definition_id
+        WHERE ag.installation_id=i.id AND ag.channel_id=g.channel_id AND d.capabilities->'skills' ? ag.skill))`);
+  const grant = rows.rows[0];
+  if (!grant || !await hasChannelAccess(c, grant.owner_id, channel.workspace_id, channel.channel_id)) return undefined;
+  return { access: grant.access, revision: grant.revision };
+}
 export class MemoryStore {
   readonly db;
   constructor(pool: Pool) { this.db = database(pool); }
@@ -17,7 +30,7 @@ export class MemoryStore {
     const channel = await this.authorize(this.db, actor, channelId);
     const result = await work(channel, this.db);
     const current = await this.authorize(this.db, actor, channelId);
-    if (current.enabled !== channel.enabled || current.provider !== channel.provider) throw new AppError(409, 'memory_settings_changed');
+    if (current.enabled !== channel.enabled || current.provider !== channel.provider || current.knowledge_enabled !== channel.knowledge_enabled) throw new AppError(409, 'memory_settings_changed');
     return result;
   }
   private async authorize(c: DbSession, actor: string, channelId: string): Promise<MemoryChannel> {
@@ -27,7 +40,7 @@ export class MemoryStore {
     if (channel.kind === 'direct') throw new AppError(403, 'direct_message_memory_forbidden');
     const [member] = await c.select({ role: s.workspaceMembers.role, guest_type: s.workspaceMembers.guest_type }).from(s.workspaceMembers)
       .where(and(eq(s.workspaceMembers.workspace_id, channel.workspace_id), eq(s.workspaceMembers.user_id, actor), eq(s.workspaceMembers.active, true)));
-    return { workspace_id: channel.workspace_id, channel_id: id, enabled: channel.memory_enabled,
+    return { workspace_id: channel.workspace_id, channel_id: id, enabled: channel.memory_enabled, knowledge_enabled: channel.knowledge_enabled,
       provider: channel.memory_provider, can_manage: member?.guest_type === 'none' && (channel.created_by === actor || member.role === 'owner' || member.role === 'admin') };
   }
   private async manage<T>(actor: string, channelId: string, work: (channel: MemoryChannel, c: DbSession) => Promise<T>): Promise<T> {
@@ -56,25 +69,15 @@ export class MemoryStore {
       if (!channel.can_manage) throw new AppError(403, 'channel_management_forbidden');
       const [installation] = await c.select().from(s.agentInstallations).where(and(eq(s.agentInstallations.id, installationId), eq(s.agentInstallations.workspace_id, channel.workspace_id)));
       if (!installation) throw new AppError(404, 'not_found');
-      if (access !== 'none' && (!channel.enabled || !installation.enabled || !await hasChannelAccess(c, installation.owner_id, channel.workspace_id, channelId))) throw new AppError(403, 'memory_agent_forbidden');
+      if (access !== 'none' && ((!channel.enabled && !channel.knowledge_enabled) || !installation.enabled || !await hasChannelAccess(c, installation.owner_id, channel.workspace_id, channelId))) throw new AppError(403, 'memory_agent_forbidden');
       await c.insert(s.agentMemoryGrants).values({ workspace_id: channel.workspace_id, channel_id: channelId, installation_id: installationId, access })
         .onConflictDoUpdate({ target: [s.agentMemoryGrants.channel_id, s.agentMemoryGrants.installation_id], set: { access, revision: sql`${s.agentMemoryGrants.revision}+1` } });
       await c.insert(s.foundationEvents).values({ id: randomUUID(), workspace_id: channel.workspace_id, installation_id: installationId, actor_id: actor, type: 'memory.access_changed', payload: { channel_id: channelId, access } });
       return { access };
     });
   }
-  private async agentAccess(c: DbSession, channel: MemoryScope, installationId: string): Promise<{ access: AgentMemoryAccess; revision: number } | undefined> {
-    const rows = await c.execute<{ access: AgentMemoryAccess; revision: number; owner_id: string }>(sql`
-      SELECT g.access,g.revision,i.owner_id FROM agent_memory_grants g
-      JOIN agent_installations i ON i.id=g.installation_id AND i.workspace_id=g.workspace_id
-      LEFT JOIN agent_connections ac ON ac.installation_id=i.id
-      WHERE g.channel_id=${channel.channel_id} AND g.workspace_id=${channel.workspace_id} AND g.installation_id=${installationId}
-        AND g.access<>'none' AND i.enabled AND ac.revoked_at IS NULL
-        AND (ac.installation_id IS NOT NULL OR EXISTS (SELECT 1 FROM agent_grants ag JOIN agent_definitions d ON d.id=i.definition_id
-          WHERE ag.installation_id=i.id AND ag.channel_id=g.channel_id AND d.capabilities->'skills' ? ag.skill))`);
-    const grant = rows.rows[0];
-    if (!grant || !await hasChannelAccess(c, grant.owner_id, channel.workspace_id, channel.channel_id)) return undefined;
-    return { access: grant.access, revision: grant.revision };
+  private async agentAccess(c: DbSession, channel: MemoryScope, installationId: string) {
+    return agentMemoryAccess(c, channel, installationId);
   }
   async agentContext<T>(task: Pick<Task, 'installation_id' | 'requester_id' | 'thread_id'>, read: (channel: MemoryChannel) => Promise<T>): Promise<T | undefined> {
     const [thread] = await this.db.select({channel_id:s.threads.channel_id,workspace_id:s.threads.workspace_id,kind:s.channels.kind}).from(s.threads).innerJoin(s.channels,eq(s.channels.id,s.threads.channel_id)).where(eq(s.threads.id, task.thread_id));
@@ -97,6 +100,11 @@ export class MemoryStore {
     await c.update(s.channels).set({ memory_enabled: enabled, memory_provider: provider }).where(eq(s.channels.id, channel.channel_id));
     return Object.assign(channel, { enabled, provider });
   }
+  async configureKnowledge(c: DbSession, channel: MemoryChannel, enabled: boolean) {
+    if (!channel.can_manage) throw new AppError(403, 'channel_management_forbidden');
+    await c.update(s.channels).set({ knowledge_enabled: enabled }).where(eq(s.channels.id, channel.channel_id));
+    return Object.assign(channel, { knowledge_enabled: enabled });
+  }
   async connections(actor: string, channelId: string): Promise<{ items: MemoryConnection[] }> {
     return this.channel(actor, channelId, async (channel, c) => {
       if (!channel.can_manage) throw new AppError(403, 'channel_management_forbidden');
@@ -115,7 +123,7 @@ export class MemoryStore {
         if (!permission || data.access === 'write' || (data.access === 'contribute' && permission.access !== 'contribute')) throw new AppError(403, 'memory_agent_forbidden');
       }
       if (threadId) await assertContextThread(c, channelId, threadId);
-      else if (!channel.enabled) throw new AppError(409, 'memory_disabled');
+      else if (!channel.enabled && !channel.knowledge_enabled) throw new AppError(409, 'memory_disabled');
       const rows = await c.select({ id: s.memoryConnections.id }).from(s.memoryConnections).where(eq(s.memoryConnections.channel_id, channelId)).limit(20);
       if (rows.length >= 20) throw new AppError(409, 'memory_connection_limit');
       const token = `smem_${randomBytes(32).toString('base64url')}`;
@@ -142,7 +150,7 @@ export class MemoryStore {
         const [connection] = await c.select({ id: s.memoryConnections.id, name: s.memoryConnections.name, access: s.memoryConnections.access, thread_id: s.memoryConnections.thread_id, installation_id: s.memoryConnections.installation_id }).from(s.memoryConnections)
           .where(and(eq(s.memoryConnections.token_hash, hash), eq(s.memoryConnections.channel_id, ref.channel_id)));
         if (!connection) throw new AppError(401, 'unauthorized');
-        if (!connection.thread_id && !channel.enabled) throw new AppError(409, 'memory_disabled');
+        if (!connection.thread_id && !channel.enabled && !channel.knowledge_enabled) throw new AppError(409, 'memory_disabled');
         if (write && connection.access === 'read') throw new AppError(403, 'memory_write_forbidden');
         const checkAgent = async () => {
           if (!connection.installation_id) return;

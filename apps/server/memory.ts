@@ -1,7 +1,7 @@
 import { messagePath } from '@space/contracts';
 import type { FastifyInstance } from 'fastify';
 import { fileURLToPath } from 'node:url';
-import { AppError, parseAgentMemoryContext, MAX_AGENT_MEMORY_CHARS, MAX_MEMORY_IMPORT_BYTES, memorySourceId, parseMemorySettings, parseMemorySource, parseMemoryWrite, record, text, uuid, type ChannelMemory } from '@space/contracts';
+import { AppError, parseAgentMemoryContext, MAX_AGENT_MEMORY_CHARS, MAX_MEMORY_IMPORT_BYTES, memorySourceId, parseKnowledgeSettings, parseMemorySettings, parseMemorySource, parseMemoryWrite, record, text, uuid, type ChannelMemory } from '@space/contracts';
 import type { AgentMemoryContext, Task } from '@space/contracts';
 import type { MemoryProvider } from '@space/core/memory';
 import { MemoryStore, type MemoryChannel } from '@space/postgres/memory';
@@ -50,7 +50,7 @@ export function registerMemoryRoutes(app: FastifyInstance, store: MemoryStore, p
     return memoryProviderFor(providers, channel, requireEnabled);
   };
   const state = async (channel: MemoryChannel): Promise<ChannelMemory> => ({
-    enabled: channel.enabled, provider: channel.provider, can_manage: channel.can_manage,
+    enabled: channel.enabled, provider: channel.provider, can_manage: channel.can_manage, knowledge_enabled: channel.knowledge_enabled,
     providers: [...providers.values()].map(({ id, name }) => ({ id, name })),
     document: channel.enabled ? await providerFor(channel).read(channel) : null,
   });
@@ -131,6 +131,10 @@ export function registerMemoryRoutes(app: FastifyInstance, store: MemoryStore, p
       if ((input.enabled || input.provider) && !providers.has(provider)) throw new AppError(400, 'invalid_memory_provider');
       return state(await store.configure(c, channel, input.enabled, provider));
     });
+  });
+  app.post<{ Params: { channelId: string } }>(`${path}/knowledge`, r => {
+    const input = parseKnowledgeSettings(r.body);
+    return store.channel(r.actorId, r.params.channelId, async (channel, c) => state(await store.configureKnowledge(c, channel, input.enabled)));
   });
   app.post<{ Params: { channelId: string } }>(`${path}/document`, { bodyLimit: 850_000 }, r => {
     const input = parseMemoryWrite(r.body);
