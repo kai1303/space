@@ -164,3 +164,23 @@ it('on phones a swipe from the left edge presses the top screen back button', as
     expect(channelBack).not.toHaveBeenCalled();
   } finally { vi.unstubAllGlobals(); }
 });
+
+it('on phones folds the Home shortcut tiles while a long conversation list is scrolled', async () => {
+  const media = { matches: true, addEventListener: () => {}, removeEventListener: () => {} };
+  vi.stubGlobal('matchMedia', vi.fn(() => media));
+  try {
+    const { fireEvent } = await import('@testing-library/react');
+    const view = render(<ChatShell name="Team" user="Kai" onHome={() => {}}><aside className="chat-sidebar"><nav data-testid="list">Channels</nav></aside></ChatShell>);
+    const app = view.container.querySelector('.chat-app')!, list = screen.getByTestId('list');
+    const scrollTo = (top: number, scrollHeight: number) => {
+      Object.defineProperties(list, { scrollTop: { value: top, configurable: true }, scrollHeight: { value: scrollHeight, configurable: true }, clientHeight: { value: 600, configurable: true } });
+      fireEvent.scroll(list);
+    };
+    scrollTo(40, 650);
+    expect(app.classList.contains('chat-app--list-scrolled')).toBe(false);
+    scrollTo(40, 1600);
+    expect(app.classList.contains('chat-app--list-scrolled')).toBe(true);
+    scrollTo(0, 1600);
+    expect(app.classList.contains('chat-app--list-scrolled')).toBe(false);
+  } finally { vi.unstubAllGlobals(); }
+});

@@ -81,6 +81,22 @@ export function ChatShell({ renderPreview, notificationDelivery, onNavigate, act
     onHome();
   });
   const openList = () => { setMoreOpen(false); setSidebarOpen(true); };
+  // Slack makes room for conversations as you scroll: the Home shortcut tiles fold away below the top.
+  const [listScrolled, setListScrolled] = useState(false);
+  useEffect(() => {
+    const root = shell.current;
+    if (!phone || !root) { setListScrolled(false); return; }
+    const scroll = (event: Event) => {
+      const target = event.target as Element;
+      if (!(target instanceof HTMLElement) || !target.closest('.chat-sidebar') || target.closest('.sp-sidebar-utilities')) return;
+      // Fold only when the list stays scrollable once the ~120px of tiles are gone; otherwise it would snap back and flicker.
+      const room = target.scrollHeight - target.clientHeight;
+      if (target.scrollTop > 24 && room > 160) setListScrolled(true);
+      else if (target.scrollTop < 8) setListScrolled(false);
+    };
+    root.addEventListener('scroll', scroll, { capture: true, passive: true });
+    return () => root.removeEventListener('scroll', scroll, { capture: true });
+  }, [phone, shell]);
   // Slack's edge swipe: a rightward swipe from the left edge presses the top screen's own back button.
   useEffect(() => {
     const root = shell.current;
@@ -122,7 +138,7 @@ export function ChatShell({ renderPreview, notificationDelivery, onNavigate, act
     document.addEventListener('keydown', key);
     return () => document.removeEventListener('keydown', key);
   }, [onSearch, sidebarOpen, moreOpen]);
-  return <div ref={shell} className={`chat-app ${sidebarOpen ? 'chat-app--sidebar-open' : ''}`} style={{ '--chat-sidebar-width': `${sidebarWidth}px` } as CSSProperties}>
+  return <div ref={shell} className={`chat-app ${sidebarOpen ? 'chat-app--sidebar-open' : ''}${listScrolled ? ' chat-app--list-scrolled' : ''}`} style={{ '--chat-sidebar-width': `${sidebarWidth}px` } as CSSProperties}>
     <a className="chat-skip" href="#chat-messages">Skip to messages</a>
     <header className="chat-topbar">
       <a className="chat-topbar-brand" href="/chat" aria-label="Space home"><SpaceLogo inverse /></a>

@@ -25,6 +25,11 @@
     background: var(--sp-sidebar-item-hover); font-size: 13px; font-weight: 700; line-height: 16px; white-space: normal; text-align: left;
   }
   .chat-app .chat-sidebar .sp-sidebar-utilities button svg { width: 20px; height: 20px; }
+  .chat-app .chat-sidebar .sp-sidebar-utilities { max-height: 120px; transition: max-height var(--sp-motion-normal) ease, opacity var(--sp-motion-normal) ease, padding var(--sp-motion-normal) ease; }
+  .chat-app--list-scrolled .chat-sidebar .sp-sidebar-utilities { max-height: 0; opacity: 0; padding-block: 0; overflow: hidden; pointer-events: none; }
+}
+@media (max-width:720px) and (prefers-reduced-motion: reduce) {
+  .chat-app .chat-sidebar .sp-sidebar-utilities { transition: none; }
   .chat-app .chat-sidebar .chat-workspace-picker > summary { font-size: 20px; font-weight: 900; }
   /* Screen headings share one size */
   .chat-app .dm-heading h2, .chat-app .notification-heading h1 { font-size: 20px; font-weight: 900; }
