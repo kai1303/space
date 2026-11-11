@@ -22,7 +22,7 @@ Knowledge is split into four parts. Each gets its own spec, plan and build.
 | 3. Knowledge UI | Browse, edit and remove notes. Thread and file indexing toggles | No |
 | 4. Promotion rules | Anything beyond the turn-end `notes` list in this spec | No |
 
-Out of scope here: changing thread or Markdown indexing opt-in (still `knowledge_thread_channels` by SQL), removing the existing channel lock in the memory MCP key check, and the 16,000-character connector limit.
+Out of scope here: changing thread or Markdown indexing opt-in (still `knowledge_thread_channels` by SQL) and the 16,000-character connector limit.
 
 ## Decisions
 
@@ -70,11 +70,11 @@ The current version of each note.
 
 | Column | Type | Notes |
 | --- | --- | --- |
-| `id` | `uuid` PK | Supplied by the MCP caller, or derived for block notes (see below) |
+| `id` | `uuid` PK | Supplied by the MCP caller, or random for block notes (see below) |
 | `workspace_id`, `channel_id` | `uuid` | FK `(workspace_id, channel_id)` to `channels` |
 | `kind` | `text` | `fact`, `decision`, `procedure` or `answer` |
 | `title` | `text` | 1–160 characters after trimming |
-| `title_key` | `text` | `lower(btrim(title))` with runs of whitespace collapsed to one space |
+| `title_key` | `text` | Generated column: `lower(regexp_replace(btrim(title), '\s+', ' ', 'g'))` |
 | `content` | `text` | 1–2,000 characters from a block, 1–16,000 from MCP. No `\0` |
 | `evidence` | `uuid[]` | 1–20 message IDs, all in `channel_id` |
 | `revision` | `integer` | Starts at 1 and goes up by 1 on each change |
@@ -127,7 +127,9 @@ RETURNING id, revision;
 
 The statement returns a row when it inserted or changed a note, and then a row goes into `knowledge_note_revisions`. No row means nothing changed. The latest save wins, and every earlier version stays in the revision table.
 
-A block note's `id` is a UUIDv5 of `task_id + ':' + index`. If the same turn end is saved twice, the second save finds the same content and changes nothing.
+A block note gets a random `id` on insert. A repeated turn end is already stopped by the agent event receipts. If the same note arrives again anyway, the title matches, the content is the same, and nothing changes. A fixed id would risk a primary-key clash inside the turn transaction, so none is used.
+
+The note row and its revision row are written by one SQL statement (a data-modifying `WITH`), so the MCP path needs no transaction of its own.
 
 ### MCP tools
 
@@ -135,7 +137,8 @@ Added to the existing `/mcp/memory` factory. They appear in discovery only while
 
 | Tool | Key access | Arguments | Behavior |
 | --- | --- | --- | --- |
-| `knowledge_add` | contribute or write | `id`, `kind`, `title`, `content`, `message_ids` (1–20) | Inserts a note. Retrying with the same `id` and fingerprint returns the same note. The same `id` with different input returns `409 note_id_conflict`. A used title returns `409 title_taken` with the existing note's `id` and `revision` |
+| `knowledge_list` | read, contribute or write | none | The same newest-20 title list as task context, so MCP-only agents can find a note's `id` and `revision` |
+| `knowledge_add` | contribute or write | `id`, `kind`, `title`, `content`, `message_ids` (1–20) | Inserts a note. Retrying with the same `id` and fingerprint returns the same note. The same `id` with different input returns `409 note_id_conflict`. A used title returns `409 title_taken`; the caller finds the existing note with `knowledge_list` |
 | `knowledge_update` | write | `id`, `revision`, and any of `kind`, `title`, `content`, `message_ids` | `UPDATE ... WHERE id = $1 AND revision = $2 AND removed_at IS NULL`. No row returns `409 note_conflict`. A clash with another live title returns `409 title_taken` |
 | `knowledge_remove` | write | `id`, `revision` | Sets `removed_at` under the same revision check and writes a `removed` revision |
 
@@ -162,18 +165,18 @@ Evidence is resolved from the key's channel. A message ID from any other channel
 | Notes per block | 0–3 |
 | Title | 1–160 characters |
 | Content | 1–2,000 characters |
-| `message_ids` | Optional, 0–20. Empty means the message that started the turn |
+| `message_ids` | Optional, 0–20. Empty means the thread's latest human message |
 | A block with only `notes` | Valid. `session` and `thread` stay optional, but the block needs at least one of the three |
 
-`parseAgentMemoryUpdate` validates each note on its own. One bad note is dropped and the rest of the block still parses.
+`parseAgentMemoryUpdate` validates each note on its own. One bad note is dropped and the rest of the block still parses. A list longer than 3 is dropped as a whole, and the checkpoints still parse. Dropped notes never reach Space, so they leave no trace entry.
 
-`saveTurnMemory` saves notes after checkpoints, in the same transaction, when all of these hold:
+`saveTurnNotes` runs right after `saveTurnMemory`, in the same transaction, and saves a note when all of these hold:
 
 - `knowledge_enabled` is on for the thread's channel.
 - The installation's `agent_memory_grants.access` is `contribute`.
 - Every evidence message is in the thread's channel.
 
-A note that fails a check is skipped. The turn trace gets one entry per note: `note:saved`, `note:unchanged`, `note:knowledge_disabled`, `note:no_grant`, `note:foreign_evidence` or `note:invalid`. Note problems never fail the turn. The writers raise `AppError` before any SQL error, so the transaction stays usable, as it does for checkpoints today.
+A note that fails a check is skipped. The turn trace gets one entry per note: `note:saved`, `note:unchanged`, `note:knowledge_disabled`, `note:no_grant` or `note:foreign_evidence`. Note problems never fail the turn. The writers raise `AppError` before any SQL error, so the transaction stays usable, as it does for checkpoints today.
 
 ## Reading notes
 
@@ -217,9 +220,9 @@ New provider file `notes.sql`, installed after `schema.sql`: `kb.notes(id text P
 
 ## Settings
 
-`POST /v1/channels/:channelId/memory/settings` also accepts `knowledge_enabled`. It is manager-only and audited. `GET /memory` returns it. The Memory dialog gets one **Knowledge notes** switch next to the memory switch. Browsing notes is part 3.
+A new route, `POST /v1/channels/:channelId/memory/knowledge` with `{ "enabled": boolean }`, sets the switch. It is manager-only. `GET /memory` and both settings routes return `knowledge_enabled`. A separate route keeps the memory switch request unchanged. The Memory dialog gets one **Knowledge notes** switch next to the memory switch. Browsing notes is part 3.
 
-MCP key creation is allowed while memory **or** Knowledge is on. A key created while only Knowledge is on exposes only the Knowledge tools and the conversation read tool, `memory_context`.
+MCP key creation is allowed while memory **or** Knowledge is on. With only Knowledge on, the memory document tools (`memory_read`, `memory_search`, `memory_remember`, `memory_write`, `memory_forget`) still appear but return `409 memory_disabled`, as they do today. The conversation and short-term memory read tools keep working.
 
 ## Connector instructions
 
@@ -247,7 +250,7 @@ The block stays hidden from people, both while streaming and in the task result,
 ## Architecture rules
 
 - **No polling:** the worker reacts to `pg_notify` and reconciles in bounded pages on startup.
-- **No explicit locks:** writes use unique indexes, `ON CONFLICT` and revision-guarded updates. PostgreSQL still takes its own row and index locks during these writes. The existing `/mcp/memory` key check still takes a channel lock. That is an existing violation, left as migration work, and the note writers add no lock of their own.
+- **No explicit locks:** writes use unique indexes, `ON CONFLICT` and revision-guarded updates. PostgreSQL still takes its own row and index locks during these writes. The `/mcp/memory` key check for channel keys reads and re-checks access without a lock. `docs/architecture/memory-mcp.md` still describes an older channel lock and is corrected in this work.
 - **Bounded:** 3 notes per block, 20 evidence messages, 20 titles in context, 128 IDs per visibility call, search limit 1–50.
 
 ## Risks
