@@ -156,7 +156,7 @@ export function GraphCanvas({ nodes, links, palette, selectedId, expandedIds, on
   const zoomBy = (factor: number) => { autoFit.current = false; const v = viewRef.current, k = clamp(v.k * factor), f = k / v.k; animateView({ k, x: v.x * f, y: v.y * f }); };
 
   const selected = selectedId ? positions.get(selectedId) : undefined;
-  const items = selectedId ? [...(menu?.(selectedId) ?? []), ...(selected?.pinned ? [{ label: 'Unpin', icon: 'unpin', onClick: () => simulation.current.unpin(selectedId) }] : [])].slice(0, 4) : [];
+  const items = selectedId ? [...(menu?.(selectedId) ?? []), ...(selected?.pinned ? [{ label: 'Unpin', icon: 'unpin', onClick: () => { simulation.current.unpin(selectedId); onSelect(undefined); } }] : [])].slice(0, 4) : [];
   const inner = Math.max(NODE_RADIUS + 8, 20), segment = items.length ? (2 * Math.PI) / items.length : 0;
 
   const press = reduced ? {} : { whileTap: { scale: 0.9 }, transition: fade };
@@ -205,7 +205,8 @@ export function GraphCanvas({ nodes, links, palette, selectedId, expandedIds, on
               onPointerEnter={() => { setHovered(n.id); simulation.current.hold(n.id); }}
               onPointerLeave={() => { setHovered(h => h === n.id ? undefined : h); simulation.current.letGo(n.id); }}
               onPointerDown={event => { event.stopPropagation(); startDrag(event, n.id); }}
-              onClick={event => { event.stopPropagation(); if (!endDrag()) onSelect(n.id); }}
+              // Like Neo4j: a click fixes the node in place and toggles its selection.
+              onClick={event => { event.stopPropagation(); if (endDrag()) return; simulation.current.pin(n.id); onSelect(selectedId === n.id ? undefined : n.id); }}
               onDoubleClick={event => { event.stopPropagation(); onToggleExpand(n.id); }}
               onKeyDown={event => onNodeKey(event, n.id)}>
               <m.g initial={enters('nodes', n.id) ? { scale: 0, opacity: 0 } : false} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.4 }} transition={spring}>

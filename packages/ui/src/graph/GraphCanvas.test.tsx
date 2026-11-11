@@ -59,6 +59,16 @@ it('click selects, double-click and Enter toggle expand, background click clears
   expect(onSelect).toHaveBeenLastCalledWith(undefined);
 });
 
+it('a click fixes the node in place, and clicking the selected node deselects it', () => {
+  const { onSelect, view } = setup({ selectedId: 't' });
+  const thread = node(/^Dedupe fix/);
+  fireEvent.click(thread);
+  expect(onSelect).toHaveBeenLastCalledWith(undefined);
+  fireEvent.click(node('Codex, session, ended'));
+  expect(onSelect).toHaveBeenLastCalledWith('s');
+  expect(view.container.querySelector('[data-node-id="s"]')!.classList.contains('is-pinned')).toBe(true);
+});
+
 it('arrow keys move focus along links', () => {
   setup();
   const channel = node('#payments, channel');

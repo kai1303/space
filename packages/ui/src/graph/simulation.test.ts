@@ -61,20 +61,33 @@ describe('GraphSimulation', () => {
     expect(sim.alpha).toBeLessThan(ALPHA_MIN);
   });
 
-  it('a small drag moves only the node; the layout restarts past the 25 px tolerance', () => {
+  it('a tiny drag moves only the node; the layout wakes once the pointer passes 5 px', () => {
     const f = fakeFrames();
     const sim = new GraphSimulation(() => {}, { frames: f.frames });
     sim.update(nodes, links); f.flush();
     const c = sim.positions().get('c')!;
     sim.dragStart('c', 100, 100);
-    sim.drag('c', c.x + 10, c.y, 110, 100);
+    sim.drag('c', c.x + 3, c.y, 103, 100);
     expect(f.pending()).toBe(0);
-    expect(sim.positions().get('c')!.x).toBe(c.x + 10);
-    sim.drag('c', c.x + 40, c.y, 140, 100);
+    expect(sim.positions().get('c')!.x).toBe(c.x + 3);
+    sim.drag('c', c.x + 8, c.y, 108, 100);
     expect(f.pending()).toBe(1);
     expect(sim.dragging).toBe(true);
     sim.release(); f.flush();
     expect(f.pending()).toBe(0);
+  });
+
+  it('pin fixes a node where it is, and a hover hold on it is kept as a pin', () => {
+    const f = fakeFrames();
+    const sim = new GraphSimulation(() => {}, { frames: f.frames });
+    sim.update(nodes, links); f.flush();
+    sim.hold('t1');
+    sim.pin('t1');
+    sim.letGo('t1');
+    const pinned = sim.positions().get('t1')!;
+    expect(pinned.pinned).toBe(true);
+    sim.update([...nodes, { id: 's1' }], [...links, { id: 'd', source: 't1', target: 's1' }]); f.flush();
+    expect(sim.positions().get('t1')).toEqual(pinned);
   });
 
   it('a hovered node is held still and let go on leave without becoming pinned', () => {

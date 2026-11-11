@@ -5,12 +5,14 @@ import { NODE_RADIUS, type Point } from './layout.js';
 // - start hot (alpha 1), pre-compute up to 300 ticks or 250 ms, then animate the rest,
 //   one tick plus 10 extra per frame, so the picture settles quickly;
 // - charge −400, collide radius = node radius + 25, link distance = both radii + 90, centre pull 0.03;
-// - a drag restarts the layout only after the pointer travels 25 px (clicks never jolt the graph),
-//   then runs at alpha 0.8 with alpha target 0.09 so neighbours follow; release cools it and keeps the pin;
+// - a drag restarts the layout once the pointer travels 5 px (Neo4j compares the squared distance
+//   with 25), so clicks never jolt the graph but any real drag wakes it at once; it then runs at
+//   alpha 0.8 with alpha target 0.09 so neighbours swing along; release cools it and keeps the pin;
+// - clicking a node fixes it where it is; Unpin (Neo4j's "Unlock") frees it again;
 // - a hovered node is held still so it never slides out from under the pointer.
 // It stops once alpha < 0.05, so an idle graph schedules nothing.
 export const ALPHA_MIN = 0.05, VELOCITY_DECAY = 0.4, PRECOMPUTE_TICKS = 300, PRECOMPUTE_MS = 250, TICKS_PER_FRAME = 11;
-export const START_ALPHA = 1, DRAG_ALPHA = 0.8, DRAG_ALPHA_TARGET = 0.09, DRAG_TOLERANCE = 25;
+export const START_ALPHA = 1, DRAG_ALPHA = 0.8, DRAG_ALPHA_TARGET = 0.09, DRAG_TOLERANCE = 5;
 export const CHARGE = -400, CENTER_PULL = 0.03, COLLIDE_PADDING = 25, LINK_GAP = 90;
 
 type SimNode = SimulationNodeDatum & { id: string; hoverHeld?: boolean };
@@ -102,6 +104,13 @@ export class GraphSimulation {
   release() {
     const d = this.drag_; this.drag_ = undefined;
     if (d?.restarted) this.sim.alphaTarget(0);
+  }
+
+  // A click fixes the node where it currently is (it becomes pinned, not just hover-held).
+  pin(id: string) {
+    const node = this.byId.get(id); if (!node) return;
+    node.fx = node.x; node.fy = node.y; node.hoverHeld = false;
+    this.run(false);
   }
 
   // Hold a hovered node still so it doesn't slide away from the pointer; let go on leave.
