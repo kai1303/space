@@ -39,6 +39,16 @@ export function GraphCanvas({ nodes, links, palette, selectedId, expandedIds, on
     for (const l of links) { map.set(l.source, [...(map.get(l.source) ?? []), l.target]); map.set(l.target, [...(map.get(l.target) ?? []), l.source]); }
     return map;
   }, [links]);
+  // The view box always fits every node (with room for captions), never smaller than 800 × 600.
+  const bounds = useMemo(() => {
+    const points = [...layout.values()];
+    if (!points.length) return { x: -VIEW_W / 2, y: -VIEW_H / 2, w: VIEW_W, h: VIEW_H };
+    const pad = NODE_RADIUS + 48;
+    const minX = Math.min(...points.map(p => p.x)) - pad, maxX = Math.max(...points.map(p => p.x)) + pad;
+    const minY = Math.min(...points.map(p => p.y)) - pad, maxY = Math.max(...points.map(p => p.y)) + pad;
+    const w = Math.max(VIEW_W, maxX - minX), h = Math.max(VIEW_H, maxY - minY);
+    return { x: (minX + maxX) / 2 - w / 2, y: (minY + maxY) / 2 - h / 2, w, h };
+  }, [layout]);
   const pairs = useMemo(() => {
     const groups = new Map<string, string[]>();
     for (const l of links) { const k = pairKey(l.source, l.target); groups.set(k, [...(groups.get(k) ?? []), l.id]); }
@@ -75,6 +85,7 @@ export function GraphCanvas({ nodes, links, palette, selectedId, expandedIds, on
   const onWheel = (event: WheelEvent) => { setView(v => ({ ...v, k: clamp(v.k * (event.deltaY < 0 ? 1.1 : 1 / 1.1)) })); };
   const selected = selectedId ? layout.get(selectedId) : undefined;
   const items = selectedId && menu ? menu(selectedId) : [];
+  const box = bounds;
 
   return <div className="sp-graph">
     <div className="sp-graph-toolbar">
@@ -85,7 +96,7 @@ export function GraphCanvas({ nodes, links, palette, selectedId, expandedIds, on
         <li key={kind}><span style={{ background: color }} />{kind}</li>)}</ul>
     </div>
     <div className="sp-graph-stage">
-      <svg ref={svg} role="application" aria-label={label} className="sp-graph-svg" viewBox={`${-VIEW_W / 2} ${-VIEW_H / 2} ${VIEW_W} ${VIEW_H}`}
+      <svg ref={svg} role="application" aria-label={label} className="sp-graph-svg" viewBox={`${box.x} ${box.y} ${box.w} ${box.h}`}
         onWheel={onWheel} onPointerMove={moveDrag} onPointerUp={endDrag}>
         <defs><marker id="sp-graph-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0L10,5L0,10z" /></marker></defs>
         <rect data-testid="sp-graph-background" x={-5000} y={-5000} width={10000} height={10000} className="sp-graph-background"
@@ -94,10 +105,14 @@ export function GraphCanvas({ nodes, links, palette, selectedId, expandedIds, on
           {links.map(l => {
             const from = layout.get(l.source), to = layout.get(l.target);
             if (!from || !to) return null;
-            const group = pairs.get(pairKey(l.source, l.target))!;
+            const group = pairs.get(pairKey(l.source, l.target))!, index = group.indexOf(l.id);
+            // Labels follow a left-to-right copy of the path so they never read upside down.
+            const backwards = to.x < from.x;
+            const labelPath = backwards ? linkPath(to, from, group.length - 1 - index, group.length) : linkPath(from, to, index, group.length);
             return <g key={l.id} className="sp-graph-link">
-              <path id={`sp-link-${l.id}`} d={linkPath(from, to, group.indexOf(l.id), group.length)} markerEnd="url(#sp-graph-arrow)" />
-              <text><textPath href={`#sp-link-${l.id}`} startOffset="50%" textAnchor="middle">{l.label}</textPath></text>
+              <path d={linkPath(from, to, index, group.length)} markerEnd="url(#sp-graph-arrow)" />
+              <path id={`sp-link-${l.id}`} d={labelPath} className="sp-graph-label-path" />
+              <text dy={-4}><textPath href={`#sp-link-${l.id}`} startOffset="50%" textAnchor="middle">{l.label}</textPath></text>
             </g>;
           })}
           {nodes.map(n => {
@@ -113,12 +128,16 @@ export function GraphCanvas({ nodes, links, palette, selectedId, expandedIds, on
               <text y={NODE_RADIUS + 14} textAnchor="middle">{cut(n.caption)}</text>
             </g>;
           })}
+          {/* The ring menu lives in the scene so it stays on its node at any zoom; it is counter-scaled to keep its size. */}
+          {selected && items.length > 0 && <g transform={`translate(${selected.x},${selected.y}) scale(${1 / view.k})`}>
+            <foreignObject x={-110} y={-(NODE_RADIUS * view.k) - 46} width={220} height={40}>
+              <div role="menu" aria-label="Node actions" className="sp-graph-menu">
+                {items.map(item => <button key={item.label} type="button" role="menuitem" onPointerDown={event => event.stopPropagation()} onClick={event => { event.stopPropagation(); item.onClick(); }}>{item.label}</button>)}
+              </div>
+            </foreignObject>
+          </g>}
         </g>
       </svg>
-      {selected && items.length > 0 && <div role="menu" aria-label="Node actions" className="sp-graph-menu"
-        style={{ left: `${50 + ((selected.x * view.k + view.x) / VIEW_W) * 100}%`, top: `${50 + ((selected.y * view.k + view.y) / VIEW_H) * 100}%` }}>
-        {items.map(item => <button key={item.label} type="button" role="menuitem" onClick={item.onClick}>{item.label}</button>)}
-      </div>}
     </div>
     <ul className="sp-sr-only" aria-label={`${label} items`}>{nodes.map(n => <li key={n.id}>{n.caption} ({n.kind})</li>)}</ul>
   </div>;
