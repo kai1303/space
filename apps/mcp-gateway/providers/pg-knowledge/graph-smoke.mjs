@@ -12,10 +12,11 @@ import { migrate } from '@space/postgres/migrate';
 import { bootstrap } from '@space/postgres/bootstrap';
 import { ChatStore } from '@space/postgres/chat';
 import { listNoteTitles, removeNote, saveNoteByTitle } from '@space/postgres/knowledge-notes';
+import { searchRelated } from './graph-related.mjs';
 
 const schema = 'graph_test_' + randomUUID().replaceAll('-', '');
 const slot = ('space_graph_' + schema).slice(0, 63);
-const admin = createPool(process.env.TEST_DATABASE_URL), index = createPool(process.env.THREAD_INDEX_URL);
+const admin = createPool(process.env.TEST_DATABASE_URL), index = createPool(process.env.THREAD_INDEX_URL), reader = createPool(process.env.KNOWLEDGE_DATABASE_URL);
 const url = new URL(process.env.TEST_DATABASE_URL);
 url.searchParams.set('options', '-c search_path=' + schema);
 const source = createPool(url.href);
@@ -50,6 +51,12 @@ try {
   assert.equal(await count('g_evidence'), 3);
   assert.equal(await count('g_channels'), 1);
 
+  const ids = Object.fromEntries((await listNoteTitles(db, seed.channel_id)).notes.map(n => [n.title, n.id]));
+  const ctx = requesterId => ({ workspaceId: seed.workspace_id, requesterId, connectionId: randomUUID(), audience: { channelId: seed.channel_id } });
+  assert.deepEqual((await searchRelated(reader, source, ctx(seed.owner_id), 'note/' + ids.A, 5)).map(h => h.title), ['B'], 'A and B cite the same thread');
+  assert.deepEqual(await searchRelated(reader, source, ctx(randomUUID()), 'note/' + ids.A, 5), [], 'unknown requester sees nothing');
+  await assert.rejects(() => searchRelated(reader, source, ctx(seed.owner_id), 'message/' + ids.A, 5), /Invalid related reference/);
+
   await save('D', two.id);                       // live change through the slot
   await until(async () => (await count('g_knowledge')) === 4);
   const evidenceOfB = async thread => (await index.query(`SELECT 1 FROM kb.g_evidence e JOIN kb.g_knowledge k ON k.id=e.knowledge_id WHERE k.title='B' AND e.thread_id=$1`, [thread])).rowCount;
@@ -83,5 +90,5 @@ try {
   await index.query('DELETE FROM kb.g_channels').catch(() => {});
   await index.query('DELETE FROM kb.graph_position WHERE slot=$1', [slot]).catch(() => {});
   await admin.query('DROP SCHEMA IF EXISTS ' + schema + ' CASCADE');
-  await Promise.all([admin.end(), index.end(), source.end()]);
+  await Promise.all([admin.end(), index.end(), reader.end(), source.end()]);
 }

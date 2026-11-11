@@ -1,5 +1,11 @@
 import { messagePath } from '@space/contracts';
 
+export function noteHit(context, note) {
+  const label = 'Note in #' + note.channel_name;
+  return { ref: { connectionId: context.connectionId, recordId: 'note/' + note.id }, title: note.title, evidence: note.content,
+    citation: { label, url: messagePath(note.channel_id, note.evidence[0]) } };
+}
+
 // Rank indexed notes, then return only those Space still shows to this requester and destination,
 // at the same revision that was indexed.
 export async function searchNotes(index, source, context, query, vector, limit) {
@@ -13,9 +19,6 @@ export async function searchNotes(index, source, context, query, vector, limit) 
   const visible = new Map(rows.map(row => [row.id, row]));
   return ranked.rows.flatMap(candidate => {
     const note = visible.get(candidate.id);
-    if (!note || note.revision !== candidate.revision) return [];
-    const label = 'Note in #' + note.channel_name;
-    return [{ ref: { connectionId: context.connectionId, recordId: 'note/' + note.id }, title: note.title, evidence: note.content,
-      citation: { label, url: messagePath(note.channel_id, note.evidence[0]) } }];
+    return note && note.revision === candidate.revision ? [noteHit(context, note)] : [];
   }).slice(0, limit);
 }
