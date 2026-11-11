@@ -26,6 +26,23 @@ The address must be the server's `BETTER_AUTH_URL` origin or listed in `AUTH_TRU
 
 Install Android Studio and its SDK, then run `pnpm --filter @space/capacitor android`. The emulator reaches the host at `10.0.2.2`.
 
+## Release builds
+
+Set `SPACE_RELEASE=1` when you sync for a store build. The sync then refuses any address that isn't `https`.
+
+```sh
+env SPACE_RELEASE=1 SPACE_URL=https://space.example.com/chat pnpm --filter @space/capacitor sync
+```
+
+## Native plugins
+
+- Keyboard: the web view shrinks above the keyboard, so the composer stays visible.
+- Status bar: light text over the dark chrome.
+- Splash screen: the Space mark on the chrome colour. The web app hides it once it renders, and it hides by itself after 1.5 s if the page never loads.
+- App: Android's back button presses the screen's back arrow, then goes back in history, then leaves the app.
+
+Icons and splash images live in the native projects (`ios/App/App/Assets.xcassets`, `android/app/src/main/res`). They were made from `apps/web/public/brand/space-logo.png`.
+
 ## Limits
 
 - Plain `http` is for development only. Release builds need `https`.

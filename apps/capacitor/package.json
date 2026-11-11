@@ -14,8 +14,12 @@
   },
   "dependencies": {
     "@capacitor/android": "^8.6.0",
+    "@capacitor/app": "^8",
     "@capacitor/core": "^8.6.0",
-    "@capacitor/ios": "^8.6.0"
+    "@capacitor/ios": "^8.6.0",
+    "@capacitor/keyboard": "^8",
+    "@capacitor/splash-screen": "^8",
+    "@capacitor/status-bar": "^8"
   },
   "devDependencies": {
     "@capacitor/cli": "^8.6.0",
