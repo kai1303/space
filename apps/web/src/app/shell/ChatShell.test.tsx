@@ -110,3 +110,31 @@ it('expands the phone tab bar with More and collapses it after choosing a destin
   await userEvent.keyboard('{Escape}');
   expect(more.getAttribute('aria-expanded')).toBe('false');
 });
+
+it('on phones makes Home the conversation list, offers a way back to it and moves the account to the top bar', async () => {
+  const media = { matches: true, addEventListener: () => {}, removeEventListener: () => {} };
+  vi.stubGlobal('matchMedia', vi.fn(() => media));
+  try {
+    const { ConversationListContext } = await import('../../shared/ui/conversation-list.js');
+    const { useContext } = await import('react');
+    function Back() { const open = useContext(ConversationListContext); return open ? <button onClick={open}>Back to conversations</button> : null; }
+    const props = { name: 'Team', user: 'Kai', onHome: vi.fn(), onDirectMessages: () => {}, onActivity: () => {} };
+    const view = render(<ChatShell {...props} directMessagesActive><Back/></ChatShell>);
+    const app = view.container.querySelector('.chat-app')!;
+    expect(app.classList.contains('chat-app--sidebar-open')).toBe(false);
+    expect(view.container.querySelector('.chat-topbar-account')).toBeTruthy();
+    expect(view.container.querySelector('.chat-rail-bottom .space-user-settings')).toBeNull();
+    await userEvent.click(screen.getByRole('link', { name: 'Home', exact: true }));
+    expect(props.onHome).toHaveBeenCalledOnce();
+    view.rerender(<ChatShell {...props}><Back/></ChatShell>);
+    expect(app.classList.contains('chat-app--sidebar-open')).toBe(true);
+    await userEvent.click(screen.getByRole('button', { name: 'Back to conversations' }));
+    expect(app.classList.contains('chat-app--sidebar-open')).toBe(true);
+  } finally { vi.unstubAllGlobals(); }
+});
+
+it('keeps the desktop layout without a back button or a top bar account', () => {
+  const view = render(<ChatShell name="Team" user="Kai" onHome={() => {}}><main>Home</main></ChatShell>);
+  expect(view.container.querySelector('.chat-topbar-account')).toBeNull();
+  expect(view.container.querySelector('.chat-rail-bottom .space-user-settings')).toBeTruthy();
+});

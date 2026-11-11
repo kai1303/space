@@ -13,6 +13,10 @@ import { ChannelSearchHeaderContext, type ChannelSearchHeader } from '../../feat
 import { UserSettings } from '../../features/profile/UserProfile.js';
 import { SpaceLogo } from '../../shared/branding/SpaceLogo.js';
 import { WorkspaceSwitcher, type WorkspaceChoice } from './WorkspaceSwitcher.js';
+import { ConversationListContext, PHONE_QUERY, usePhoneLayout } from '../../shared/ui/conversation-list.js';
+
+// The address the app was opened with, before it restores the last conversation. A deep link keeps its conversation.
+let launchList = typeof window !== 'undefined' && ['/', '/chat'].includes(window.location.pathname);
 
 export function ChatShell({ renderPreview, notificationDelivery, onNavigate, activeDestination, adminItems, onActivity, activityActive = false, notificationCount = 0, onHome, onDirectMessages, directMessagesActive = false, name, user, userId, onNameChange, onSearch, onMembers, workspaces = [], workspace = '', onWorkspaceChange, onCreateWorkspace, sidebarWidth = 220, onBack, onForward, history = [], activity, children }: {
   renderPreview?: RailProps['renderPreview'];
@@ -51,7 +55,32 @@ export function ChatShell({ renderPreview, notificationDelivery, onNavigate, act
   const railId = useId();
   // Phones show the rail as a bottom tab bar; "More" reveals the remaining destinations above it.
   const [moreOpen, setMoreOpen] = useState(false);
-  useEffect(() => { setSidebarOpen(false); setMoreOpen(false); }, [activeDestination, activityActive, directMessagesActive]);
+  const phone = usePhoneLayout();
+  // Like Slack, Home on a phone is the conversation list. Opening the app at /chat starts there.
+  const showListNext = useRef(false);
+  useEffect(() => {
+    setSidebarOpen(showListNext.current); showListNext.current = false; setMoreOpen(false);
+  }, [activeDestination, activityActive, directMessagesActive]);
+  // Opened at /chat on a phone: show the list once the workspace is ready, even if the last conversation was restored.
+  // The ref keeps this repeatable when effects re-run without a real change (React StrictMode in development).
+  const launching = useRef(false);
+  useEffect(() => {
+    if (!workspace || !(launchList || launching.current)) return;
+    launchList = false;
+    launching.current = typeof window.matchMedia === 'function' && window.matchMedia(PHONE_QUERY).matches
+      && !activeDestination && !activityActive && !directMessagesActive;
+    if (launching.current) setSidebarOpen(true);
+    // Only the first ready workspace counts as the launch.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workspace]);
+  const home = onHome && (() => {
+    if (!phone) { onHome(); return; }
+    // Already home: open the list now. Otherwise open it after the destination change resets panels.
+    if (!activeDestination && !activityActive && !directMessagesActive) setSidebarOpen(true);
+    else showListNext.current = true;
+    onHome();
+  });
+  const openList = () => { setMoreOpen(false); setSidebarOpen(true); };
   const menu = useRef<HTMLDivElement>(null);
   const [channelSearch, setChannelSearch] = useState<ChannelSearchHeader | null>(null);
   function openSearch() { setSidebarOpen(false); (channelSearch?.edit ?? onSearch)?.(); }
@@ -83,6 +112,7 @@ export function ChatShell({ renderPreview, notificationDelivery, onNavigate, act
       <button className="chat-global-search" disabled={!onSearch} onClick={openSearch}><NavigationIcon name="search" size={17}/><span>{channelSearch?.label ?? `Search ${name}`}</span><kbd>⌘ K</kbd></button>
       <div className="chat-mobile-toggle" hidden={!!activeDestination || activityActive || directMessagesActive} ref={menu}><IconButton label={sidebarOpen ? 'Close conversations' : 'Open conversations'} aria-expanded={sidebarOpen} aria-controls="chat-conversations" onClick={() => setSidebarOpen(open => !open)}><List size={20} /></IconButton></div>
       <div className="chat-topbar-end">{window.spaceDesktop?.openBrowser && <IconButton label="Open browser" onClick={() => window.spaceDesktop?.openBrowser?.()}><Globe size={19}/></IconButton>}{activity}<a className="chat-system-link" href="/design-system" aria-label="Open design system"><BookOpen size={19} /></a></div>
+      {phone && <div className="chat-topbar-account"><UserSettings user={user} userId={userId} onNameChange={onNameChange} /></div>}
     </header>
     <div className="chat-body">
       <LayoutGroup id={railId}><nav className={`chat-rail${moreOpen ? ' chat-rail--more-open' : ''}`} aria-label="Main navigation" onClick={event => {
@@ -92,20 +122,20 @@ export function ChatShell({ renderPreview, notificationDelivery, onNavigate, act
       }}>
         {onWorkspaceChange ? <WorkspaceSwitcher items={workspaces} value={workspace} onChange={onWorkspaceChange} onCreate={onCreateWorkspace} /> : <div className="chat-workspace-mark" title={name}><SpaceLogo icon /></div>}
         <RailNavigation key={workspace} active={activeDestination ?? (activityActive ? 'activity' : directMessagesActive ? 'dms' : 'home')}
-          onHome={onHome} onNavigate={onNavigate} onDirectMessages={onDirectMessages} onActivity={onActivity}
+          onHome={home} onNavigate={onNavigate} onDirectMessages={onDirectMessages} onActivity={onActivity}
           adminItems={adminItems} notificationCount={notificationCount} renderPreview={renderPreview}/>
         <button type="button" className="chat-rail-item chat-rail-more" aria-expanded={moreOpen} onClick={() => setMoreOpen(open => !open)}>
           <span className="chat-rail-icon"><span className="chat-rail-glyph"><DotsThree size={24} weight="bold" aria-hidden="true"/></span></span><span>More</span>
         </button>
         <div className="chat-rail-bottom">
           <IconButton label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} theme`} onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}>{theme === 'dark' ? <Sun size={21} /> : <Moon size={21} />}</IconButton>
-          <UserSettings user={user} userId={userId} onNameChange={onNameChange} />
+          {!phone && <UserSettings user={user} userId={userId} onNameChange={onNameChange} />}
         </div>
       </nav></LayoutGroup>
       <div className="chat-main-area" onClick={event => {
         setMoreOpen(false);
         if ((event.target as Element).closest('.sp-channel, .sp-sidebar-create, .sp-sidebar-compose, .sp-sidebar-utilities button')) setSidebarOpen(false);
-      }}><ChannelSearchHeaderContext.Provider value={setChannelSearch}>{children}</ChannelSearchHeaderContext.Provider></div>
+      }}><ConversationListContext.Provider value={phone ? openList : null}><ChannelSearchHeaderContext.Provider value={setChannelSearch}>{children}</ChannelSearchHeaderContext.Provider></ConversationListContext.Provider></div>
       <AnimatePresence>{sidebarOpen && <motion.button {...surfaceMotion(reduced, 'scrim')} key="sidebar-scrim" className="chat-sidebar-backdrop" aria-label="Close conversation navigation" onClick={() => { setSidebarOpen(false); menu.current?.querySelector('button')?.focus(); }}><X size={22} /></motion.button>}</AnimatePresence>
     </div>
   </div>;

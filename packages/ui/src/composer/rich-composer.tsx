@@ -118,7 +118,8 @@ export function RichComposer({
   }, [acknowledgedDocument, ready]);
   const [text, setText] = useState("");
   const [formats, setFormats] = useState<Record<string, unknown>>({});
-  const [showFormats, setShowFormats] = useState(true);
+  // Phones start with a slim composer; "Show formatting" brings the toolbar back.
+  const [showFormats, setShowFormats] = useState(() => !(typeof window !== "undefined" && typeof window.matchMedia === "function" && window.matchMedia("(max-width: 720px)").matches));
   const [sending, setSending] = useState(false);
   const [error, setError] = useState("");
   const [localFiles, setLocalFiles] = useState<Attachment[]>(attachmentsEnabled ? defaultAttachments : []);
