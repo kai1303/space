@@ -3,6 +3,7 @@ import { sql } from 'drizzle-orm';
 import { AppError, KNOWLEDGE_TITLES_MAX, type KnowledgeNote, type KnowledgeNotesContext, type NoteDraft, type NotePatch } from '@space/contracts';
 import type { DbSession } from './database.js';
 import { rows } from './thread-context.js';
+import { agentMemoryAccess } from './memory.js';
 
 export type NoteProducer = { id: string; name: string };
 export type NoteScope = { workspaceId: string; channelId: string };
@@ -121,4 +122,24 @@ export async function listNoteTitles(c: DbSession, channelId: string): Promise<K
     SELECT id, kind, title, revision, updated_at::text AS updated_at FROM knowledge_notes
     WHERE channel_id = ${channelId} AND removed_at IS NULL ORDER BY updated_at DESC, id DESC LIMIT ${KNOWLEDGE_TITLES_MAX + 1}`);
   return { channel_id: channelId, notes: found.slice(0, KNOWLEDGE_TITLES_MAX), truncated: found.length > KNOWLEDGE_TITLES_MAX };
+}
+
+export type TurnNoteOutcome = 'saved' | 'unchanged' | 'knowledge_disabled' | 'no_grant' | 'foreign_evidence';
+
+// Called inside the execution.completed transaction. It never throws for a bad note:
+// evidence is checked with a plain SELECT before the insert, so the transaction stays usable.
+export async function saveTurnNotes(c: DbSession, input: { channelId: string; installationId: string; producer: NoteProducer; notes: NoteDraft[]; fallbackMessageId: string | null }): Promise<TurnNoteOutcome[]> {
+  if (!input.notes.length) return [];
+  const [channel] = await rows<{ workspace_id: string; knowledge_enabled: boolean; kind: string }>(c, sql`SELECT workspace_id, knowledge_enabled, kind FROM channels WHERE id=${input.channelId}`);
+  if (!channel || channel.kind !== 'channel' || !channel.knowledge_enabled) return input.notes.map(() => 'knowledge_disabled');
+  const grant = await agentMemoryAccess(c, { workspace_id: channel.workspace_id, channel_id: input.channelId }, input.installationId);
+  if (grant?.access !== 'contribute') return input.notes.map(() => 'no_grant');
+  const results: TurnNoteOutcome[] = [];
+  for (const note of input.notes) {
+    const message_ids = note.message_ids.length ? note.message_ids : input.fallbackMessageId ? [input.fallbackMessageId] : [];
+    try { await assertNoteEvidence(c, input.channelId, message_ids); }
+    catch (error) { if (error instanceof AppError) { results.push('foreign_evidence'); continue; } throw error; }
+    results.push(await saveNoteByTitle(c, { workspaceId: channel.workspace_id, channelId: input.channelId }, { ...note, message_ids }, input.producer));
+  }
+  return results;
 }

@@ -9,6 +9,7 @@ type TurnStatus = {
   approval: 'proposed' | 'approved' | 'rejected' | 'requested' | 'allowed' | 'denied';
   outcome: 'completed' | 'failed' | 'stopped' | 'rejected';
   memory: `${'session' | 'thread'}:${'saved' | 'pending' | 'skipped'}`;
+  note: 'saved' | 'unchanged' | 'knowledge_disabled' | 'no_grant' | 'foreign_evidence';
 };
 
 const pending = new WeakMap<DbSession, string[]>();

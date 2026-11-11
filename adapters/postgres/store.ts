@@ -10,6 +10,7 @@ import { tokenHash } from './bootstrap.js';
 import { hasThreadAccess } from './access.js';
 import { readThreadContext } from './thread-context.js';
 import { readChannelMemory, readPendingMemory, readSessionMemory, saveTurnMemory } from './layered-memory.js';
+import { saveTurnNotes } from './knowledge-notes.js';
 import { sessionTransaction, SessionConflict } from './session-concurrency.js';
 import { traceTool, traceToolChanges, traceTurn } from './turn-trace.js';
 import { directTurnTarget, runTurn, type AdmitLocalTurn, type TurnPlan } from './direct-turn-admission.js';
@@ -351,6 +352,11 @@ export class PostgresStore implements DeliveryStore {
           const [definition] = (await c.execute<{ name: string }>(sql`SELECT d.name FROM agent_installations i JOIN agent_definitions d ON d.id=i.definition_id WHERE i.id=${installationId}`)).rows;
           const outcomes = await saveTurnMemory(c, { channelId: thread.channel_id, threadId: task.thread_id, sessionId: task.session_id ?? null, installationId, producer: { id: installationId, name: definition?.name ?? 'Agent' }, memory });
           for (const { scope, outcome } of outcomes) traceTurn(c, task.id, 'memory', `${scope}:${outcome}`);
+          if (memory.notes?.length) {
+            const [human] = (await c.execute<{ id: string }>(sql`SELECT id FROM messages WHERE channel_id=${thread.channel_id} AND thread_id=${task.thread_id} AND author_type='human' AND deleted_at IS NULL ORDER BY sequence DESC LIMIT 1`)).rows;
+            const notes = await saveTurnNotes(c, { channelId: thread.channel_id, installationId, producer: { id: installationId, name: definition?.name ?? 'Agent' }, notes: memory.notes, fallbackMessageId: human?.id ?? null });
+            for (const outcome of notes) traceTurn(c, task.id, 'note', outcome);
+          }
         }
       } else if (next === 'failed') await this.append(c, task, 'task.failed', installationId, { error: event.payload.text, ...(event.payload.response ? { response: event.payload.response } : {}) }, event.id);
     });

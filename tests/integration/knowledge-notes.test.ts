@@ -177,3 +177,44 @@ test('knowledge tools over a real MCP client: contribute adds, write edits, the 
     await assert.rejects(contribute.callTool({ name: 'knowledge_list', arguments: {} }), /memory_disabled/);
   } finally { await contribute.close(); await write.close(); }
 });
+
+import { saveTurnNotes } from '@space/postgres/knowledge-notes';
+import type { AgentEvent } from '@space/contracts';
+
+test('turn notes need the switch and a contribute grant, and evidence from this channel', async () => {
+  const a = await bootstrap(pool), b = await bootstrap(pool);
+  const root = await post(a.owner_token, a.channel_id, 'Dedupe on idempotency_key');
+  const foreign = await post(b.owner_token, b.channel_id, 'Elsewhere');
+  const path = `/channels/${a.channel_id}/memory`;
+  const input = (notes: any[]) => ({ channelId: a.channel_id, installationId: a.installation_id, producer: codex, notes, fallbackMessageId: root.id });
+  const plain = { kind: 'decision' as const, title: 'Duplicate charge fix', content: 'Dedupe.', message_ids: [] };
+  assert.deepEqual(await saveTurnNotes(db(), input([plain])), ['knowledge_disabled']);
+  await api(a.owner_token, 'POST', `${path}/knowledge`, { enabled: true });
+  assert.deepEqual(await saveTurnNotes(db(), input([plain])), ['no_grant']);
+  await api(a.owner_token, 'POST', `${path}/agents/${a.installation_id}`, { access: 'contribute' });
+  assert.deepEqual(await saveTurnNotes(db(), input([plain, { ...plain, title: 'Other', message_ids: [foreign.id] }])), ['saved', 'foreign_evidence']);
+  assert.deepEqual(await saveTurnNotes(db(), input([plain])), ['unchanged']);
+  const [row] = (await pool.query('SELECT evidence FROM knowledge_notes WHERE channel_id=$1', [a.channel_id])).rows;
+  assert.deepEqual(row.evidence, [root.id], 'empty evidence falls back to the latest human message');
+});
+
+function agentEvent(executionId: string, sequence: number, type: AgentEvent['type'], payload: AgentEvent['payload']): AgentEvent {
+  return { id: randomUUID(), schema_version: '1.0', execution_id: executionId, sequence, type, occurred_at: new Date().toISOString(), payload };
+}
+
+test('a completed turn saves block notes in the same transaction as checkpoints', async () => {
+  const a = await bootstrap(pool);
+  const path = `/channels/${a.channel_id}/memory`;
+  await api(a.owner_token, 'POST', `${path}/knowledge`, { enabled: true });
+  await api(a.owner_token, 'POST', `${path}/agents/${a.installation_id}`, { access: 'contribute' });
+  await post(a.owner_token, a.channel_id, 'Retries cause duplicate charges', a.thread_id);
+  const task = await store.createTask(a.owner_id, { workspace_id: a.workspace_id, thread_id: a.thread_id, installation_id: a.installation_id, goal: 'Fix', skill: 'demo.echo' }, randomUUID());
+  const approved = await store.approveTask(a.owner_id, task.id);
+  await store.acceptEvent(a.installation_id, agentEvent(approved.active_execution_id!, 1, 'execution.started', { text: 'Working' }));
+  await store.acceptEvent(a.installation_id, agentEvent(approved.active_execution_id!, 2, 'execution.completed', { text: 'Done', response: {
+    messages: [], tools: [], components: [],
+    memory: { notes: [{ kind: 'decision', title: 'Duplicate charge fix', content: 'Dedupe on idempotency_key.', message_ids: [] }] },
+  } as any }));
+  const notes = (await pool.query('SELECT title, producer_id FROM knowledge_notes WHERE channel_id=$1', [a.channel_id])).rows;
+  assert.deepEqual(notes, [{ title: 'Duplicate charge fix', producer_id: a.installation_id }]);
+});
