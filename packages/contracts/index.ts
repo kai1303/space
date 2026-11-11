@@ -16,6 +16,7 @@ export * from './rich-text.js';
 export * from './assets.js';
 export * from './memory.js';
 export * from './thread-context.js';
+export * from './layered-memory.js';
 import type { ThreadContext } from './thread-context.js';
 export const SCHEMA_VERSION = '1.0' as const;
 export type ControlFeature = 'active_steer' | 'queued_followup' | 'cancel' | 'pause' | 'resume' | 'progress_stream' | 'input_request';
