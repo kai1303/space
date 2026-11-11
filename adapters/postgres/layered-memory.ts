@@ -1,6 +1,6 @@
 import { sql } from 'drizzle-orm';
 import {
-  AppError, uuid, chatCursor, encodeChannelCursor, parseChannelCursor,
+  AppError, uuid, chatCursor, encodeChannelCursor, parseChannelCursor, parseThreadCheckpoint,
   CHANNEL_MEMORY_DAYS, CHANNEL_PAGE_DEFAULT, CHANNEL_PAGE_MAX, CHECKPOINT_LIMIT,
   type ChannelMemoryPage, type MemoryNode, type SessionMemory, type ThreadMemory, type MemoryConflict, type AgentMemoryUpdate,
   type ThreadCheckpoint, type ThreadCheckpointInput, type ThreadContextMessage,
@@ -78,6 +78,13 @@ function ownSession(session: { installation_id: string; state: string }, install
 export async function readSessionMemory(c: DbSession, channelId: string, sessionId: string, installationId: string | null): Promise<SessionMemory> {
   const session = await sessionRow(c, channelId, sessionId);
   ownSession(session, installationId);
+  return sessionMemoryFor(c, channelId, session);
+}
+// People: the route authorizes thread access first. Ended sessions stay readable as history.
+export async function readSessionMemoryForPerson(c: DbSession, channelId: string, sessionId: string): Promise<SessionMemory> {
+  return sessionMemoryFor(c, channelId, await sessionRow(c, channelId, sessionId));
+}
+async function sessionMemoryFor(c: DbSession, channelId: string, session: Awaited<ReturnType<typeof sessionRow>>): Promise<SessionMemory> {
   const checkpoint = await sessionCheckpoint(c, session.id);
   const recent = await rows<{ id: string; sequence: string; text: string; text_length: number; author_id: string; attachments: ThreadContextMessage['attachments'] }>(c, sql`
     SELECT id, sequence::text, left(text, 1000) AS text, length(text) AS text_length, installation_id AS author_id, attachments
@@ -97,6 +104,10 @@ export async function readSessionMemory(c: DbSession, channelId: string, session
 export async function writeSessionCheckpoint(c: DbSession, channelId: string, sessionId: string, installationId: string | null, input: ThreadCheckpointInput, producer: { id: string; name: string }): Promise<ThreadCheckpoint> {
   const session = await sessionRow(c, channelId, sessionId);
   ownSession(session, installationId);
+  return insertSessionCheckpoint(c, channelId, session, input, producer);
+}
+async function insertSessionCheckpoint(c: DbSession, channelId: string, session: Awaited<ReturnType<typeof sessionRow>>, input: ThreadCheckpointInput, producer: { id: string; name: string }): Promise<ThreadCheckpoint> {
+  if (session.state === 'ended') throw new AppError(409, 'session_ended');
   await assertContextThread(c, channelId, session.thread_id);
   const current = await sessionCheckpoint(c, session.id);
   if ((current?.revision ?? 0) !== input.revision) throw new AppError(409, 'session_checkpoint_conflict');
@@ -153,4 +164,21 @@ export async function readPendingMemory(c: DbSession, installationId: string, th
       END AS current_revision
     FROM memory_pending p WHERE p.installation_id=${installationId} AND p.scope_key = ANY(${sql.param(keys)}::text[])
     ORDER BY p.scope_key`);
+}
+
+export interface PersonCheckpointInput { revision: number; summary: string; content: string }
+
+// Person edits anchor to the thread's latest message, like turn-end saves.
+async function personInput(c: DbSession, channelId: string, threadId: string, input: PersonCheckpointInput): Promise<ThreadCheckpointInput> {
+  const [last] = await rows<{ id: string; sequence: string }>(c, sql`SELECT id, sequence::text FROM messages WHERE channel_id=${channelId} AND thread_id=${threadId} ORDER BY sequence DESC LIMIT 1`);
+  if (!last) throw new AppError(409, 'thread_empty');
+  return parseThreadCheckpoint({ revision: input.revision, through_sequence: last.sequence, summary: input.summary, content: input.content, source_message_ids: [last.id] });
+}
+export async function writeThreadCheckpointForPerson(c: DbSession, channelId: string, threadId: string, input: PersonCheckpointInput, person: { id: string; name: string }): Promise<ThreadCheckpoint> {
+  await assertContextThread(c, channelId, threadId);
+  return writeThreadCheckpoint(c, channelId, threadId, await personInput(c, channelId, threadId, input), person);
+}
+export async function writeSessionCheckpointForPerson(c: DbSession, channelId: string, sessionId: string, input: PersonCheckpointInput, person: { id: string; name: string }): Promise<ThreadCheckpoint> {
+  const session = await sessionRow(c, channelId, sessionId);
+  return insertSessionCheckpoint(c, channelId, session, await personInput(c, channelId, session.thread_id, input), person);
 }
