@@ -2,7 +2,7 @@ import { forceCollide, forceLink, forceManyBody, forceSimulation, forceX, forceY
 
 export const NODE_RADIUS = 28;
 export const MAX_TICKS = 300;
-export type Point = { x: number; y: number; pinned?: boolean };
+export type Point = { x: number; y: number };
 type SimNode = SimulationNodeDatum & { id: string };
 type SimLink = SimulationLinkDatum<SimNode> & { id: string };
 
@@ -27,7 +27,7 @@ export function layoutGraph(nodes: { id: string }[], links: { id: string; source
   const sim: SimNode[] = ordered.map((n, index) => {
     const known = previous.get(n.id);
     const node: SimNode = known
-      ? { id: n.id, x: known.x, y: known.y, ...(known.pinned ? { fx: known.x, fy: known.y } : {}) }
+      ? { id: n.id, x: known.x, y: known.y }
       : (() => {
         const anchorId = parent.get(n.id);
         const anchor = anchorId ? byId.get(anchorId) : undefined;
@@ -53,7 +53,7 @@ export function layoutGraph(nodes: { id: string }[], links: { id: string; source
   const round = (v: number) => Math.round(v * 10) / 10;
   return new Map(nodes.map(n => {
     const s = byId.get(n.id)!;
-    return [n.id, { x: round(s.x!), y: round(s.y!), ...(s.fx != null ? { pinned: true } : {}) }];
+    return [n.id, { x: round(s.x!), y: round(s.y!) }];
   }));
 }
 

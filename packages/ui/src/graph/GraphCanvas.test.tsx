@@ -78,14 +78,13 @@ it('a drag-and-drop is not a click: it never selects, deselects or toggles', () 
   expect(onSelect).toHaveBeenLastCalledWith('s');
 });
 
-it('a click fixes the node in place, and clicking the selected node deselects it', () => {
+it('a click toggles selection and never pins the node', () => {
   const { onSelect, view } = setup({ selectedId: 't' });
-  const thread = node(/^Dedupe fix/);
-  fireEvent.click(thread);
+  fireEvent.click(node(/^Dedupe fix/));
   expect(onSelect).toHaveBeenLastCalledWith(undefined);
   fireEvent.click(node('Codex, session, ended'));
   expect(onSelect).toHaveBeenLastCalledWith('s');
-  expect(view.container.querySelector('[data-node-id="s"]')!.classList.contains('is-pinned')).toBe(true);
+  expect(view.container.querySelector('.is-pinned')).toBeNull();
 });
 
 it('arrow keys move focus along links', () => {
@@ -116,16 +115,15 @@ it('the ring menu is a donut of equal slices around the selected node and runs a
   expect(hide).toHaveBeenCalled();
 });
 
-it('dragging a node pins it, adds Unpin to the ring, and Unpin frees it', () => {
-  const { view } = setup({ selectedId: 'c', menu: () => [] });
+it('a dropped node is not pinned and no Unpin action exists', () => {
+  const { view } = setup({ selectedId: 'c', menu: () => [{ label: 'Hide', icon: 'dismiss', onClick: () => {} }] });
   const channel = node('#payments, channel');
   const svg = screen.getByRole('application');
   fireEvent.pointerDown(channel, { clientX: 0, clientY: 0, pointerId: 1 });
   fireEvent.pointerMove(svg, { clientX: 80, clientY: 40, pointerId: 1 });
   fireEvent.pointerUp(svg, { pointerId: 1 });
-  expect(view.container.querySelector('[data-node-id="c"]')!.classList.contains('is-pinned')).toBe(true);
-  fireEvent.click(screen.getByRole('menuitem', { name: 'Unpin' }));
-  expect(view.container.querySelector('[data-node-id="c"]')!.classList.contains('is-pinned')).toBe(false);
+  expect(view.container.querySelector('.is-pinned')).toBeNull();
+  expect(screen.queryByRole('menuitem', { name: 'Unpin' })).toBeNull();
 });
 
 it('hover fades nodes and links that are not connected', () => {

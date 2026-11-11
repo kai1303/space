@@ -12,12 +12,11 @@ describe('layoutGraph', () => {
     expect(points.every(p => Number.isFinite(p.x) && Number.isFinite(p.y))).toBe(true);
     for (const p of points) for (const q of points) if (p !== q) expect(Math.hypot(p.x - q.x, p.y - q.y)).toBeGreaterThan(NODE_RADIUS * 1.5);
   });
-  it('keeps pinned nodes in place and places new nodes', () => {
+  it('starts from previous positions and places new nodes', () => {
     const first = layoutGraph(nodes, links);
-    const pinned = new Map([['c', { x: 500, y: 500, pinned: true }]]);
-    const second = layoutGraph([...nodes, { id: 's2' }], [...links, { id: 'e', source: 't2', target: 's2' }], new Map([...first, ...pinned]));
-    expect(second.get('c')).toEqual({ x: 500, y: 500, pinned: true });
+    const second = layoutGraph([...nodes, { id: 's2' }], [...links, { id: 'e', source: 't2', target: 's2' }], first);
     expect(second.get('s2')).toBeDefined();
+    expect(Math.hypot(second.get('c')!.x - first.get('c')!.x, second.get('c')!.y - first.get('c')!.y)).toBeLessThan(80);
   });
   it('returns an empty map for no nodes', () => {
     expect(layoutGraph([], []).size).toBe(0);

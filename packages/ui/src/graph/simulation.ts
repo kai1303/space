@@ -7,8 +7,9 @@ import { NODE_RADIUS, type Point } from './layout.js';
 // - charge −400, collide radius = node radius + 25, link distance = both radii + 90, centre pull 0.03;
 // - a drag restarts the layout once the pointer travels 5 px (Neo4j compares the squared distance
 //   with 25), so clicks never jolt the graph but any real drag wakes it at once; it then runs at
-//   alpha 0.8 with alpha target 0.09 so neighbours swing along; release cools it and keeps the pin;
-// - clicking a node fixes it where it is; Unpin (Neo4j's "Unlock") frees it again;
+//   alpha 0.8 with alpha target 0.09 so neighbours swing along; release cools it;
+// - nothing is ever pinned: a dragged node is held only while the pointer is down and floats
+//   free again on release (Neo4j pins on click and drop; Space deliberately does not);
 // - a hovered node is held still so it never slides out from under the pointer.
 // It stops once alpha < 0.05, so an idle graph schedules nothing.
 export const ALPHA_MIN = 0.05, VELOCITY_DECAY = 0.4, PRECOMPUTE_TICKS = 300, PRECOMPUTE_MS = 250, TICKS_PER_FRAME = 11;
@@ -55,7 +56,7 @@ export class GraphSimulation {
 
   positions(): Map<string, Point> {
     const round = (v: number) => Math.round(v * 10) / 10;
-    return new Map([...this.byId].map(([id, n]) => [id, { x: round(n.x!), y: round(n.y!), ...(n.fx != null && !n.hoverHeld ? { pinned: true } : {}) }]));
+    return new Map([...this.byId].map(([id, n]) => [id, { x: round(n.x!), y: round(n.y!) }]));
   }
 
   // Keeps known nodes where they are; new nodes start next to their parent and spring out.
@@ -101,16 +102,13 @@ export class GraphSimulation {
       this.run();
     } else if (!d.restarted || this.options.reducedMotion) this.run(false);
   }
+  // Let go of the dragged node so it floats free; the layout cools down from here.
   release() {
     const d = this.drag_; this.drag_ = undefined;
+    const node = d ? this.byId.get(d.id) : undefined;
+    if (node) { node.fx = null; node.fy = null; node.hoverHeld = false; }
     if (d?.restarted) this.sim.alphaTarget(0);
-  }
-
-  // A click fixes the node where it currently is (it becomes pinned, not just hover-held).
-  pin(id: string) {
-    const node = this.byId.get(id); if (!node) return;
-    node.fx = node.x; node.fy = node.y; node.hoverHeld = false;
-    this.run(false);
+    else if (node) { this.sim.alpha(Math.max(this.sim.alpha(), 0.1)); this.run(); }
   }
 
   // Hold a hovered node still so it doesn't slide away from the pointer; let go on leave.
@@ -121,12 +119,6 @@ export class GraphSimulation {
   letGo(id: string) {
     const node = this.byId.get(id);
     if (node?.hoverHeld) { node.fx = null; node.fy = null; node.hoverHeld = false; }
-  }
-
-  unpin(id?: string) {
-    for (const node of id ? [this.byId.get(id)].filter(Boolean) as SimNode[] : this.byId.values()) { node.fx = null; node.fy = null; node.hoverHeld = false; }
-    this.sim.alpha(Math.max(this.sim.alpha(), 0.3));
-    this.run();
   }
 
   stop() {

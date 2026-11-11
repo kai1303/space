@@ -650,7 +650,6 @@
 .sp-graph-caption { font-size: 9px; font-weight: 700; fill: #fff; paint-order: stroke; stroke: rgb(0 0 0 / 0.28); stroke-width: 2px; pointer-events: none; }
 .sp-graph-halo { fill: none; stroke: var(--sp-focus); stroke-width: 8; stroke-opacity: 0.35; }
 .sp-graph-node:focus-visible .sp-graph-dot { stroke: var(--sp-focus); stroke-width: 4; }
-.sp-graph-node.is-pinned .sp-graph-dot { stroke-dasharray: 4 2; }
 .sp-graph-node.is-faded, .sp-graph-link.is-faded { opacity: 0.35; }
 /* Ring menu: solid grey slices split by a 2 px background-coloured gap, white line icons, darker on hover. */
 .sp-graph-ring-item { cursor: pointer; outline: none; }

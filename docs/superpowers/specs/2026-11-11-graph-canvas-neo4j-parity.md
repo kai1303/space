@@ -10,8 +10,8 @@ Make `@space/ui/graph` `GraphCanvas` behave like the Neo4j Browser graph view. B
 | --- | --- | --- |
 | Simulation | `d3-force` runs live: charge, link, collide, weak centre `forceX`/`forceY`. Velocity decay 0.4, stops below alpha 0.05, up to 300 ticks pre-computed, then extra ticks per frame | Same forces and constants. Pre-compute up to 300 ticks, then animate the rest with `requestAnimationFrame` until alpha < 0.05, then stop. No timer while idle |
 | New nodes | Placed on a circle, then settle | New nodes start next to their parent and spring out (simulation reheated to alpha 0.3) |
-| Drag | Dragging pins the node (`fx`/`fy`) and raises the alpha target, so neighbours follow. Release keeps it pinned | Same. Drag sets alpha target 0.09 while held, 0 on release. Node stays pinned |
-| Unpin | Ring menu "Unlock" clears the pin | Same, plus double-click on empty space clears all pins |
+| Drag | Dragging pins the node (`fx`/`fy`) and raises the alpha target, so neighbours follow. Release keeps it pinned. A click also pins | Neighbours follow the same way (alpha 0.8, target 0.09 after 5 px). **Space never pins**: the node is held only while dragged and floats free on release; clicks only select. A drag-and-drop is never treated as a click |
+| Unpin | Ring menu "Unlock" clears the pin | Not needed, because nothing is pinned |
 | Caption | Text inside the circle, cut to fit | Caption inside the circle, up to 2 lines, cut with an ellipsis. Text colour picked for contrast |
 | Node style | Light fill per label with a darker border. Size by label style, default radius 25 | Pastel fill from `palette`, border 2 px of a darker shade (`color-mix`). Radius 25 |
 | Relationship | Straight line with an arrowhead. The label sits at the midpoint, upright, and the line is broken around it. Parallel links curve apart | Same. The label gap uses a measured text width (or 6.5 px per character). Labels never render upside down |

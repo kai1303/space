@@ -46,10 +46,11 @@ describe('GraphSimulation', () => {
     const after = sim.positions().get('t1')!;
     expect(Math.hypot(after.x - before.x, after.y - before.y)).toBeGreaterThan(20);
     sim.release(); f.flush();
-    expect(sim.positions().get('c')).toMatchObject({ x: c.x + 300, y: c.y + 300, pinned: true });
+    // Nothing is pinned: once released, the dropped node is pulled back by its links.
+    const dropped = sim.positions().get('c')!;
+    expect(dropped.pinned).toBeUndefined();
+    expect(Math.hypot(dropped.x - (c.x + 300), dropped.y - (c.y + 300))).toBeGreaterThan(20);
     expect(f.pending()).toBe(0);
-    sim.unpin('c'); f.flush();
-    expect(sim.positions().get('c')!.pinned).toBeUndefined();
   });
 
   it('reduced motion settles synchronously and never requests frames', () => {
@@ -77,19 +78,6 @@ describe('GraphSimulation', () => {
     expect(f.pending()).toBe(0);
   });
 
-  it('pin fixes a node where it is, and a hover hold on it is kept as a pin', () => {
-    const f = fakeFrames();
-    const sim = new GraphSimulation(() => {}, { frames: f.frames });
-    sim.update(nodes, links); f.flush();
-    sim.hold('t1');
-    sim.pin('t1');
-    sim.letGo('t1');
-    const pinned = sim.positions().get('t1')!;
-    expect(pinned.pinned).toBe(true);
-    sim.update([...nodes, { id: 's1' }], [...links, { id: 'd', source: 't1', target: 's1' }]); f.flush();
-    expect(sim.positions().get('t1')).toEqual(pinned);
-  });
-
   it('a hovered node is held still and let go on leave without becoming pinned', () => {
     const f = fakeFrames();
     const sim = new GraphSimulation(() => {}, { frames: f.frames });
@@ -100,7 +88,7 @@ describe('GraphSimulation', () => {
     sim.update([...nodes, { id: 's1' }], [...links, { id: 'd', source: 't1', target: 's1' }]); f.flush();
     expect(sim.positions().get('t1')).toEqual(held);
     sim.letGo('t1');
-    sim.unpin(); f.flush();
+    sim.update([...nodes, { id: 's1' }, { id: 's2' }], [...links, { id: 'd', source: 't1', target: 's1' }, { id: 'e', source: 't1', target: 's2' }]); f.flush();
     expect(sim.positions().get('t1')).not.toEqual(held);
   });
 

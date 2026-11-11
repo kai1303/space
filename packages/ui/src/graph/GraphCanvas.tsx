@@ -165,7 +165,7 @@ export function GraphCanvas({ nodes, links, palette, selectedId, expandedIds, on
   const zoomBy = (factor: number) => { autoFit.current = false; const v = viewRef.current, k = clamp(v.k * factor), f = k / v.k; animateView({ k, x: v.x * f, y: v.y * f }); };
 
   const selected = selectedId ? positions.get(selectedId) : undefined;
-  const items = selectedId ? [...(menu?.(selectedId) ?? []), ...(selected?.pinned ? [{ label: 'Unpin', icon: 'unpin', onClick: () => { simulation.current.unpin(selectedId); onSelect(undefined); } }] : [])].slice(0, 4) : [];
+  const items = selectedId ? (menu?.(selectedId) ?? []).slice(0, 4) : [];
   const inner = Math.max(NODE_RADIUS + 8, 20), segment = items.length ? (2 * Math.PI) / items.length : 0;
 
   const press = reduced ? {} : { whileTap: { scale: 0.9 }, transition: fade };
@@ -182,7 +182,7 @@ export function GraphCanvas({ nodes, links, palette, selectedId, expandedIds, on
         onWheel={onWheel} onPointerMove={moveDrag} onPointerUp={endDrag}>
         <defs><marker id="sp-graph-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0L10,5L0,10z" /></marker></defs>
         <rect data-testid="sp-graph-background" x={-5000} y={-5000} width={10000} height={10000} className="sp-graph-background"
-          onPointerDown={event => startDrag(event)} onClick={() => { if (!wasDrag()) onSelect(undefined); }} onDoubleClick={() => simulation.current.unpin()} />
+          onPointerDown={event => startDrag(event)} onClick={() => { if (!wasDrag()) onSelect(undefined); }} />
         <g data-testid="sp-graph-scene" transform={`translate(${view.x},${view.y}) scale(${view.k})`}>
           {/* Links draw themselves in when added and fade out when removed. */}
           <AnimatePresence initial={false}>{links.map(l => {
@@ -210,12 +210,12 @@ export function GraphCanvas({ nodes, links, palette, selectedId, expandedIds, on
             const lines = captionLines(n.caption);
             return <m.g key={n.id} exit={{ opacity: 0 }} transition={fade}><g data-node-id={n.id} role="button" tabIndex={0} aria-label={`${n.caption}, ${n.kind}${n.muted ? ', ended' : ''}`}
               aria-pressed={selectedId === n.id} aria-expanded={expandedIds.has(n.id)} transform={`translate(${p.x},${p.y})`}
-              className={`sp-graph-node${selectedId === n.id ? ' is-selected' : ''}${n.muted ? ' is-muted' : ''}${related && !related.has(n.id) ? ' is-faded' : ''}${p.pinned ? ' is-pinned' : ''}`}
+              className={`sp-graph-node${selectedId === n.id ? ' is-selected' : ''}${n.muted ? ' is-muted' : ''}${related && !related.has(n.id) ? ' is-faded' : ''}`}
               onPointerEnter={() => { setHovered(n.id); simulation.current.hold(n.id); }}
               onPointerLeave={() => { setHovered(h => h === n.id ? undefined : h); simulation.current.letGo(n.id); }}
               onPointerDown={event => { event.stopPropagation(); startDrag(event, n.id); }}
-              // Like Neo4j: a click fixes the node in place and toggles its selection.
-              onClick={event => { event.stopPropagation(); if (wasDrag()) return; simulation.current.pin(n.id); onSelect(selectedId === n.id ? undefined : n.id); }}
+              // A click toggles selection. Nodes are never pinned.
+              onClick={event => { event.stopPropagation(); if (wasDrag()) return; onSelect(selectedId === n.id ? undefined : n.id); }}
               onDoubleClick={event => { event.stopPropagation(); onToggleExpand(n.id); }}
               onKeyDown={event => onNodeKey(event, n.id)}>
               <m.g initial={enters('nodes', n.id) ? { scale: 0, opacity: 0 } : false} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.4 }} transition={spring}>
