@@ -405,9 +405,9 @@ export async function readThreadContext(c: DbSession, channelId: string, threadI
 Add a shared source validator and replace `writeThreadCheckpoint`:
 
 ```typescript
-export async function assertCheckpointSources(c: DbSession, channelId: string, threadId: string, input: ThreadCheckpointInput, scope: 'thread' | 'session', sessionId?: string) {
-  const owned = scope === 'session' ? sql`AND agent_session_id=${sessionId!}` : sql``;
-  const [boundary] = await rows(c, sql`SELECT id FROM messages WHERE channel_id=${channelId} AND thread_id=${threadId} ${owned} AND sequence=${input.through_sequence}::bigint`);
+// The watermark may be any message in the thread, so turn-end saves (Task 10) can use the latest one.
+export async function assertCheckpointSources(c: DbSession, channelId: string, threadId: string, input: ThreadCheckpointInput, scope: 'thread' | 'session') {
+  const [boundary] = await rows(c, sql`SELECT id FROM messages WHERE channel_id=${channelId} AND thread_id=${threadId} AND sequence=${input.through_sequence}::bigint`);
   if (!boundary) throw new AppError(400, `invalid_${scope}_watermark`);
   const found = await rows<{ id: string }>(c, sql`SELECT id FROM messages WHERE channel_id=${channelId} AND thread_id=${threadId}
     AND id = ANY(${sql.param(input.source_message_ids)}::uuid[]) AND sequence<=${input.through_sequence}::bigint`);
@@ -646,7 +646,7 @@ export async function writeSessionCheckpoint(c: DbSession, channelId: string, se
   const current = await sessionCheckpoint(c, session.id);
   if ((current?.revision ?? 0) !== input.revision) throw new AppError(409, 'session_checkpoint_conflict');
   if (current && BigInt(chatCursor(input.through_sequence)) < BigInt(current.through_sequence)) throw new AppError(409, 'session_checkpoint_watermark_conflict');
-  await assertCheckpointSources(c, channelId, session.thread_id, input, 'session', session.id);
+  await assertCheckpointSources(c, channelId, session.thread_id, input, 'session');
   const [saved] = await rows<ThreadCheckpoint>(c, sql`INSERT INTO thread_checkpoints(thread_id,session_id,channel_id,revision,through_sequence,content,summary,source_message_ids,producer_id,producer_name)
     VALUES(${session.thread_id},${session.id},${channelId},${input.revision + 1},${input.through_sequence}::bigint,${input.content},${input.summary},${sql.param(input.source_message_ids)}::uuid[],${producer.id},${producer.name})
     ON CONFLICT (session_id, revision) WHERE session_id IS NOT NULL DO NOTHING
@@ -1015,6 +1015,406 @@ Expected: no output.
 
 ---
 
+---
+
+## Automatic updates (Tasks 9–11)
+
+Each agent turn ends with a hidden `<space-memory>` block in the agent's own answer, so no extra model call is needed. The connector hides the block from people and attaches it as `AgentResponse.memory`. When Space accepts `execution.completed`, it saves the block in the same transaction as the turn result. A conflicting save is kept in `memory_pending` and sent back to the agent in its next task context, so the agent can merge it.
+
+### Task 9: Memory block contract
+
+**Files:**
+- Create: `packages/contracts/memory-block.ts`
+- Modify: `packages/contracts/agent-response.ts`
+- Modify: `packages/contracts/index.ts`
+- Test: `tests/contracts/layered-memory.test.ts`
+
+- [ ] **Step 1: Write the failing test**
+
+Append to `tests/contracts/layered-memory.test.ts`:
+
+```typescript
+import { visibleText, extractMemoryBlock, parseAgentResponse } from '@space/contracts';
+
+const block = '<space-memory>{"session":{"base_revision":2,"summary":"Step 3 fixed","content":"# Progress\\nStep 3 fixed"}}</space-memory>';
+
+test('the memory block is hidden from people while streaming and when final', () => {
+  assert.equal(visibleText(`Done.\n${block}`, true), 'Done.');
+  assert.equal(visibleText('Done.\n<space-mem', false), 'Done.\n');
+  assert.equal(visibleText('a < b', true), 'a < b');
+  assert.equal(visibleText('a <', false), 'a ');
+});
+
+test('extractMemoryBlock parses a valid block and drops a bad one', () => {
+  assert.deepEqual(extractMemoryBlock(`x ${block}`), { session: { base_revision: 2, summary: 'Step 3 fixed', content: '# Progress\nStep 3 fixed' } });
+  assert.equal(extractMemoryBlock('<space-memory>{bad</space-memory>'), undefined);
+  assert.equal(extractMemoryBlock('<space-memory>{"thread":{"base_revision":0,"summary":"","content":"x"}}</space-memory>'), undefined);
+  assert.equal(extractMemoryBlock('no block'), undefined);
+});
+
+test('an invalid memory field never fails the whole response', () => {
+  const response = parseAgentResponse({ messages: [], tools: [], components: [], memory: { session: { base_revision: -1, summary: 'x', content: 'y' } } });
+  assert.equal(response.memory, undefined);
+  const ok = parseAgentResponse({ messages: [], tools: [], components: [], memory: { thread: { base_revision: 0, summary: 's', content: 'c' } } });
+  assert.equal(ok.memory?.thread?.summary, 's');
+});
+```
+
+- [ ] **Step 2: Run the test and confirm it fails**
+
+Run: `cd tests && npx tsx --test contracts/layered-memory.test.ts`
+Expected: FAIL with an import error for `visibleText`.
+
+- [ ] **Step 3: Create `packages/contracts/memory-block.ts`**
+
+```typescript
+import { AppError, record } from './validation.js';
+import { CHECKPOINT_LIMIT, SUMMARY_LIMIT } from './thread-context.js';
+
+export interface AgentMemoryPart { base_revision: number; summary: string; content: string }
+export interface AgentMemoryUpdate { session?: AgentMemoryPart; thread?: AgentMemoryPart }
+
+const OPEN = '<space-memory>', CLOSE = '</space-memory>';
+
+function parsePart(value: unknown): AgentMemoryPart {
+  const p = record(value, ['base_revision', 'summary', 'content']);
+  if (!Number.isSafeInteger(p.base_revision) || (p.base_revision as number) < 0) throw new AppError(400, 'invalid_memory_update');
+  if (typeof p.summary !== 'string' || !p.summary.trim() || p.summary.trim().length > SUMMARY_LIMIT) throw new AppError(400, 'invalid_memory_update');
+  if (typeof p.content !== 'string' || !p.content.trim() || p.content.trim().length > CHECKPOINT_LIMIT || p.content.includes('\0')) throw new AppError(400, 'invalid_memory_update');
+  return { base_revision: p.base_revision as number, summary: p.summary.trim(), content: p.content.trim() };
+}
+export function parseAgentMemoryUpdate(value: unknown): AgentMemoryUpdate {
+  const v = record(value, ['session', 'thread']);
+  if (v.session === undefined && v.thread === undefined) throw new AppError(400, 'invalid_memory_update');
+  return { ...(v.session === undefined ? {} : { session: parsePart(v.session) }), ...(v.thread === undefined ? {} : { thread: parsePart(v.thread) }) };
+}
+
+// While streaming, also hold back a trailing partial "<space-memory" so it never flashes on screen.
+export function visibleText(raw: string, final: boolean): string {
+  const at = raw.indexOf(OPEN);
+  if (at >= 0) return raw.slice(0, at).trimEnd();
+  if (!final) for (let k = Math.min(OPEN.length - 1, raw.length); k > 0; k--) if (OPEN.startsWith(raw.slice(-k))) return raw.slice(0, -k);
+  return raw;
+}
+export function extractMemoryBlock(raw: string): AgentMemoryUpdate | undefined {
+  const start = raw.indexOf(OPEN), end = start < 0 ? -1 : raw.indexOf(CLOSE, start);
+  if (start < 0 || end < 0) return undefined;
+  try { return parseAgentMemoryUpdate(JSON.parse(raw.slice(start + OPEN.length, end))); } catch { return undefined; }
+}
+```
+
+Export it from `packages/contracts/index.ts` with `export * from './memory-block.js';`.
+
+- [ ] **Step 4: Add `memory` to `AgentResponse`**
+
+In `packages/contracts/agent-response.ts`, add the import `import { parseAgentMemoryUpdate, type AgentMemoryUpdate } from './memory-block.js';`, then add `memory?: AgentMemoryUpdate` to the `AgentResponse` type.
+
+In `parseAgentResponse`, add `'memory'` to the `record(input, [...])` key list. Then, where the returned object is built, add:
+
+```typescript
+    ...(() => { if (v.memory === undefined) return {}; try { return { memory: parseAgentMemoryUpdate(v.memory) }; } catch { return {}; } })(),
+```
+
+A bad block is dropped. It never fails the whole turn.
+
+- [ ] **Step 5: Build and run the tests**
+
+Run: `pnpm --filter @space/contracts build && cd tests && npx tsx --test contracts/*.test.ts`
+Expected: PASS for all tests.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add packages/contracts/memory-block.ts packages/contracts/agent-response.ts packages/contracts/index.ts tests/contracts/layered-memory.test.ts
+git commit -m "Add hidden turn-end memory block contract"
+```
+
+---
+
+### Task 10: Save memory when a turn completes
+
+**Files:**
+- Create: `adapters/postgres/migrations/086_memory_pending.sql`
+- Modify: `adapters/postgres/migrate.ts`
+- Modify: `adapters/postgres/layered-memory.ts`
+- Modify: `adapters/postgres/store.ts` (`acceptEvent`, `prepareDelivery`)
+- Modify: `packages/contracts/index.ts`, `packages/contracts/foundation.ts`, `packages/contracts/layered-memory.ts`
+- Test: `tests/integration/layered-memory.test.ts`
+
+- [ ] **Step 1: Write the failing test**
+
+Append to `tests/integration/layered-memory.test.ts`:
+
+```typescript
+import { saveTurnMemory, readPendingMemory } from '@space/postgres/layered-memory';
+
+test('turn-end memory saves both layers, keeps a conflict as pending, and clears it on the next save', async () => {
+  const a = await bootstrap(pool);
+  const root = await post(a.owner_token, a.channel_id, 'Start');
+  const session = randomUUID();
+  await pool.query(`INSERT INTO agent_sessions(id,workspace_id,installation_id,origin_thread_id,title) VALUES($1,$2,$3,$4,'Run')`, [session, a.workspace_id, a.installation_id, root.thread_id]);
+  const base = { channelId: a.channel_id, threadId: root.thread_id, sessionId: session, installationId: a.installation_id, producer: { id: a.installation_id, name: 'Codex' } };
+  const first = await saveTurnMemory(db(), { ...base, memory: { session: { base_revision: 0, summary: 'S1', content: 'session one' }, thread: { base_revision: 0, summary: 'T1', content: 'thread one' } } });
+  assert.deepEqual(first, [{ scope: 'session', outcome: 'saved' }, { scope: 'thread', outcome: 'saved' }]);
+  const stale = await saveTurnMemory(db(), { ...base, memory: { thread: { base_revision: 0, summary: 'T-stale', content: 'stale' } } });
+  assert.deepEqual(stale, [{ scope: 'thread', outcome: 'pending' }]);
+  const pending = await readPendingMemory(db(), a.installation_id, root.thread_id, session);
+  assert.equal(pending.length, 1);
+  assert.equal(pending[0]!.current_revision, 1);
+  assert.equal(pending[0]!.summary, 'T-stale');
+  await saveTurnMemory(db(), { ...base, memory: { thread: { base_revision: 1, summary: 'T2', content: 'merged' } } });
+  assert.equal((await readPendingMemory(db(), a.installation_id, root.thread_id, session)).length, 0);
+  await pool.query(`UPDATE agent_sessions SET state='ended' WHERE id=$1`, [session]);
+  assert.deepEqual(await saveTurnMemory(db(), { ...base, memory: { session: { base_revision: 1, summary: 'S2', content: 'late' } } }), [{ scope: 'session', outcome: 'skipped' }]);
+});
+```
+
+- [ ] **Step 2: Run the test and confirm it fails**
+
+Run: `cd tests && npx tsx --test --test-name-pattern="turn-end" integration/layered-memory.test.ts`
+Expected: FAIL with an import error for `saveTurnMemory`.
+
+- [ ] **Step 3: Add migration 086**
+
+Create `adapters/postgres/migrations/086_memory_pending.sql`:
+
+```sql
+-- One pending (conflicted) turn-end update per installation and scope. The latest one replaces an earlier one.
+CREATE TABLE memory_pending (
+  installation_id uuid NOT NULL REFERENCES agent_installations(id) ON DELETE CASCADE,
+  scope_key text NOT NULL CHECK (scope_key ~ '^(thread|session):[0-9a-f-]{36}$'),
+  base_revision integer NOT NULL CHECK (base_revision >= 0),
+  summary text NOT NULL CHECK (length(btrim(summary)) BETWEEN 1 AND 280),
+  content text NOT NULL CHECK (length(btrim(content)) BETWEEN 1 AND 6000),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (installation_id, scope_key)
+);
+```
+
+Add `'086_memory_pending.sql'` after `'085_layered_memory.sql'` in `adapters/postgres/migrate.ts`.
+
+- [ ] **Step 4: Add `saveTurnMemory` and `readPendingMemory` to `adapters/postgres/layered-memory.ts`**
+
+Add `writeThreadCheckpoint` to the `./thread-context.js` import and `type AgentMemoryUpdate` to the contracts import. Then append:
+
+```typescript
+type TurnScope = 'session' | 'thread';
+export type TurnMemoryOutcome = { scope: TurnScope; outcome: 'saved' | 'pending' | 'skipped' };
+
+// Called inside the execution.completed transaction. It never throws for a bad or stale update,
+// so memory problems cannot fail the agent's turn.
+export async function saveTurnMemory(c: DbSession, input: { channelId: string; threadId: string; sessionId: string | null; installationId: string; producer: { id: string; name: string }; memory: AgentMemoryUpdate }): Promise<TurnMemoryOutcome[]> {
+  const [last] = await rows<{ id: string; sequence: string }>(c, sql`SELECT id, sequence::text FROM messages WHERE channel_id=${input.channelId} AND thread_id=${input.threadId} ORDER BY sequence DESC LIMIT 1`);
+  const results: TurnMemoryOutcome[] = [];
+  for (const scope of ['session', 'thread'] as const) {
+    const part = input.memory[scope];
+    if (!part) continue;
+    if (!last || (scope === 'session' && !input.sessionId)) { results.push({ scope, outcome: 'skipped' }); continue; }
+    const key = scope === 'session' ? `session:${input.sessionId}` : `thread:${input.threadId}`;
+    const checkpoint = { revision: part.base_revision, through_sequence: last.sequence, content: part.content, summary: part.summary, source_message_ids: [last.id] };
+    try {
+      if (scope === 'session') await writeSessionCheckpoint(c, input.channelId, input.sessionId!, input.installationId, checkpoint, input.producer);
+      else await writeThreadCheckpoint(c, input.channelId, input.threadId, checkpoint, input.producer);
+      await c.execute(sql`DELETE FROM memory_pending WHERE installation_id=${input.installationId} AND scope_key=${key}`);
+      results.push({ scope, outcome: 'saved' });
+    } catch (error) {
+      if (!(error instanceof AppError)) throw error;
+      const conflict = error.code === 'thread_checkpoint_conflict' || error.code === 'session_checkpoint_conflict'
+        || error.code === 'thread_checkpoint_watermark_conflict' || error.code === 'session_checkpoint_watermark_conflict';
+      if (!conflict) { results.push({ scope, outcome: 'skipped' }); continue; }
+      await c.execute(sql`INSERT INTO memory_pending(installation_id,scope_key,base_revision,summary,content)
+        VALUES(${input.installationId},${key},${part.base_revision},${part.summary},${part.content})
+        ON CONFLICT (installation_id, scope_key) DO UPDATE SET base_revision=EXCLUDED.base_revision, summary=EXCLUDED.summary, content=EXCLUDED.content, created_at=now()`);
+      results.push({ scope, outcome: 'pending' });
+    }
+  }
+  return results;
+}
+
+export interface PendingMemory { scope: TurnScope; base_revision: number; current_revision: number; summary: string; content: string }
+export async function readPendingMemory(c: DbSession, installationId: string, threadId: string, sessionId: string | null): Promise<PendingMemory[]> {
+  const keys = [`thread:${threadId}`, ...(sessionId ? [`session:${sessionId}`] : [])];
+  return rows<PendingMemory>(c, sql`
+    SELECT split_part(p.scope_key, ':', 1) AS scope, p.base_revision, p.summary, p.content,
+      coalesce((SELECT max(cp.revision) FROM thread_checkpoints cp
+        WHERE (p.scope_key = 'thread:' || cp.thread_id::text AND cp.session_id IS NULL) OR p.scope_key = 'session:' || cp.session_id::text), 0) AS current_revision
+    FROM memory_pending p WHERE p.installation_id=${installationId} AND p.scope_key = ANY(${sql.param(keys)}::text[])
+    ORDER BY p.scope_key`);
+}
+```
+
+`writeThreadCheckpoint` and `writeSessionCheckpoint` throw `AppError` before any statement that could abort the transaction. Their inserts use `ON CONFLICT DO NOTHING`. So catching the error leaves the surrounding turn transaction usable.
+
+- [ ] **Step 5: Hook into `acceptEvent` in `adapters/postgres/store.ts`**
+
+Add `saveTurnMemory` and `readPendingMemory` to the `./layered-memory.js` import. Inside the `if (next === 'completed') {` block (after the line that appends `'task.completed'`), add:
+
+```typescript
+        const memory = event.payload.response?.memory;
+        if (memory) {
+          const [definition] = (await c.execute<{ name: string }>(sql`SELECT d.name FROM agent_installations i JOIN agent_definitions d ON d.id=i.definition_id WHERE i.id=${installationId}`)).rows;
+          const outcomes = await saveTurnMemory(c, { channelId: thread.channel_id, threadId: task.thread_id, sessionId: task.session_id ?? null, installationId, producer: { id: installationId, name: definition?.name ?? 'Agent' }, memory });
+          for (const { scope, outcome } of outcomes) traceTurn(c, task.id, 'memory', `${scope}:${outcome}`);
+        }
+```
+
+Before using it, check `traceTurn`'s signature with `grep -n "function traceTurn" adapters/postgres/*.ts`. If its third argument is a closed union, add `'memory'` to that union.
+
+- [ ] **Step 6: Return pending updates in the next task context**
+
+In `packages/contracts/layered-memory.ts`, add:
+
+```typescript
+export interface MemoryConflict { scope: 'session' | 'thread'; base_revision: number; current_revision: number; summary: string; content: string }
+export function parseMemoryConflicts(value: unknown): MemoryConflict[] {
+  if (!Array.isArray(value) || value.length > 2) throw new AppError(400, 'invalid_memory_conflicts');
+  return value.map(raw => {
+    const v = record(raw, ['scope', 'base_revision', 'current_revision', 'summary', 'content']);
+    if ((v.scope !== 'session' && v.scope !== 'thread') || !Number.isSafeInteger(v.base_revision) || !Number.isSafeInteger(v.current_revision)) throw new AppError(400, 'invalid_memory_conflicts');
+    return { scope: v.scope, base_revision: v.base_revision as number, current_revision: v.current_revision as number, summary: text(v.summary, 280), content: text(v.content, 6000) };
+  });
+}
+```
+
+In `packages/contracts/index.ts`, add `memory_conflicts?:import('./layered-memory.js').MemoryConflict[]` to `InvocationRequest.context`. In `packages/contracts/foundation.ts`, add `'memory_conflicts'` to the context key list and add `...(ctx.memory_conflicts === undefined ? {} : { memory_conflicts: parseMemoryConflicts(ctx.memory_conflicts) }),` to the assembled context.
+
+In `prepareDelivery` in `adapters/postgres/store.ts`, after the `agent_session_memory` lines from Task 6, add:
+
+```typescript
+      const conflicts = await readPendingMemory(c, task.installation_id, task.thread_id, task.session_id ?? null);
+      if (conflicts.length) context.memory_conflicts = conflicts;
+```
+
+- [ ] **Step 7: Add an end-to-end assertion to the test from Step 1**
+
+Before the `UPDATE agent_sessions SET state='ended'` line, add a check that the pending conflict reaches the task context. Use the `prepared(...)` helper pattern from `tests/integration/agent-memory.test.ts`:
+
+```typescript
+  await saveTurnMemory(db(), { ...base, memory: { thread: { base_revision: 0, summary: 'T-stale-2', content: 'stale again' } } });
+  const pendingNow = await readPendingMemory(db(), a.installation_id, root.thread_id, session);
+  assert.equal(pendingNow[0]!.scope, 'thread');
+  assert.equal(pendingNow[0]!.current_revision, 2);
+```
+
+- [ ] **Step 8: Build and run the tests**
+
+Run: `pnpm --filter @space/contracts --filter @space/postgres build && cd tests && npx tsx --test integration/layered-memory.test.ts integration/agent-memory.test.ts integration/tasks*.test.ts contracts/*.test.ts`
+Expected: PASS for all tests. If `integration/tasks*.test.ts` matches no file, drop it and run `integration/task-flow.test.ts`.
+
+- [ ] **Step 9: Commit**
+
+```bash
+git add adapters/postgres/migrations/086_memory_pending.sql adapters/postgres/migrate.ts adapters/postgres/layered-memory.ts adapters/postgres/store.ts packages/contracts/index.ts packages/contracts/foundation.ts packages/contracts/layered-memory.ts tests/integration/layered-memory.test.ts
+git commit -m "Save agent memory automatically when a turn completes"
+```
+
+---
+
+### Task 11: Connectors write and hide the block
+
+**Files:**
+- Create: `apps/connector/memory-instructions.ts`
+- Modify: `apps/connector/agent-progress.ts:41-88` (`snapshot`)
+- Modify: `apps/connector/claude.ts:124,152`, `apps/connector/codex.ts:135,292`, `apps/connector/kiro.ts:161,279`
+- Test: `apps/connector/test/memory-block.test.mjs`
+
+- [ ] **Step 1: Write the failing test**
+
+Create `apps/connector/test/memory-block.test.mjs`:
+
+```javascript
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { AgentProgress } from '../dist/agent-progress.js';
+import { memoryInstructions } from '../dist/memory-instructions.js';
+
+const block = '<space-memory>{"thread":{"base_revision":1,"summary":"Fixed","content":"# Done\\nFixed"}}</space-memory>';
+
+test('progress snapshots hide the block and attach memory only when terminal', () => {
+  const progress = new AgentProgress();
+  const streaming = progress.snapshot([{ id: 'm', text: `Fixed it.\n<space-mem`, status: 'streaming' }], false);
+  assert.equal(streaming.messages[0].text, 'Fixed it.\n');
+  assert.equal(streaming.memory, undefined);
+  const final = progress.snapshot([{ id: 'm', text: `Fixed it.\n${block}`, status: 'complete' }], true);
+  assert.equal(final.messages[0].text, 'Fixed it.');
+  assert.equal(final.memory.thread.summary, 'Fixed');
+});
+
+test('instructions name the base revisions from the supplied context', () => {
+  const text = memoryInstructions({ thread_id: 't', messages: [], working_memory: { checkpoint: { revision: 3 } }, agent_session_memory: { checkpoint: null } });
+  assert.match(text, /<space-memory>/);
+  assert.match(text, /thread base_revision 3/);
+  assert.match(text, /session base_revision 0/);
+  assert.equal(memoryInstructions(undefined), '');
+});
+```
+
+Before running, check how `AgentProgress` is constructed: `grep -n "constructor" apps/connector/agent-progress.ts`. If it takes arguments, pass the same ones that `apps/connector/test/agent-progress.test.mjs` uses.
+
+- [ ] **Step 2: Run the test and confirm it fails**
+
+Run: `pnpm --filter @space/connector build && node --test apps/connector/test/memory-block.test.mjs`
+Expected: FAIL. `streaming.messages[0].text` still contains `<space-mem`.
+
+- [ ] **Step 3: Create `apps/connector/memory-instructions.ts`**
+
+```typescript
+import type { InvocationRequest } from '@space/contracts';
+
+type Context = InvocationRequest['context'] | { working_memory?: { checkpoint?: { revision: number } | null }; agent_session_memory?: { checkpoint?: { revision: number } | null } } | undefined;
+
+// The block rides on the agent's own final answer, so saving memory costs no extra model call.
+export function memoryInstructions(context: Context): string {
+  if (!context) return '';
+  const thread = context.working_memory?.checkpoint?.revision ?? 0;
+  const session = context.agent_session_memory ? context.agent_session_memory.checkpoint?.revision ?? 0 : undefined;
+  return `\n\nAfter your answer, add one hidden memory block. People never see it:\n<space-memory>{"thread":{"base_revision":N,"summary":"…","content":"…"}${session === undefined ? '' : ',"session":{"base_revision":N,"summary":"…","content":"…"}'}}</space-memory>\n`
+    + `Use thread base_revision ${thread}${session === undefined ? '' : ` and session base_revision ${session}`}. `
+    + 'Each content replaces the whole checkpoint: keep decisions, open questions and progress, drop finished items, at most 6000 characters. Each summary is one line of at most 280 characters. '
+    + 'Leave out a layer that did not change. If memory_conflicts is present, merge it into your update.';
+}
+```
+
+- [ ] **Step 4: Hide and extract in `AgentProgress.snapshot`**
+
+In `apps/connector/agent-progress.ts`, add the import `import { visibleText, extractMemoryBlock } from '@space/contracts';`. At the start of `snapshot(messages, terminal = false)`, add:
+
+```typescript
+    const memory = terminal ? extractMemoryBlock(messages.map(m => m.text).join('\n\n')) : undefined;
+    messages = messages.map(m => ({ ...m, text: visibleText(m.text, terminal) }));
+```
+
+Add `...(memory ? { memory } : {})` to the object passed to the first `parseAgentResponse({...})` call on line 46. The final `parseAgentResponse(snapshot)` on line 88 keeps the field.
+
+- [ ] **Step 5: Hide the block in `payload.text` and add the instructions**
+
+Add `import { visibleText } from '@space/contracts';` and `import { memoryInstructions } from './memory-instructions.js';` to each runtime.
+
+| File | Line | Change |
+| --- | --- | --- |
+| `apps/connector/claude.ts` | 124 (`payload: { text: value, …`) | `text: visibleText(value, terminal)` |
+| `apps/connector/claude.ts` | 152 (`const prompt = …`) | Append `${memoryInstructions(request.context)}` after `${request.goal}` |
+| `apps/connector/codex.ts` | 135 (`payload: { text, …`) | `text: visibleText(text, terminal)` |
+| `apps/connector/codex.ts` | 292 (`const prompt = …`) | Append `${memoryInstructions(request.context)}` after `${request.goal}` |
+| `apps/connector/kiro.ts` | 161 (`text: detail,`) | `text: visibleText(detail, terminal),` |
+| `apps/connector/kiro.ts` | 279 (`const content = …`) | Append `${memoryInstructions(request.context)}` after `${request.goal}` |
+
+- [ ] **Step 6: Build and run all connector tests**
+
+Run: `pnpm --filter @space/contracts --filter @space/connector build && pnpm --filter @space/connector test`
+Expected: PASS for all tests. Tests that compare exact prompt text (for example in `apps/connector/test/kiro.test.mjs` or `claude.test.mjs`) need the instruction suffix added to the expected string whenever their fixture invocation has a `context`.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add apps/connector/memory-instructions.ts apps/connector/agent-progress.ts apps/connector/claude.ts apps/connector/codex.ts apps/connector/kiro.ts apps/connector/test
+git commit -m "Write turn-end memory from connectors and hide it from people"
+```
+
+- [ ] **Step 8: Run Task 8 (full verification) again**
+
+---
+
 ## Spec coverage
 
 | Spec requirement | Task |
@@ -1030,3 +1430,6 @@ Expected: no output.
 | Membership rechecked per call | 5 (existing `store.connected`) |
 | Task context layers and `channel_notes` rename | 6 |
 | Tests 1–10 from the spec | 1 (8), 3 (1, 7), 4 (4, 6), 5 (2, 3, 5, 9), 6 (10) |
+| Automatic turn-end updates, hidden block, no extra model call | 9, 11 |
+| Saved in the turn transaction, conflicts kept as pending and sent back | 10 |
+| Bad memory never fails a turn | 9 (parse), 10 (`saveTurnMemory`) |

@@ -79,6 +79,27 @@ Every layer returns the same envelope, so an agent can move down and up:
 - The write uses an optimistic check: the insert succeeds only when `revision` is still the latest. Otherwise it returns `409 thread_checkpoint_conflict` or `409 session_checkpoint_conflict`. The writer inserts `revision + 1`, and the partial unique indexes make the check atomic. No explicit or distributed locks are used.
 - Space never writes or invents a summary or checkpoint and runs no model for memory.
 
+## Automatic updates
+
+Memory updates on its own at the end of every agent turn, and costs no extra model call.
+
+```
+agent's final answer ... <space-memory>{"session":{...},"thread":{...}}</space-memory>
+        │ connector hides the block from people (also while streaming)
+        ▼
+AgentResponse.memory ──► execution.completed ──► Space saves both layers in the same transaction
+                                                   ├─ saved    → new revision
+                                                   ├─ conflict → memory_pending, sent back in the next context
+                                                   └─ invalid  → dropped; the turn still succeeds
+```
+
+- The connector adds short instructions to each turn prompt. They name the base revisions taken from the task context.
+- Each part (`session`, `thread`) holds `base_revision`, `summary` (≤280) and `content` (≤6,000). A part the agent leaves out is not changed.
+- Space saves each part with the same optimistic insert as the tools. The watermark and source are the thread's latest message.
+- On a conflict, the update is kept as one `memory_pending` row per installation and scope, replaced by the newest one. The next task context includes it as `memory_conflicts`, and the agent merges it in its next block. A successful save deletes the pending row.
+- A bad block, an ended session or invalid sources never fail the turn. The outcome is recorded in the turn trace.
+- The MCP tools stay available for updates in the middle of a turn.
+
 ## Compaction
 
 - The agent compacts its own checkpoint. It reads, rewrites the whole checkpoint shorter (dropping finished items, merging repeats, keeping decisions and open questions) and saves it against the revision it read.
