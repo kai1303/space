@@ -111,6 +111,10 @@
       "types": "./dist/workspace-retention.d.ts",
       "default": "./dist/workspace-retention.js"
     },
+    "./scheduled-messages": {
+      "types": "./dist/scheduled-messages.d.ts",
+      "default": "./dist/scheduled-messages.js"
+    },
     "./todo-sync": {
       "types": "./dist/todo-sync.d.ts",
       "default": "./dist/todo-sync.js"

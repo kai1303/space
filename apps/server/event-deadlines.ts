@@ -4,6 +4,7 @@ import { uuid } from '@space/contracts';
 import type { PostgresStore } from '@space/postgres/store';
 import type { AssetStore } from '@space/postgres/assets';
 import type { AssetStorage } from './storage.js';
+import type { ScheduledMessageStore } from '@space/postgres/scheduled-messages';
 
 async function due(message: EventDelivery): Promise<boolean> {
   const timestamp = Date.parse(message.event.available_at ?? '');
@@ -11,10 +12,20 @@ async function due(message: EventDelivery): Promise<boolean> {
   return true;
 }
 
-export function registerEventDeadlines(app: FastifyInstance, getEvents: () => Promise<EventBus>, tasks: PostgresStore, assets: AssetStore, storage?: AssetStorage) {
+export function registerEventDeadlines(app: FastifyInstance, getEvents: () => Promise<EventBus>, tasks: PostgresStore, assets: AssetStore, storage?: AssetStorage, scheduled?: ScheduledMessageStore) {
   const stops: (() => Promise<void>)[] = [];
   app.addHook('onReady', async () => {
     const bus = await getEvents();
+    // Scheduled sends: the broker releases each event at send_at. deliver() is conditional on the schedule
+    // version and the send is idempotent, so early, stale and repeated deliveries are safe.
+    if (scheduled) stops.push(await bus.subscribe('scheduled.message_due.*', {durable:'scheduled-messages',queue:'scheduled-messages',maxPending:8}, async message => {
+      if (!await due(message)) return;
+      const {scheduled_id,version} = message.event.data;
+      if (typeof scheduled_id !== 'string' || !Number.isSafeInteger(version) || Number(version) < 1) { await message.ack(); return; }
+      const remaining = await scheduled.deliver(uuid(scheduled_id), Number(version));
+      if (remaining > 0) await message.retry(remaining);
+      else await message.ack();
+    }));
     stops.push(await bus.subscribe('todo.reminder_due.*', {durable:'todo-reminders',queue:'todo-reminders',maxPending:16}, async message => {
       if (!await due(message)) return;
       const {todo_id,remind_at,reminder_version} = message.event.data;

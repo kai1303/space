@@ -82,3 +82,4 @@ export * from './huddles.js';
 
 export * from './channel-permissions.js';
 export * from './knowledge.js';
+export * from './scheduled-messages.js';

@@ -23,6 +23,8 @@ import { registerWorkspaceHubRoutes } from './workspace-hub.js';
 import { TodoSyncStore } from '@space/postgres/todo-sync';
 import { TODO_SYNC_PATH, registerTodoSyncRoutes } from './todo-sync.js';
 import { registerEventDeadlines } from './event-deadlines.js';
+import { registerScheduledMessageRoutes } from './scheduled-messages.js';
+import { ScheduledMessageStore } from '@space/postgres/scheduled-messages';
 import { AgentSessionStore } from '@space/postgres/agent-sessions';
 import {directTurns} from './direct-turns.js';
 import { registerAgentSessionRoutes } from './agent-sessions.js';
@@ -156,6 +158,8 @@ export function createApi(store: PostgresStore, options: { workflowChat?: Workfl
 
   const chat = new ChatStore(store.pool);
   registerChatRoutes(app, chat);
+  const scheduled = new ScheduledMessageStore(store.pool, chat);
+  registerScheduledMessageRoutes(app, scheduled);
   registerWorkflowChat(app, chat, options.workflowChat);
   registerNavigatorRoutes(app, new NavigatorStore(store.pool));
   const memory = new MemoryStore(store.pool), memoryProviders = createMemoryProviders(options.memory);
@@ -180,7 +184,7 @@ export function createApi(store: PostgresStore, options: { workflowChat?: Workfl
   registerAgentConnections(app, io, connections, store, onOutbox, getEvents, work);
   registerToolApprovals(app,io,new ToolApprovalStore(store.pool),connections,work,onOutbox,invalidate);
   registerSearch(app, new SearchStore(store.pool), getEvents, options.search);
-  registerEventDeadlines(app, getEvents, store, assets, options.storage);
+  registerEventDeadlines(app, getEvents, store, assets, options.storage, scheduled);
   registerWorkspaceRetention(app,getEvents,new WorkspaceRetentionStore(store.pool),options.storage);
   if(options.invitationEmail) registerInvitationEmailDelivery(app,getEvents,invitations,options.invitationEmail.mailer);
   return app;
