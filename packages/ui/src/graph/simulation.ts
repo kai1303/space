@@ -1,19 +1,26 @@
 import { forceCollide, forceLink, forceManyBody, forceSimulation, forceX, forceY, type Simulation, type SimulationLinkDatum, type SimulationNodeDatum } from 'd3-force';
 import { NODE_RADIUS, type Point } from './layout.js';
 
-// Live force layout. It pre-computes most of the settling, animates the rest on animation
-// frames, and stops once cool, so an idle graph schedules nothing.
-// Several ticks per frame so dragged neighbours keep up with the pointer.
-export const ALPHA_MIN = 0.05, VELOCITY_DECAY = 0.4, PRECOMPUTE_TICKS = 300, TICKS_PER_FRAME = 3;
-export const REHEAT_ALPHA = 0.3, DRAG_ALPHA_TARGET = 0.3;
+// Live force layout tuned to feel like the Neo4j Browser graph view (behaviour studied, code our own):
+// - start hot (alpha 1), pre-compute up to 300 ticks or 250 ms, then animate the rest,
+//   one tick plus 10 extra per frame, so the picture settles quickly;
+// - charge −400, collide radius = node radius + 25, link distance = both radii + 90, centre pull 0.03;
+// - a drag restarts the layout only after the pointer travels 25 px (clicks never jolt the graph),
+//   then runs at alpha 0.8 with alpha target 0.09 so neighbours follow; release cools it and keeps the pin;
+// - a hovered node is held still so it never slides out from under the pointer.
+// It stops once alpha < 0.05, so an idle graph schedules nothing.
+export const ALPHA_MIN = 0.05, VELOCITY_DECAY = 0.4, PRECOMPUTE_TICKS = 300, PRECOMPUTE_MS = 250, TICKS_PER_FRAME = 11;
+export const START_ALPHA = 1, DRAG_ALPHA = 0.8, DRAG_ALPHA_TARGET = 0.09, DRAG_TOLERANCE = 25;
+export const CHARGE = -400, CENTER_PULL = 0.03, COLLIDE_PADDING = 25, LINK_GAP = 90;
 
-type SimNode = SimulationNodeDatum & { id: string };
+type SimNode = SimulationNodeDatum & { id: string; hoverHeld?: boolean };
 type SimLink = SimulationLinkDatum<SimNode> & { id: string };
 export type FrameScheduler = { request(callback: () => void): number; cancel(handle: number): void };
 const browserFrames: FrameScheduler = {
   request: callback => requestAnimationFrame(callback),
   cancel: handle => cancelAnimationFrame(handle),
 };
+const now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
 
 function seeded(seed = 1) {
   let state = seed >>> 0;
@@ -24,7 +31,7 @@ export class GraphSimulation {
   private readonly sim: Simulation<SimNode, SimLink>;
   private readonly byId = new Map<string, SimNode>();
   private frame: number | undefined;
-  private dragging = false;
+  private drag_: { id: string; startX: number; startY: number; restarted: boolean } | undefined;
 
   constructor(private readonly onTick: (positions: Map<string, Point>) => void,
     private readonly options: { reducedMotion?: boolean; frames?: FrameScheduler } = {}) {
@@ -32,20 +39,21 @@ export class GraphSimulation {
       .randomSource(seeded())
       .velocityDecay(VELOCITY_DECAY)
       .alphaMin(ALPHA_MIN)
-      .force('charge', forceManyBody<SimNode>().strength(-420))
-      .force('collide', forceCollide<SimNode>(NODE_RADIUS * 1.6))
-      .force('x', forceX<SimNode>(0).strength(0.03))
-      .force('y', forceY<SimNode>(0).strength(0.03))
+      .force('charge', forceManyBody<SimNode>().strength(CHARGE))
+      .force('collide', forceCollide<SimNode>(NODE_RADIUS + COLLIDE_PADDING))
+      .force('x', forceX<SimNode>(0).strength(CENTER_PULL))
+      .force('y', forceY<SimNode>(0).strength(CENTER_PULL))
       .stop();
   }
 
   get running() { return this.frame !== undefined; }
+  get dragging() { return !!this.drag_?.restarted; }
   get settled() { return !this.dragging && this.sim.alpha() < ALPHA_MIN; }
   get alpha() { return this.sim.alpha(); }
 
   positions(): Map<string, Point> {
     const round = (v: number) => Math.round(v * 10) / 10;
-    return new Map([...this.byId].map(([id, n]) => [id, { x: round(n.x!), y: round(n.y!), ...(n.fx != null ? { pinned: true } : {}) }]));
+    return new Map([...this.byId].map(([id, n]) => [id, { x: round(n.x!), y: round(n.y!), ...(n.fx != null && !n.hoverHeld ? { pinned: true } : {}) }]));
   }
 
   // Keeps known nodes where they are; new nodes start next to their parent and spring out.
@@ -53,6 +61,7 @@ export class GraphSimulation {
     const ids = new Set(nodes.map(n => n.id));
     const kept = links.filter(l => ids.has(l.source) && ids.has(l.target));
     const parent = new Map(kept.map(l => [l.target, l.source]));
+    const before = (this.sim.force('link') as ReturnType<typeof forceLink> | undefined)?.links().length ?? 0;
     for (const id of [...this.byId.keys()]) if (!ids.has(id)) this.byId.delete(id);
     const fresh = nodes.filter(n => !this.byId.has(n.id));
     const firstRun = this.byId.size === 0;
@@ -64,26 +73,51 @@ export class GraphSimulation {
       this.byId.set(n.id, { id: n.id, x: (anchor?.x ?? 0) + Math.cos(angle) * distance, y: (anchor?.y ?? 0) + Math.sin(angle) * distance });
     }
     this.sim.nodes(nodes.map(n => this.byId.get(n.id)!));
-    this.sim.force('link', forceLink<SimNode, SimLink>(kept.map(l => ({ id: l.id, source: l.source, target: l.target }))).id(n => n.id).distance(NODE_RADIUS * 2 + 90));
-    if (!fresh.length && kept.length === (this.sim.force('link') as ReturnType<typeof forceLink>).links().length && !firstRun) return;
-    if (firstRun) this.settle(PRECOMPUTE_TICKS);
-    this.reheat(firstRun ? this.sim.alpha() : REHEAT_ALPHA);
+    this.sim.force('link', forceLink<SimNode, SimLink>(kept.map(l => ({ id: l.id, source: l.source, target: l.target })))
+      .id(n => n.id).distance(NODE_RADIUS * 2 + LINK_GAP));
+    if (!firstRun && !fresh.length && kept.length === before && nodes.length === this.sim.nodes().length) return;
+    this.sim.alpha(START_ALPHA);
+    // The first layout is pre-computed so the graph opens already in shape. Later additions
+    // (an expand) animate from the parent so new nodes visibly spring out.
+    if (firstRun) this.precompute();
+    this.run();
   }
 
-  drag(id: string, x: number, y: number) {
+  // Drag: the node follows the pointer at once; the layout restarts only past the tolerance.
+  dragStart(id: string, clientX: number, clientY: number) {
+    if (!this.byId.has(id)) return;
+    this.drag_ = { id, startX: clientX, startY: clientY, restarted: false };
+  }
+  drag(id: string, x: number, y: number, clientX?: number, clientY?: number) {
     const node = this.byId.get(id); if (!node) return;
-    node.fx = x; node.fy = y;
-    if (!this.dragging) { this.dragging = true; this.sim.alphaTarget(DRAG_ALPHA_TARGET); this.reheat(Math.max(this.sim.alpha(), DRAG_ALPHA_TARGET * 2)); }
-    else if (this.options.reducedMotion) this.reheat(this.sim.alpha());
+    node.fx = x; node.fy = y; node.x = x; node.y = y; node.hoverHeld = false;
+    const d = this.drag_ ?? (this.drag_ = { id, startX: clientX ?? 0, startY: clientY ?? 0, restarted: false });
+    const travelled = clientX === undefined ? Infinity : Math.hypot(clientX - d.startX, (clientY ?? 0) - d.startY);
+    if (!d.restarted && travelled > DRAG_TOLERANCE) {
+      d.restarted = true;
+      this.sim.alphaTarget(DRAG_ALPHA_TARGET).alpha(DRAG_ALPHA);
+      this.run();
+    } else if (!d.restarted || this.options.reducedMotion) this.run(false);
   }
   release() {
-    if (!this.dragging) return;
-    this.dragging = false; this.sim.alphaTarget(0);
+    const d = this.drag_; this.drag_ = undefined;
+    if (d?.restarted) this.sim.alphaTarget(0);
   }
-  pin(id: string, point: Point) { const node = this.byId.get(id); if (node) { node.fx = point.x; node.fy = point.y; node.x = point.x; node.y = point.y; } }
+
+  // Hold a hovered node still so it doesn't slide away from the pointer; let go on leave.
+  hold(id: string) {
+    const node = this.byId.get(id);
+    if (node && node.fx == null) { node.fx = node.x; node.fy = node.y; node.hoverHeld = true; }
+  }
+  letGo(id: string) {
+    const node = this.byId.get(id);
+    if (node?.hoverHeld) { node.fx = null; node.fy = null; node.hoverHeld = false; }
+  }
+
   unpin(id?: string) {
-    for (const node of id ? [this.byId.get(id)].filter(Boolean) as SimNode[] : this.byId.values()) { node.fx = null; node.fy = null; }
-    this.reheat(REHEAT_ALPHA);
+    for (const node of id ? [this.byId.get(id)].filter(Boolean) as SimNode[] : this.byId.values()) { node.fx = null; node.fy = null; node.hoverHeld = false; }
+    this.sim.alpha(Math.max(this.sim.alpha(), 0.3));
+    this.run();
   }
 
   stop() {
@@ -91,18 +125,22 @@ export class GraphSimulation {
     this.frame = undefined;
   }
 
-  private settle(maxTicks: number) {
-    for (let tick = 0; tick < maxTicks && this.sim.alpha() >= ALPHA_MIN; tick++) this.sim.tick();
+  private precompute() {
+    const start = now();
+    for (let tick = 0; tick < PRECOMPUTE_TICKS && this.sim.alpha() >= ALPHA_MIN; tick++) {
+      this.sim.tick();
+      if (!this.options.reducedMotion && now() - start >= PRECOMPUTE_MS) break;
+    }
   }
-  private reheat(alpha: number) {
-    this.sim.alpha(alpha);
+  // animate=false only paints the current positions (e.g. a node moved under the pointer).
+  private run(animate = true) {
     if (this.options.reducedMotion) {
-      this.settle(PRECOMPUTE_TICKS);
+      if (animate) for (let tick = 0; tick < PRECOMPUTE_TICKS && this.sim.alpha() >= Math.max(ALPHA_MIN, this.sim.alphaTarget()); tick++) this.sim.tick();
       this.onTick(this.positions());
       return;
     }
     this.onTick(this.positions());
-    if (this.frame === undefined && (this.sim.alpha() >= ALPHA_MIN || this.dragging)) this.schedule();
+    if (animate && this.frame === undefined && (this.sim.alpha() >= ALPHA_MIN || this.dragging)) this.schedule();
   }
   private schedule() {
     const frames = this.options.frames ?? browserFrames;

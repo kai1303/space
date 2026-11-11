@@ -114,7 +114,7 @@ it('zoom buttons change the scale and fit restores the fitted view', () => {
   setup();
   const scene = screen.getByTestId('sp-graph-scene');
   const before = scene.getAttribute('transform');
-  fireEvent.click(screen.getByRole('button', { name: 'Zoom in' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Zoom out' }));
   expect(scene.getAttribute('transform')).not.toBe(before);
   fireEvent.click(screen.getByRole('button', { name: 'Fit graph' }));
   expect(scene.getAttribute('transform')).toBe(before);
@@ -142,9 +142,9 @@ it('wheel zoom keeps the scene point under the pointer still', () => {
   const read = () => { const [, x, y, k] = /translate\((-?[\d.]+),(-?[\d.]+)\) scale\(([\d.]+)\)/.exec(scene.getAttribute('transform')!)!.map(Number); return { x: x!, y: y!, k: k! }; };
   const px = 600 - 400, py = 450 - 300;
   const before = read();
-  fireEvent.wheel(svg, { clientX: 600, clientY: 450, deltaY: -100 });
+  fireEvent.wheel(svg, { clientX: 600, clientY: 450, deltaY: 100 });
   const after = read();
-  expect(after.k).toBeGreaterThan(before.k);
+  expect(after.k).toBeLessThan(before.k);
   expect((px - after.x) / after.k).toBeCloseTo((px - before.x) / before.k, 6);
   expect((py - after.y) / after.k).toBeCloseTo((py - before.y) / before.k, 6);
 });

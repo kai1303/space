@@ -17,7 +17,8 @@ export type GraphCanvasProps = {
   label: string;
 };
 export const MAX_GRAPH_NODES = 500;
-const MIN_SCALE = 0.2, MAX_SCALE = 4, VIEW_W = 800, VIEW_H = 600, RING_WIDTH = 30;
+// Zoom 0.1–2× like Neo4j; button and fit zooms ease over 400 ms, wheel zoom is immediate.
+const MIN_SCALE = 0.1, MAX_SCALE = 2, VIEW_W = 800, VIEW_H = 600, RING_WIDTH = 30, FIT_PADDING = 0.05, ZOOM_MS = 400;
 const clamp = (v: number) => Math.min(MAX_SCALE, Math.max(MIN_SCALE, v));
 const pairKey = (a: string, b: string) => (a < b ? `${a}|${b}` : `${b}|${a}`);
 const reducedMotion = () => typeof window === 'undefined' || typeof window.matchMedia !== 'function' || window.matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -59,18 +60,37 @@ export function GraphCanvas({ nodes, links, palette, selectedId, expandedIds, on
   const fit = (points: Map<string, Point>) => {
     const all = [...points.values()];
     if (!all.length) return { x: 0, y: 0, k: 1 };
-    const pad = NODE_RADIUS + RING_WIDTH + 24;
+    const pad = NODE_RADIUS + 12;
     const minX = Math.min(...all.map(p => p.x)) - pad, maxX = Math.max(...all.map(p => p.x)) + pad;
     const minY = Math.min(...all.map(p => p.y)) - pad, maxY = Math.max(...all.map(p => p.y)) + pad;
-    const k = clamp(Math.min(VIEW_W / (maxX - minX), VIEW_H / (maxY - minY), 1.4));
+    const k = clamp(Math.min(VIEW_W * (1 - 2 * FIT_PADDING) / (maxX - minX), VIEW_H * (1 - 2 * FIT_PADDING) / (maxY - minY), MAX_SCALE));
     return { x: -((minX + maxX) / 2) * k, y: -((minY + maxY) / 2) * k, k };
   };
+  const motion = useRef({ reduced: reducedMotion(), frame: undefined as number | undefined });
+  const viewRef = useRef(view); viewRef.current = view;
+  // Ease the view to a target over ZOOM_MS (immediately with reduced motion).
+  const animateView = (target: { x: number; y: number; k: number }) => {
+    if (motion.current.frame !== undefined) cancelAnimationFrame(motion.current.frame);
+    if (motion.current.reduced || typeof requestAnimationFrame !== 'function') { setView(target); return; }
+    const from = viewRef.current, start = performance.now();
+    const step = () => {
+      const t = Math.min(1, (performance.now() - start) / ZOOM_MS), e = 1 - (1 - t) ** 3;
+      setView({ x: from.x + (target.x - from.x) * e, y: from.y + (target.y - from.y) * e, k: from.k + (target.k - from.k) * e });
+      motion.current.frame = t < 1 ? requestAnimationFrame(step) : undefined;
+    };
+    motion.current.frame = requestAnimationFrame(step);
+  };
+  const wasSettled = useRef(false);
   const simulation = useRef<GraphSimulation>(null as unknown as GraphSimulation);
   if (!simulation.current) simulation.current = new GraphSimulation(next => {
     setPositions(next);
-    if (autoFit.current && simulation.current?.settled !== false) setView(fit(next));
-  }, { reducedMotion: reducedMotion() });
-  useEffect(() => () => simulation.current.stop(), []);
+    // Like Neo4j, fit once the layout comes to rest (not on every frame), until the user takes over.
+    const settled = simulation.current?.settled !== false;
+    if (autoFit.current && settled && !wasSettled.current) animateView(fit(next));
+    else if (autoFit.current && settled && motion.current.reduced) setView(fit(next));
+    wasSettled.current = settled;
+  }, { reducedMotion: motion.current.reduced });
+  useEffect(() => () => { simulation.current.stop(); if (motion.current.frame !== undefined) cancelAnimationFrame(motion.current.frame); }, []);
 
   // Re-run the layout only when the set of nodes or links changes, not on caption updates.
   const shape = useMemo(() => `${nodes.map(n => n.id).join(',')}|${links.map(l => `${l.source}>${l.target}`).join(',')}`, [nodes, links]);
@@ -105,6 +125,7 @@ export function GraphCanvas({ nodes, links, palette, selectedId, expandedIds, on
   const startDrag = (event: PointerEvent, id?: string) => {
     const origin = id ? positions.get(id) ?? { x: 0, y: 0 } : { x: view.x, y: view.y };
     drag.current = { id, startX: event.clientX, startY: event.clientY, origin, moved: false };
+    if (id) simulation.current.dragStart(id, event.clientX, event.clientY);
     (event.target as Element).setPointerCapture?.(event.pointerId);
   };
   const moveDrag = (event: PointerEvent) => {
@@ -112,7 +133,7 @@ export function GraphCanvas({ nodes, links, palette, selectedId, expandedIds, on
     const dx = (event.clientX - d.startX) * scale(), dy = (event.clientY - d.startY) * scale();
     if (!d.moved && Math.hypot(dx, dy) < 4) return;
     d.moved = true; autoFit.current = false;
-    if (d.id) simulation.current.drag(d.id, d.origin.x + dx / view.k, d.origin.y + dy / view.k);
+    if (d.id) simulation.current.drag(d.id, d.origin.x + dx / view.k, d.origin.y + dy / view.k, event.clientX, event.clientY);
     else setView(v => ({ ...v, x: d.origin.x + dx, y: d.origin.y + dy }));
   };
   const endDrag = () => { const d = drag.current; drag.current = null; if (d?.id && d.moved) simulation.current.release(); return d?.moved; };
@@ -124,7 +145,7 @@ export function GraphCanvas({ nodes, links, palette, selectedId, expandedIds, on
     const py = rect?.height ? (event.clientY - rect.top) * (VIEW_H / rect.height) - VIEW_H / 2 : 0;
     setView(v => { const k = clamp(v.k * (event.deltaY < 0 ? 1.1 : 1 / 1.1)), f = k / v.k; return { k, x: px - (px - v.x) * f, y: py - (py - v.y) * f }; });
   };
-  const zoomBy = (factor: number) => { autoFit.current = false; setView(v => { const k = clamp(v.k * factor), f = k / v.k; return { k, x: v.x * f, y: v.y * f }; }); };
+  const zoomBy = (factor: number) => { autoFit.current = false; const v = viewRef.current, k = clamp(v.k * factor), f = k / v.k; animateView({ k, x: v.x * f, y: v.y * f }); };
 
   const selected = selectedId ? positions.get(selectedId) : undefined;
   const items = selectedId ? [...(menu?.(selectedId) ?? []), ...(selected?.pinned ? [{ label: 'Unpin', icon: 'unpin', onClick: () => simulation.current.unpin(selectedId) }] : [])].slice(0, 4) : [];
@@ -134,7 +155,7 @@ export function GraphCanvas({ nodes, links, palette, selectedId, expandedIds, on
     <div className="sp-graph-toolbar">
       <button type="button" aria-label="Zoom in" onClick={() => zoomBy(1.25)}>+</button>
       <button type="button" aria-label="Zoom out" onClick={() => zoomBy(1 / 1.25)}>−</button>
-      <button type="button" aria-label="Fit graph" onClick={() => { autoFit.current = true; setView(fit(positions)); }}>⤢</button>
+      <button type="button" aria-label="Fit graph" onClick={() => { autoFit.current = true; animateView(fit(positions)); }}>⤢</button>
       <ul className="sp-graph-legend" aria-label="Legend">{Object.entries(palette).map(([kind, color]) =>
         <li key={kind}><span style={{ background: color }} />{kind}</li>)}</ul>
     </div>
@@ -167,7 +188,8 @@ export function GraphCanvas({ nodes, links, palette, selectedId, expandedIds, on
             return <g key={n.id} data-node-id={n.id} role="button" tabIndex={0} aria-label={`${n.caption}, ${n.kind}${n.muted ? ', ended' : ''}`}
               aria-pressed={selectedId === n.id} aria-expanded={expandedIds.has(n.id)} transform={`translate(${p.x},${p.y})`}
               className={`sp-graph-node${selectedId === n.id ? ' is-selected' : ''}${n.muted ? ' is-muted' : ''}${related && !related.has(n.id) ? ' is-faded' : ''}${p.pinned ? ' is-pinned' : ''}`}
-              onPointerEnter={() => setHovered(n.id)} onPointerLeave={() => setHovered(h => h === n.id ? undefined : h)}
+              onPointerEnter={() => { setHovered(n.id); simulation.current.hold(n.id); }}
+              onPointerLeave={() => { setHovered(h => h === n.id ? undefined : h); simulation.current.letGo(n.id); }}
               onPointerDown={event => { event.stopPropagation(); startDrag(event, n.id); }}
               onClick={event => { event.stopPropagation(); if (!endDrag()) onSelect(n.id); }}
               onDoubleClick={event => { event.stopPropagation(); onToggleExpand(n.id); }}
