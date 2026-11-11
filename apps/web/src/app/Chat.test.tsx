@@ -1017,13 +1017,15 @@ function mockUnreadChat() {
   return { fetch, snapshot };
 }
 it('updates unopened channel badges from authoritative realtime snapshots without double counting', async () => {
-  const { snapshot } = mockUnreadChat();
+  const { snapshot: base } = mockUnreadChat();
+  // Channel badges count mentions unless the channel opts into a badge for every post.
+  const snapshot = { ...base, channels: base.channels.map(c => ({ ...c, mention_count: c.unread_count })) };
   render(<Chat />);
   await waitFor(() => expect(mocks.sockets.some(s => s.requests.some((r: any) => r.name === 'workspace.subscribe'))).toBe(true));
   const socket = mocks.sockets.find(s => s.requests.some((r: any) => r.name === 'workspace.subscribe'));
   await act(async () => { socket.receive('workspace.unread', snapshot, vi.fn()); });
   await screen.findByLabelText('3 unread');
-  const updated = { ...snapshot, channels: snapshot.channels.map(c => c.channel_id === 'second' ? { ...c, unread_count: 4, latest_sequence: '4' } : c) };
+  const updated = { ...snapshot, channels: snapshot.channels.map(c => c.channel_id === 'second' ? { ...c, unread_count: 4, mention_count: 4, latest_sequence: '4' } : c) };
   await act(async () => { socket.receive('workspace.unread', updated, vi.fn()); socket.receive('workspace.unread', updated, vi.fn()); });
   expect(screen.getAllByLabelText('4 unread')).toHaveLength(1);
   expect(screen.queryByLabelText('3 unread')).toBeNull();
@@ -2138,6 +2140,7 @@ it('opens integrations for a sidebar channel while the active conversation stays
     if (path === '/v1/channels/builds') return builds;
     if (path.endsWith('/permissions')) return {capabilities:{post:true,reply:true,manage:true},manager_ids:[]};
     if (path.endsWith('/webhooks')) return [];
+    if (path.endsWith('/navigator')) return {candidates:[]};
     if (isMessageHistory(path)) return messagePage();
     if (path.includes('/history')) return {events:[],cursor:'0',has_more:false};
     return {items:[],next_cursor:null};
@@ -2147,7 +2150,9 @@ it('opens integrations for a sidebar channel while the active conversation stays
   fireEvent.contextMenu(screen.getByRole('button',{name:'builds',exact:true}));
   await userEvent.click(await screen.findByRole('menuitem',{name:'Channel details'}));
   const modal = await screen.findByRole('dialog',{name:'# builds'});
-  await userEvent.click(within(modal).getByRole('tab',{name:'Integrations'}));
+  await userEvent.click(within(modal).getByRole('tab',{name:'Agents & apps'}));
+  await within(modal).findByText('No agents or apps have been added to this channel.');
+  await userEvent.click(within(modal).getByRole('button',{name:'Manage'}));
   await within(modal).findByRole('button',{name:'Create incoming webhook'});
   expect(composer.isConnected).toBe(true);
   expect(screen.getByRole('button',{name:'general',exact:true,hidden:true}).getAttribute('aria-current')).toBe('page');
