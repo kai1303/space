@@ -259,4 +259,6 @@
   .chat-channel-header [aria-label="Star conversation"],.chat-channel-header [aria-label="Unstar conversation"]{display:none}
   .chat-header-actions .chat-channel-member-button{font-size:0;gap:0;width:32px;height:32px;padding:0;justify-content:center;border:0}
   .chat-channel-topic{display:none}
+  /* Slack adds and edits channel tabs from the desktop app only. */
+  .chat-channel-tabs .channel-tab-menu{display:none}
 }
