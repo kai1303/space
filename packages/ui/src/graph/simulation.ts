@@ -5,7 +5,7 @@ import { NODE_RADIUS, type Point } from './layout.js';
 // frames, and stops once cool, so an idle graph schedules nothing.
 // Several ticks per frame so dragged neighbours keep up with the pointer.
 export const ALPHA_MIN = 0.05, VELOCITY_DECAY = 0.4, PRECOMPUTE_TICKS = 300, TICKS_PER_FRAME = 3;
-export const REHEAT_ALPHA = 0.3, DRAG_ALPHA_TARGET = 0.09;
+export const REHEAT_ALPHA = 0.3, DRAG_ALPHA_TARGET = 0.3;
 
 type SimNode = SimulationNodeDatum & { id: string };
 type SimLink = SimulationLinkDatum<SimNode> & { id: string };
