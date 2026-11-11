@@ -139,6 +139,12 @@
   .chat-app .chat-sidebar-backdrop { display: none; }
   .chat-app .chat-mobile-toggle { display: none; }
   .chat-topbar-account { display: flex; flex-shrink: 0; }
+  /* Slack's floating compose button, bottom right of the conversation list. */
+  .chat-app .chat-sidebar .sp-sidebar-compose {
+    position: absolute; right: 16px; bottom: 16px; z-index: 3; width: 56px; height: 56px; min-height: 56px; border-radius: 16px;
+    background: var(--sp-accent); color: var(--sp-on-accent); box-shadow: 0 6px 20px #0000004d;
+  }
+  .chat-app .chat-sidebar .sp-sidebar-compose svg { width: 24px; height: 24px; }
   .chat-topbar-account .space-account-menu > summary { padding: 0; }
   .rail-peek { width: min(360px, calc(100vw - 16px)); }
 }

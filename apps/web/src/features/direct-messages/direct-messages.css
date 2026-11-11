@@ -58,3 +58,11 @@
 
 .dm-row.rail-peek-row { border: 0; }
 .dm-row.rail-peek-row time { flex-shrink: 0; align-self: flex-start; color: var(--sp-text-secondary); font-size: 12px; }
+/* Phones: New message floats bottom right, like Slack's compose button. */
+@media (max-width: 720px) {
+  .dm-heading > .sp-icon-button[aria-label="New message"] {
+    position: absolute; right: 16px; bottom: 16px; z-index: 3; width: 56px; height: 56px; min-height: 56px; border-radius: 16px;
+    background: var(--sp-accent); color: var(--sp-on-accent); box-shadow: 0 6px 20px #0000004d;
+  }
+  .dm-heading > .sp-icon-button[aria-label="New message"] svg { width: 24px; height: 24px; }
+}
