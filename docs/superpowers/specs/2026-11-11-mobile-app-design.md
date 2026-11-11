@@ -1,13 +1,13 @@
 # Space mobile app (first version)
 
-Add `apps/mobile` (`@space/mobile`), an Expo + React Native + TypeScript app for iOS and Android. The first version lets a signed-in member read and send channel messages in realtime. It talks to the existing `apps/server` API and does not change chat behavior.
+Add `apps/mobile` (`@space/mobile`), an Expo + React Native + TypeScript app for iOS and Android. The first version lets a signed-in member read and send channel messages in realtime. It talks to the existing `apps/server` API and needs no server change.
 
 ## Scope
 
 In scope:
 
 1. Sign in with email and password, sign out, and session expiry handling.
-2. Workspace channel list for the signed-in member.
+2. Pick a workspace (skipped when the member has exactly one), then list its joined channels.
 3. Channel conversation: load recent history, page older history, send a text message, and receive new messages live.
 
 Out of scope for this version: direct messages, threads, agents and agent sessions, files and previews, mentions UI, search, huddles and calls, push notifications, sign-up and email verification, offline send queue. Each gets its own spec later.
@@ -16,79 +16,81 @@ Out of scope for this version: direct messages, threads, agents and agent sessio
 
 ```
 apps/mobile/
-  app.json              Expo config (scheme `space`)
-  metro.config.js       pnpm workspace resolution
-  app/                  Expo Router routes
-    _layout.tsx         session owner + auth gate
+  app.json                Expo config (scheme `space`)
+  app/                    Expo Router routes
+    _layout.tsx           AuthProvider
     sign-in.tsx
-    (app)/index.tsx     channel list
-    (app)/channels/[channelId].tsx
+    (app)/_layout.tsx     auth gate + realtime session owner
+    (app)/index.tsx       workspace list
+    (app)/workspaces/[workspaceId].tsx   channel list
+    (app)/channels/[channelId].tsx       conversation
   src/
     features/
-      auth/             sign-in screen, session store
-      channels/         channel list
-      chat/             timeline, composer, history paging
+      auth/               AuthProvider, sign-in screen
+      channels/           channel list
+      chat/               history window, outbox, conversation screen
+      workspaces/         workspace list
     shared/
-      api/              fetch wrapper with auth headers and error mapping
-      realtime/         socket.io session owner
-      storage/          expo-secure-store wrapper
-      config.ts         server base URL
-  test/
+      api/                cookie jar, session client, request helpers
+      realtime/           socket.io session owner
+      storage/            expo-secure-store wrapper
+      config.ts           server base URL
 ```
 
-It follows the web split: product behavior in `features`, infrastructure in `shared`. `features` must not import from `app`; `shared` must not import `features`. The app does not import `@space/ui` or `apps/web`, because both target the DOM. It may import `@space/contracts` for request and event types. It must not import server-only packages.
+It follows the web split: product behavior in `features`, infrastructure in `shared`. `features` must not import from `app`; `shared` must not import `features`. The app does not import `@space/ui` or `apps/web`, because both target the DOM. It uses `import type` only from `@space/contracts`, so no contracts runtime code enters the bundle. It must not import server-only packages.
 
-`pnpm-workspace.yaml` already includes `apps/*`. Add root scripts `mobile` (`pnpm --filter @space/mobile start`) and wire `typecheck` and `test` into Turbo. Metro needs `watchFolders` set to the repo root and `nodeModulesPaths` for both the app and root `node_modules`, so hoisted pnpm packages resolve. `@space/contracts` must build before the mobile bundle and typecheck; declare it as a `workspace:*` dependency so Turbo orders it.
+`pnpm-workspace.yaml` already includes `apps/*`, and Expo detects pnpm monorepos and configures Metro itself, so the app ships no custom `metro.config.js`. Add a root `mobile` script (`pnpm --filter @space/mobile start`). The app's `typecheck` and `test` scripts join the existing Turbo tasks; `@space/contracts` is a `workspace:*` dependency so Turbo builds its types first.
+
+`src/features/chat/history-window.ts` is a copy of the web file of the same name, with its tests. Moving it into a shared package is a separate change.
 
 ## Authentication
 
-The server uses Better Auth with a custom JWT session cookie (`apps/server/session-jwt.ts`). `apps/server/api.ts` rejects any cookie-carrying write whose `Origin` is not trusted, and the session plugin checks `Origin` too. Native apps send no `Origin` header by default.
+The server uses Better Auth with a 15-minute access JWT cookie and a rotating refresh cookie (`apps/server/session-jwt.ts`). Cookie-carrying writes, `/v1/auth/refresh` and the Socket.IO handshake all require an `Origin` in the trusted set, which always contains the server's own origin.
 
-Approach: use Better Auth's Expo integration.
+Approach: the app is a native client, so it handles cookies and `Origin` itself. No server plugin and no new trusted origin.
 
-- Server: add the `@better-auth/expo` server plugin to `createAuthentication`. Operators add the app origin (`space://`) to `AUTH_TRUSTED_ORIGINS`; nothing is trusted by default.
-- Client: `createAuthClient` with `expoClient({ scheme: 'space', storage: SecureStore })`. The plugin stores the session cookie in the device keychain and attaches it to auth requests.
-- Non-auth API calls and the socket handshake go through `shared/api`, which sets `Cookie` from secure storage and `Origin: space://` on every request. The existing origin check then applies unchanged.
+- Every request sends `Origin` equal to the server's own origin (from `EXPO_PUBLIC_SPACE_URL`) and `credentials: 'omit'`, so the platform cookie store is not used.
+- A small cookie jar keeps the `Set-Cookie` values from each response and sends them back as a `Cookie` header. The jar is saved in `expo-secure-store` and nowhere else. It is never logged.
+- Renewal follows the web `session-fetch.ts` rules: renew before a request once the access deadline (`x-space-access-expires`) has passed, renew once on a 401 with `x-space-auth-required`, and share a single renewal between concurrent callers.
+- A failed renewal, or a second socket `unauthorized` after one renewal, clears the jar and routes to sign-in. Sign-out calls the server, then clears the jar even if the call fails.
 
-The session token lives only in `expo-secure-store`. It is never logged or kept in plain `AsyncStorage`. A 401 from the API, or `session.revoked` from the socket, clears storage and routes to sign-in. Sign-out calls the server sign-out endpoint, then clears storage even if the call fails.
-
-The plan must confirm that the JWT session plugin's origin check and cookie rewriting accept these requests, and adjust only if a test proves they do not.
+Why not a custom scheme origin such as `space://`: `new URL('space://').origin` is the string `"null"`, so adding it to `AUTH_TRUSTED_ORIGINS` would also trust `Origin: null`, which sandboxed browser frames send. The `Origin` check protects browsers from cross-site requests. A native app is not a browser, so sending the server's own origin gives up nothing.
 
 ## Realtime
 
-One socket.io connection per signed-in session, owned by the root layout (the mobile counterpart of the web `SocketSession`). Features subscribe through it and unsubscribe on unmount. Settings mirror the web client: websocket transport, explicit connect, backoff from 1 s to 30 s with jitter, one session recovery attempt before treating the session as expired.
+One socket.io connection per signed-in session, owned by `app/(app)/_layout.tsx` (the mobile counterpart of the web `SocketSession`). It sends the cookie jar and `Origin` as handshake headers, and rebuilds them before each connect. Features subscribe through it and unsubscribe on unmount. Commands are sent one at a time, because the server answers `busy` to a second command in flight. Settings mirror the web client: websocket transport, explicit connect, backoff from 1 s to 30 s with jitter, one session renewal before treating the session as expired. After any renewal the socket reconnects with the new cookie.
 
 App state handling uses React Native `AppState` events, not a timer:
 
 - Going to background disconnects the socket.
-- Returning to foreground reconnects, then refetches history after the newest message the screen holds, through the same paged history API. This is the durable recovery path for anything missed while disconnected.
+- Returning to foreground reconnects. On `connect` the open channel sends `channel.subscribe` with the last event cursor it saw, and the server replays every event after it. This is the same durable recovery the web client uses.
+- If the server answers `invalid_cursor`, the screen reloads the latest history page and subscribes from its `event_cursor`.
 
-Incoming events are merged by message id, so a message that arrives both live and from the catch-up fetch shows once.
+Incoming messages are merged by id, so a message that arrives both from replay and from history shows once.
 
 ## Chat
 
-- History: request recent messages for the channel, then older pages on scroll to top. Page size and request shapes match the web `useMessageHistory`.
-- Send: the composer emits `message.send` on the socket with a client-generated `client_message_id`, matching the web `message-outbox.ts` contract. The message shows as pending until a server message with the same `client_message_id` and author arrives. A failed send stays in the list with a retry action that reuses the same `client_message_id`.
+- History: `GET /v1/channels/:id/messages`, then older pages with `?before=<older_cursor>`. The screen keeps at most 500 messages (the web `HISTORY_LIMIT`) and loads one page at a time. Thread replies are hidden, as in the web channel view.
+- Send: the composer emits `message.send` on the socket with a client-generated `client_message_id`, matching the web `message-sender.ts` contract. The message shows as pending until a server message with the same `client_message_id` and author arrives. A failed send stays in the list with a retry action that reuses the same `client_message_id`. Text is capped at 16,000 characters, the server limit, and at most 50 messages can be pending.
 - Message text renders as plain text in this version. Rich formatting can follow later.
-- Payload and list sizes are bounded: one page in flight at a time and a capped number of messages kept in memory per channel.
 
 ## Configuration
 
-The server base URL comes from `EXPO_PUBLIC_SPACE_URL`. Development builds may use `http://` against a LAN address; release builds require `https://`. No secrets live in the app bundle.
+The server base URL comes from `EXPO_PUBLIC_SPACE_URL` and must be an origin with no path. Development builds may use `http://` against a LAN address; release builds require `https://`. No secrets live in the app bundle.
 
 ## Error handling
 
-- Network failure: show an inline banner and keep the last loaded data.
+- Network failure: show an inline banner and keep the last loaded data. A failed start-up session check shows a retry screen and keeps the stored session.
 - 401 or revoked session: clear the session and route to sign-in.
-- 403 on a channel: show a no-access state and return to the channel list.
+- 403 or 404 on a channel: show a no-access state with a way back to the channel list.
 - Other server errors: map through a shared error-text helper, like web `error-text.ts`.
 
 ## Testing
 
-- Unit tests (Jest with `jest-expo` and React Native Testing Library): session store, API wrapper headers and 401 handling, history merge and dedupe, send pending, failure and retry with a stable `client_message_id`, socket lifecycle on `AppState` changes.
-- Server test: a request with `Origin: space://` and a mobile session cookie succeeds when that origin is configured, and fails when it is not.
-- Manual check on the iOS simulator and an Android emulator against a local stack: sign in, open a channel, send from mobile and see it on web, send from web and see it on mobile, background the app, send from web, foreground, and confirm the missed message appears once.
+- Unit tests (Jest with `jest-expo` and React Native Testing Library): config validation, cookie jar parsing, session client (sign-in, renewal, expiry, shared renewal), request errors, realtime session (headers, renewal, command order), history merge and dedupe, outbox pending, failure and retry with a stable `client_message_id`, sign-in screen.
+- Server test in `tests/integration/auth.test.ts`: a client that sends only explicit `Cookie` and same-origin `Origin` headers can sign in, write, renew and open a socket with the renewed cookies.
+- Manual check on the iOS simulator and an Android emulator against a local stack: sign in, open a channel, send from mobile and see it on web, send from web and see it on mobile, background the app, send from web, foreground, and confirm the missed message appears once. Sign out and confirm the app cannot read `/v1/me`.
 
 ## Done when
 
-The app builds with `pnpm mobile` in Expo Go or a development build, all tests above pass in CI, `pnpm typecheck` covers the app, and the manual check passes on both platforms.
+The app starts with `pnpm mobile` in Expo Go, all tests above pass, `pnpm typecheck` covers the app, and the manual check passes on both platforms.
