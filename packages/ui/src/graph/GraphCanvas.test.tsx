@@ -59,6 +59,25 @@ it('click selects, double-click and Enter toggle expand, background click clears
   expect(onSelect).toHaveBeenLastCalledWith(undefined);
 });
 
+it('a drag-and-drop is not a click: it never selects, deselects or toggles', () => {
+  const { onSelect } = setup({ selectedId: 't' });
+  const svg = screen.getByRole('application');
+  const drop = (target: Element) => {
+    fireEvent.pointerDown(target, { clientX: 0, clientY: 0, pointerId: 1 });
+    fireEvent.pointerMove(svg, { clientX: 60, clientY: 30, pointerId: 1 });
+    fireEvent.pointerUp(svg, { pointerId: 1 });
+    fireEvent.click(target);
+  };
+  drop(node(/^Dedupe fix/));
+  drop(node('Codex, session, ended'));
+  drop(screen.getByTestId('sp-graph-background'));
+  expect(onSelect).not.toHaveBeenCalled();
+  fireEvent.pointerDown(node('Codex, session, ended'), { clientX: 0, clientY: 0, pointerId: 1 });
+  fireEvent.pointerUp(svg, { pointerId: 1 });
+  fireEvent.click(node('Codex, session, ended'));
+  expect(onSelect).toHaveBeenLastCalledWith('s');
+});
+
 it('a click fixes the node in place, and clicking the selected node deselects it', () => {
   const { onSelect, view } = setup({ selectedId: 't' });
   const thread = node(/^Dedupe fix/);

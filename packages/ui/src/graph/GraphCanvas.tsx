@@ -56,6 +56,7 @@ export function GraphCanvas({ nodes, links, palette, selectedId, expandedIds, on
   const [detailsOpen, setDetailsOpen] = useState(true);
   const autoFit = useRef(true);
   const drag = useRef<{ id?: string; startX: number; startY: number; origin: Point; moved: boolean } | null>(null);
+  const swallowClick = useRef(false);
   const svg = useRef<SVGSVGElement>(null);
   const tooMany = nodes.length > MAX_GRAPH_NODES;
 
@@ -131,6 +132,7 @@ export function GraphCanvas({ nodes, links, palette, selectedId, expandedIds, on
     }
   };
   const startDrag = (event: PointerEvent, id?: string) => {
+    swallowClick.current = false;
     const origin = id ? positions.get(id) ?? { x: 0, y: 0 } : { x: view.x, y: view.y };
     drag.current = { id, startX: event.clientX, startY: event.clientY, origin, moved: false };
     if (id) simulation.current.dragStart(id, event.clientX, event.clientY);
@@ -144,7 +146,14 @@ export function GraphCanvas({ nodes, links, palette, selectedId, expandedIds, on
     if (d.id) simulation.current.drag(d.id, d.origin.x + dx / view.k, d.origin.y + dy / view.k, event.clientX, event.clientY);
     else setView(v => ({ ...v, x: d.origin.x + dx, y: d.origin.y + dy }));
   };
-  const endDrag = () => { const d = drag.current; drag.current = null; if (d?.id && d.moved) simulation.current.release(); return d?.moved; };
+  // pointerup ends a drag before the browser fires its click, so remember that the gesture was a
+  // drag and swallow the click that follows: a drag-and-drop never selects, pins or deselects.
+  const endDrag = () => {
+    const d = drag.current; drag.current = null;
+    if (d?.moved) { swallowClick.current = true; if (d.id) simulation.current.release(); }
+    return d?.moved;
+  };
+  const wasDrag = () => { endDrag(); const dragged = swallowClick.current; swallowClick.current = false; return dragged; };
   // Zoom keeps the scene point under the pointer still.
   const onWheel = (event: WheelEvent) => {
     autoFit.current = false;
@@ -173,7 +182,7 @@ export function GraphCanvas({ nodes, links, palette, selectedId, expandedIds, on
         onWheel={onWheel} onPointerMove={moveDrag} onPointerUp={endDrag}>
         <defs><marker id="sp-graph-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0L10,5L0,10z" /></marker></defs>
         <rect data-testid="sp-graph-background" x={-5000} y={-5000} width={10000} height={10000} className="sp-graph-background"
-          onPointerDown={event => startDrag(event)} onClick={() => { if (!endDrag()) onSelect(undefined); }} onDoubleClick={() => simulation.current.unpin()} />
+          onPointerDown={event => startDrag(event)} onClick={() => { if (!wasDrag()) onSelect(undefined); }} onDoubleClick={() => simulation.current.unpin()} />
         <g data-testid="sp-graph-scene" transform={`translate(${view.x},${view.y}) scale(${view.k})`}>
           {/* Links draw themselves in when added and fade out when removed. */}
           <AnimatePresence initial={false}>{links.map(l => {
@@ -206,7 +215,7 @@ export function GraphCanvas({ nodes, links, palette, selectedId, expandedIds, on
               onPointerLeave={() => { setHovered(h => h === n.id ? undefined : h); simulation.current.letGo(n.id); }}
               onPointerDown={event => { event.stopPropagation(); startDrag(event, n.id); }}
               // Like Neo4j: a click fixes the node in place and toggles its selection.
-              onClick={event => { event.stopPropagation(); if (endDrag()) return; simulation.current.pin(n.id); onSelect(selectedId === n.id ? undefined : n.id); }}
+              onClick={event => { event.stopPropagation(); if (wasDrag()) return; simulation.current.pin(n.id); onSelect(selectedId === n.id ? undefined : n.id); }}
               onDoubleClick={event => { event.stopPropagation(); onToggleExpand(n.id); }}
               onKeyDown={event => onNodeKey(event, n.id)}>
               <m.g initial={enters('nodes', n.id) ? { scale: 0, opacity: 0 } : false} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.4 }} transition={spring}>
