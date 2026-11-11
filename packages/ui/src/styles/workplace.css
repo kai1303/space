@@ -614,3 +614,34 @@
 .sp-sidebar-context-menu .sp-menu-group-title{display:block;padding:3px 8px;color:var(--sp-text-secondary);font-size:12px}
 .sp-sidebar-context-menu kbd{font:inherit;color:var(--sp-text-secondary)}
 
+/* Graph view (memory graph and future graph views) */
+.sp-graph { display: grid; grid-template-rows: auto 1fr; height: 100%; min-height: 420px; border: 1px solid var(--sp-border); border-radius: var(--sp-radius-md); background: var(--sp-surface); overflow: hidden; }
+.sp-graph-toolbar { display: flex; gap: 6px; align-items: center; padding: 6px 8px; border-bottom: 1px solid var(--sp-border); }
+.sp-graph-toolbar > button { width: 28px; height: 28px; border-radius: var(--sp-radius-sm); border: 1px solid var(--sp-border); background: transparent; color: var(--sp-text); cursor: pointer; }
+.sp-graph-toolbar > button:hover { background: var(--sp-surface-hover); }
+.sp-graph-legend { display: flex; gap: 10px; margin: 0 0 0 auto; padding: 0; list-style: none; font-size: 12px; color: var(--sp-text-secondary); text-transform: capitalize; }
+.sp-graph-legend span { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 4px; vertical-align: -1px; }
+.sp-graph-stage { position: relative; min-height: 360px; overflow: hidden; }
+.sp-graph-svg { position: absolute; inset: 0; display: block; width: 100%; height: 100%; touch-action: none; user-select: none; }
+.sp-graph-background { fill: transparent; cursor: grab; }
+.sp-graph-background:active { cursor: grabbing; }
+.sp-graph-link path { fill: none; stroke: var(--sp-text-tertiary); stroke-width: 1.5; }
+.sp-graph-link-gap { fill: var(--sp-surface); }
+.sp-graph-link text { font-size: 9px; fill: var(--sp-text-secondary); letter-spacing: 0.04em; pointer-events: none; }
+#sp-graph-arrow path { fill: var(--sp-text-tertiary); }
+.sp-graph-node { cursor: pointer; outline: none; }
+.sp-graph-dot { stroke-width: 2; }
+.sp-graph-caption { font-size: 10px; font-weight: 600; fill: #1b1b1f; pointer-events: none; }
+.sp-graph-halo { fill: none; stroke: var(--sp-focus); stroke-width: 4; stroke-opacity: 0.55; }
+.sp-graph-node:focus-visible .sp-graph-dot { stroke: var(--sp-focus); stroke-width: 4; }
+.sp-graph-node.is-pinned .sp-graph-dot { stroke-dasharray: 4 2; }
+.sp-graph-node.is-faded, .sp-graph-link.is-faded { opacity: 0.35; }
+.sp-graph-ring-item { cursor: pointer; outline: none; }
+.sp-graph-ring-item path { fill: color-mix(in srgb, var(--sp-surface-raised) 85%, var(--sp-text) 15%); stroke: var(--sp-border); stroke-width: 1; }
+.sp-graph-ring-item:hover path, .sp-graph-ring-item:focus-visible path { fill: color-mix(in srgb, var(--sp-accent) 30%, var(--sp-surface-raised)); }
+.sp-graph-ring-item text { font-size: 12px; fill: var(--sp-text); pointer-events: none; }
+.sp-graph-details { position: absolute; top: 8px; right: 8px; width: min(300px, 45%); max-height: calc(100% - 16px); overflow: auto; display: flex; flex-direction: column; gap: 6px; padding: 8px; border: 1px solid var(--sp-border); border-radius: var(--sp-radius-md); background: color-mix(in srgb, var(--sp-surface-raised) 94%, transparent); box-shadow: 0 6px 24px rgb(0 0 0 / 0.18); }
+.sp-graph-details.is-collapsed { width: auto; }
+.sp-graph-details-toggle { align-self: flex-end; border: 0; background: transparent; color: var(--sp-text-secondary); font-size: 12px; cursor: pointer; }
+.sp-graph-status { padding: 16px; color: var(--sp-text-secondary); }
+@media (prefers-reduced-motion: no-preference) { .sp-graph-node.is-faded, .sp-graph-link.is-faded { transition: opacity 120ms ease-out; } }
