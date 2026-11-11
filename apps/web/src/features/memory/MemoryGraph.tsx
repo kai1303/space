@@ -108,11 +108,11 @@ export function MemoryGraph({ channel, name, onSelect, onAccessLost, onOpenThrea
   const menu = (id: string) => {
     const item = lookup.get(id);
     if (!item || item.kind === 'channel') return [];
-    const hide = { label: 'Hide', icon: '✕', onClick: () => { setHidden(old => new Set(old).add(id)); select(undefined); } };
+    const hide = { label: 'Hide', icon: 'dismiss', onClick: () => { setHidden(old => new Set(old).add(id)); select(undefined); } };
     if (item.kind === 'thread') return [
-      { label: expanded.has(item.node.ref.id) ? 'Collapse' : 'Expand', icon: expanded.has(item.node.ref.id) ? '−' : '+', onClick: () => void toggle(id) },
-      ...(onOpenThread ? [{ label: 'Open thread', icon: '↗', onClick: () => onOpenThread(item.node.ref.id) }] : []), hide];
-    return [...(onOpenSession ? [{ label: 'Open session', icon: '↗', onClick: () => onOpenSession(item.threadId, item.node.ref.id) }] : []), hide];
+      { label: expanded.has(item.node.ref.id) ? 'Collapse' : 'Expand', icon: expanded.has(item.node.ref.id) ? 'collapse' : 'expand', onClick: () => void toggle(id) },
+      ...(onOpenThread ? [{ label: 'Open thread', icon: 'open', onClick: () => onOpenThread(item.node.ref.id) }] : []), hide];
+    return [...(onOpenSession ? [{ label: 'Open session', icon: 'open', onClick: () => onOpenSession(item.threadId, item.node.ref.id) }] : []), hide];
   };
 
   return <div className="memory-graph">

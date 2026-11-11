@@ -251,6 +251,22 @@
   .sp-rich-actions .sp-composer-divider { display: none; }
 }
 .sp-rich-send-group .sp-send-rich.sp-button { margin-left: 0; border-radius: 4px; }
+/* Slack's split Send button: send now, or open the schedule menu from the caret. */
+.sp-rich-send-group:has(.sp-schedule-send) .sp-send-rich.sp-button { border-radius: 4px 0 0 4px; }
+.sp-schedule-send { display: inline-flex; }
+.sp-schedule-send .sp-schedule-trigger { min-height: 28px; width: 22px; padding: 0; border-radius: 0 4px 4px 0; border-left: 1px solid var(--sp-border); color: var(--sp-text-secondary); list-style: none; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; }
+.sp-schedule-send .sp-schedule-trigger::-webkit-details-marker { display: none; }
+.sp-schedule-send details[aria-disabled=true] .sp-schedule-trigger, .sp-schedule-send summary[aria-disabled=true] { opacity: .45; cursor: not-allowed; }
+.sp-schedule-menu-content { width: 280px; max-width: calc(100vw - 16px); }
+.sp-schedule-panel { display: flex; flex-direction: column; padding: 8px 0; font-family: var(--sp-font-sans); }
+.sp-schedule-panel > strong { padding: 4px 16px 8px; font-size: 13px; color: var(--sp-text-secondary); }
+.sp-schedule-option { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 36px; padding: 6px 16px; border: 0; background: transparent; color: var(--sp-text); font: 14px var(--sp-font-sans); text-align: left; cursor: pointer; }
+.sp-schedule-option:hover, .sp-schedule-option:focus-visible { background: var(--sp-surface-hover); }
+.sp-schedule-custom { display: flex; flex-direction: column; gap: 8px; padding: 8px 16px 4px; }
+.sp-schedule-custom label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; font-weight: 700; }
+.sp-schedule-custom input { font: 16px var(--sp-font-sans); padding: 6px 8px; border: 1px solid var(--sp-border-strong); border-radius: 6px; background: var(--sp-surface); color: var(--sp-text); }
+.sp-schedule-custom p { margin: 0; color: var(--sp-danger); font-size: 13px; }
+@media (hover: none) and (max-width: 720px) { .sp-schedule-send .sp-schedule-trigger { display: none; } .sp-rich-send-group:has(.sp-schedule-send) .sp-send-rich.sp-button { border-radius: 4px; } }
 .sp-composer-divider {
   height: 18px;
   width: 1px;
@@ -632,14 +648,18 @@
 .sp-graph-node { cursor: pointer; outline: none; }
 .sp-graph-dot { stroke-width: 2; }
 .sp-graph-caption { font-size: 9px; font-weight: 700; fill: #fff; paint-order: stroke; stroke: rgb(0 0 0 / 0.28); stroke-width: 2px; pointer-events: none; }
-.sp-graph-halo { fill: none; stroke: var(--sp-focus); stroke-width: 3; stroke-opacity: 0.8; }
+.sp-graph-halo { fill: none; stroke: var(--sp-focus); stroke-width: 8; stroke-opacity: 0.35; }
 .sp-graph-node:focus-visible .sp-graph-dot { stroke: var(--sp-focus); stroke-width: 4; }
 .sp-graph-node.is-pinned .sp-graph-dot { stroke-dasharray: 4 2; }
 .sp-graph-node.is-faded, .sp-graph-link.is-faded { opacity: 0.35; }
+/* Ring menu: solid grey slices split by a 2 px background-coloured gap, white line icons, darker on hover. */
 .sp-graph-ring-item { cursor: pointer; outline: none; }
-.sp-graph-ring-item path { fill: color-mix(in srgb, var(--sp-text) 30%, var(--sp-surface)); fill-opacity: 0.72; stroke: none; }
-.sp-graph-ring-item:hover path, .sp-graph-ring-item:focus-visible path { fill: color-mix(in srgb, var(--sp-accent) 30%, var(--sp-surface-raised)); }
-.sp-graph-ring-item text { font-size: 12px; fill: var(--sp-text); pointer-events: none; }
+.sp-graph-ring-slice { fill: #8f949c; stroke: var(--sp-surface); stroke-width: 2px; transition: fill 120ms ease-out; }
+.sp-graph-ring-item:hover .sp-graph-ring-slice, .sp-graph-ring-item:focus-visible .sp-graph-ring-slice { fill: #6b7079; }
+.sp-graph-ring-icon { fill: none; stroke: #fff; stroke-width: 1.6px; stroke-linecap: round; stroke-linejoin: round; pointer-events: none; }
+.sp-graph-ring-item text { font-size: 14px; fill: #fff; pointer-events: none; }
+@media (prefers-reduced-motion: no-preference) { .sp-graph-ring { animation: sp-graph-ring-in 200ms ease-out; } }
+@keyframes sp-graph-ring-in { from { opacity: 0; } to { opacity: 1; } }
 .sp-graph-details { position: absolute; top: 8px; right: 8px; width: min(300px, 45%); max-height: calc(100% - 16px); overflow: auto; display: flex; flex-direction: column; gap: 6px; padding: 8px; border: 1px solid var(--sp-border); border-radius: var(--sp-radius-md); background: color-mix(in srgb, var(--sp-surface-raised) 94%, transparent); box-shadow: 0 6px 24px rgb(0 0 0 / 0.18); }
 .sp-graph-details.is-collapsed { width: auto; }
 .sp-graph-details-toggle { align-self: flex-end; border: 0; background: transparent; color: var(--sp-text-secondary); font-size: 12px; cursor: pointer; }

@@ -20,7 +20,8 @@ function Demo({ threads, parallel }: { threads: number; parallel?: boolean }) {
   if (parallel) links.push({ id: 'extra', source: 'c', target: 't0', label: 'MENTIONS' });
   return <div style={{ height: 520 }}><GraphCanvas label="Demo graph" nodes={nodes} links={links} palette={palette} selectedId={selected} expandedIds={expanded}
     onSelect={setSelected} onToggleExpand={toggle}
-    menu={id => [{ label: expanded.has(id) ? 'Collapse' : 'Expand', icon: expanded.has(id) ? '−' : '+', onClick: () => toggle(id) }, { label: 'Hide', icon: '✕', onClick: () => setSelected(undefined) }]}
+    menu={id => [{ label: expanded.has(id) ? 'Collapse' : 'Expand', icon: expanded.has(id) ? 'collapse' : 'expand', onClick: () => toggle(id) },
+      { label: 'Open', icon: 'open', onClick: () => {} }, { label: 'Hide', icon: 'dismiss', onClick: () => setSelected(undefined) }]}
     details={selected ? <p>Selected <strong>{nodes.find(n => n.id === selected)?.caption}</strong></p> : undefined} /></div>;
 }
 const meta = { title: 'Graph/GraphCanvas', component: Demo } satisfies Meta<typeof Demo>;

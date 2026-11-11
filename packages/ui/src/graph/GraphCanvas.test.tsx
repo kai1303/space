@@ -69,10 +69,16 @@ it('arrow keys move focus along links', () => {
 
 it('the ring menu is a donut of equal slices around the selected node and runs actions', () => {
   const open = vi.fn(), hide = vi.fn();
-  setup({ selectedId: 't', menu: id => [{ label: 'Open thread', icon: '↗', onClick: () => open(id) }, { label: 'Hide', icon: '✕', onClick: hide }] });
+  setup({ selectedId: 't', menu: id => [{ label: 'Open thread', icon: 'open', onClick: () => open(id) }, { label: 'Hide', icon: '✕', onClick: hide }] });
   const ring = screen.getByRole('menu', { name: 'Node actions' });
   const slices = within(ring).getAllByRole('menuitem');
   expect(slices).toHaveLength(2);
+  expect(slices[0]!.querySelector('.sp-graph-ring-icon')).toBeTruthy();
+  expect(slices[1]!.querySelector('text')!.textContent).toBe('✕');
+  // The first slice starts at 12 o'clock: its outer edge begins just right of straight up.
+  const [, sx, sy] = /^M(-?[\d.]+),(-?[\d.]+)/.exec(slices[0]!.querySelector('path')!.getAttribute('d')!)!.map(Number);
+  expect(sy!).toBeLessThan(0);
+  expect(Math.abs(sx!)).toBeLessThan(2);
   for (const slice of slices) expect(slice.querySelector('path')!.getAttribute('d')).toMatch(/^M.+A.+L.+A.+Z$/);
   expect(slices[0]!.querySelector('title')!.textContent).toBe('Open thread');
   fireEvent.click(within(ring).getByRole('menuitem', { name: 'Open thread' }));

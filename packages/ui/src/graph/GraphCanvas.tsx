@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode, type WheelEvent } from 'react';
 import { arcPath, linkLabelAnchor, linkPath, NODE_RADIUS, type Point } from './layout.js';
 import { GraphSimulation } from './simulation.js';
+import { GraphIcon, isGraphIcon } from './icons.js';
 
 export type GraphNode = { id: string; kind: string; caption: string; muted?: boolean };
 export type GraphLink = { id: string; source: string; target: string; label: string };
@@ -16,7 +17,7 @@ export type GraphCanvasProps = {
   label: string;
 };
 export const MAX_GRAPH_NODES = 500;
-const MIN_SCALE = 0.2, MAX_SCALE = 4, VIEW_W = 800, VIEW_H = 600, RING_WIDTH = 22;
+const MIN_SCALE = 0.2, MAX_SCALE = 4, VIEW_W = 800, VIEW_H = 600, RING_WIDTH = 30;
 const clamp = (v: number) => Math.min(MAX_SCALE, Math.max(MIN_SCALE, v));
 const pairKey = (a: string, b: string) => (a < b ? `${a}|${b}` : `${b}|${a}`);
 const reducedMotion = () => typeof window === 'undefined' || typeof window.matchMedia !== 'function' || window.matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -126,7 +127,7 @@ export function GraphCanvas({ nodes, links, palette, selectedId, expandedIds, on
   const zoomBy = (factor: number) => { autoFit.current = false; setView(v => { const k = clamp(v.k * factor), f = k / v.k; return { k, x: v.x * f, y: v.y * f }; }); };
 
   const selected = selectedId ? positions.get(selectedId) : undefined;
-  const items = selectedId ? [...(menu?.(selectedId) ?? []), ...(selected?.pinned ? [{ label: 'Unpin', icon: '⌖', onClick: () => simulation.current.unpin(selectedId) }] : [])].slice(0, 4) : [];
+  const items = selectedId ? [...(menu?.(selectedId) ?? []), ...(selected?.pinned ? [{ label: 'Unpin', icon: 'unpin', onClick: () => simulation.current.unpin(selectedId) }] : [])].slice(0, 4) : [];
   const inner = Math.max(NODE_RADIUS + 8, 20), segment = items.length ? (2 * Math.PI) / items.length : 0;
 
   return <div className="sp-graph">
@@ -172,23 +173,26 @@ export function GraphCanvas({ nodes, links, palette, selectedId, expandedIds, on
               onDoubleClick={event => { event.stopPropagation(); onToggleExpand(n.id); }}
               onKeyDown={event => onNodeKey(event, n.id)}>
               {selectedId === n.id && <circle className="sp-graph-halo" r={NODE_RADIUS + 4} />}
+              {selectedId !== n.id && hovered === n.id && <circle className="sp-graph-halo is-hover" r={NODE_RADIUS + 4} />}
               <circle className="sp-graph-dot" r={NODE_RADIUS} style={{ fill: `color-mix(in srgb, ${color} 88%, white)`, stroke: `color-mix(in srgb, ${color} 62%, black)` }} />
               <text className="sp-graph-caption" textAnchor="middle" dominantBaseline="central">
                 {lines.map((line, i) => <tspan key={i} x={0} y={(i - (lines.length - 1) / 2) * 11}>{line}</tspan>)}
               </text>
             </g>;
           })}
-          {/* Donut ring menu: equal slices around the selected node. */}
-          {selected && items.length > 0 && <g role="menu" aria-label="Node actions" className="sp-graph-ring" transform={`translate(${selected.x},${selected.y})`}>
+          {/* Donut ring menu: equal slices around the selected node, the first starting at 12 o'clock. */}
+          {selected && items.length > 0 && <g key={selectedId} role="menu" aria-label="Node actions" className="sp-graph-ring" transform={`translate(${selected.x},${selected.y})`}>
             {items.map((item, i) => {
-              const start = -Math.PI / 2 - segment / 2 + i * segment, mid = start + segment / 2, r = inner + RING_WIDTH / 2;
+              const start = -Math.PI / 2 + i * segment, mid = start + segment / 2, r = inner + RING_WIDTH / 2;
+              const ix = Math.round(Math.cos(mid) * r * 10) / 10, iy = Math.round(Math.sin(mid) * r * 10) / 10;
               return <g key={item.label} role="menuitem" tabIndex={0} aria-label={item.label} className="sp-graph-ring-item"
                 onPointerDown={event => event.stopPropagation()}
                 onClick={event => { event.stopPropagation(); item.onClick(); }}
                 onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); item.onClick(); } }}>
                 <title>{item.label}</title>
-                <path d={arcPath(inner, inner + RING_WIDTH, start, start + segment)} />
-                <text x={Math.round(Math.cos(mid) * r * 10) / 10} y={Math.round(Math.sin(mid) * r * 10) / 10} textAnchor="middle" dominantBaseline="central">{item.icon ?? item.label.slice(0, 1)}</text>
+                <path className="sp-graph-ring-slice" d={arcPath(inner, inner + RING_WIDTH, start, start + segment)} />
+                {isGraphIcon(item.icon) ? <GraphIcon name={item.icon} x={ix} y={iy} />
+                  : <text x={ix} y={iy} textAnchor="middle" dominantBaseline="central">{item.icon ?? item.label.slice(0, 1)}</text>}
               </g>;
             })}
           </g>}
