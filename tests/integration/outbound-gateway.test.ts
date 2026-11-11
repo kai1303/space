@@ -419,3 +419,127 @@ test('editing another paired agent’s workspace grant preserves a selected tool
     await gateway.close();
   }
 });
+
+test('workspace knowledge plugins share discovery, scoped grants, cited search and exact resolution', async () => {
+  const { createGateway } = await import('../../apps/mcp-gateway/dist/gateway.js');
+  const seed = await fixture(), foreign = await bootstrap(pool);
+  const store = new OutboundStore(pool, randomBytes(32).toString('hex'));
+  const scope = { actor: seed.owner_id, workspace: seed.workspace_id };
+  const people = await store.create(scope, { kind: 'people', name: 'Directory', url: 'space:people', auth_type: 'none' });
+  const channels = await store.create(scope, { kind: 'channels', name: 'Channels', url: 'space:channels', auth_type: 'none' });
+  const catalog = await store.create(scope, { kind: 'knowledge', name: 'Catalog', url: 'https://example.com/mcp', auth_type: 'none' });
+  let malformed = false;
+  const remote = {
+    async discover() {
+      return ['knowledge_manifest','knowledge_search','write_document'].map(name => ({ name, inputSchema: { type: 'object' } }));
+    },
+    async call(connection: { url: string }, name: string, args: Record<string, unknown>) {
+      assert.equal(connection.url, catalog.url);
+      if (name === 'knowledge_manifest') return { content: [], structuredContent: {
+        apiVersion: 1, name: 'Service catalog', description: 'Find service owners',
+        filters: [{ key: 'team', description: 'Team name' }],
+      } };
+      assert.equal(name, 'knowledge_search');
+      assert.deepEqual(args.context, {
+        workspaceId: seed.workspace_id, requesterId: seed.owner_id, installationId: seed.installation_id,
+        connectionId: catalog.id, audience: { kind: 'channel', channelId: seed.channel_id },
+      });
+      const ref = { connectionId: catalog.id, recordId: 'billing' };
+      return { content: [], structuredContent: { hits: [{
+        ref, title: 'Billing', evidence: 'Billing is owned by the demo owner.',
+        citation: { label: 'Service catalog', url: malformed ? 'javascript:invalid' : 'https://example.com/billing' },
+        facts: [{ subject: ref, predicate: 'catalog:owner', value: { connectionId: people.id, recordId: seed.owner_id } }],
+      }] } };
+    },
+  };
+  const gateway = createGateway(store, { remote });
+  const address = await gateway.listen({ host: '127.0.0.1', port: 0 });
+  const client = new Client({ name: 'knowledge-test', version: '1' });
+  try {
+    for (const connection of [people, channels, catalog]) {
+      const token = store.security.sign({ owner: scope.actor, workspace: scope.workspace, installation: '', execution: '',
+        aud: 'outbound-internal', exp: Date.now() + 30000 });
+      const discovery = await gateway.inject({ method: 'POST', url: '/internal/discover', headers: { host: 'localhost', authorization: 'Bearer ' + token },
+        payload: { connection_id: connection.id, revision: connection.revision } });
+      assert.equal(discovery.statusCode, 200, discovery.body);
+      const discovered = await store.get(scope, connection.id);
+      const names = discovered.tools.map(t => t.name);
+      assert.deepEqual(names, connection !== catalog ? ['knowledge_search','knowledge_resolve'] : ['knowledge_search']);
+      assert.equal(await store.issue(seed.execution, seed.installation_id, address + '/mcp') === undefined, connection === people);
+      await store.grant(scope, connection.id, { revision: discovered.revision, installation_id: seed.installation_id, tools: names });
+    }
+    const access = (await store.issue(seed.execution, seed.installation_id, address + '/mcp'))!;
+    await client.connect(new StreamableHTTPClientTransport(new URL(access.url), {
+      requestInit: { headers: { authorization: 'Bearer ' + access.token } },
+    }));
+    const { tools } = await client.listTools();
+    const directory = tools.find(t => t.description?.includes('"Directory"') && t.name.endsWith('knowledge_search'))!;
+    const resolve = tools.find(t => t.description?.includes('"Directory"') && t.name.endsWith('knowledge_resolv'))!;
+    const search = tools.find(t => t.description?.includes('"Catalog"'))!;
+    for (const builtIn of [directory, resolve])
+      assert.deepEqual(builtIn.annotations, { readOnlyHint: true, destructiveHint: false, openWorldHint: false });
+    assert.equal(search.annotations, undefined);
+    const call = (name: string, args: Record<string, unknown>) => client.callTool({ name, arguments: args });
+    const channelSearch = tools.find(t => t.description?.includes('"Channels"') && t.name.endsWith('knowledge_search'))!;
+    const channelResolve = tools.find(t => t.description?.includes('"Channels"') && t.name.endsWith('knowledge_resolv'))!;
+    assert.equal(channelSearch.annotations?.readOnlyHint, true);
+    const page = async (query = '', extra = {}) => (await call(channelSearch.name, { query, ...extra })).structuredContent as import('@space/contracts').KnowledgePage;
+    const channelHit = async (id: string) => (await call(channelResolve.name, { ref: { connectionId: channels.id, recordId: id } })).structuredContent;
+    const { parseConversationPath } = await import('@space/contracts');
+    const listed = (await page()).hits;
+    assert.deepEqual(listed.map(hit => hit.citation.label), ['#general']);
+    assert.equal(parseConversationPath(listed[0]!.citation.url).channel, seed.channel_id);
+    const publicId = randomUUID(), privateId = randomUUID(), archivedId = randomUUID();
+    await pool.query(`INSERT INTO channels(id,workspace_id,name,private,archived_at) VALUES
+      ($1,$4,'public-roadmap',false,NULL),($2,$4,'private-roadmap',true,NULL),($3,$4,'old-roadmap',false,now())`,
+      [publicId, privateId, archivedId, seed.workspace_id]);
+    await pool.query('INSERT INTO channel_members(workspace_id,channel_id,user_id) VALUES($1,$2,$3)', [seed.workspace_id,privateId,seed.owner_id]);
+    assert.deepEqual((await page('#roadmap')).hits.map(h => h.ref.recordId), [publicId]);
+    for (const id of [privateId, archivedId, foreign.channel_id]) assert.deepEqual(await channelHit(id), { hit: null });
+    const one = await page('', { limit: 1 });
+    const two = await page('', { limit: 1, cursor: one.nextCursor });
+    assert.equal(two.nextCursor, undefined);
+    assert.deepEqual(new Set([one.hits[0]!.ref.recordId,two.hits[0]!.ref.recordId]), new Set([publicId,seed.channel_id]));
+    await pool.query('UPDATE channels SET private=true WHERE id=$1', [seed.channel_id]);
+    assert.deepEqual(await channelHit(privateId), { hit: null }); // Another audience member is excluded.
+    await pool.query('INSERT INTO channel_members(workspace_id,channel_id,user_id) VALUES($1,$2,$3)', [seed.workspace_id,privateId,seed.collaborator_id]);
+    assert.deepEqual((await page('private-roadmap')).hits.map(h => h.ref.recordId), [privateId]);
+    await pool.query('UPDATE channels SET private=false WHERE id=$1', [seed.channel_id]);
+    assert.deepEqual(await channelHit(privateId), { hit: null }); // A public room can gain new readers.
+    const result = await call(search.name, { query: 'billing', filters: { team: 'finance' } });
+    const resultPage = result.structuredContent as import('@space/contracts').KnowledgePage;
+    const ref = resultPage.hits[0]!.facts![0]!.value;
+    const resolved = (await call(resolve.name, { ref })).structuredContent as { hit: import('@space/contracts').KnowledgeHit };
+    assert.equal(resolved.hit.ref.recordId, seed.owner_id);
+    assert.equal(resolved.hit.citation.label, '@' + resolved.hit.title);
+    assert.ok(resolved.hit.citation.url.endsWith('?profile=user:' + seed.owner_id));
+    const before = (await call(directory.name, { query: '', filters: { workspace_role: 'admin' } })).structuredContent;
+    assert.deepEqual(before, { hits: [] });
+    await pool.query("UPDATE workspace_members SET role='admin' WHERE workspace_id=$1 AND user_id=$2", [seed.workspace_id,seed.collaborator_id]);
+    const after = (await call(directory.name, { query: '', filters: { workspace_role: 'admin' } })).structuredContent as import('@space/contracts').KnowledgePage;
+    assert.deepEqual(after.hits.map(hit => hit.ref.recordId), [seed.collaborator_id]);
+    const first = (await call(directory.name, { query: '', limit: 1 })).structuredContent as import('@space/contracts').KnowledgePage;
+    assert.ok(first.nextCursor);
+    const second = (await call(directory.name, { query: '', limit: 1, cursor: first.nextCursor })).structuredContent as import('@space/contracts').KnowledgePage;
+    assert.equal(second.nextCursor, undefined);
+    assert.notEqual(first.hits[0]!.ref.recordId, second.hits[0]!.ref.recordId);
+    assert.deepEqual((await call(resolve.name, { ref: { connectionId: people.id, recordId: foreign.owner_id } })).structuredContent, { hit: null });
+    assert.equal((await call(directory.name, { query: '', filters: { team: 'x' } })).isError, true);
+    assert.equal((await call(search.name, { query: '', context: {} })).isError, true);
+    malformed = true;
+    assert.equal((await call(search.name, { query: 'billing' })).isError, true);
+    const privatePeer = randomUUID();
+    await pool.query('INSERT INTO users(id) VALUES($1)', [privatePeer]);
+    await pool.query('INSERT INTO workspace_members(workspace_id,user_id) VALUES($1,$2)', [seed.workspace_id,privatePeer]);
+    const peerRef = { connectionId: people.id, recordId: privatePeer };
+    assert.ok(((await call(resolve.name, { ref: peerRef })).structuredContent as { hit: unknown }).hit);
+    await pool.query("UPDATE workspace_members SET role='member',guest_type='multi' WHERE workspace_id=$1 AND user_id=$2", [seed.workspace_id,seed.collaborator_id]);
+    assert.deepEqual((await call(resolve.name, { ref: peerRef })).structuredContent, { hit: null });
+    assert.deepEqual((await page()).hits.map(hit => hit.ref.recordId), [seed.channel_id]); // Guest audience cannot discover unjoined public channels.
+    assert.deepEqual(await channelHit(publicId), { hit: null });
+    const current = await store.get(scope, people.id);
+    await store.grant(scope, people.id, { installation_id: seed.installation_id, tools: [], revision: current.revision });
+    assert.equal((await client.listTools()).tools.length, 3);
+    assert.equal((await call(resolve.name, { ref })).isError, true);
+  } finally { await client.close(); await gateway.close(); }
+});

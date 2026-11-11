@@ -11,7 +11,7 @@ import { UnreadStore } from './unread.js';
 import { createHash, randomUUID } from 'node:crypto';
 import type { Pool } from 'pg';
 import { and, eq, gt, lt, gte, lte, asc, desc, or, exists, inArray, isNull, sql } from 'drizzle-orm';
-import { AppError, parseReactionInput, parseMessageInput, parseChannelInput, parseChannelUpdate, parseMessagePage, parsePage, record, uuid, chatCursor, type ChatMessage, type ChatEvent, type ChatHistory, type MessagePage, type ChannelSummary, type ChannelDetails, type ChannelPin, type ChannelTabsState, type ChannelLinkMessage } from '@space/contracts';
+import { AppError, parseReactionInput, parseMessageInput, parseChannelInput, parseChannelUpdate, parseMessagePage, parsePage, record, uuid, chatCursor, type ChatMessage, type ChatEvent, type ChatHistory, type MessagePage, type ChannelNotificationPreferences, type ChannelSummary, type ChannelDetails, type ChannelPin, type ChannelTabsState, type ChannelLinkMessage } from '@space/contracts';
 import { database, type DbSession } from './database.js';
 import { hasChannelAccess, requireWorkspaceAccess, lockWorkspace, hasThreadAccess } from './access.js';
 import { page } from './membership.js';
@@ -27,10 +27,17 @@ export class ChatStore {
       await requireWorkspaceAccess(c, actor, workspace);
       const member = c.select({ user_id: s.channelMembers.user_id }).from(s.channelMembers)
         .where(and(eq(s.channelMembers.channel_id, s.channels.id), eq(s.channelMembers.user_id, actor)));
-      const rows = await c.select({ channel: s.channels, joined: sql<boolean>`exists (${member})` })
+      const rows = await c.select({ channel: s.channels, joined: sql<boolean>`exists (${member})`,
+        preferences: sql<ChannelNotificationPreferences | null>`(SELECT jsonb_build_object(
+          'mode',cm.notification_mode,'effective_mode',coalesce(cm.notification_mode,p.mode,'mentions'),
+          'muted_until',cm.muted_until,'thread_replies',cm.notify_thread_replies,
+          'desktop_enabled',coalesce(cm.channel_desktop_enabled,p.desktop_enabled,false),
+          'badge_every_post',cm.badge_every_post,'follow_every_thread',cm.follow_every_thread)
+          FROM channel_members cm LEFT JOIN mention_preferences p ON p.user_id=cm.user_id
+          WHERE cm.channel_id=${s.channels.id} AND cm.user_id=${actor})` })
         .from(s.channels).where(and(eq(s.channels.workspace_id, workspace), eq(s.channels.kind, 'channel'), channelIds && inArray(s.channels.id, channelIds), or(and(eq(s.channels.private, false),sql`EXISTS(SELECT 1 FROM workspace_members wm WHERE wm.workspace_id=${workspace} AND wm.user_id=${actor} AND wm.guest_type='none')`), exists(member)), after ? gt(s.channels.id, after) : undefined))
         .orderBy(s.channels.id).limit(limit + 1);
-      return page(rows.map(row => channelDto(row.channel, row.joined)), limit, row => row.id);
+      return page(rows.map(row => ({...channelDto(row.channel, row.joined), ...(row.preferences && {notification_preferences:row.preferences})})), limit, row => row.id);
     });
   }
   async createChannel(actor: string, workspace: string, input: unknown) {

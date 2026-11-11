@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
-import type { OutboundAgent, OutboundCall, OutboundConnection, WorkspaceSettings } from '@space/contracts';
-import { Button, Dialog, Select, TextField } from '@space/ui/primitives';
+import type { ConnectionKind, OutboundAgent, OutboundCall, OutboundConnection, WorkspaceSettings } from '@space/contracts';
+import { Button, Dialog, Select, TextField, toast } from '@space/ui/primitives';
 import { request } from '../../shared/api/request.js';
 import { subscribeUpdates } from '../../shared/realtime/live-updates.js';
 import './connections.css';
@@ -128,7 +128,7 @@ export function Connections(props: ConnectionsProps) {
       }} />}
       <div className="space-connections-list">{items.map(item => <section className="space-connection" aria-label={item.name} key={item.id}>
         <div className="space-connection-heading"><h3>{item.name}</h3><span>{item.enabled ? 'Enabled' : 'Disabled'}</span></div>
-        <p className="space-connection-url">{item.url}</p>
+        <p className="space-connection-url">{item.kind === 'people' ? 'Built-in people directory' : item.kind === 'channels' ? 'Built-in channel directory' : item.url}</p>
         <p className="space-connections-hint">{item.auth_type === 'bearer' ? 'Bearer token saved' : 'No authentication'} · Last observed: {statusText[item.status]} · {item.tools.length} tools</p>
         <div className="space-connections-actions">
           <Button size="sm" disabled={busy} onClick={() => { setEditing(item); setAccess(null); setDeleting(null); setError(''); }}>Edit</Button>
@@ -137,7 +137,12 @@ export function Connections(props: ConnectionsProps) {
           <Button size="sm" disabled={busy} onClick={() => void mutate(`${connectionsPath}/${item.id}`, { revision: item.revision, enabled: !item.enabled }, 'PATCH')}>{item.enabled ? 'Disable' : 'Enable'}</Button>
           <Button size="sm" variant="ghost" disabled={busy} onClick={() => { setDeleting(item.id); setEditing(null); setAccess(null); }}>Delete</Button>
         </div>
-        {deleting === item.id && <div className="space-connection-confirm"><p>Delete {item.name}? Its saved credentials and agent access will be removed.</p><div className="space-connections-actions"><Button disabled={busy} onClick={() => setDeleting(null)}>Cancel</Button><Button disabled={busy} onClick={async () => { if (await mutate(`${connectionsPath}/${item.id}`, { revision: item.revision }, 'DELETE')) setDeleting(null); }}>Delete connection</Button></div></div>}
+        {deleting === item.id && <div className="space-connection-confirm"><p>Delete {item.name}? Its saved credentials and agent access will be removed.</p><div className="space-connections-actions"><Button disabled={busy} onClick={() => setDeleting(null)}>Cancel</Button><Button disabled={busy} onClick={async () => {
+          if (await mutate(`${connectionsPath}/${item.id}`, { revision: item.revision }, 'DELETE')) {
+            setDeleting(null);
+            toast.success('Connection deleted');
+          }
+        }}>Delete connection</Button></div></div>}
       </section>)}</div>
       {selected && <GrantEditor workspace={workspace} key={`${selected.id}:${selected.revision}:${agentPage.cursors.at(-1) ?? ''}`} connection={selected} agents={agentPage.items} busy={busy}
         onPrevious={workspace && agentPage.cursors.length ? () => showAgentPage(agentPage.cursors.slice(0, -1)) : undefined}
@@ -152,24 +157,36 @@ export function Connections(props: ConnectionsProps) {
 
 function ConnectionEditor({ connection, busy, workspace, onSave, onCancel }: { workspace: boolean; connection?: OutboundConnection; busy: boolean; onSave: (body: object) => Promise<void>; onCancel: () => void }) {
   const [name, setName] = useState(connection?.name ?? ''), [url, setUrl] = useState(connection?.url ?? ''), [auth, setAuth] = useState<'bearer' | 'none'>(connection?.auth_type ?? 'bearer'), [token, setToken] = useState('');
+  const [kind, setKind] = useState<ConnectionKind>(connection?.kind ?? 'mcp');
+  const directory = kind === 'people' || kind === 'channels';
   const endpointChanged = workspace && connection && url.trim() !== connection.url;
-  const requiresToken = auth === 'bearer' && (!connection || connection.auth_type !== 'bearer' || endpointChanged);
+  const requiresToken = !directory && auth === 'bearer' && (!connection || connection.auth_type !== 'bearer' || endpointChanged);
   async function submit(event: FormEvent) {
     event.preventDefault();
-    const body = { name: name.trim(), url: url.trim(), auth_type: auth, ...(auth === 'bearer' && token ? { token } : {}) };
+    const body = {
+      ...(!connection && kind !== 'mcp' ? { kind } : {}),
+      name: name.trim(), url: directory ? 'space:' + kind : url.trim(), auth_type: directory ? 'none' : auth,
+      ...(!directory && auth === 'bearer' && token ? { token } : {}),
+    };
     setToken('');
     await onSave(body);
   }
   return <form className="space-connection-editor" onSubmit={submit}>
     <h3>{connection ? `Edit ${connection.name}` : 'Add a connection'}</h3>
     <fieldset disabled={busy}>
+      {workspace && !connection && <label className="space-connection-select">Connection type<Select aria-label="Connection type" value={kind} onChange={event => {
+        const next = event.target.value as ConnectionKind;
+        setKind(next); setToken('');
+        if (!name.trim() || name === 'People directory' || name === 'Channel directory')
+          setName(next === 'people' ? 'People directory' : next === 'channels' ? 'Channel directory' : '');
+      }}><option value="mcp">MCP server</option><option value="people">Space people directory</option><option value="channels">Space channel directory</option><option value="knowledge">External knowledge plugin</option></Select></label>}
       <TextField label="Connection name" required maxLength={100} value={name} onChange={event => setName(event.target.value)} placeholder={workspace ? "Team GitHub" : "GitHub personal"} />
-      <TextField label="MCP endpoint" type="url" required maxLength={2000} value={url} onChange={event => setUrl(event.target.value)} placeholder="https://example.com/mcp" hint="Public HTTPS only. Put credentials in the token field, never in the URL." />
+      {!directory && <><TextField label="MCP endpoint" type="url" required maxLength={2000} value={url} onChange={event => setUrl(event.target.value)} placeholder="https://example.com/mcp" hint="Public HTTPS only. Put credentials in the token field, never in the URL." />
       <label className="space-connection-select">Authentication<Select aria-label="Authentication" value={auth} onChange={event => { setAuth(event.target.value as 'bearer' | 'none'); setToken(''); }}><option value="bearer">Bearer token</option><option value="none">No authentication</option></Select></label>
-      {auth === 'bearer' && <TextField label="Bearer token" type="password" autoComplete="new-password" required={requiresToken} maxLength={4096} value={token} onChange={event => setToken(event.target.value)} hint={endpointChanged ? 'Enter a token for the new endpoint.' : connection?.auth_type === 'bearer' ? 'Leave blank to keep the saved token. Tokens are never shown again.' : 'Stored securely and sent only to this MCP server.'} />}
+      {auth === 'bearer' && <TextField label="Bearer token" type="password" autoComplete="new-password" required={requiresToken} maxLength={4096} value={token} onChange={event => setToken(event.target.value)} hint={endpointChanged ? 'Enter a token for the new endpoint.' : connection?.auth_type === 'bearer' ? 'Leave blank to keep the saved token. Tokens are never shown again.' : 'Stored securely and sent only to this MCP server.'} />}</>}
     </fieldset>
-    {connection && <p className="space-connections-hint">Changing the endpoint or credentials clears discovered tools and agent grants. Test the connection and grant access again afterward.</p>}
-    <div className="space-connections-actions"><Button disabled={busy} onClick={onCancel}>Cancel</Button><Button type="submit" variant="primary" loading={busy} disabled={!name.trim() || !url.trim() || (requiresToken && !token)}>Save connection</Button></div>
+    {connection && !directory && <p className="space-connections-hint">Changing the endpoint or credentials clears discovered tools and agent grants. Test the connection and grant access again afterward.</p>}
+    <div className="space-connections-actions"><Button disabled={busy} onClick={onCancel}>Cancel</Button><Button type="submit" variant="primary" loading={busy} disabled={!name.trim() || (!directory && !url.trim()) || (requiresToken && !token)}>Save connection</Button></div>
   </form>;
 }
 

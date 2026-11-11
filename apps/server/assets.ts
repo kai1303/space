@@ -3,6 +3,7 @@ import { AppError, MAX_ASSET_BYTES, MAX_MESSAGE_ASSETS, record, uuid } from '@sp
 import { AssetStore, assetAttachment } from '@space/postgres/assets';
 import type { AssetStorage } from './storage.js';
 import { generateAssetPreview } from './previews.js';
+import { type OfficeSettings, officeSession } from './office.js';
 import { generatePdfThumbnail } from './pdf-thumbnail.js';
 
 function pdfRange(value: string, size: number): { start: number; end: number } | undefined {
@@ -15,7 +16,7 @@ function pdfRange(value: string, size: number): { start: number; end: number } |
   return { start: first, end: match[2] ? Math.min(last, size - 1) : size - 1 };
 }
 
-export function registerAssetRoutes(app: FastifyInstance, assets: AssetStore, storage?: AssetStorage) {
+export function registerAssetRoutes(app: FastifyInstance, assets: AssetStore, storage?: AssetStorage, office?: OfficeSettings) {
   const enabled = () => { if (!storage) throw new AppError(503, 'uploads_unavailable'); return storage; };
   app.get('/v1/assets/config', async () => ({ enabled: !!storage, max_file_size: MAX_ASSET_BYTES, max_files: MAX_MESSAGE_ASSETS }));
   app.get<{ Params: { channelId: string } }>('/v1/channels/:channelId/assets', r => assets.list(r.actorId, uuid(r.params.channelId), r.query));
@@ -43,9 +44,19 @@ export function registerAssetRoutes(app: FastifyInstance, assets: AssetStore, st
     const backend = enabled();
     return assets.preview(actor, id, row => generateAssetPreview(backend, row.id, row.name, row.object_key, row.size));
   };
-  app.get<{ Params: { assetId: string } }>('/v1/assets/:assetId/preview', r => {
+  app.get<{ Params: { assetId: string } }>('/v1/assets/:assetId/preview', async r => {
     record(r.query, []);
-    return previewFor(r.actorId, uuid(r.params.assetId));
+    const preview = await previewFor(r.actorId, uuid(r.params.assetId));
+    return preview.kind === 'office' && !office ? { kind: 'unsupported', reason: 'Office viewer is unavailable.' } : preview;
+  });
+  app.get<{ Params: { assetId: string } }>('/v1/assets/:assetId/office-session', async (r, reply) => {
+    record(r.query, []);
+    const backend = enabled(), id = uuid(r.params.assetId);
+    const preview = await previewFor(r.actorId, id);
+    if (preview.kind !== 'office' || !office) throw new AppError(415, 'preview_unavailable');
+    const row = await assets.download(r.actorId, id);
+    reply.header('cache-control', 'private, no-store');
+    return officeSession(office, id, row.name, preview.fileType, await backend.download(row.object_key, row.name, 'onlyoffice'));
   });
   app.route<{ Params: { assetId: string } }>({ method: ['GET', 'HEAD'], url: '/v1/assets/:assetId/content', handler: async (r, reply) => {
     record(r.query, []);
@@ -53,7 +64,7 @@ export function registerAssetRoutes(app: FastifyInstance, assets: AssetStore, st
     const row = await assets.download(r.actorId, id);
     // HEAD never backfills legacy metadata by downloading private object bytes.
     const preview = row.preview ?? (r.method === 'HEAD' ? undefined : await previewFor(r.actorId, id));
-    if (!preview || preview.kind === 'text' || preview.kind === 'unsupported') throw new AppError(415, 'preview_unavailable');
+    if (!preview || preview.kind === 'office' || preview.kind === 'text' || preview.kind === 'unsupported') throw new AppError(415, 'preview_unavailable');
     if (preview.kind === 'pdf') {
       reply.type('application/pdf').header('content-disposition', 'attachment').header('accept-ranges', 'bytes');
       if (r.method === 'HEAD') return reply.header('content-length', row.size).send();

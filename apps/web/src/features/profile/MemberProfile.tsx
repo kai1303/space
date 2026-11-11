@@ -3,6 +3,7 @@ import { createContext, useCallback, useContext, useEffect, useLayoutEffect, use
 import { createPortal } from 'react-dom';
 import { AnimatePresence, useIsPresent } from 'motion/react';
 import { Avatar, Badge, Button, Menu, SidePanel } from '@space/ui/primitives';
+import { AgentProfileLinkContext } from '@space/ui/agents';
 import { ChatCircle, Clock, DotsThree, EnvelopeSimple, Phone, X } from '@phosphor-icons/react';
 import { visibleStatus, type DirectMessageSummary, type WorkspaceProfile } from '@space/contracts';
 import { request } from '../../shared/api/request.js';
@@ -42,7 +43,7 @@ export function ProfileProvider({ children, workspace, viewer, onMessage, onConn
     });
   }, []);
   useEffect(() => { setSelection(value => value?.workspace === workspace ? value : undefined); }, [workspace]);
-  return <Context.Provider value={{open, close, selected}}>{children}{createPortal(
+  return <Context.Provider value={{open, close, selected}}><AgentProfileLinkContext.Provider value={{workspace, viewer, open}}>{children}</AgentProfileLinkContext.Provider>{createPortal(
     <AnimatePresence>{selected && <ProfilePanel key={`${workspace}:${selected.kind}:${selected.id}`} workspace={workspace} viewer={viewer} target={selected} onClose={close} onMessage={onMessage} onConnection={onConnection}/>}</AnimatePresence>, document.body
   )}</Context.Provider>;
 }

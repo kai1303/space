@@ -1,11 +1,13 @@
 import { useMemberProfile } from '../profile/MemberProfile.js';
 import { useEffect, useId, useRef, useState, type FormEvent } from 'react';
-import { Avatar, Badge, Button, Dialog, Tabs } from '@space/ui/primitives';
+import { Avatar, Badge, Button, Dialog, Tabs, toast } from '@space/ui/primitives';
 import { Archive, Copy, Hash, Lock, MagnifyingGlass, UserPlus } from '@phosphor-icons/react';
 import type { ChannelDetails as Details, ChannelMember, ChannelSummary, ChannelPermissionSnapshot, WorkspaceParticipant } from '@space/contracts';
 import { listAll, request } from '../../shared/api/request.js';
 import './channel-details.css';
 import { ChannelTabManager } from './ChannelTabs.js';
+import { WorkspaceMembers } from '../workspace/members/WorkspaceMembers.js';
+import { ChannelAgents, ChannelAgentPicker } from './ChannelAgents.js';
 import { ChannelWebhooks } from './ChannelWebhooks.js';
 import { ChannelPermissionEditor, postingLabels, type PermissionSection } from './ChannelPermissions.js';
 
@@ -19,12 +21,13 @@ export function ChannelDetails(props: Props) {
 }
 function DetailsDialog({ channel, viewer, initialTab = 'about', permissions, permissionsPending = false, onClose, onChange, onLeft }: Props) {
   const profiles = useMemberProfile();
+  const [agentPicker, setAgentPicker] = useState<'pick' | 'connect'>(), [agentRevision, setAgentRevision] = useState(0);
   const [permissionEditor, setPermissionEditor] = useState<{ section: PermissionSection; snapshot: ChannelPermissionSnapshot }>();
   const id = useId();
   const [details, setDetails] = useState<Details>(), [members, setMembers] = useState<ChannelMember[]>([]);
   const [tab, setTab] = useState(initialTab), [query, setQuery] = useState(''), [error, setError] = useState('');
   const [field, setField] = useState<Field>(), [adding, setAdding] = useState(false), [copied, setCopied] = useState(false);
-  const [confirmation, setConfirmation] = useState<'archive' | 'leave' | ChannelMember>();
+  const [confirmation, setConfirmation] = useState<'archive' | 'restore' | 'leave' | ChannelMember>();
   async function refresh() {
     const [detail, people] = await Promise.all([request<Details>(`/channels/${channel.id}`), listAll<ChannelMember>(`/channels/${channel.id}/members`)]);
     setDetails(detail); setMembers(people);
@@ -49,10 +52,10 @@ function DetailsDialog({ channel, viewer, initialTab = 'about', permissions, per
     <Dialog open title={`${current.private ? '🔒' : '#'} ${current.name}`} onClose={onClose}>
       <div className="space-channel-details">
         <div className="space-channel-meta"><Badge>{current.private ? 'Private channel' : 'Public channel'}</Badge>{archived && <Badge><Archive size={13} /> Archived</Badge>}<span>{details ? `${details.member_count} ${details.member_count === 1 ? 'member' : 'members'}` : 'Loading…'}</span></div>
-        <Tabs label="Channel details" value={tab} onChange={setTab} items={[{ id: 'about', label: 'About', panelId: `${id}-about` }, { id: 'members', label: `Members${details ? ` ${details.member_count}` : ''}`, panelId: `${id}-members` }, { id: 'integrations', label: 'Integrations', panelId: `${id}-integrations` }, { id: 'tabs', label: 'Tabs', panelId: `${id}-tabs` }, { id: 'settings', label: 'Settings', panelId: `${id}-settings` }]} />
+        <Tabs label="Channel details" value={tab} onChange={setTab} items={[{ id: 'about', label: 'About', panelId: `${id}-about` }, { id: 'members', label: `Members${details ? ` ${details.member_count}` : ''}`, panelId: `${id}-members` }, { id: 'integrations', label: 'Agents & apps', panelId: `${id}-integrations` }, { id: 'tabs', label: 'Tabs', panelId: `${id}-tabs` }, { id: 'settings', label: 'Settings', panelId: `${id}-settings` }]} />
         {error && <div className="space-channel-error" role="alert">{error} <Button size="sm" onClick={() => { setError(''); void refresh().catch(e => setError(errorText(e))); }}>Retry</Button></div>}
         {!details && !error && <p className="space-channel-loading" role="status">Loading channel details…</p>}
-        {details && <div key={tab} id={`${id}-${tab}`} role="tabpanel" aria-label={tab === 'tabs' ? 'Tabs' : tab === 'members' ? 'Members' : tab === 'settings' ? 'Settings' : tab === 'integrations' ? 'Integrations' : 'About'} className={tab === 'members' ? 'space-channel-body space-channel-body--members' : 'space-channel-body'}>
+        {details && <div key={tab} id={`${id}-${tab}`} role="tabpanel" aria-label={tab === 'tabs' ? 'Tabs' : tab === 'members' ? 'Members' : tab === 'settings' ? 'Settings' : tab === 'integrations' ? 'Agents & apps' : 'About'} className={tab === 'members' ? 'space-channel-body space-channel-body--members' : 'space-channel-body'}>
           {tab === 'tabs' && <ChannelTabManager channel={channel.id} actor={viewer} archived={archived}/>}
           {tab === 'about' && <>
             <div className="space-channel-card">
@@ -77,35 +80,53 @@ function DetailsDialog({ channel, viewer, initialTab = 'about', permissions, per
             </ul>
             {!filtered.length && <p className="space-channel-muted">No members match “{query}”.</p>}
           </>}
-          {tab === 'integrations' && (can('manage') && !archived ? <ChannelWebhooks channel={channel.id} /> :
-            <p>{permissionsPending ? 'Checking channel permissions…' : archived ? 'This channel is archived.' : 'Channel managers can manage incoming webhooks.'}</p>)}
+          {tab === 'integrations' && (archived ? <p>This channel is archived.</p> : <>
+            <ChannelAgents key={viewer} channel={channel.id} actor={viewer} revision={agentRevision} onAdd={() => setAgentPicker('pick')}/>
+            {can('manage') && <WebhookSettings channel={channel.id}/>}
+          </>)}
           {tab === 'settings' && <>
             <div className="space-channel-card">
               {policy && <><section><div className="space-channel-field-heading"><h3>Posting permissions</h3>{can('manage') && !archived && <button className="space-channel-link" aria-label="Edit posting permissions" onClick={() => setPermissionEditor({ section: 'posting', snapshot: policy })}>Edit</button>}</div><p>{postingLabels[policy.posting]}</p><p className="space-channel-muted">{policy.allow_replies ? 'Threads are allowed.' : 'Only people who can post can reply.'} {policy.allow_broadcast ? 'Channel-wide mentions are allowed, subject to workspace settings.' : 'Channel-wide mentions are disabled.'}</p></section>
               <section><div className="space-channel-field-heading"><h3>Member permissions</h3>{can('manage') && !archived && <button className="space-channel-link" aria-label="Edit member permissions" onClick={() => setPermissionEditor({ section: 'actions', snapshot: policy })}>Edit</button>}</div><p>Choose who can invite and remove people, edit details, or archive this channel.</p></section></>}
               <section><h3>Channel visibility</h3><p>{details.private ? 'Only invited members can find this channel and read its messages.' : 'Everyone in this workspace can find and join this channel.'}</p></section>
-              <section><h3>{archived ? 'Archived channel' : 'Archive channel'}</h3><p>{archived ? 'Message history is preserved. Restore this channel to send messages again.' : 'Archive this channel when it’s no longer needed. Its history will remain available to members.'}</p>{can('archive') && <Button onClick={() => setConfirmation('archive')}><Archive size={16} />{archived ? 'Restore channel' : 'Archive channel for everyone'}</Button>}</section></div>
+              <section><h3>{archived ? 'Archived channel' : 'Archive channel'}</h3><p>{archived ? 'Message history is preserved. Restore this channel to send messages again.' : 'Archive this channel when it’s no longer needed. Its history will remain available to members.'}</p>{can('archive') && <Button onClick={() => setConfirmation(archived ? 'restore' : 'archive')}><Archive size={16} />{archived ? 'Restore channel' : 'Archive channel for everyone'}</Button>}</section></div>
             {permissionsPending && <p className="space-channel-muted" role="status">Checking channel permissions…</p>}
           </>}
         </div>}
       </div>
     </Dialog>
+    {agentPicker === 'pick' && !archived && <ChannelAgentPicker key={viewer} channel={channel.id} name={current.name} actor={viewer} revision={agentRevision} onConnect={() => setAgentPicker('connect')} onClose={() => setAgentPicker(undefined)} onAdded={() => setAgentRevision(n => n + 1)}/>}
+    {agentPicker === 'connect' && details && !archived && <WorkspaceMembers open workspace={details.workspace_id} viewer={viewer}
+      onClose={() => { setAgentRevision(n => n + 1); setAgentPicker('pick'); }} returnOnPaired/>}
     {permissionEditor && <ChannelPermissionEditor channel={channel.id} snapshot={permissionEditor.snapshot} members={members} section={permissionEditor.section} canEdit={can('manage') && !archived} onClose={() => setPermissionEditor(undefined)} onSaved={next => { setDetails(current => current ? { ...current, permissions: next } : current); }} />}
     {field && details && <ChannelEditor field={field} details={details} onClose={() => setField(undefined)} onSaved={saved} />}
     {adding && details && <AddPeople details={details} members={members} onClose={() => setAdding(false)} onAdded={async () => { const detail = await refresh(); onChange(detail); }} />}
     {confirmation && <ChannelConfirmation
-      title={confirmation === 'leave' ? `Leave #${current.name}?` : confirmation === 'archive' ? `${archived ? 'Restore' : 'Archive'} #${current.name}?` : `Remove ${confirmation.name}?`}
-      description={confirmation === 'leave' ? current.private ? 'You will need another member to invite you back to this private channel.' : 'You can rejoin this public channel at any time.' : confirmation === 'archive' ? archived ? 'Members will be able to send messages and replies again.' : 'Members can still read message history. New messages and replies will be disabled until this channel is restored.' : `${confirmation.name} will lose access to this channel. ${current.private ? 'They will need an invitation to return.' : 'They can rejoin this public channel.'}`}
-      label={confirmation === 'leave' ? 'Leave channel' : confirmation === 'archive' ? archived ? 'Restore channel' : 'Archive channel' : 'Remove member'}
+      title={confirmation === 'leave' ? `Leave #${current.name}?` : confirmation === 'restore' ? `Restore #${current.name}?` : confirmation === 'archive' ? `Archive #${current.name}?` : `Remove ${confirmation.name}?`}
+      description={confirmation === 'leave' ? current.private ? 'You will need another member to invite you back to this private channel.' : 'You can rejoin this public channel at any time.' : confirmation === 'restore' ? 'Members will be able to send messages and replies again.' : confirmation === 'archive' ? 'Members can still read message history. New messages and replies will be disabled until this channel is restored.' : `${confirmation.name} will lose access to this channel. ${current.private ? 'They will need an invitation to return.' : 'They can rejoin this public channel.'}`}
+      label={confirmation === 'leave' ? 'Leave channel' : confirmation === 'restore' ? 'Restore channel' : confirmation === 'archive' ? 'Archive channel' : 'Remove member'}
       onClose={() => setConfirmation(undefined)}
       onConfirm={async () => {
-        if (confirmation === 'archive') saved(await request<Details>(`/channels/${channel.id}`, { archived: !archived }, undefined, 'PATCH'));
-        else {
-          await request(`/channels/${channel.id}/members/${confirmation === 'leave' ? viewer : confirmation.id}`, undefined, undefined, 'DELETE');
-          if (confirmation !== 'leave') { const detail = await refresh(); onChange(detail); }
+        if (confirmation === 'archive' || confirmation === 'restore') {
+          const detail = await request<Details>(`/channels/${channel.id}`, { archived: confirmation === 'archive' }, undefined, 'PATCH');
+          saved(detail);
+          return `#${detail.name} ${detail.archived_at ? 'archived' : 'restored'}`;
         }
+        await request(`/channels/${channel.id}/members/${confirmation === 'leave' ? viewer : confirmation.id}`, undefined, undefined, 'DELETE');
+        if (confirmation === 'leave') return `You left #${current.name}`;
+        await refresh().then(onChange).catch(reason => setError(errorText(reason)));
+        return `${confirmation.name} removed from #${current.name}`;
       }} onDone={confirmation === 'leave' ? onLeft : undefined} />}
   </>;
+}
+function WebhookSettings({ channel }: { channel: string }) {
+  const [open, setOpen] = useState(false);
+  return <div className="space-channel-card"><section>
+    <div className="space-channel-field-heading"><h3>Incoming webhooks</h3>
+      <button className="space-channel-link" aria-expanded={open} onClick={() => setOpen(!open)}>{open ? 'Close' : 'Manage'}</button></div>
+    <p>Post messages to this channel from an external service.</p>
+    {open && <ChannelWebhooks channel={channel}/>}
+  </section></div>;
 }
 function MemberAvatar({ member }: { member: ChannelMember }) {
   return member.image ? <img className="space-channel-avatar" src={member.image} alt={member.name} /> : <Avatar name={member.name} initials={member.name.slice(0, 2).toUpperCase()} size="md" presence={member.presence === 'active' ? 'online' : 'away'} />;
@@ -154,7 +175,7 @@ function AddPeople({ details, members, onClose, onAdded }: { details: Details; m
     <footer><Button disabled={busy} onClick={() => setOpen(false)}>Cancel</Button><Button variant="primary" type="submit" loading={busy} disabled={!selected}>Add</Button></footer>
   </form></Dialog>;
 }
-function ChannelConfirmation({ title, description, label, onClose, onConfirm, onDone }: { title: string; description: string; label: string; onClose: () => void; onConfirm: () => Promise<void>; onDone?: () => void }) {
+export function ChannelConfirmation({ title, description, label, onClose, onConfirm, onDone }: { title: string; description: string; label: string; onClose: () => void; onConfirm: () => Promise<string>; onDone?: () => void }) {
   const [open, setOpen] = useState(true), [busy, setBusy] = useState(false), [error, setError] = useState(''), [done, setDone] = useState(false);
-  return <Dialog open={open} title={title} onBeforeClose={() => !busy} onClose={() => { onClose(); if (done) onDone?.(); }}><div className="space-channel-editor space-channel-confirm"><p>{description}</p>{error && <p className="space-channel-error" role="alert">{error}</p>}<footer><Button disabled={busy} onClick={() => setOpen(false)}>Cancel</Button><Button variant="primary" loading={busy} onClick={() => { if (busy) return; setBusy(true); setError(''); void onConfirm().then(() => { setDone(true); setOpen(false); }).catch(e => setError(errorText(e))).finally(() => setBusy(false)); }}>{label}</Button></footer></div></Dialog>;
+  return <Dialog open={open} title={title} onBeforeClose={() => !busy} onClose={() => { onClose(); if (done) onDone?.(); }}><div className="space-channel-editor space-channel-confirm"><p>{description}</p>{error && <p className="space-channel-error" role="alert">{error}</p>}<footer><Button disabled={busy} onClick={() => setOpen(false)}>Cancel</Button><Button variant="primary" loading={busy} onClick={() => { if (busy) return; setBusy(true); setError(''); void onConfirm().then(message => { setDone(true); setOpen(false); toast.success(message); }).catch(e => setError(errorText(e))).finally(() => setBusy(false)); }}>{label}</Button></footer></div></Dialog>;
 }

@@ -13,7 +13,7 @@ import {useAgentSessionHistory} from './useAgentSessionHistory.js';
 import {useCallback,useEffect,useId,useMemo,useRef,useState,type FormEvent} from 'react';
 import type {ChannelAgent,AgentSessionDetail,AgentSessionSummary,AgentSessionOutputs,NavigatorCandidate,RichDocument,Task,ChatEvent,ChatMessage,MentionReference} from '@space/contracts';
 import { Select, Button, Tabs, Avatar, Dialog, Menu, IconButton } from '@space/ui/primitives';
-import {Plus,Robot,Stop,Paperclip,ChatCircle,Browser,GitDiff,DotsThree,Star,PencilSimple} from '@phosphor-icons/react';
+import {Plus,Robot,Info,Stop,Paperclip,ChatCircle,Browser,GitDiff,DotsThree,Star,PencilSimple} from '@phosphor-icons/react';
 import { request } from '../../shared/api/request.js';
 import { type MessageAttempt } from '../composer/message-sender.js';
 import {subscribeUpdates} from '../../shared/realtime/live-updates.js';
@@ -146,17 +146,20 @@ function SessionConversation({initial,session,channel,channelName,onBack,onClose
  const manage=viewerId===activeSession.owner_id||viewerId===activeSession.created_by;
  const rows=turns.flatMap((turn,index)=>{
   const base={channel_id:channel,thread_id:session.origin_thread_id,task_id:turn.task.id,client_message_id:null,created_at:turn.created_at??session.created_at};
-  const requestRow={turn,request:true,message:{...base,id:`${turn.task.id}:request`,sequence:String(index*2+1),text:turn.task.goal,document:turn.task.request_document,author:{kind:'human' as const,id:turn.task.requester_id,name:turn.requester_name}}};
+  const requestRow={turn,request:true,showMessage:true,notice:null,message:{...base,id:`${turn.task.id}:request`,sequence:String(index*2+1),text:turn.task.goal,document:turn.task.request_document,author:{kind:'human' as const,id:turn.task.requester_id,name:turn.requester_name}}};
   const {task,response}=turn;
   const hasContent=response?.messages.some(message=>message.text.trim())||response?.tools.length||response?.components.length;
-  const replyText=task.result??(turn.detail==='session_stopped'?'This turn was stopped.':turn.detail);
+  const notice=task.status==='rejected'?'Request declined':task.status==='failed'
+   ?turn.detail==='session_stopped'?'Turn stopped':turn.detail==='local_execution_interrupted'?'Turn interrupted':'Turn failed'
+   :null;
+  const replyText=task.result??(notice?'':turn.detail);
   const pendingReply=task.status==='queued'||task.status==='running';
   // Older connectors can stream plain text without a structured response.
   const hasReply=hasContent||(!response||!pendingReply)&&replyText?.trim();
   if(!hasReply&&(pendingReply||task.status==='completed'))return [requestRow];
   return [
    requestRow,
-   {turn,request:false,message:{...base,id:`${turn.task.id}:response`,sequence:String(index*2+2),text:replyText||(task.status==='rejected'?'Request declined':''),agent_response:turn.response,author:{kind:'agent' as const,id:session.installation_id,name:session.agent_name}}},
+   {turn,request:false,showMessage:!notice||Boolean(hasReply),notice,message:{...base,id:`${turn.task.id}:response`,sequence:String(index*2+2),text:replyText||'',agent_response:turn.response,author:{kind:'agent' as const,id:session.installation_id,name:session.agent_name}}},
   ];
  });
  const arrivals=useMessageArrivals(rows.map(row=>row.message),!loading&&tab==='messages'?session.id:null);
@@ -178,7 +181,9 @@ function SessionConversation({initial,session,channel,channelName,onBack,onClose
   {error&&<p role="alert" className="agent-sessions-error">{error} <Button size="sm" variant="ghost" disabled={refreshing||!!loading} onClick={()=>void refresh()}>Retry</Button></p>}
   <ToolApprovals audience={history.latest.audience} items={history.latest.tool_approvals??[]} canDecide={viewerId===activeSession.owner_id} onResolved={refresh}/><div className="agent-session-body"><div className="agent-session-conversation" role="tabpanel" aria-label="Messages" id={`${viewsId}-messages`} hidden={tab!=='messages'}><MessageTimeline header={!data.next_cursor&&<><ConversationIntroduction title={session.agent_name} icon={<Avatar name={session.agent_name} initials={session.agent_name.slice(0,2).toUpperCase()} size="lg" tone="green"/>}>This is the beginning of your conversation with {session.agent_name}.</ConversationIntroduction>{data.context&&<><SidekickContextSection context={data.context}/><div className="sidekick-conversation-divider" role="separator" aria-label="Agent conversation"><span>Conversation with {session.agent_name}</span></div></>}</>} label="Session conversation" role="log" items={events} page={{has_older:!!data.next_cursor,has_newer:data.has_newer}} loading={loading} latestVersion={latestVersion} load={load} pinned={pinned} hidden={tab!=='messages'} render={(_event,index)=>{
    const row=rows[index]!,turn=row.turn;
-   return <div id={`chat-message-${row.message.id}`} tabIndex={-1} className="chat-message-anchor"><ConversationDateDivider date={row.message.created_at} previous={rows[index-1]?.message.created_at}/><ConversationMessage message={row.message as ChatMessage} previous={rows[index-1]?.message} viewerId={viewerId} arrival={arrivals.has(row.message.id)} onMentionClick={setSelectedMention} showAgentActivity={false} streaming={!row.request&&busy(turn.task)} actions={{copyMessage:()=>navigator.clipboard.writeText(row.message.text)}} body={!row.request&&turn.task.status==='awaiting_approval'?<div className="agent-session-approval"><p>Waiting for {session.agent_name}’s owner to approve this request.</p>{viewerId===session.owner_id&&<><Button size="sm" disabled={pending} onClick={()=>void action(`/tasks/${turn.task.id}/approve`)}>Approve request</Button><Button size="sm" variant="ghost" disabled={pending} onClick={()=>void action(`/tasks/${turn.task.id}/reject`)}>Decline</Button></>}</div>:undefined}>{!row.request&&turn.task.status==='failed'&&<p role="status">This turn stopped. You can send another message or start a new session.</p>}</ConversationMessage></div>;
+   return <div id={`chat-message-${row.message.id}`} tabIndex={-1} className="chat-message-anchor"><ConversationDateDivider date={row.message.created_at} previous={rows[index-1]?.message.created_at}/>{row.showMessage&&<ConversationMessage message={row.message as ChatMessage} previous={rows[index-1]?.message} viewerId={viewerId} arrival={arrivals.has(row.message.id)} onMentionClick={setSelectedMention} showAgentActivity={false} streaming={!row.request&&busy(turn.task)} actions={{copyMessage:()=>navigator.clipboard.writeText(row.message.text)}} body={!row.request&&turn.task.status==='awaiting_approval'?<div className="agent-session-approval"><p>Waiting for {session.agent_name}’s owner to approve this request.</p>{viewerId===session.owner_id&&<><Button size="sm" disabled={pending} onClick={()=>void action(`/tasks/${turn.task.id}/approve`)}>Approve request</Button><Button size="sm" variant="ghost" disabled={pending} onClick={()=>void action(`/tasks/${turn.task.id}/reject`)}>Decline</Button></>}</div>:undefined}/>}
+    {row.notice&&<div role="status" className="agent-session-system-notice"><Info size={16} aria-hidden="true"/><span><strong>Space</strong> · {row.notice}</span></div>}
+   </div>;
   }}/>{footer}
   </div>{tab!=='messages'&&<div className="agent-session-output-view" role="tabpanel" id={`${viewsId}-${tab}`} aria-label={tab==='preview'?'Preview':tab==='files'?'Files':'Changes'} tabIndex={0}>
    <div className="agent-session-output">{tab==='preview'?<TaskPreview preview={outputs.preview}/>:tab==='files'?<TaskFiles files={outputs.files}/>:<TaskChanges changes={outputs.changes}/>}</div>

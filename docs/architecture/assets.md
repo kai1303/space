@@ -230,7 +230,8 @@ after verification. Evidence is retained under
 | PDF | Locally bundled, lazily loaded PDF.js canvas with page navigation and zoom. |
 | UTF-8 text/code | Escaped source with syntax highlighting and a bounded inline snippet/full preview. HTML and SVG stay source text. |
 | Recognized audio/video | Browser-native playback controls; unsupported codecs retain the original download. |
-| Office documents, archives, unknown/corrupt files | Explicit unavailable preview and original download. |
+| DOCX, XLSX, PPTX, ODT, ODS, ODP | Read-only ONLYOFFICE viewer when configured. |
+| Archives, unknown/corrupt files | Explicit unavailable preview and original download. |
 
 Kinds come from file bytes; the upload's declared MIME type does not grant inline
 rendering. Image decoding caps total pixels at 40 million and frames at 500;
@@ -343,7 +344,7 @@ Conversion admits two jobs per API, a 25MiB input, first-page-only 720px raster,
 installs `poppler-utils`, `util-linux-misc` and `font-liberation`; rebuild the
 server image to activate them. Native development needs `pdftoppm` and fonts on
 PATH, plus `prlimit` on Linux. Unsupported, encrypted and over-budget documents
-retain the icon/viewer/download path. Office conversion remains outside scope.
+retain the icon/viewer/download path. Office attachments open in the separately configured ONLYOFFICE service.
 
 Verification: 26 server, 19 asset API and 32 frontend preview tests passed,
 plus 2 real API/SeaweedFS tests, typecheck and server/web builds. The Alpine
@@ -365,3 +366,33 @@ count assertions failed while unrelated outbox/migration work changed the shared
 checkout. Affected asset/preview checks above passed after the final change.
 
 ![Inline PDF card](/Users/kai/.codex/visualizations/2026/11/03/01a1a08d-7f31-73b1-8a25-65404ae51560/channel-inline-pdf.png)
+
+
+## Opening Office attachments locally
+
+Add these variables to the environment of the Space API and Docker Compose. Generate
+the shared secret once with `openssl rand -hex 32` and store it in the ignored
+local `.env` file.
+
+```dotenv
+ONLYOFFICE_URL=http://127.0.0.1:58080
+ONLYOFFICE_STORAGE_ENDPOINT=http://seaweedfs:8333
+ONLYOFFICE_JWT_SECRET=<generated secret>
+```
+
+```sh
+docker compose -f compose.yaml -f compose.office.yaml up -d onlyoffice
+pnpm migrate
+```
+
+Restart the API with the same environment. For a containerized API, include both
+Compose files when starting the server. The browser connects to `ONLYOFFICE_URL`.
+The document server fetches a signed object URL on `ONLYOFFICE_STORAGE_ENDPOINT`
+(defaults to the API's internal storage endpoint). Use HTTPS for the browser URL
+when Space runs on HTTPS.
+
+Opening an Office attachment requests `GET /v1/assets/:assetId/office-session`.
+Space checks current access, signs a view-only configuration, and gives the viewer
+60 seconds to fetch the original. The ordinary download remains available if the
+viewer is disabled. Markdown attachments render inside the text preview with the
+same size limits as source code.

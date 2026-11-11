@@ -1,5 +1,6 @@
 import { afterEach, beforeAll, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { toast } from '@space/ui/primitives';
 import userEvent from '@testing-library/user-event';
 import { UserSettings } from '../profile/UserProfile.js';
 
@@ -97,6 +98,7 @@ it('tests, disables and removes a connection with the latest revision', async ()
   await userEvent.click(connection().getByRole('button', { name: 'Delete' }));
   await userEvent.click(screen.getByRole('button', { name: 'Delete connection' }));
   await waitFor(() => expect(screen.queryByRole('heading', { name: 'GitHub personal' })).toBeNull());
+  expect(toast.getState().toasts.at(-1)).toMatchObject({ type: 'success', title: 'Connection deleted' });
   expect(fetcher.mock.calls.some(([url, opts]) => url.endsWith('/personal') && opts?.method === 'DELETE' && JSON.parse(opts.body as string).revision === 3)).toBe(true);
 });
 it('keeps edits after a failed save but never renders a secret echoed in an error', async () => {

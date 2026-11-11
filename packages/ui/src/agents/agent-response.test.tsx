@@ -29,6 +29,36 @@ it('never mounts agent HTML, executable links or remote images', () => {
   const { container } = render(<AgentResponse response={{ ...response, messages: [{ id: 'm', status: 'complete', text: '<script>alert(1)</script>\n\n[click](javascript:alert)\n\n![tracking](https://example.com/pixel.png)' }] }} />);
   expect(container.querySelector('script, iframe, img, a[href^="javascript:"]')).toBeNull();
 });
+it('preserves workspace profile citations while dropping other relative links', () => {
+  const href = '/w/hBRc483YT8KupyFKN8gHEQ?profile=user:560b316c-16f7-4149-86b6-33fb137bf1d2';
+  render(<AgentMarkdown text={`[kai · Space profile](${href}) [@kai](${href}) [Other](/settings) [Remote](//example.com)`} />);
+  const mentions = screen.getAllByRole('link', { name: '@kai' });
+  expect(mentions).toHaveLength(2);
+  for (const mention of mentions) {
+    expect(mention.getAttribute('href')).toBe(href);
+    expect(mention.classList.contains('sp-mention-token')).toBe(true);
+  }
+  expect(screen.getAllByRole('link')).toHaveLength(2);
+});
+it.each(['/c/WKg-kkvDSN66pfa8v7JNFA/message/YoTtlDdtRiusFXmjIRoVTw', '/v1/assets/58a83e92-4bc3-48de-baa5-f6bcbfb24d14/download'])('opens the canonical citation %s and drops malformed paths', (path) => {
+  render(<AgentMarkdown text={`[Original message](${path}) [other](${path}?redirect=1) [invalid](${path}/more)`} />);
+  expect(screen.getAllByRole('link')).toHaveLength(1);
+  const link = screen.getByRole('link', { name: 'Original message' });
+  expect(link.getAttribute('href')).toBe(path);
+  expect(link.getAttribute('target')).toBe('_blank');
+  expect(link.getAttribute('rel')).toContain('noopener');
+});
+it('renders canonical channel citations as same-tab channel mentions', () => {
+  const href = '/c/hBRc483YT8KupyFKN8gHEQ';
+  render(<AgentMarkdown text={`[#general](${href}) #plain [bad](/c/invalid) [redirect](${href}?next=offsite)`} />);
+  const [tag] = screen.getAllByRole('link');
+  expect(screen.getAllByRole('link')).toHaveLength(1);
+  expect(tag?.textContent).toBe('#general');
+  expect(tag?.getAttribute('href')).toBe(href);
+  expect(tag?.getAttribute('target')).toBeNull();
+  expect(tag?.getAttribute('data-mention-kind')).toBe('channel');
+  expect(tag?.classList.contains('sp-mention-token')).toBe(true);
+});
 it('updates streamed text in place and shows interrupted tool state on failure', () => {
   const partial: Response = { messages: [{ id: 'm', text: 'Hel', status: 'streaming' }], tools: [], components: [], step: 'Looking up records' };
   const { rerender } = render(<AgentResponse response={partial} streaming />);

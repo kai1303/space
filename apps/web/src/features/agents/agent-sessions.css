@@ -32,6 +32,10 @@
 
 .agent-session-sidebar-notice{margin:4px 12px 8px;font-size:12px;line-height:1.5;color:var(--sp-sidebar-text)}
 
-.agent-session-header-title { display:flex; align-items:center; gap:4px; min-width:0; font-size:13px; }
+.agent-session > .chat-channel-header > .sp-conversation-heading { max-width: 50%; }
+.agent-session .sp-conversation-title { max-width: 100%; margin-left: 0; }
+.agent-session-header-title { display:flex; flex:1 1 0; align-items:center; gap:4px; min-width:0; font-size:13px; }
 .agent-session-header-title > span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .agent-session-header-title > button { flex-shrink:0; }
+
+.agent-session-system-notice { display:flex; align-items:center; gap:7px; margin:6px 20px; padding:5px 10px; border-inline-start:2px solid var(--sp-border); color:var(--sp-text-secondary); font-size:13px; line-height:1.4; }

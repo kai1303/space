@@ -158,6 +158,9 @@ importers:
 
   apps/mcp-gateway:
     dependencies:
+      '@aws-sdk/client-s3':
+        specifier: ^3.1161.0
+        version: 3.1161.0
       '@modelcontextprotocol/client':
         specifier: 2.4.0
         version: 2.4.0
@@ -289,6 +292,9 @@ importers:
       '@livekit/components-react':
         specifier: 2.9.25
         version: 2.9.25(livekit-client@2.23.0)(react-dom@19.3.1)(react@19.3.1)(tslib@2.9.1)
+      '@onlyoffice/document-editor-react':
+        specifier: 2.3.0
+        version: 2.3.0(@onlyoffice/doceditor-types@10.0.4)(react-dom@19.3.1)(react@19.3.1)
       '@phosphor-icons/react':
         specifier: ^2.1.10
         version: 2.1.10(react-dom@19.3.1)(react@19.3.1)
@@ -2825,6 +2831,23 @@ packages:
   /@noble/hashes@2.4.0:
     resolution: {integrity: sha512-X5XaVWZIBCT7HHZGm5I7ZQXDwLG+bGXuSrMQAW+7Zvl87h1kmc1ZB1VSRJcpUfoUrGQp4Fkoxm5kZ+Ms+aW+eA==}
     engines: {node: '>= 20.19.0'}
+    dev: false
+
+  /@onlyoffice/doceditor-types@10.0.4:
+    resolution: {integrity: sha512-XyVlkg0rv421lyKC4KmTLOG+gJhvZCIFcS63+N8eiWmucCPzAsqmYYUsEDaE4XmRNf9VpQ1sKPenYJLVUEddjQ==}
+    dev: false
+
+  /@onlyoffice/document-editor-react@2.3.0(@onlyoffice/doceditor-types@10.0.4)(react-dom@19.3.1)(react@19.3.1):
+    resolution: {integrity: sha512-0g4j4iLUMYSRIAHnFilnXbMKwIIk8UIct+qnHMySW2r5cx8ii/zK8yaO2Meeqyd1bzmji5MTTkXcLJ+XHS6YeA==}
+    peerDependencies:
+      '@onlyoffice/doceditor-types': '>=9.3.1'
+      react: ^16.9.0 || ^17 || ^18 || ^19
+      react-dom: ^16.9.0 || ^17 || ^18 || ^19
+    dependencies:
+      '@onlyoffice/doceditor-types': 10.0.4
+      lodash: 4.18.1
+      react: 19.3.1
+      react-dom: 19.3.1(react@19.3.1)
     dev: false
 
   /@opentelemetry/api@1.10.0:
@@ -6753,6 +6776,10 @@ packages:
   /lodash.isequal@4.5.0:
     resolution: {integrity: sha512-pDo3lu8Jhfjqls6GkMgpahsF9kCyayhgykjyLMNFTKWrpVdAQtYyB4muAMWozBB4ig/dtWAmsMxLEI8wuz+DYQ==}
     deprecated: This package is deprecated. Use require('node:util').isDeepStrictEqual instead.
+
+  /lodash@4.18.1:
+    resolution: {integrity: sha512-dMInicTPVE8d1e5otfwmmjlxkZoUpiVLwyeTdUsi/Caj/gfzzblBcCE5sRHV/AsjuCmxWrte2TNGSYuCeCq+0Q==}
+    dev: false
 
   /log-update@8.0.0:
     resolution: {integrity: sha512-lddSgOt3bPASrylL54ZSpy8nBHns+vBVSoILlVOx+dei300pnLRN958rj/EdlVLKuWlSESU3qdnDZdAI7FXYGg==}

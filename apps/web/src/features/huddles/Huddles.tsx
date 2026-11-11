@@ -4,6 +4,7 @@ import {RoomContext,RoomAudioRenderer,StartAudio,ParticipantTile,useTracks,useLo
 import {AnimatePresence,motion,useReducedMotion} from 'motion/react';
 import {Headphones,Microphone,MicrophoneSlash,VideoCamera,VideoCameraSlash,MonitorArrowUp,PhoneDisconnect,CaretDown,CaretUp,GearSix} from '@phosphor-icons/react';
 import {Button,Dialog,IconButton,Select} from '@space/ui/primitives';
+import {parseConversationPath} from '@space/contracts';
 import type {Huddle,HuddleAdmission,Page} from '@space/contracts';
 import {request} from '../../shared/api/request.js';
 import {subscribeUpdates,invalidateUpdates} from '../../shared/realtime/live-updates.js';
@@ -25,6 +26,10 @@ const errorText=(error:unknown)=>{
 export function HuddleProvider({children}:{children:ReactNode}) {
  const call=useCallingState();
  const [enabled,setEnabled]=useState(false),[loading,setLoading]=useState(true);
+ const [linkedChannel] = useState(() => {
+  if (new URLSearchParams(location.search).get('huddle') !== '1') return;
+  try { return parseConversationPath(location.pathname).channel; } catch { return; }
+ });
  const [target,setTarget]=useState<Target|null>(null),[session,setSession]=useState<Session|null>(null);
  const [busy,setBusy]=useState(false),[error,setError]=useState(''),[microphone,setMicrophone]=useState(true);
  const room=useRef<Room|null>(null),generation=useRef(0),joining=useRef(false);
@@ -37,6 +42,18 @@ export function HuddleProvider({children}:{children:ReactNode}) {
   const expired=()=>{leave();setTarget(null);};window.addEventListener('space:session-expired',expired);
   return()=>{alive=false;generation.current++;joining.current=false;void room.current?.disconnect(true);room.current=null;window.removeEventListener('space:session-expired',expired);};
  },[leave]);
+ useEffect(() => {
+  if (!linkedChannel || loading) return;
+  if (!enabled) { setError('Huddles are not configured for this server yet.'); return; }
+  const controller = new AbortController();
+  void request<{id:string; name:string; joined:boolean; archived_at:string|null; kind?:string}>(`/channels/${linkedChannel}`,undefined,undefined,'POST',controller.signal)
+    .then(channel => {
+      if (controller.signal.aborted) return;
+      if (!channel.joined || channel.archived_at || channel.kind === 'direct') { setError('This channel is unavailable for huddles.'); return; }
+      setTarget({id:channel.id,name:channel.name});
+    }).catch(reason => { if (!controller.signal.aborted) setError(errorText(reason)); });
+  return () => controller.abort();
+ }, [linkedChannel,enabled,loading]);
  useEffect(()=>{if(call?.call?.state==='accepted'&&room.current){leave();setError('You left the huddle to take your direct call.');}},[call?.call?.state,leave]);
  useEffect(()=>{
   if(!session)return;

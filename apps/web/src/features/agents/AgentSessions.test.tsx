@@ -162,6 +162,18 @@ it('clears cached conversation when a send discovers lost access',async()=>{
  await userEvent.type(await screen.findByRole('textbox',{name:'Message agent session'}),'Check access');await userEvent.keyboard('{Enter}');
  await waitFor(()=>expect(lost).toHaveBeenCalledOnce());expect(screen.queryByRole('log',{name:'Session conversation'})).toBeNull();
 });
+it('renders an interrupted turn without a reply as a Space notice',async()=>{
+ const fetch=setup(),original=fetch.getMockImplementation()!;
+ const sample=turn('Look up the runbook');
+ fetch.mockImplementation(async(path,init)=>path==='/v1/agent-sessions/one'?{ok:true,json:async()=>({
+  session:session('one','Research'),turns:[{...sample,task:{...sample.task,status:'failed',result:null},response:null,detail:'local_execution_interrupted'}],next_cursor:null,
+ })}:original(path,init));
+ render(<AgentSessions thread="thread" channel="channel" viewerId="user" initialSessionId="one" onAccessLost={()=>{}}/>);
+ const notice=(await screen.findByText(/· Turn interrupted/)).closest('[role="status"]');
+ expect(notice?.textContent).toBe('Space · Turn interrupted');
+ expect(within(screen.getByRole('log',{name:'Session conversation'})).getAllByRole('article')).toHaveLength(1);
+ expect(screen.queryByText('local_execution_interrupted')).toBeNull();
+});
 it('stops work without losing a prepared draft and makes ended sessions read-only',async()=>{
  const fetch=setup(),original=fetch.getMockImplementation()!;let stopped=false,ended=false;
  fetch.mockImplementation(async(path,init)=>{
@@ -173,7 +185,7 @@ it('stops work without losing a prepared draft and makes ended sessions read-onl
  await userEvent.click(await screen.findByRole('button',{name:'Research',exact:true}));
  const editor=await screen.findByRole('textbox',{name:'Message agent session'});await userEvent.type(editor,'A prepared follow-up');
  await userEvent.click(screen.getByRole('button',{name:'Stop',exact:true}));
- await screen.findByText('This turn stopped. You can send another message or start a new session.');expect(editor.textContent).toContain('A prepared follow-up');
+ const notice=await screen.findByText(/· Turn stopped/);expect(notice.closest('article')).toBeNull();expect(screen.getByText('Result: Research prompt')).toBeTruthy();expect(editor.textContent).toContain('A prepared follow-up');
  expect(screen.queryByRole('button',{name:'End session',exact:true})).toBeNull();
  ended=true;await act(async()=>{await mocks.refresh?.();});
  await screen.findByText('This session has ended. Its conversation and outputs are saved.');expect(screen.queryByRole('textbox',{name:'Message agent session'})).toBeNull();

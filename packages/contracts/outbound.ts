@@ -8,7 +8,12 @@ export interface OutboundGrant {
   installation_id: string;
   tools: string[];
 }
+export type ConnectionKind = 'mcp' | 'people' | 'channels' | 'knowledge';
+export function isDirectoryKind(kind: unknown): kind is 'people' | 'channels' {
+  return kind === 'people' || kind === 'channels';
+}
 export interface OutboundConnection {
+  kind?: ConnectionKind;
   id: string;
   name: string;
   url: string;
@@ -52,14 +57,18 @@ export function outboundUrl(raw: unknown) {
   return url.href;
 }
 export function parseOutboundConnection(raw: unknown) {
-  const v = record(raw, ['name', 'url', 'auth_type', 'token']);
+  const v = record(raw, ['name', 'url', 'auth_type', 'token', 'kind']);
+  const kind = v.kind === undefined ? 'mcp' : v.kind;
+  if (kind !== 'mcp' && !isDirectoryKind(kind) && kind !== 'knowledge') throw new AppError(400, 'invalid_connection_kind');
+  if (isDirectoryKind(kind) && (v.url !== 'space:' + kind || v.auth_type !== 'none')) throw new AppError(400, 'invalid_directory_connection');
   if (v.auth_type !== 'bearer' && v.auth_type !== 'none') throw new AppError(400, 'invalid_mcp_auth');
   const token = v.token === undefined ? undefined : text(v.token, 4096);
   if ((v.auth_type === 'bearer' && !token) || (v.auth_type === 'none' && token) || (token && /[\r\n]/.test(token)))
     throw new AppError(400, 'invalid_mcp_token');
   return {
     name: text(v.name, 100).trim(),
-    url: outboundUrl(v.url),
+    kind,
+    url: isDirectoryKind(kind) ? 'space:' + kind : outboundUrl(v.url),
     auth_type: v.auth_type,
     ...(token ? { token } : {}),
   };

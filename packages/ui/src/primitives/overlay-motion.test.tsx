@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { useRef } from 'react';
+import { Toaster } from './toast.js';
 import { Dialog } from './primitives.js';
 
 const animations = vi.hoisted(() => [] as { finish: () => void; stop: ReturnType<typeof vi.fn> }[]);
@@ -33,6 +34,24 @@ it('keeps a dismissed modal open until its exit finishes and notifies once', asy
   await act(async () => { animations.at(-1)!.finish(); });
   expect(dialog.open).toBe(false);
   expect(onClose).toHaveBeenCalledOnce();
+});
+
+it('keeps the notification region in the active modal and restores it on unmount', () => {
+  function Example({ first, second }: { first?: boolean; second?: boolean }) {
+    return <><Toaster />
+      {first && <Dialog open title="Settings" onClose={() => {}}>Settings</Dialog>}
+      {second && <Dialog open title="Confirmation" onClose={() => {}}>Confirm</Dialog>}
+    </>;
+  }
+  const { rerender } = render(<Example first />);
+  const host = () => screen.getByRole('region').closest('dialog');
+  expect(host()).toBe(screen.getByRole('dialog', { name: 'Settings' }));
+  rerender(<Example first second />);
+  expect(host()).toBe(screen.getByRole('dialog', { name: 'Confirmation' }));
+  rerender(<Example first />);
+  expect(host()).toBe(screen.getByRole('dialog', { name: 'Settings' }));
+  rerender(<Example />);
+  expect(host()).toBeNull();
 });
 
 it('animates a controlled close and cancels it if reopened', async () => {

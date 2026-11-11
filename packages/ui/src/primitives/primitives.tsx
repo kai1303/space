@@ -11,6 +11,7 @@ import {
 import { createPortal } from "react-dom";
 import { Check, CaretDown, X } from "@phosphor-icons/react";
 import { AnimatePresence, motion, useAnimate, useIsPresent, useReducedMotion } from "motion/react";
+import { registerToastDialog } from "./toast.js";
 import { motionTransition, surfaceMotion } from "../motion/motion.js";
 
 export type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
@@ -463,6 +464,9 @@ export function Dialog({
     });
     return () => { active = false; animation.stop(); };
   }, [open, closing, animate, reduced]);
+  useEffect(() => {
+    if (open && !closing && ref.current) return registerToastDialog(ref.current);
+  }, [open, closing, ref]);
   return (
     <dialog
       ref={ref}
@@ -518,28 +522,33 @@ export function Skeleton({
 export function ChannelItem({
   name,
   selected = false,
+  hasMenu = false,
   unread = 0,
+  badgeCount = unread,
   icon,
   onClick,
 }: {
   name: string;
   selected?: boolean;
+  hasMenu?: boolean;
   unread?: number;
+  badgeCount?: number;
   icon: ReactNode;
-  onClick: () => void;
+  onClick: React.MouseEventHandler<HTMLButtonElement>;
 }) {
   return (
     <button
       type="button"
       className={`sp-channel ${unread ? "sp-channel--unread" : ""}`}
+      aria-haspopup={hasMenu ? "menu" : undefined}
       aria-current={selected ? "page" : undefined}
       onClick={onClick}
     >
       {icon}
       <span className="sp-channel-name" title={name}>{name}</span>
-      {unread > 0 && (
-        <span className="sp-unread" aria-label={`${unread} unread`}>
-          {unread}
+      {badgeCount > 0 && (
+        <span className="sp-unread" aria-label={`${badgeCount} unread`}>
+          {badgeCount}
         </span>
       )}
     </button>

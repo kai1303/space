@@ -1,6 +1,6 @@
 import { sessionFetch } from '../../shared/api/session-fetch.js';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
-import { Select, Badge, Button, Dialog } from '@space/ui/primitives';
+import { Select, Badge, Button, Dialog, toast } from '@space/ui/primitives';
 import { Reveal } from '@space/ui/motion';
 import { MAX_MEMORY_CHARS, MAX_MEMORY_IMPORT_BYTES, type ChannelMemory as MemoryState, type MemoryDocument, type MemoryMatch } from '@space/contracts';
 import { request } from '../../shared/api/request.js';
@@ -78,7 +78,10 @@ function MemoryDialog({ channel, name, message, onClose }: Props) {
     const link = document.createElement('a'); link.href = url; link.download = `${channel}-memory.md`; link.click();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
-  return <Dialog open title={`Memory in #${name}`} description="Shared knowledge for this channel, with links to its sources." onClose={onClose} onBeforeClose={() => !dirty || window.confirm('Discard your unsaved memory edits?')}>
+  return <Dialog open title={`Memory in #${name}`} description="Shared knowledge for this channel, with links to its sources." onClose={() => {
+    if (dirty) toast.success('Unsaved memory edits discarded');
+    onClose();
+  }} onBeforeClose={() => !dirty || window.confirm('Discard your unsaved memory edits?')}>
     <div className="channel-memory">
       {error && <div role="alert" className="channel-memory-error">{error}</div>}
       {notice && <p role="status">{notice}</p>}
@@ -142,7 +145,13 @@ function MemoryDialog({ channel, name, message, onClose }: Props) {
         {data.can_manage && <MemoryConnections key={channel} channel={channel} enabled={data.enabled} />}
         {data.can_manage && <div className="channel-memory-delete"><Reveal open={confirmDelete}><div className="channel-memory-delete-confirmation"><p>Delete all saved memory in this provider? Conversation messages and uploaded files stay in chat.</p><div className="channel-memory-actions"><Button variant="danger" disabled={busy || dirty} onClick={() => void run(async () => {
           await requestDelete(path);
-          if (active.current) { if (data.enabled) { const result = await request<MemoryState>(path); if (active.current) { setData(result); setDraft(result.document?.content ?? ''); } } setNotice('Stored memory deleted.'); setConfirmDelete(false); setUpload(undefined); setMatches(null); setMessageSaved(false); }
+          if (!active.current) return;
+          toast.success('Stored channel memory deleted');
+          setConfirmDelete(false); setUpload(undefined); setMatches(null); setMessageSaved(false);
+          if (data.enabled) {
+            const result = await request<MemoryState>(path);
+            if (active.current) { setData(result); setDraft(result.document?.content ?? ''); }
+          }
         })}>Confirm delete memory</Button><Button disabled={busy} onClick={() => setConfirmDelete(false)}>Cancel</Button></div></div></Reveal>{!confirmDelete && <Button variant="ghost" disabled={busy || dirty} onClick={() => setConfirmDelete(true)}>Delete stored memory…</Button>}</div>}
       </>}
     </div>

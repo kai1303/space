@@ -1,7 +1,7 @@
 import { sessionFetch } from '../../../shared/api/session-fetch.js';
 import { WorkspaceInvitations } from '../invitations/WorkspaceInvitations.js';
 import { useEffect, useRef, useState } from 'react';
-import { Select, Avatar, Badge, Button, Dialog, Menu } from '@space/ui/primitives';
+import { Select, Avatar, Badge, Button, Dialog, Menu, toast } from '@space/ui/primitives';
 import { DotsThree, MagnifyingGlass, Robot, UserPlus } from '@phosphor-icons/react';
 import type { MemberRole, WorkspaceDirectory, WorkspaceDirectoryMember } from '@space/contracts';
 import { request } from '../../../shared/api/request.js';
@@ -65,7 +65,17 @@ function MemberAdministration({workspace,viewer,onClose}:Props) {
       else if(action.kind==='transfer')await request(`/workspaces/${workspace}/transfer-ownership`,{user_id:action.member.user_id});
       else if(action.kind==='deactivate')await request(`${base}/${action.member.user_id}`,undefined,undefined,'DELETE');
       else await request(base,{user_id:action.member.user_id,role:'member'});
-      if(alive.current){setAction(undefined);setNotice(action.kind==='add'?'Person added to the workspace.':'Member updated.');await refresh();}
+      if (alive.current) {
+        setAction(undefined);
+        switch (action.kind) {
+          case 'add': setNotice('Person added to the workspace.'); break;
+          case 'role': toast.success(`Account type for ${action.member.display_name} changed to ${roleNames[nextRole]}`); break;
+          case 'deactivate': toast.success(`${action.member.display_name} deactivated`); break;
+          case 'reactivate': toast.success(`${action.member.display_name} reactivated`); break;
+          case 'transfer': toast.success(`Workspace ownership transferred to ${action.member.display_name}`); break;
+        }
+        await refresh();
+      }
     } catch(reason) {if(alive.current){await refresh();if(alive.current)setError(errorText(reason));}}
     finally {mutation.current=false;if(alive.current)setBusy(false);}
   }

@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeAll, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { toast } from '@space/ui/primitives';
 import userEvent from '@testing-library/user-event';
 import { Chat } from './Chat.js';
 import type { ChannelPermissionSnapshot, ChatMessage, MessagePage } from '@space/contracts';
@@ -2083,12 +2084,15 @@ it('confirms deletion of an owned thread reply, retains it on failure and replac
   };
   await user.click((await open()).getByRole('button', { name: 'Cancel' }));
   expect(attempts).toBe(0);
+  expect(toast.getState().toasts.some(item => item.title === 'Message deleted')).toBe(false);
   const dialog = await open();
   await user.click(dialog.getByRole('button', { name: 'Delete message' }));
   expect((await dialog.findByRole('alert')).textContent).toContain('temporarily unavailable');
   expect(within(row).getByText(reply.text)).toBeTruthy();
+  expect(toast.getState().toasts.some(item => item.title === 'Message deleted')).toBe(false);
   await user.click(dialog.getByRole('button', { name: 'Delete message' }));
   await panel.findByText('This message was deleted.');
+  expect(toast.getState().toasts.at(-1)).toMatchObject({ type: 'success', title: 'Message deleted' });
   expect(panel.queryByText(reply.text)).toBeNull();
   expect(within(row).queryByLabelText('More actions')).toBeNull();
   expect(screen.getByRole('button', { name: /1 reply View thread/ })).toBeTruthy();

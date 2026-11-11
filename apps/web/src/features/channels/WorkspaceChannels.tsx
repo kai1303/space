@@ -1,5 +1,9 @@
 import { sessionPath, conversationPath } from '@space/contracts';
 import { usePublishedPath } from '../../shared/ui/conversation-location.js';
+import { ChannelNotificationEditor } from './ChannelNotificationEditor.js';
+import { ChannelConfirmation } from './ChannelDetails.js';
+import { NotificationPreferences } from '../notifications/Notifications.js';
+import { channelMenu, type NotificationPatch, type ChannelMenuDialog } from './channel-menu.js';
 import { RenameSessionDialog } from '../agents/RenameSessionDialog.js';
 import { AgentSessions } from '../agents/AgentSessions.js';
 import { useAgentSessionList } from '../agents/useAgentSessionList.js';
@@ -7,11 +11,11 @@ import type { Snapshot } from '../../shared/ui/view-state.js';
 import type { ConversationView } from '../chat/view-state.js';
 import { useStarredChannels } from './useStarredChannels.js';
 import { useDirectMessageList } from '../direct-messages/DirectMessages.js';
-import { subscribeUpdates } from '../../shared/realtime/live-updates.js';
+import { invalidateUpdates, subscribeUpdates } from '../../shared/realtime/live-updates.js';
 import { useWorkspaceUnread } from '../notifications/useWorkspaceUnread.js';
 import { useEffect, useRef, useState, type CSSProperties, type FormEvent, type ReactNode } from 'react';
 import { motion, useReducedMotion } from 'motion/react';
-import type { DirectMessageSummary, AgentSessionReference } from '@space/contracts';
+import type { DirectMessageSummary, AgentSessionReference, ChannelNotificationPreferences } from '@space/contracts';
 import { Button, Dialog } from '@space/ui/primitives';
 import { WorkspaceSidebar } from '@space/ui/navigation';
 import { motionTransition } from '@space/ui/motion';
@@ -58,8 +62,46 @@ export function WorkspaceChannels({ initialSession, onSessionRestored, viewForCh
   const [detailsId, setDetailsId] = useState<string>();
   const detailsChannel = channels.find(item => item.id === detailsId && item.joined);
   const sidebarPermissions = useChannelPermissions(detailsChannel?.id, workspace);
-  const joinedIds = new Set(channels.filter(item => item.joined).map(item => item.id));
-  const openDetails = (id: string) => joinedIds.has(id) ? () => setDetailsId(id) : undefined;
+  const [menuDialog, setMenuDialog] = useState<{ id:string; kind:ChannelMenuDialog }>();
+  const [splitId, setSplitId] = useState<string>();
+  const [showMuted, setShowMuted] = useState(false);
+  const [clock, setClock] = useState(Date.now);
+  const split = channels.find(item => item.id === splitId);
+  const target = channels.find(item => item.id === menuDialog?.id && item.joined);
+  const byId = new Map(channels.map(item => [item.id,item]));
+  useEffect(() => {
+    const deadlines = channels.map(item => Date.parse(item.notification_preferences?.muted_until ?? '')).filter(end => end > Date.now());
+    if (!deadlines.length) return;
+    const timer = setTimeout(() => setClock(Date.now()), Math.max(0,Math.min(...deadlines) - Date.now()) + 1);
+    return () => clearTimeout(timer);
+  }, [channels, clock]);
+  const unreadById = new Map(unread.channels.map(item => [item.channel_id,item]));
+  function badges(id: string) {
+    const counts = unreadById.get(id);
+    return {unread:counts?.unread_count ?? 0,badgeCount:byId.get(id)?.notification_preferences?.badge_every_post ? counts?.unread_count ?? 0 : counts?.mention_count ?? 0};
+  }
+  function hiddenChannel(id: string) {
+    const prefs = byId.get(id)?.notification_preferences;
+    return !unreadById.get(id)?.mention_count && (prefs?.mode === 'none' || Date.parse(prefs?.muted_until ?? '') > Date.now());
+  }
+  const reportMenuError = (reason: unknown) => updateView(view => ({ ...view, error:errorText(reason) }));
+  async function savePreferences(id: string, patch: NotificationPatch) {
+    const preferences = await request<ChannelNotificationPreferences>(`/channels/${id}/notification-settings`, patch, undefined, 'PATCH', undefined, profile.id);
+    channelMutation.current++;
+    updateView(view => ({ ...view, channels:view.channels.map(item => item.id === id ? {...item,notification_preferences:preferences} : item) }));
+  }
+  function channelActions(c: { id: string; name: string; private: boolean; kind?: string }) {
+    if (c.kind === 'direct') return {};
+    const item = byId.get(c.id);
+    if (!item) return {};
+    const openSplit = () => setSplitId(c.id);
+    return { onSplit:conversationPath(c.id) && window.self === window.top ? openSplit : undefined, actions:channelMenu(item, starred.ids.includes(c.id), {
+      split:openSplit, dialog:kind => kind === 'details' ? setDetailsId(c.id) : setMenuDialog({id:c.id,kind}),
+      copy:value => { void navigator.clipboard.writeText(value).catch(reportMenuError); },
+      star:() => { void starred.toggle(c.id, {...c,kind:'channel'}).catch(reportMenuError); },
+      save:patch => { void savePreferences(c.id,patch).catch(reportMenuError); },
+    }) };
+  }
   const homeDirect = views.get(workspace)?.direct;
   const agentSession = views.get(workspace)?.agentSession;
   function closeSession() { updateView(view => ({...view,agentSession:undefined})); }
@@ -84,7 +126,7 @@ export function WorkspaceChannels({ initialSession, onSessionRestored, viewForCh
   useEffect(() => {
     let active = true, initialized = false;
     scope.current++;
-    setRenameId(undefined); setDetailsId(undefined);
+    setRenameId(undefined); setDetailsId(undefined); setSplitId(undefined); setMenuDialog(undefined); setShowMuted(false);
     setName(''); setPrivate(false); setBusy(false); setCreateOpen(false); setComposeRequest(0);
     updateView(view => ({ ...view, error: '' }));
     async function load() {
@@ -131,7 +173,7 @@ export function WorkspaceChannels({ initialSession, onSessionRestored, viewForCh
   }, [requestedChannel, channels, loaded, workspace]);
   function channelChanged(updated: Channel) {
     channelMutation.current++;
-    updateView(view => ({ ...view, channels: view.channels.map(item => item.id === updated.id ? updated : item) }));
+    updateView(view => ({ ...view, channels: view.channels.map(item => item.id === updated.id ? { ...item, ...updated } : item) }));
   }
   function leftChannel(channel: Channel) {
     channelMutation.current++;
@@ -206,9 +248,9 @@ export function WorkspaceChannels({ initialSession, onSessionRestored, viewForCh
         loading={!loaded && !error} showEmptySections onNewMessage={onNewDirectMessage}
         selectedShortcut={shortcut} onThreads={() => onShortcut('threads')} onHuddles={() => onShortcut('huddles')} onDrafts={() => onShortcut('drafts')} onSaved={() => onShortcut('saved')} onDirectories={() => onShortcut('directories')}
         workspaceControl={workspaceControl}
-        channels={[...starred.conversations.map(c => ({id:c.id,name:c.name,section:'starred' as const,onDetails:openDetails(c.id),private:c.private,typing:c.kind === 'direct' && typing.has(c.id)})), ...channels.filter(c => !starred.ids.includes(c.id)).map(c => ({ id: c.id, onDetails: openDetails(c.id), name: c.archived_at ? `${c.name} (archived)` : c.name, private: c.private, unread: c.joined ? unread.channels.find(item => item.channel_id === c.id)?.unread_count : 0, section: 'channels' as const })), ...sessionRows.map(item => ({ id:`session:${item.id}`, name:item.title, agentName:item.agentName, typing:item.working, section:item.section, onRename:item.canRename ? () => setRenameId(item.id) : undefined })), ...directs.items.filter(dm => !starred.ids.includes(dm.id)).map(dm => ({ id: dm.id, name: dm.name, typing: typing.has(dm.id), section: 'direct' as const, initials: (dm.participants.find(person => person.id !== profile.id) ?? dm.participants[0])?.name.slice(0, 2).toUpperCase(), image: (dm.participants.find(person => person.id !== profile.id) ?? dm.participants[0])?.image, online: (dm.participants.find(person => person.id !== profile.id) ?? dm.participants[0])?.presence === 'active', unread: unread.channels.find(item => item.channel_id === dm.id)?.unread_count ?? 0 }))]} selectedId={shortcut ? '' : agentSession ? `session:${agentSession.id}` : homeDirect?.id ?? selected}
+        channels={[...starred.conversations.filter(c => showMuted || !hiddenChannel(c.id)).map(c => ({id:c.id,name:c.name,section:'starred' as const,...channelActions(c),...badges(c.id),private:c.private,typing:c.kind === 'direct' && typing.has(c.id)})), ...channels.filter(c => !starred.ids.includes(c.id) && (showMuted || !hiddenChannel(c.id))).map(c => ({ id: c.id, ...channelActions(c), name: c.archived_at ? `${c.name} (archived)` : c.name, private: c.private, ...badges(c.id), section: 'channels' as const })), ...sessionRows.map(item => ({ id:`session:${item.id}`, name:item.title, agentName:item.agentName, typing:item.working, section:item.section, onRename:item.canRename ? () => setRenameId(item.id) : undefined })), ...directs.items.filter(dm => !starred.ids.includes(dm.id)).map(dm => ({ id: dm.id, name: dm.name, typing: typing.has(dm.id), section: 'direct' as const, initials: (dm.participants.find(person => person.id !== profile.id) ?? dm.participants[0])?.name.slice(0, 2).toUpperCase(), image: (dm.participants.find(person => person.id !== profile.id) ?? dm.participants[0])?.image, online: (dm.participants.find(person => person.id !== profile.id) ?? dm.participants[0])?.presence === 'active', unread: unread.channels.find(item => item.channel_id === dm.id)?.unread_count ?? 0 }))]} selectedId={shortcut ? '' : agentSession ? `session:${agentSession.id}` : homeDirect?.id ?? selected}
         onSelect={id => { onContentClose(); const session = sessions.items.find(item => `session:${item.id}` === id) ?? starredSessions.conversations.find(item=>`session:${item.id}`===id)?.session; if (session) { updateView(view => ({...view,agentSession:session})); onSearchClose(); return; } closeSession(); if (directs.items.some(dm => dm.id === id) || starred.conversations.some(c => c.id === id && c.kind === 'direct')) { const dm = directs.items.find(item => item.id === id); if (dm) { updateView(view => ({ ...view, direct: dm })); onVisit(dm); onSearchClose(); } else onDirectMessage(id); return; } updateView(view => ({ ...view, selected: id, direct: undefined })); onVisit(channels.find(channel => channel.id === id)); setComposeRequest(0); onSearchClose(); }} onCreateChannel={() => setCreateOpen(true)}
-        sectionFooters={{starred:<>
+        sectionFooters={{channels:channels.some(c => hiddenChannel(c.id)) && <button className="sp-sidebar-section-toggle" onClick={() => setShowMuted(!showMuted)}>{showMuted ? 'Hide muted channels' : 'Show muted channels'}</button>,starred:<>
           {starredSessions.next&&<Button size="sm" onClick={starredSessions.loadMore}>More starred sessions</Button>}
           {starredSessions.hasPrevious&&<Button size="sm" onClick={starredSessions.first}>First starred sessions</Button>}
         </>,sessions:<>
@@ -223,6 +265,19 @@ export function WorkspaceChannels({ initialSession, onSessionRestored, viewForCh
       {error && channel?.joined && <p role="alert">{error}</p>}
     </div>
     {content ?? (agentSession ? <main id="chat-messages" tabIndex={-1} className="chat-channel" aria-label="Agent session"><AgentSessions key={agentSession.id} thread={agentSession.origin_thread_id} channel={agentSession.channel_id} initialSessionId={agentSession.id} viewerId={profile.id} archived={agentSession.channel_archived} drafts={drafts} onDraftChange={onDraftChange} attempt={uploads.attempt} acknowledged={uploads.acknowledged} onAccepted={(key,document)=>uploads.sent(key,document,[])} onClose={closeSession} onAccessLost={()=>{const key=`session:${agentSession.channel_id}:${agentSession.id}`;delete drafts[key];onDraftChange(key,{ops:[]});closeSession();void sessions.refresh();}}/></main> : !loaded && !error ? <ConversationLoading label="Loading workspace" /> : channel?.joined ? <ChannelRoom viewState={viewForChannel(channel.id)} readState={unread.channels.find(item => item.channel_id === channel.id)} requestedThread={mentionTarget?.channel_id === channel.id ? mentionTarget.thread_id : undefined} mentionTarget={mentionTarget?.channel_id === channel.id ? mentionTarget.message_id : undefined} onMentionOpened={onMentionOpened} key={channel.id} uploads={uploads} profile={profile} channel={channel} onChannelChange={updated => homeDirect ? updateView(view => ({ ...view, direct: updated as DirectMessageSummary })) : channelChanged(updated)} onCloseDirect={homeDirect ? () => void closeHomeDirect() : undefined} onLeft={() => leftChannel(channel)} drafts={drafts} onDraftChange={onDraftChange} onAccessLost={() => { onForgetChannel(channel.id); if (homeDirect) forgetDirect(channel.id, 'This conversation is unavailable'); }} searchOpen={searchOpen} onSearchClose={onSearchClose} composeRequest={composeRequest} /> : <motion.main initial={reduced ? false : { opacity: .65 }} animate={{ opacity: 1 }} transition={motionTransition(reduced)} id="chat-messages" tabIndex={-1} className="chat-empty"><div className="chat-empty-icon">{channel?.private ? <Lock size={32} /> : <Hash size={32} />}</div><h1>{channel ? channel.name : 'A place for every conversation'}</h1><p>{channel ? channel.archived_at ? 'Join this archived channel to read its message history.' : 'Join this channel to read and send messages with your team.' : loaded ? 'Create your first channel and bring your team together.' : 'Loading your channels…'}</p>{channel ? <Button variant="primary" loading={busy} onClick={() => void join()}>Join channel</Button> : loaded && <Button variant="primary" onClick={() => setCreateOpen(true)}><Plus size={17} /> Create channel</Button>}{error && <p role="alert">{error}</p>}</motion.main>)}
+    {split && <aside className="space-channel-split" aria-label={`Split view of #${split.name}`}>
+      <header><strong>#{split.name}</strong><Button size="sm" aria-label="Close split view" onClick={() => setSplitId(undefined)}>Close</Button></header>
+      <iframe key={split.id} title={`Conversation in #${split.name}`} src={conversationPath(split.id) + '?view=split'} />
+    </aside>}
+    {target && menuDialog?.kind === 'default' && <NotificationPreferences workspace={workspace} onClose={() => { setMenuDialog(undefined); void invalidateUpdates('workspace',workspace); }}/>}
+    {target && menuDialog?.kind === 'advanced' && <ChannelNotificationEditor key={target.id} channel={target} onClose={() => setMenuDialog(undefined)} onSave={patch => savePreferences(target.id,patch)}/>}
+    {target && menuDialog?.kind === 'leave' && <ChannelConfirmation title={`Leave #${target.name}?`} label="Leave channel"
+      description={target.private ? 'You’ll need an invitation to rejoin this private channel.' : 'You can rejoin this public channel at any time.'}
+      onClose={() => setMenuDialog(undefined)} onConfirm={async () => {
+        await request(`/channels/${target.id}/members/${profile.id}`, undefined, undefined, 'DELETE');
+        return `You left #${target.name}`;
+      }}
+      onDone={() => leftChannel(target)}/>}
     {detailsChannel && <ChannelDetails open channel={detailsChannel} viewer={profile.id} permissions={sidebarPermissions.snapshot}
       permissionsPending={!sidebarPermissions.snapshot} onClose={() => setDetailsId(undefined)} onChange={channelChanged}
       onLeft={() => { leftChannel(detailsChannel); setDetailsId(undefined); }} />}

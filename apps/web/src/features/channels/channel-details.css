@@ -82,3 +82,30 @@
   .channel-tab-manager li[data-hidden]:is(:hover,:focus-within) small { visibility:hidden; }
 }
 .channel-tab-manager > .sp-menu { display:inline-block; }
+
+.space-channel-app-list{list-style:none;margin:0;padding:0}
+.space-channel-app-list li{display:flex;align-items:center;gap:10px;min-height:44px}
+.space-channel-app-list li strong{min-width:0;overflow-wrap:anywhere}
+.space-channel-app-list li button{margin-inline-start:auto}
+.space-channel-app-icon{display:grid;place-items:center;width:32px;height:32px;flex:none;border-radius:8px;background:var(--sp-surface-subtle);border:1px solid var(--sp-border)}
+.space-channel-app-picker .space-channel-app-list{max-height:45dvh;overflow:auto}
+.chat-app .space-channel-app-picker .space-channel-search{flex-direction:row;align-items:center}
+.space-channel-webhooks{margin-top:12px}
+.space-channel-details .sp-tabs{overflow-x:auto}
+.space-channel-details .sp-tabs button{white-space:nowrap}
+.space-channel-card + .space-channel-card{margin-top:16px}
+.space-channel-app-picker section,.space-channel-connect-agent{margin-block-start:16px}
+.space-channel-app-picker h3{margin:0;font-size:14px}
+.space-channel-connect-agent{border-top:1px solid var(--sp-border);padding-top:12px}
+.space-channel-connect-agent p{margin:0 0 8px}
+.space-channel-split{min-width:0;flex:1;display:flex;flex-direction:column;border-inline-start:1px solid var(--sp-border);background:var(--sp-surface)}
+.space-channel-split>header{display:flex;justify-content:space-between;align-items:center;padding:6px 12px;border-bottom:1px solid var(--sp-border)}
+.space-channel-split iframe{border:0;flex:1;width:100%;min-height:0}
+.space-split-document .chat-app .chat-topbar,.space-split-document .chat-app .chat-rail,.space-split-document .chat-app .chat-sidebar,.space-split-document .chat-app .chat-sidebar-backdrop{display:none}
+.space-split-document .chat-app .chat-conversation{visibility:visible}
+@media(max-width:720px){.space-channel-split{position:absolute;inset:0;z-index:10}}
+.space-channel-alert-settings>h3{margin:0 0 12px}
+.chat-app .space-channel-alert-toggle{display:flex;flex-direction:row;align-items:center;justify-content:space-between;gap:18px;padding:12px 0;border-bottom:1px solid var(--sp-border)}
+.space-channel-alert-toggle small{display:block;color:var(--sp-text-secondary)}
+.chat-app .space-channel-alert-toggle input{width:18px;height:18px;flex:none;accent-color:var(--sp-success)}
+.space-channel-alert-settings>.sp-button{margin-top:16px}

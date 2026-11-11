@@ -41,6 +41,7 @@ import { registerChatRoutes, incomingWebhookPath } from './chat.js';
 import { registerRealtime, type RealtimeOptions } from './realtime.js';
 import { registerWorkspaceRoutes } from './workspace.js';
 import { AssetStore } from '@space/postgres/assets';
+import type { OfficeSettings } from './office.js';
 import { registerAssetRoutes } from './assets.js';
 import type { AssetStorage } from './storage.js';
 import { MemoryStore } from '@space/postgres/memory';
@@ -51,7 +52,7 @@ declare module 'fastify' {
   interface FastifyRequest { actorId: string }
 }
 
-export function createApi(store: PostgresStore, options: { workflowChat?: WorkflowChatConfig; monitoring?: MonitoringListener; huddles?: HuddleMedia; outbound?: OutboundOptions; search?: TypesenseOptions; invitationEmail?: {config:InvitationEmailConfig;mailer:ReturnType<typeof createInvitationMailer>}; pairedConnectors?: import('@space/contracts').PairedConnector[]; logger?: boolean; realtime?: RealtimeOptions; auth?: Authentication; allowDevelopmentTokens?: boolean; trustedProxies?: string[]; storage?: AssetStorage; memory?: MemoryOptions } = {}) {
+export function createApi(store: PostgresStore, options: { workflowChat?: WorkflowChatConfig; monitoring?: MonitoringListener; huddles?: HuddleMedia; outbound?: OutboundOptions; search?: TypesenseOptions; invitationEmail?: {config:InvitationEmailConfig;mailer:ReturnType<typeof createInvitationMailer>}; pairedConnectors?: import('@space/contracts').PairedConnector[]; logger?: boolean; realtime?: RealtimeOptions; auth?: Authentication; allowDevelopmentTokens?: boolean; trustedProxies?: string[]; storage?: AssetStorage; office?: OfficeSettings; memory?: MemoryOptions } = {}) {
   if (options.allowDevelopmentTokens && process.env.NODE_ENV === 'production') throw new Error('Development tokens are forbidden in production');
   const authenticate = async (headers: IncomingHttpHeaders, socketToken?: unknown) => {
     const actor = await options.auth?.actor(headers);
@@ -162,7 +163,7 @@ export function createApi(store: PostgresStore, options: { workflowChat?: Workfl
   registerMemoryRoutes(app, memory, memoryProviders);
   registerMemoryMcp(app, memory, memoryProviders, options.auth?.origins, process.env.MEMORY_MCP_ALLOWED_HOSTS?.split(',').map(host => host.trim()).filter(Boolean));
   const assets = new AssetStore(store.pool);
-  registerAssetRoutes(app, assets, options.storage);
+  registerAssetRoutes(app, assets, options.storage, options.office);
   const connections = new AgentConnectionStore(store.pool, { connectors: options.pairedConnectors });
   registerAgentConnectionRoutes(app, connections);
   const { io, onOutbox, getEvents, work, health, invalidate } = registerRealtime(app, authenticate, chat, { ...options.realtime, receiptMetrics, ...(options.auth ? { allowedOrigins: [...options.auth.origins], strictOrigins: true } : {}) });

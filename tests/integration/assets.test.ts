@@ -1,6 +1,6 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { randomBytes, randomUUID } from 'node:crypto';
+import { createHmac, randomBytes, randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { Pool } from 'pg';
 import { io } from 'socket.io-client';
@@ -34,7 +34,8 @@ const storage = {
   async download(key: string) { return `http://storage.test/download/${key}`; },
   async remove(key: string) { removed.push(key); objects.delete(key); contents.delete(key); },
 };
-const app = createApi(new PostgresStore(pool), { allowDevelopmentTokens: true, storage });
+const office = { url: 'https://docs.example.test', secret: randomBytes(32).toString('hex') };
+const app = createApi(new PostgresStore(pool), { allowDevelopmentTokens: true, storage, office });
 let address: string;
 before(async () => { await admin.query(`CREATE SCHEMA ${schema}`); await migrate(pool); address = await app.listen({ host: '127.0.0.1', port: 0 }); });
 after(async () => { await app.close(); await pool.end(); await admin.query(`DROP SCHEMA ${schema} CASCADE`); await admin.end(); });
@@ -456,4 +457,32 @@ test('channel file listing is read-only and proceeds while channel and workspace
     writer.release();
     await reader.end();
   }
+});
+
+test('issues signed view-only sessions for verified Office files visible to the caller', async () => {
+  const a = await bootstrap(pool);
+  // The ODF mimetype entry is enough for file-type to identify the sealed ZIP.
+  const data = Buffer.from('UEsDBBQAAAAAAFlra11exjIMJwAAACcAAAAIAAAAbWltZXR5cGVhcHBsaWNhdGlvbi92bmQub2FzaXMub3BlbmRvY3VtZW50LnRleHRQSwECFAMUAAAAAABZa2tdXsYyDCcAAAAnAAAACAAAAAAAAAAAAAAAgAEAAAAAbWltZXR5cGVQSwUGAAAAAAEAAQA2AAAATQAAAAAA', 'base64');
+  const created = (await api(a.owner_token, 'POST', `/channels/${a.channel_id}/assets`, { name: 'runbook.odt', size: data.length }, 201)).json();
+  objects.set(created.upload.fields.key, data.length);
+  contents.set(created.upload.fields.key, data);
+  const path = `/assets/${created.asset.id}`;
+  await api(a.owner_token, 'POST', path + '/complete', {});
+  assert.deepEqual((await api(a.owner_token, 'GET', path + '/preview')).json(), { kind: 'office', fileType: 'odt' });
+  const response = await api(a.owner_token, 'GET', path + '/office-session');
+  assert.equal(response.headers['cache-control'], 'private, no-store');
+  const { config, documentServerUrl } = response.json();
+  assert.equal(documentServerUrl, office.url);
+  const [header, body, signature] = config.token.split('.');
+  assert.equal(signature, createHmac('sha256', office.secret).update(header + '.' + body).digest('base64url'));
+  const claims = JSON.parse(Buffer.from(body, 'base64url').toString());
+  assert.deepEqual(claims.document, config.document);
+  assert.equal(claims.document.key, created.asset.id);
+  assert.equal(claims.document.permissions.edit, false);
+  assert.equal(claims.editorConfig.mode, 'view');
+  assert.equal(claims.exp - claims.iat, 300);
+  await api(a.collaborator_token, 'GET', path + '/office-session', undefined, 404);
+  await api(a.owner_token, 'GET', path + '/content', undefined, 415);
+  const { asset } = await upload(a);
+  await api(a.owner_token, 'GET', `/assets/${asset.id}/office-session`, undefined, 415);
 });

@@ -1,5 +1,6 @@
 import { afterEach, beforeAll, expect, it, vi } from 'vitest';
 import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
+import { toast } from '@space/ui/primitives';
 import userEvent from '@testing-library/user-event';
 import { ChannelDetails } from './ChannelDetails.js';
 import type { ChannelDetails as Details } from '@space/contracts';
@@ -54,6 +55,16 @@ it('archiving requires confirmation and keeps server failures visible', async ()
   await userEvent.click(within(dialog).getByRole('button', { name: 'Archive channel', exact: true }));
   expect(await within(dialog).findByRole('alert')).toHaveProperty('textContent', 'Resolve pending or running agent tasks before archiving this channel.');
   expect(props.onChange).not.toHaveBeenCalled();
+  expect(toast.getState().toasts.some(item => item.title === '#product archived')).toBe(false);
+  vi.mocked(fetch).mockResolvedValueOnce({ ok: true, json: async () => ({ ...channel, archived_at: '2026-11-11T00:00:00Z' }) } as Response);
+  await userEvent.click(within(dialog).getByRole('button', { name: 'Archive channel', exact: true }));
+  await waitFor(() => expect(toast.getState().toasts.at(-1)?.title).toBe('#product archived'));
+  await waitFor(() => expect(dialog.isConnected).toBe(false));
+  await userEvent.click(screen.getByRole('button', { name: /Restore channel/ }));
+  const restore = screen.getByRole('dialog', { name: 'Restore #product?' });
+  vi.mocked(fetch).mockResolvedValueOnce({ ok: true, json: async () => channel } as Response);
+  await userEvent.click(within(restore).getByRole('button', { name: 'Restore channel' }));
+  await waitFor(() => expect(toast.getState().toasts.at(-1)?.title).toBe('#product restored'));
 });
 
 it('adding a workspace person posts their ID and refreshes membership', async () => {
@@ -125,12 +136,14 @@ it('creates, copies and revokes a webhook from the selected channel', async () =
   const fetch = vi.fn(async (url: string, init?: RequestInit) => {
     const payload = url.endsWith('/webhooks') ? init?.method === 'POST'
       ? {id:'hook', name:'Build Bot', path:'/v1/hooks/incoming/test'} : []
-      : url.includes('/members?') ? {items:members, next_cursor:null} : channel;
+      : url.endsWith('/agents') ? [] : url.endsWith('/navigator') ? {candidates:[]} : url.includes('/members?') ? {items:members, next_cursor:null} : channel;
     return {ok:true, status:init?.method === 'DELETE' ? 204 : 200, json:async () => payload};
   });
   vi.stubGlobal('fetch', fetch);
   render(<ChannelDetails {...props} />);
-  await user.click(await screen.findByRole('tab', {name:'Integrations'}));
+  await user.click(await screen.findByRole('tab', {name:'Agents & apps'}));
+  expect(screen.queryByLabelText('Integration name')).toBeNull();
+  await user.click(screen.getByRole('button', {name:'Manage'}));
   await user.type(await screen.findByLabelText('Integration name'), 'Build Bot');
   await user.click(screen.getByRole('button', {name:'Create incoming webhook'}));
   await user.click(await screen.findByRole('button', {name:'Copy URL'}));
@@ -138,5 +151,66 @@ it('creates, copies and revokes a webhook from the selected channel', async () =
   await user.click(screen.getByRole('button', {name:'Revoke'}));
   await user.click(screen.getByRole('button', {name:'Revoke webhook'}));
   await waitFor(() => expect(screen.queryByLabelText('Webhook URL')).toBeNull());
+  expect(toast.getState().toasts.at(-1)).toMatchObject({ type: 'success', title: 'Webhook revoked' });
   expect(fetch).toHaveBeenCalledWith('/v1/channels/channel/webhooks/hook', expect.objectContaining({method:'DELETE'}));
+});
+
+it('lets a member add one owned skill, then shows the shared agent once in the channel', async () => {
+  const user = userEvent.setup();
+  let added = false;
+  const mock = vi.fn(async (url: string, init?: RequestInit) => {
+    if (url.endsWith('/connections/research/channels/channel')) {
+      expect(JSON.parse(String(init?.body))).toEqual({enabled:true, skill:'review'});
+      added = true;
+    }
+    const payload = url.endsWith('/navigator') ? {candidates: added ? [{installation_id:'research',name:'Research',skill:'review'}] : []}
+      : url.endsWith('/agents') ? [{id:'research',name:'Research',skills:['review','edit'],granted_skills:added ? ['review'] : []}]
+      : url.includes('/members?') ? {items:members,next_cursor:null} : {...channel,can_manage:false};
+    return {ok:true,status:200,json:async () => payload};
+  });
+  vi.stubGlobal('fetch',mock);
+  render(<ChannelDetails {...props} initialTab="integrations" />);
+  await user.click(await screen.findByRole('button',{name:'Add Agent or App'}));
+  const picker = screen.getByRole('dialog',{name:'Add agents & apps'});
+  await user.type(within(picker).getByRole('searchbox'),'review');
+  expect(within(picker).queryByRole('button',{name:'Add Research · edit'})).toBeNull();
+  await user.click(within(picker).getByRole('button',{name:'Add Research · review'}));
+  await waitFor(() => expect(within(picker).queryByRole('button',{name:'Add Research · review'})).toBeNull());
+  expect(within(picker).queryByRole('button',{name:'Connect a new agent'})).toBeNull();
+  await user.clear(within(picker).getByRole('searchbox'));
+  expect(await within(picker).findByText('Research', {exact:true})).toBeTruthy();
+  expect(within(picker).getByRole('button',{name:'Add Research · edit'})).toBeTruthy();
+  await user.click(within(picker).getByRole('button',{name:'Close dialog'}));
+  await waitFor(() => expect(screen.queryByRole('dialog',{name:'Add agents & apps'})).toBeNull());
+  expect(await screen.findByRole('button',{name:'Add more'})).toBeTruthy();
+  expect(screen.getAllByText('Research')).toHaveLength(1);
+  expect(mock.mock.calls.some(([url]) => url.endsWith('/webhooks'))).toBe(false);
+});
+
+it('shows inherited and teammate agents once and returns from connection setup to the refreshed picker', async () => {
+  const user = userEvent.setup();
+  const candidates = [
+    {installation_id:'mine',name:'My Codex',skill:'review'},
+    {installation_id:'mine',name:'My Codex',skill:'edit'},
+    {installation_id:'other',name:'Team agent',skill:'review'},
+  ];
+  vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+    const payload = url.endsWith('/navigator') ? {candidates}
+      : url.endsWith('/agents') ? [{id:'mine',name:'My Codex',skills:['review','edit'],inherits_owner_access:true}]
+      : url.includes('/members?') ? {items:members,next_cursor:null}
+      : url.includes('/participants?') ? {items:[],next_cursor:null}
+      : url.endsWith('/connectors') ? [] : channel;
+    return {ok:true,status:200,json:async () => payload};
+  }));
+  render(<ChannelDetails {...props} initialTab="integrations"/>);
+  await user.click(await screen.findByRole('button',{name:'Add more'}));
+  const picker = within(screen.getByRole('dialog',{name:'Add agents & apps'}));
+  expect(await picker.findAllByText('My Codex')).toHaveLength(1);
+  expect(picker.getByText('Team agent')).toBeTruthy();
+  await user.click(await picker.findByRole('button',{name:'Connect a new agent'}));
+  const setup = await screen.findByRole('dialog',{name:'Connect an agent'});
+  candidates.push({installation_id:'new',name:'New agent',skill:'review'});
+  await user.click(within(setup).getByRole('button',{name:'Close dialog'}));
+  const refreshed = within(await screen.findByRole('dialog',{name:'Add agents & apps'}));
+  expect(await refreshed.findByText('New agent')).toBeTruthy();
 });

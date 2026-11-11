@@ -53,7 +53,7 @@ export class AssetStore {
         description: sql<string | null>`(SELECT entry->>'description' FROM jsonb_array_elements(${messages.attachments}) entry WHERE entry->>'id' = ${assets.id}::text LIMIT 1)`,
       }).from(assets).innerJoin(messages, source).innerJoin(users, eq(users.id, assets.uploader_id))
         .where(and(scope, cursor, query.q ? sql`${assets.name} ilike ${pattern}` : undefined,
-          query.kind === 'all' ? undefined : query.kind === 'other' ? sql`${previewKind} in ('unsupported', 'file')` : eq(previewKind, query.kind)))
+          query.kind === 'all' ? undefined : query.kind === 'other' ? sql`${previewKind} in ('unsupported', 'file', 'office')` : eq(previewKind, query.kind)))
         .orderBy(order(messages.created_at), order(assets.id)).limit(query.limit + 1);
       const items = rows.slice(0, query.limit).map(({ description, ...file }) => ({ ...file, ...(description ? { description } : {}) }));
       return { items, next_cursor: rows.length > query.limit ? items.at(-1)!.id : null };

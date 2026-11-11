@@ -1,7 +1,7 @@
 import { useWorkspaceQueryCache } from '../../shared/realtime/workspace-query-cache.js';
 import { useEffect, useRef, useState } from 'react';
 import type { HubTodo, Page } from '@space/contracts';
-import { Select, Button, Dialog, IconButton, Menu, Popover } from '@space/ui/primitives';
+import { Select, Button, Dialog, IconButton, Menu, Popover, toast } from '@space/ui/primitives';
 import { RichComposer } from '@space/ui/composer';
 import { RichContent } from '@space/ui/rich-text';
 import { ArrowsDownUp, Bell, Broom, CaretDown, CheckCircle, DotsThree, FunnelSimple, X } from '@phosphor-icons/react';
@@ -89,7 +89,15 @@ export function WorkspaceTodos({workspace,onOpen,archived=false,initialTodoId}:{
   }
   async function runCleanup(){
     if(!cleanup)return;const result=await data.change<{items:HubTodo[];next_cursor:string|null}>('/cleanup',cleanup);
-    if(result){setNotice(`${result.items.length} to-dos ${cleanup.action==='complete'?'completed':cleanup.action==='archive'?'moved to Saved':'cleared'}.`);setNextCleanup(result.next_cursor?{...cleanup,after:result.next_cursor}:undefined);setCleanup(undefined);data.select();}
+    if (!result) return;
+    const count = result.items.length;
+    const outcome = cleanup.action === 'complete' ? 'completed' : cleanup.action === 'archive' ? 'moved to Saved' : 'cleared';
+    toast.success(`${count} ${count === 1 ? 'to-do' : 'to-dos'} ${outcome}`);
+    setUndo(undefined);
+    setNotice(result.next_cursor ? 'More to-dos are available to clean up.' : '');
+    setNextCleanup(result.next_cursor ? {...cleanup, after: result.next_cursor} : undefined);
+    setCleanup(undefined);
+    data.select();
   }
   const current=data.selected;
   const filtered=status!=='all'||reminder!=='all';

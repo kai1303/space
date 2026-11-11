@@ -1,6 +1,6 @@
 import { workspacePath } from '@space/contracts';
 import { useEffect, useId, useRef, useState } from 'react';
-import { Select, Button, Dialog, Tabs } from '@space/ui/primitives';
+import { Select, Button, Dialog, Tabs, toast } from '@space/ui/primitives';
 import { workspacePreferenceDefaults, workspaceLanguages, type WorkspaceSettings as Settings, type WorkspaceSettingsUpdate } from '@space/contracts';
 import { request } from '../../../shared/api/request.js';
 import { subscribeUpdates } from '../../../shared/realtime/live-updates.js';
@@ -39,12 +39,19 @@ function SettingsDialog({workspace,onClose,onRenamed,onManageMembers}:Props) {
     return()=>{active.current=false;generation.current++;stop();};
   },[workspace]);
   function change<K extends keyof Settings>(key:K,value:Settings[K]) {dirty.current=true;setNotice('');setDraft(previous=>previous ? {...previous,[key]:value} : previous);}
-  async function save(patch:WorkspaceSettingsUpdate, renamed=false) {
+  async function save(patch:WorkspaceSettingsUpdate, action?: 'rename' | 'retention') {
     if(saving.current || !manager)return;
     saving.current=true;setBusy(true);setError('');generation.current++;
     try {
       const saved=await request<Settings>(`/workspaces/${workspace}/settings`,patch,undefined,'PATCH');
-      if(active.current){generation.current++;const item={...settings,...saved} as Settings;setSettings(item);resetDraft(item);setEditing(false);setNotice('Workspace settings saved.');if(renamed)onRenamed(item.name);}
+      if (active.current) {
+        generation.current++;
+        const item = {...settings,...saved} as Settings;
+        setSettings(item); resetDraft(item); setEditing(false);
+        if (action === 'retention') toast.success('Message retention policy updated');
+        else setNotice('Workspace settings saved.');
+        if (action === 'rename') onRenamed(item.name);
+      }
     } catch(reason){if(active.current)setError(reason instanceof Error?reason.message.replaceAll('_',' '):'Unable to update settings');}
     finally{saving.current=false;if(active.current)setBusy(false);}
   }
@@ -74,7 +81,7 @@ function SettingsDialog({workspace,onClose,onRenamed,onManageMembers}:Props) {
       {settings&&draft&&<>
         {!manager&&<p>Only workspace owners and admins can change these settings.</p>}
         {tab==='settings'&&<section className="workspace-settings-row"><header><div><h3>Workspace name</h3><p>Your workspace is called <strong>{settings.name}</strong>.</p></div>{manager&&!editing&&<Button size="sm" aria-label="Edit workspace name" disabled={busy||dirty.current} onClick={()=>{setName(settings.name);setEditing(true);setNotice('');}}>Edit</Button>}</header>
-          {editing&&manager&&<form onSubmit={event=>{event.preventDefault();void save({revision:settings.revision,name:name.trim()},true);}}><label>Workspace name<input ref={nameInput} required maxLength={100} value={name} onChange={event=>setName(event.target.value)} disabled={busy}/></label><div><Button type="submit" variant="primary" loading={busy} disabled={!name.trim()||name.trim()===settings.name}>Save changes</Button><Button disabled={busy} onClick={()=>setEditing(false)}>Cancel</Button></div></form>}
+          {editing&&manager&&<form onSubmit={event=>{event.preventDefault();void save({revision:settings.revision,name:name.trim()},'rename');}}><label>Workspace name<input ref={nameInput} required maxLength={100} value={name} onChange={event=>setName(event.target.value)} disabled={busy}/></label><div><Button type="submit" variant="primary" loading={busy} disabled={!name.trim()||name.trim()===settings.name}>Save changes</Button><Button disabled={busy} onClick={()=>setEditing(false)}>Cancel</Button></div></form>}
         </section>}
         <form className="workspace-preferences-form" onSubmit={event=>{event.preventDefault();savePreferences();}}>
           <fieldset disabled={!manager||busy}>
@@ -104,7 +111,7 @@ function SettingsDialog({workspace,onClose,onRenamed,onManageMembers}:Props) {
     <p>Your other pending workspace settings will also be saved.</p>
     <div className="workspace-settings-actions">
       <Button onClick={()=>setPendingRetention(undefined)}>Cancel</Button>
-      <Button variant="primary" onClick={()=>{const patch=pendingRetention;setPendingRetention(undefined);void save(patch);}}>Apply retention policy</Button>
+      <Button variant="primary" onClick={()=>{const patch=pendingRetention;setPendingRetention(undefined);void save(patch,'retention');}}>Apply retention policy</Button>
     </div>
   </Dialog>}
   </>;

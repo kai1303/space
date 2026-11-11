@@ -448,3 +448,30 @@ it('only removes saved grants when an agent becomes unavailable during editing',
   await userEvent.click(save);
   await waitFor(() => expect(api.request).toHaveBeenCalledWith('/workspaces/workspace/connections/service/grants', { revision: 4, installation_id: 'paired', tools: [] }, undefined, 'PUT'));
 });
+
+it.each(['people', 'channels', 'knowledge'])('installs a workspace knowledge source of kind %s', async kind => {
+  api.request.mockImplementation(async (path: string) => {
+    if (path.endsWith('/settings')) return { role: 'owner' };
+    if (path.endsWith('/connections')) return { items: [], agents: { items: [] } };
+    return response(path);
+  });
+  render(<WorkspaceDestinations view="agents" {...props} />);
+  await userEvent.click(screen.getByRole('button', { name: 'Apps' }));
+  await userEvent.click(await screen.findByRole('button', { name: 'Add MCP server' }));
+  await userEvent.click(screen.getByRole('combobox', { name: 'Connection type' }));
+  await userEvent.click(screen.getByRole('option', { name: kind === 'people' ? 'Space people directory' : kind === 'channels' ? 'Space channel directory' : 'External knowledge plugin' }));
+  if (kind !== 'knowledge') {
+    expect(screen.queryByLabelText('MCP endpoint')).toBeNull();
+    expect(screen.queryByLabelText('Bearer token')).toBeNull();
+  } else {
+    await userEvent.type(screen.getByLabelText('Connection name'), 'Catalog');
+    await userEvent.type(screen.getByLabelText('MCP endpoint'), 'https://kb.example/mcp');
+    await userEvent.click(screen.getByRole('combobox', { name: 'Authentication' }));
+    await userEvent.click(screen.getByRole('option', { name: 'No authentication' }));
+  }
+  await userEvent.click(screen.getByRole('button', { name: 'Save connection' }));
+  expect(api.request).toHaveBeenCalledWith('/workspaces/workspace/connections', {
+    kind, name: kind === 'people' ? 'People directory' : kind === 'channels' ? 'Channel directory' : 'Catalog',
+    url: kind !== 'knowledge' ? 'space:' + kind : 'https://kb.example/mcp', auth_type: 'none',
+  }, undefined, 'POST');
+});

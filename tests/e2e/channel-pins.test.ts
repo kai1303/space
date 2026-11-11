@@ -32,7 +32,13 @@ test('two members see channel pins, shares, and tab visibility without refreshin
   let vite:ChildProcess|undefined,browser:Awaited<ReturnType<typeof chromium.launch>>|undefined;
   t.after(async()=>{
     await browser?.close();if(vite)await terminate(vite);await app.close();await bridge.close();await pool.end();
-    await admin.query('SELECT pg_drop_replication_slot(slot_name) FROM pg_replication_slots WHERE slot_name=$1',[bridge.slot]);
+    for (let attempt=0; ;attempt++) {
+      try { await admin.query('SELECT pg_drop_replication_slot(slot_name) FROM pg_replication_slots WHERE slot_name=$1',[bridge.slot]); break; }
+      catch (error) {
+        if ((error as {code?:string}).code !== '55006' || attempt >= 6) throw error;
+        await new Promise(resolve => setTimeout(resolve,50 * 2 ** attempt));
+      }
+    }
     await admin.query(`DROP PUBLICATION IF EXISTS "${bridge.publication}"`);await admin.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);await admin.end();
   });
   await admin.query(`CREATE SCHEMA ${schema}`);await migrate(pool);await bridge.start();
@@ -56,6 +62,49 @@ test('two members see channel pins, shares, and tab visibility without refreshin
     return page;
   }
   const alice=await openMember('alice'), bob=await openMember('bob');
+  await t.test('channel context menu handles copy, mute, settings, split view and leave confirmation', async () => {
+    const name = (await pool.query('SELECT name FROM channels WHERE id=$1',[seed.channel_id])).rows[0].name;
+    const row = alice.getByRole('navigation',{name:'Workspace conversations'}).getByRole('button',{name,exact:true});
+    const menu = alice.getByRole('menu',{name:'Actions for '+name});
+    const open = () => row.click({button:'right'});
+    await open();
+    await expect(menu.getByRole('menuitemradio',{name:'Just mentions'})).toBeChecked();
+    await menu.getByRole('menuitem',{name:'Copy',exact:true}).hover();
+    const copy = menu.getByRole('menu',{name:'Copy',exact:true});
+    await expect(copy.getByRole('menuitem')).toHaveText(['Copy name','Copy link','Copy huddle link']);
+    await alice.context().grantPermissions(['clipboard-read','clipboard-write'],{origin:web});
+    await copy.getByRole('menuitem',{name:'Copy huddle link'}).click();
+    const link = new URL(await alice.evaluate(() => navigator.clipboard.readText()));
+    assert.equal(link.origin,web);
+    assert.equal(link.searchParams.get('huddle'),'1');
+    await open();
+    await menu.getByRole('menuitemradio',{name:'Mute and hide'}).click();
+    await expect(row).toHaveCount(0);
+    await alice.reload();
+    await alice.getByRole('button',{name:'Show muted channels'}).click();
+    await open();
+    await expect(menu.getByRole('menuitemradio',{name:'Mute and hide'})).toBeChecked();
+    await menu.getByRole('menuitem',{name:'More options'}).click();
+    await menu.getByRole('menuitem',{name:'Advanced settings'}).click();
+    const editor = alice.getByRole('dialog',{name:'Advanced settings'});
+    await expect(editor).toBeVisible();
+    await editor.getByRole('switch',{name:'Badge every new message in your sidebar'}).click();
+    await expect(editor.getByRole('switch',{name:'Badge every new message in your sidebar'})).toBeChecked();
+    await editor.getByRole('button',{name:'Close',exact:true}).click();
+    await open();
+    await menu.getByRole('menuitemradio',{name:'Just mentions'}).click();
+    await open();
+    await menu.getByRole('menuitem',{name:'Open in split view'}).click();
+    const split = alice.frameLocator('iframe[title="Conversation in #'+name+'"]');
+    await expect(split.getByText('Shared release notes',{exact:true})).toBeVisible();
+    await expect(split.getByRole('navigation',{name:'Main navigation'})).toHaveCount(0);
+    await expect(alice.getByText('Shared release notes',{exact:true})).toBeVisible();
+    await alice.getByRole('button',{name:'Close split view'}).click();
+    await open();
+    await menu.getByRole('menuitem',{name:'Leave channel'}).click();
+    await alice.getByRole('dialog',{name:'Leave #'+name+'?'}).getByRole('button',{name:'Cancel'}).click();
+    await expect(row).toBeVisible();
+  });
   for(const page of [alice,bob]) await expect(page.getByRole('tab',{name:'Pins'})).toHaveCount(0);
   await alice.getByRole('article').filter({hasText:'Shared release notes'}).hover();
   await alice.getByRole('button',{name:'More actions',exact:true}).click();

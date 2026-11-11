@@ -61,6 +61,7 @@ Mention a teammate’s Codex, Kiro, or Claude agent and follow its work in a sha
   - [Workflows](#workflows)
 - [Connect a local agent](#connect-a-local-agent)
 - [MCP connections](#mcp-connections)
+  - [Workspace knowledge plugins](#workspace-knowledge-plugins)
 - [Architecture](#architecture)
 - [Integrations](#integrations)
 - [Project status](#project-status)
@@ -396,6 +397,21 @@ The gateway supports remote **Streamable HTTP** with a bearer token or anonymous
 access. A request from the agent owner can use personal and workspace grants.
 Another member’s approved request can use only workspace grants for that agent.
 Both people must still have access to the workspace and channel.
+
+### Workspace knowledge plugins
+
+The built-in **Space people directory** answers questions such as “Who are the workspace admins?” from current memberships. A company can also connect its own knowledge system through the [external plugin interface](docs/architecture/knowledge-plugins.md).
+
+The optional **self-hosted PostgreSQL plugin** uses pgContext to find runbook passages by keyword and meaning, then uses pgGraph to look up who owns the matching service. Each result includes a source link. In the sample dataset, both the Payments team and the shared channel can find the recovery runbook for a duplicate charge. Only the Payments team can see the ownership record that names Mina.
+
+Follow the [provider setup guide](apps/mcp-gateway/providers/pg-knowledge/README.md) to start the database, seed the sample data, and run the provider with Ollama. With the pilot running, test both channel audiences from the repository root:
+
+```sh
+node --env-file="$HOME/.config/space/pggraph/provider.env" \
+  apps/mcp-gateway/providers/pg-knowledge/smoke.mjs --agent
+```
+
+This test uses a local model and Space’s MCP client. To try it in Space chat, register the provider as an **External knowledge plugin**, test the connection, and grant `knowledge_search` to the paired agent.
 
 ---
 

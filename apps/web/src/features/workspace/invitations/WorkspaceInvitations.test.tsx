@@ -1,5 +1,6 @@
 import { afterEach, beforeAll, expect, it, vi } from 'vitest';
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { toast } from '@space/ui/primitives';
 import userEvent from '@testing-library/user-event';
 import { WorkspaceInvitations } from './WorkspaceInvitations.js';
 const api=vi.hoisted(()=>({request:vi.fn()}));
@@ -24,6 +25,7 @@ it('requires confirmation to revoke and does not offer admin or guest roles to r
  expect(api.request.mock.calls.some(call=>call[3]==='DELETE')).toBe(false);
  await userEvent.click(screen.getByRole('button',{name:'Revoke invitation',exact:true}));
  await waitFor(()=>expect(api.request).toHaveBeenCalledWith('/workspaces/workspace/invitations/invite',undefined,undefined,'DELETE'));
+ expect(toast.getState().toasts.at(-1)?.title).toBe('Invitation revoked');
  await userEvent.click(screen.getByRole('button',{name:'Invite by email'}));expect(screen.queryByRole('option',{name:'Admin',exact:true})).toBeNull();expect(screen.queryByRole('option',{name:'Single-channel guest'})).toBeNull();
 });
 it('resends with an idempotency key and exposes the rotated link for copying',async()=>{

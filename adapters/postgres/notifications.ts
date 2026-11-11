@@ -29,6 +29,38 @@ export class NotificationStore {
   readonly db;
   constructor(pool: Pool) { this.db = database(pool); }
 
+  async updateChannelSettings(actor: string, channel: string, input: unknown) {
+    const patch = record(input, ['mode', 'muted_until', 'thread_replies', 'desktop_enabled', 'badge_every_post', 'follow_every_thread']);
+    const changes = [];
+    if ('mode' in patch) {
+      if (patch.mode !== null && (typeof patch.mode !== 'string' || !['mentions','all','none'].includes(patch.mode))) throw new AppError(400, 'invalid_mode');
+      changes.push(sql`notification_mode=${patch.mode}`);
+    }
+    if ('thread_replies' in patch) {
+      if (patch.thread_replies !== null && typeof patch.thread_replies !== 'boolean') throw new AppError(400, 'invalid_boolean');
+      changes.push(sql`notify_thread_replies=${patch.thread_replies}`);
+    }
+    for (const [key,column] of [['desktop_enabled','channel_desktop_enabled'],['badge_every_post','badge_every_post'],['follow_every_thread','follow_every_thread']] as const) {
+      if (!(key in patch)) continue;
+      if (typeof patch[key] !== 'boolean') throw new AppError(400, 'invalid_boolean');
+      changes.push(sql`${sql.identifier(column)}=${patch[key]}`);
+    }
+    if ('muted_until' in patch) {
+      const until = patch.muted_until;
+      if (until !== null && (typeof until !== 'string' || !Number.isFinite(Date.parse(until)) || Date.parse(until) <= Date.now() || Date.parse(until) > Date.now() + 2 * 86400000)) throw new AppError(400, 'invalid_pause');
+      changes.push(sql`muted_until=${until}::timestamptz`);
+    }
+    if (!changes.length) throw new AppError(400, 'empty_update');
+    const result = await this.db.execute(sql`UPDATE channel_members cm SET ${sql.join(changes, sql`, `)}
+      FROM channels ch, workspace_members wm WHERE cm.channel_id=${uuid(channel)} AND cm.user_id=${actor}
+      AND ch.id=cm.channel_id AND ch.kind='channel' AND wm.workspace_id=ch.workspace_id AND wm.user_id=cm.user_id AND wm.active
+      RETURNING cm.notification_mode AS mode, coalesce(cm.notification_mode,(SELECT mode FROM mention_preferences WHERE user_id=cm.user_id),'mentions') AS effective_mode,
+        cm.muted_until,cm.notify_thread_replies AS thread_replies,
+        coalesce(cm.channel_desktop_enabled,(SELECT desktop_enabled FROM mention_preferences WHERE user_id=cm.user_id),false) AS desktop_enabled,cm.badge_every_post,cm.follow_every_thread`);
+    if (!result.rows.length) throw missing();
+    return result.rows[0];
+  }
+
   async notify(c: DbSession, actor: string, channel: Channel, message: string, thread: string, refs: MentionReference[], reply: boolean) {
     const followers = [actor, ...refs.filter(ref => ref.kind === 'user').map(ref => ref.id)];
     await c.execute(sql`INSERT INTO notification_subscriptions(thread_id,user_id)
@@ -37,23 +69,23 @@ export class NotificationStore {
       ON CONFLICT DO NOTHING`);
     await c.execute(sql`INSERT INTO notifications(workspace_id,channel_id,message_id,user_id,actor_id,kind,silent)
       SELECT ${channel.workspace_id},${channel.id},${message},recipient.user_id,${actor},recipient.kind,
-        NOT recipient.joined OR coalesce(p.paused_until>now(),false) OR coalesce(p.mode,'mentions')='none' OR (recipient.kind='thread_reply' AND NOT coalesce(p.thread_replies,true))
+        NOT recipient.joined OR coalesce(p.paused_until>now(),false) OR coalesce(recipient.muted_until>now(),false) OR coalesce(recipient.notification_mode,p.mode,'mentions')='none' OR (recipient.kind='thread_reply' AND NOT coalesce(recipient.notify_thread_replies,recipient.follow_every_thread OR coalesce(p.thread_replies,true)))
       FROM (
         SELECT wm.user_id,CASE WHEN mn.id IS NOT NULL THEN 'mention' WHEN ${channel.kind === 'direct'} THEN 'direct_message'
-          WHEN ${reply} AND ns.following THEN 'thread_reply' ELSE 'channel_message' END AS kind,cm.user_id IS NOT NULL AS joined
+          WHEN ${reply} AND (ns.following OR (ns.following IS NULL AND cm.follow_every_thread)) THEN 'thread_reply' ELSE 'channel_message' END AS kind,cm.user_id IS NOT NULL AS joined,cm.follow_every_thread,cm.notification_mode,cm.muted_until,cm.notify_thread_replies
         FROM workspace_members wm LEFT JOIN channel_members cm ON cm.workspace_id=wm.workspace_id AND cm.user_id=wm.user_id AND cm.channel_id=${channel.id}
         LEFT JOIN mention_notifications mn ON mn.message_id=${message} AND mn.user_id=wm.user_id
         LEFT JOIN notification_subscriptions ns ON ns.thread_id=${thread} AND ns.user_id=wm.user_id
         LEFT JOIN mention_preferences p ON p.user_id=wm.user_id
         WHERE wm.workspace_id=${channel.workspace_id} AND wm.active AND wm.user_id<>${actor}
-          AND (mn.id IS NOT NULL OR (cm.user_id IS NOT NULL AND (${channel.kind === 'direct'} OR (${reply} AND ns.following) OR (NOT ${reply} AND p.mode='all'))))
+          AND (mn.id IS NOT NULL OR (cm.user_id IS NOT NULL AND (${channel.kind === 'direct'} OR (${reply} AND (ns.following OR (ns.following IS NULL AND cm.follow_every_thread))) OR (NOT ${reply} AND coalesce(cm.notification_mode,p.mode)='all'))))
       ) recipient LEFT JOIN mention_preferences p ON p.user_id=recipient.user_id
       ORDER BY recipient.user_id ON CONFLICT DO NOTHING`);
   }
 
   async reaction(c: DbSession, actor: string, channel: Channel, message: string, emoji: string) {
     await c.execute(sql`INSERT INTO notifications(workspace_id,channel_id,message_id,user_id,actor_id,kind,emoji,silent)
-      SELECT ${channel.workspace_id},${channel.id},m.id,m.user_id,${actor},'reaction',${emoji},coalesce(p.paused_until>now(),false) OR coalesce(p.mode,'mentions')='none'
+      SELECT ${channel.workspace_id},${channel.id},m.id,m.user_id,${actor},'reaction',${emoji},coalesce(p.paused_until>now(),false) OR coalesce(cm.muted_until>now(),false) OR coalesce(cm.notification_mode,p.mode,'mentions')='none'
       FROM messages m JOIN workspace_members wm ON wm.workspace_id=m.workspace_id AND wm.user_id=m.user_id AND wm.active
       JOIN channel_members cm ON cm.channel_id=m.channel_id AND cm.user_id=m.user_id
       LEFT JOIN mention_preferences p ON p.user_id=m.user_id
@@ -130,16 +162,16 @@ export class NotificationStore {
     const { channel = 'desktop' } = record(input, ['channel']);
     if (channel !== 'desktop' && channel !== 'sound') throw new AppError(400, 'invalid_channel');
     const claimedAt = channel === 'sound' ? sql`sound_claimed_at` : sql`claimed_at`;
-    const enabled = channel === 'sound' ? sql`p.sound_enabled` : sql`p.desktop_enabled`;
+    const enabled = channel === 'sound' ? sql`p.sound_enabled` : sql`coalesce(cm.channel_desktop_enabled,p.desktop_enabled,false)`;
     id = chatCursor(id);
     return sessionTransaction(this.db, async c => {
       await requireWorkspaceAccess(c, actor, uuid(workspace));
-      const result = await c.execute(sql`UPDATE notifications n SET ${claimedAt}=now() FROM mention_preferences p
-        WHERE n.id=${id}::bigint AND ${scope(actor, workspace)} AND p.user_id=n.user_id
-          AND EXISTS(SELECT 1 FROM channel_members cm WHERE cm.channel_id=n.channel_id AND cm.user_id=n.user_id)
+      const result = await c.execute(sql`UPDATE notifications n SET ${claimedAt}=now() FROM channel_members cm LEFT JOIN mention_preferences p ON p.user_id=cm.user_id
+        WHERE n.id=${id}::bigint AND ${scope(actor, workspace)}
+          AND cm.channel_id=n.channel_id AND cm.user_id=n.user_id AND (cm.muted_until IS NULL OR cm.muted_until<=now())
           AND ${claimedAt} IS NULL AND n.read_at IS NULL AND NOT n.silent AND n.created_at>=now()-interval '2 minutes'
-          AND ${enabled} AND p.mode<>'none' AND (p.paused_until IS NULL OR p.paused_until<=now())
-          AND (n.kind<>'thread_reply' OR p.thread_replies) AND (n.kind<>'channel_message' OR p.mode='all')
+          AND ${enabled} AND coalesce(cm.notification_mode,p.mode,'mentions')<>'none' AND (p.paused_until IS NULL OR p.paused_until<=now())
+          AND (n.kind<>'thread_reply' OR coalesce(cm.notify_thread_replies,cm.follow_every_thread OR coalesce(p.thread_replies,true))) AND (n.kind<>'channel_message' OR coalesce(cm.notification_mode,p.mode)='all')
         RETURNING n.id`);
       if (!result.rows.length) return { deliver: false };
       if (channel === 'sound') return { deliver: true };

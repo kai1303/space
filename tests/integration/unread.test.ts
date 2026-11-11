@@ -8,6 +8,7 @@ import { io, type Socket } from 'socket.io-client';
 import { RedisSocketAdapter } from '@space/redis';
 import { bootstrap } from '@space/postgres/bootstrap';
 import { migrate, migrationFiles } from '@space/postgres/migrate';
+import { EventBridge } from '@space/event-service/bridge';
 import { ChatStore } from '@space/postgres/chat';
 import { PostgresStore } from '@space/postgres/store';
 import { createApi } from '@space/server/api';
@@ -139,7 +140,17 @@ async function subscriber(token: string, workspace: string, server = 0) {
     assert.fail('timed out waiting for authoritative unread snapshot');
   } };
 }
-test('workspace realtime covers unopened channels, syncs devices across servers, and recovers after reconnect', async () => {
+test('workspace realtime covers unopened channels, syncs devices across servers, and recovers after reconnect', async t => {
+  const bridge = new EventBridge({databaseUrl:process.env.TEST_DATABASE_URL!, natsUrl:process.env.NATS_URL ?? process.env.TEST_NATS_URL ?? 'nats://127.0.0.1:54222', schema});
+  t.after(async () => {
+    await bridge.close();
+    for(let attempt=0; ;attempt++) {
+      try { await admin.query('SELECT pg_drop_replication_slot(slot_name) FROM pg_replication_slots WHERE slot_name=$1',[bridge.slot]); break; }
+      catch(error) { if ((error as {code?:string}).code !== '55006' || attempt>=6) throw error; await delay(50 * 2 ** attempt); }
+    }
+    await admin.query(`DROP PUBLICATION IF EXISTS "${bridge.publication}"`);
+  });
+  await bridge.start();
   const a = await bootstrap(pool);
   const ch = await api(a.owner_token, 'POST', `/workspaces/${a.workspace_id}/channels`, { name: 'Other channel', private: false }, 201);
   await api(a.collaborator_token, 'POST', `/channels/${ch.id}/join`, {});

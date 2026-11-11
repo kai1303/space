@@ -8,10 +8,10 @@ import { MacRunnerLinks } from './MacRunnerLinks.js';
 import './members.css';
 const errorText = (error: unknown) => error instanceof Error ? error.message.replaceAll('_', ' ') : 'Unable to update members';
 const statusText = { online: 'Online', offline: 'Offline', auth_required: 'Sign-in required', error: 'Connection needs attention' };
-export function WorkspaceMembers(props: { initialConnector?: string; agent?: string; workspace: string; viewer: string; open: boolean; onClose: () => void }) {
+export function WorkspaceMembers(props: { returnOnPaired?: boolean; initialConnector?: string; agent?: string; workspace: string; viewer: string; open: boolean; onClose: () => void }) {
   return props.open ? <MemberDialog key={`${props.workspace}:${props.agent ?? props.initialConnector ?? 'new'}`} {...props} /> : null;
 }
-function MemberDialog({ initialConnector, agent, workspace, viewer, onClose }: { initialConnector?:string; agent?:string; workspace: string; viewer: string; onClose: () => void }) {
+function MemberDialog({ returnOnPaired, initialConnector, agent, workspace, viewer, onClose }: { returnOnPaired?: boolean; initialConnector?:string; agent?:string; workspace: string; viewer: string; onClose: () => void }) {
   const [connector, setConnector] = useState(initialConnector ?? 'codex.local'), [connectors, setConnectors] = useState<PairedConnector[]>([]);
   const [connectionType, setConnectionType] = useState<'local' | 'cloud' | 'endpoint'>();
   const [members, setMembers] = useState<WorkspaceParticipant[]>([]), [loaded, setLoaded] = useState(false);
@@ -148,7 +148,7 @@ function MemberDialog({ initialConnector, agent, workspace, viewer, onClose }: {
       {pairing && <section className="space-pairing" aria-label={`Connect ${name}`}>
         {pairStatus?.status === 'claimed' ? <>
           <div className="space-agent-success"><CheckCircle size={30}/><div><strong>{name} paired with this workspace</strong><p role="status">{connected?.status === 'online' ? remote || pairingProvider === 'claude' ? `${name} is connected and ready.` : `Your local ${name} is connected and signed in.` : remote ? 'Start your cloud runner and finish its setup. Its status will update here.' : pairingProvider === 'codex' ? 'Complete Continue with ChatGPT in the local connector. Its status will update here.' : `Sign in to ${name} in its connector. Its status will update here.`}</p></div></div>
-          <Button variant="primary" onClick={() => {pending.current = undefined; status.current = undefined; setPairing(undefined); setPairStatus(undefined);}}>Done</Button>
+          <Button variant="primary" onClick={() => {pending.current = undefined; status.current = undefined; setPairing(undefined); setPairStatus(undefined); if (returnOnPaired) onClose();}}>Done</Button>
         </> : expired ? <><strong>This pairing code has expired or was cancelled.</strong><p>Create a new code to continue connecting your agent.</p><Button variant="primary" loading={busy} onClick={() => void createPairing()}>Generate new code</Button><Button size="sm" variant="ghost" disabled={busy} onClick={() => void cancel()}>Back to setup</Button></> : desktop && pairingProvider ? <p role="status">Connecting {name} on this Mac…</p> : <>
           <div className="space-pairing-heading"><span className="space-agent-step-label">PAIR YOUR RUNNER</span><strong>{remote ? `Connect ${name} to your cloud runner` : `Connect ${name} on your computer`}</strong></div>
           <ol className="space-pairing-steps">

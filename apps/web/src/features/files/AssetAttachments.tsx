@@ -2,10 +2,12 @@ import { sessionFetch } from '../../shared/api/session-fetch.js';
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import type { AssetAttachment, AssetPreview } from '@space/contracts';
 import { Button, Dialog, IconButton } from '@space/ui/primitives';
+import { AgentMarkdown } from '@space/ui/agents';
 import { CodeBlock } from '@space/ui/rich-text';
 import { ArrowLeft, ArrowRight, DownloadSimple, Eye, File, FileCode, FilePdf, MagnifyingGlassMinus, MagnifyingGlassPlus, MusicNote, VideoCamera } from '@phosphor-icons/react';
 import './asset-attachments.css';
 
+const OfficePreview = lazy(() => import('./OfficePreview.js').then(module => ({ default: module.OfficePreview })));
 const PdfPreview = lazy(() => import('./PdfPreview.js').then(module => ({ default: module.PdfPreview })));
 const assetUrl = (id: string, action: string) => `/v1/assets/${encodeURIComponent(id)}/${action}`;
 function usePreview(id: string, onAccessLost?: (status: number) => void) {
@@ -21,7 +23,7 @@ function usePreview(id: string, onAccessLost?: (status: number) => void) {
       if ([401, 403, 404].includes(response.status)) accessLost.current?.(response.status);
       if (!response.ok) throw new Error('Preview unavailable');
       const preview = await response.json() as AssetPreview;
-      if (!preview || !['image', 'pdf', 'audio', 'video', 'text', 'unsupported'].includes(preview.kind)) throw new Error('Invalid preview');
+      if (!preview || !['image', 'pdf', 'audio', 'video', 'text', 'office', 'unsupported'].includes(preview.kind)) throw new Error('Invalid preview');
       if (!controller.signal.aborted) setState({ id, preview });
     }).catch(() => { if (!controller.signal.aborted) setState({ id, failed: true }); });
     return () => controller.abort();
@@ -98,7 +100,8 @@ function TextPreview({ preview }: { preview: Extract<AssetPreview, { kind: 'text
     if (++lines > 1000) { code = code.slice(0, match.index); break; }
   }
   const shortened = code.length < preview.text.length;
-  return <div className="asset-text-preview" role="region" aria-label="Text file preview" tabIndex={0}><CodeBlock code={code} language={preview.language} />
+  return <div className="asset-text-preview" role="region" aria-label="Text file preview" tabIndex={0}>
+    {preview.language === 'markdown' ? <AgentMarkdown text={code} /> : <CodeBlock code={code} language={preview.language} />}
     {(shortened || preview.truncated) && <p role="status">{shortened ? 'Preview shortened to 20,000 characters, 32 KiB, or 1,000 lines.' : 'Showing the first 256 KiB.'} Download to read the complete file.</p>}
   </div>;
 }
@@ -106,9 +109,10 @@ function ViewerContent({ asset, onAccessLost }: { asset: AssetAttachment; onAcce
   const { preview, failed, fail } = usePreview(asset.id, onAccessLost);
   if (failed || preview?.kind === 'unsupported') return <div className="asset-viewer-fallback"><File size={56} /><p role="status">Preview unavailable</p><p>Download the original to open this file.</p></div>;
   if (!preview) return <p className="asset-viewer-loading" role="status">Loading preview…</p>;
-  const kindLabel = { image: 'Image', pdf: 'PDF', text: 'Text', audio: 'Audio', video: 'Video' }[preview.kind];
+  const kindLabel = { image: 'Image', pdf: 'PDF', text: 'Text', office: 'Office document', audio: 'Audio', video: 'Video' }[preview.kind];
   let content;
   if (preview.kind === 'image') content = <ImagePreview asset={asset} preview={preview} onError={fail} />;
+  else if (preview.kind === 'office') content = <Suspense fallback={<p role="status">Opening document…</p>}><OfficePreview id={asset.id} onAccessLost={onAccessLost} /></Suspense>;
   else if (preview.kind === 'pdf') content = <Suspense fallback={<p role="status">Loading PDF viewer…</p>}><PdfPreview assetId={asset.id} size={asset.size} /></Suspense>;
   else if (preview.kind === 'text') content = <TextPreview preview={preview} />;
   else content = <div className="asset-media-preview"><NativeMedia asset={asset} kind={preview.kind} onError={fail} /></div>;

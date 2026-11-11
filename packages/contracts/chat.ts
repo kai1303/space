@@ -35,6 +35,7 @@ export type ChatEvent = { channel_id: string; thread_id: string; sequence: strin
 );
 export interface ChatHistory { events: ChatEvent[]; cursor: string; oldest_cursor: string; has_more: boolean }
 export interface ChannelUnread {
+  mention_count?: number;
   channel_id: string; last_read_sequence: string; latest_sequence: string; unread_count: number;
 }
 export interface WorkspaceUnread { workspace_id: string; channels: ChannelUnread[] }
@@ -72,7 +73,17 @@ export function parseChannelInput(input: unknown) {
   return { name: text(v.name, 80).trim(), private: v.private };
 }
 
+export type ChannelNotificationPreferences = {
+  mode: 'all' | 'mentions' | 'none' | null;
+  effective_mode: 'all' | 'mentions' | 'none';
+  desktop_enabled: boolean;
+  badge_every_post: boolean;
+  follow_every_thread: boolean;
+  muted_until: string | null;
+  thread_replies: boolean | null;
+};
 export interface ChannelSummary {
+  notification_preferences?: ChannelNotificationPreferences;
   kind?: 'channel' | 'direct';
   id: string; workspace_id: string; name: string; private: boolean; joined: boolean;
   topic: string; description: string; archived_at: string | null; created_by: string | null; created_at: string;

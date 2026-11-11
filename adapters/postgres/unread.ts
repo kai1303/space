@@ -18,9 +18,18 @@ export class UnreadStore {
       const result = await c.execute<WorkspaceUnread['channels'][number] & Record<string, unknown>>(sql`
         SELECT ch.id AS channel_id,coalesce(r.last_read_sequence,0)::text AS last_read_sequence,
           coalesce((SELECT m.sequence FROM messages m WHERE m.workspace_id=${workspace} AND m.channel_id=ch.id AND ${root} ORDER BY m.sequence DESC LIMIT 1),0)::text AS latest_sequence,
-          coalesce(m.unread_count,0)::int AS unread_count
+          coalesce(m.unread_count,0)::int AS unread_count,
+          coalesce(mentions.total,0)::int AS mention_count
         FROM channel_members cm JOIN channels ch ON ch.id=cm.channel_id AND ch.workspace_id=cm.workspace_id
         LEFT JOIN channel_reads r ON r.channel_id=cm.channel_id AND r.user_id=cm.user_id
+        LEFT JOIN (
+          SELECT mn.channel_id,count(*) AS total FROM mention_notifications mn
+          JOIN messages mentioned ON mentioned.channel_id=mn.channel_id AND mentioned.id=mn.message_id
+          LEFT JOIN channel_reads seen ON seen.channel_id=mn.channel_id AND seen.user_id=mn.user_id
+          WHERE mn.workspace_id=${workspace} AND mn.user_id=${actor} AND mn.read_at IS NULL
+            AND mentioned.deleted_at IS NULL AND mentioned.sequence>coalesce(seen.last_read_sequence,0)
+          GROUP BY mn.channel_id
+        ) mentions ON mentions.channel_id=ch.id
         LEFT JOIN LATERAL (
           SELECT count(*) FILTER (WHERE m.user_id IS DISTINCT FROM ${actor}::uuid) AS unread_count
           FROM messages m WHERE m.workspace_id=${workspace} AND m.channel_id=ch.id AND m.deleted_at IS NULL AND m.sequence>coalesce(r.last_read_sequence,0) AND ${root}

@@ -67,7 +67,7 @@ async function readAgentPage(c: Query, scope: OutboundScope, after?: unknown): P
 function connectionSelect(scope: OutboundScope) {
   const workspace = typeof scope !== 'string';
   const visibleGrants = workspace ? `AND g.installation_id IN (SELECT i.id ${agentPage(scope)} LIMIT 100)` : '';
-  return `SELECT c.id,c.name,c.url,c.auth_type,c.enabled,c.revision,c.status,c.tools,c.created_at,
+  return `SELECT c.id,c.kind,c.name,c.url,c.auth_type,c.enabled,c.revision,c.status,c.tools,c.created_at,
     coalesce((SELECT jsonb_agg(jsonb_build_object('installation_id',g.installation_id,'tools',g.tools) ORDER BY g.installation_id)
       FROM outbound_grants g WHERE g.connection_id=c.id ${visibleGrants}),'[]') AS grants
     FROM outbound_connections c WHERE c.${scopeKey(scope).column}=$1`;
@@ -139,6 +139,7 @@ export class OutboundStore {
     const key = scopeKey(scope);
     const input = parseOutboundConnection(raw),
       id = randomUUID();
+    if (input.kind !== 'mcp' && typeof scope === 'string') throw new AppError(400, 'workspace_plugin_required');
     return this.transaction(async (c) => {
       await requireManager(c, scope);
       const slots = await c.query(
@@ -147,7 +148,7 @@ export class OutboundStore {
       );
       if (!slots.rows[0]) throw new AppError(409, 'connection_limit');
       await c.query(
-        `INSERT INTO outbound_connections(id,${key.column},slot,name,url,auth_type,secret) VALUES($1,$2,$3,$4,$5,$6,$7)`,
+        `INSERT INTO outbound_connections(id,${key.column},slot,name,url,auth_type,secret,kind) VALUES($1,$2,$3,$4,$5,$6,$7,$8)`,
         [
           id,
           key.id,
@@ -156,6 +157,7 @@ export class OutboundStore {
           input.url,
           input.auth_type,
           input.token ? this.security.encrypt(input.token, managedBinding(scope, id)) : null,
+          input.kind,
         ],
       );
       return this.get(scope, id, c);
@@ -171,6 +173,7 @@ export class OutboundStore {
       const current = await this.credentials(scope, id, c),
         auth = input.auth_type ?? previous.auth_type;
       const parsed = parseOutboundConnection({
+        kind: previous.kind,
         name: input.name ?? previous.name,
         url: input.url ?? previous.url,
         auth_type: auth,
@@ -299,7 +302,7 @@ export class OutboundStore {
   async authority(claims: OutboundClaims, c: Query = this.pool) {
     if (claims.exp <= Date.now()) throw new AppError(401, 'unauthorized');
     const result = await c.query(
-      `SELECT e.id FROM executions e
+      `SELECT e.id,i.workspace_id,th.channel_id FROM executions e
        JOIN tasks t ON t.id=e.task_id AND t.active_execution_id=e.id AND t.installation_id=e.installation_id AND t.session_id=e.session_id
        JOIN agent_installations i ON i.id=e.installation_id
        JOIN agent_sessions s ON s.id=e.session_id AND s.installation_id=i.id
@@ -321,11 +324,12 @@ export class OutboundStore {
       ],
     );
     if (!result.rows.length) throw new AppError(403, 'outbound_access_revoked');
+    return { workspaceId: String(result.rows[0].workspace_id), channelId: String(result.rows[0].channel_id) };
   }
   async allowed(claims: OutboundClaims, c: Query = this.pool) {
     await this.authority(claims, c);
     const { rows } = await c.query(
-      `SELECT c.id,c.name AS connection_name,c.workspace_id,c.revision,c.credential_revision,c.tools,g.tools AS allowed
+      `SELECT c.id,c.kind,c.url,c.name AS connection_name,c.workspace_id,c.revision,c.credential_revision,c.tools,g.tools AS allowed
        FROM outbound_connections c JOIN outbound_grants g ON g.connection_id=c.id
        WHERE ((c.owner_id=$1 AND c.owner_id=$3) OR c.workspace_id=$4) AND g.installation_id=$2
        AND c.enabled AND c.status='ready' ORDER BY c.id`,
@@ -339,6 +343,8 @@ export class OutboundStore {
           name: outboundToolName(r.id, t.name),
           description: `${r.workspace_id ? 'Workspace connection' : 'Connection'} "${r.connection_name}". ${t.description ?? t.name}`,
           upstreamName: t.name,
+          url: r.url as string,
+          kind: r.kind as import('@space/contracts').ConnectionKind,
           definition: t,
           connection_id: r.id,
           revision: r.revision as number,
@@ -411,11 +417,12 @@ export class OutboundStore {
       if (rows[0].count >= 4) throw new AppError(429, 'outbound_busy');
       // Only decrypt the selected grant, in the snapshot that authorized its dispatch.
       const { rows: [endpoint] } = await c.query(
-        'SELECT id,name,url,secret,owner_id,workspace_id FROM outbound_connections WHERE id=$1',
+        'SELECT id,kind,name,url,secret,owner_id,workspace_id FROM outbound_connections WHERE id=$1',
         [selected.connection_id],
       );
       const connection = {
         id: selected.connection_id,
+        kind: endpoint.kind as import('@space/contracts').ConnectionKind,
         name: endpoint.name as string,
         url: endpoint.url as string,
         token: endpoint.secret

@@ -13,7 +13,7 @@ const mediaTypes: Record<string, 'audio' | 'video'> = {
   'video/mp4': 'video', 'video/webm': 'video', 'video/ogg': 'video',
 };
 const textLanguages: Record<string, string> = {
-  txt: 'plaintext', md: 'markdown', json: 'json', csv: 'plaintext',
+  txt: 'plaintext', md: 'markdown', markdown: 'markdown', json: 'json', csv: 'plaintext',
   ts: 'typescript', tsx: 'tsx', js: 'javascript', jsx: 'jsx', py: 'python',
   go: 'go', rs: 'rust', java: 'java', css: 'css', html: 'html', xml: 'xml',
   yaml: 'yaml', yml: 'yaml', sh: 'bash', sql: 'sql', svg: 'xml',
@@ -62,6 +62,9 @@ export async function generateAssetPreview(storage: AssetStorage, id: string, na
     if (image.display) await storage.write(`previews/${id}/display.webp`, image.display, 'image/webp');
     return image.preview;
   }
+  const ext = detected?.ext;
+  if (ext === 'docx' || ext === 'xlsx' || ext === 'pptx' || ext === 'odt' || ext === 'ods' || ext === 'odp')
+    return { kind: 'office', fileType: ext };
   if (detected?.mime === 'application/pdf') return { kind: 'pdf', mime: 'application/pdf' };
   if (detected && mediaTypes[detected.mime]) return { kind: mediaTypes[detected.mime]!, mime: detected.mime };
   // Recognized binary formats never fall back to text, even with a misleading extension.

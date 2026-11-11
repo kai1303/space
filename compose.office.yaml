@@ -1,0 +1,14 @@
+services:
+  onlyoffice:
+    image: onlyoffice/documentserver:10.0.0.1
+    ports:
+      - "127.0.0.1:58080:80"
+    environment:
+      JWT_ENABLED: "true"
+      JWT_SECRET: ${ONLYOFFICE_JWT_SECRET:?Set a shared ONLYOFFICE_JWT_SECRET}
+    restart: unless-stopped
+  server:
+    environment:
+      ONLYOFFICE_URL: ${ONLYOFFICE_URL:-http://127.0.0.1:58080}
+      ONLYOFFICE_JWT_SECRET: ${ONLYOFFICE_JWT_SECRET:?Set a shared ONLYOFFICE_JWT_SECRET}
+      ONLYOFFICE_STORAGE_ENDPOINT: http://seaweedfs:8333

@@ -14,3 +14,5 @@
 @media(max-width:600px){.sp-dialog[open]:has(> .asset-viewer--single :is(.asset-text-preview, .asset-viewer-fallback)){width:calc(100vw - 16px);max-height:calc(100dvh - 16px);border-radius:8px}.asset-viewer--single > .asset-viewer-content:has(.asset-text-preview){max-height:calc(100dvh - 220px)}}
 
 .asset-viewer--single:has(.asset-text-preview, .asset-viewer-fallback){flex:0 1 auto}
+.asset-office-preview { flex: 1; min-height: 0; }
+.asset-office-preview iframe { display: block; width: 100%; height: 100%; border: 0; }

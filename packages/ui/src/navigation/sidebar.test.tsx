@@ -122,14 +122,31 @@ it('uses the agent avatar for sessions in both regular and starred sections',()=
  expect(screen.getByRole('button',{name:'Review README'}).querySelector('.sp-avatar')?.textContent).toBe('LO');
 });
 
-it("opens another channel's details through either sidebar menu without navigating", async () => {
+it("opens a channel context menu with the pointer or keyboard without navigating", async () => {
   const select = vi.fn(), details = vi.fn();
   render(<WorkspaceSidebar workspace="Team" selectedId="general" width={220} onWidthChange={() => {}} onSelect={select}
-    channels={[{ id:"general", name:"general", section:"channels" }, { id:"builds", name:"builds", section:"starred", onDetails:details }]} />);
+    channels={[{ id:"general", name:"general", section:"channels" }, { id:"builds", name:"builds", section:"starred", actions:[
+      {label:"Channel details",select:details},
+      {label:"Copy",items:[{label:"Copy link",select:vi.fn()}]},
+      {label:"Unstar channel",select:vi.fn()},
+    ] }]} />);
   const row = screen.getByRole("button", {name:"builds"});
   fireEvent.contextMenu(row);
   await userEvent.click(await screen.findByRole("menuitem", {name:"Channel details"}));
-  await userEvent.click(screen.getByRole("button", {name:"Actions for builds"}));
+  expect(screen.queryByRole("button", {name:"Actions for builds"})).toBeNull();
+  row.focus();
+  await userEvent.keyboard("{Shift>}{F10}{/Shift}");
+  expect(document.activeElement).toBe(screen.getByRole("menuitem", {name:"Channel details"}));
+  await userEvent.keyboard("{ArrowDown}");
+  expect(document.activeElement).toBe(screen.getByRole("menuitem", {name:"Copy",exact:true}));
+  await userEvent.keyboard("{ArrowRight}");
+  expect(document.activeElement).toBe(screen.getByRole("menuitem", {name:"Copy link"}));
+  await userEvent.keyboard("{ArrowLeft}");
+  expect(document.activeElement).toBe(screen.getByRole("menuitem", {name:"Copy",exact:true}));
+  await userEvent.keyboard("{Escape}");
+  expect(document.activeElement).toBe(row);
+  expect(screen.queryByRole("menu")).toBeNull();
+  fireEvent.keyDown(row, { key: "ContextMenu" });
   await userEvent.click(await screen.findByRole("menuitem", {name:"Channel details"}));
   expect(details).toHaveBeenCalledTimes(2);
   expect(select).not.toHaveBeenCalled();

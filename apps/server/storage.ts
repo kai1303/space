@@ -10,7 +10,7 @@ export interface AssetStorage {
   createUpload(key: string, size: number, expiresAt?: Date): Promise<{ url: string; fields: Record<string, string> }>;
   // Retries and concurrent processors must reuse sealed originals, never overwrite them.
   finalize(stagingKey: string, finalKey: string, size: number): Promise<void>;
-  download(key: string, name: string): Promise<string>;
+  download(key: string, name: string, audience?: 'onlyoffice'): Promise<string>;
   read(key: string, maxBytes: number, range?: { start: number; end: number }): Promise<Uint8Array>;
   write(key: string, data: Uint8Array, type: string): Promise<void>;
   inline(key: string, type: string): Promise<string>;
@@ -18,7 +18,7 @@ export interface AssetStorage {
 }
 
 type StorageConfig = {
-  endpoint: string; publicEndpoint: string; bucket: string;
+  endpoint: string; publicEndpoint: string; officeEndpoint?: string; bucket: string;
   accessKey: string; secretKey: string; origins: string[];
 };
 const maxSize = 25 * 1024 * 1024;
@@ -38,6 +38,7 @@ const validateSize = (size: number) => {
 export class SeaweedStorage implements AssetStorage {
   private readonly client: S3Client;
   private readonly publicClient: S3Client;
+  private readonly officeClient: S3Client;
   constructor(private readonly config: StorageConfig) {
     const options = {
       region: 'us-east-1', forcePathStyle: true,
@@ -45,6 +46,7 @@ export class SeaweedStorage implements AssetStorage {
       requestHandler: { connectionTimeout: 3000, requestTimeout: 10000 },
     };
     this.client = new S3Client({ ...options, endpoint: config.endpoint });
+    this.officeClient = config.officeEndpoint ? new S3Client({ ...options, endpoint: config.officeEndpoint }) : this.client;
     this.publicClient = new S3Client({ ...options, endpoint: config.publicEndpoint });
   }
   private async run<T>(operation: () => Promise<T>): Promise<T> {
@@ -120,9 +122,9 @@ export class SeaweedStorage implements AssetStorage {
       if (final.ContentLength !== size) throw new AppError(409, 'invalid_upload');
     });
   }
-  async download(key: string, name: string): Promise<string> {
+  async download(key: string, name: string, audience?: 'onlyoffice'): Promise<string> {
     const encodedName = encodeURIComponent(Buffer.from(name).toString('utf8')).replace(/[!'()*]/g, char => `%${char.charCodeAt(0).toString(16).toUpperCase()}`);
-    return this.run(() => getSignedUrl(this.publicClient, new GetObjectCommand({
+    return this.run(() => getSignedUrl(audience === 'onlyoffice' ? this.officeClient : this.publicClient, new GetObjectCommand({
       Bucket: this.config.bucket, Key: key, ResponseContentType: 'application/octet-stream',
       ResponseContentDisposition: `attachment; filename="download"; filename*=UTF-8''${encodedName}`,
     }), { expiresIn: 60 }));
@@ -192,14 +194,15 @@ export function createAssetStorageFromEnv(env: NodeJS.ProcessEnv = process.env):
   if (values.every(value => !value)) return undefined;
   if (values.some(value => !value)) throw new Error('asset_storage_configuration');
   const [endpoint, publicEndpoint, bucket, accessKey, secretKey, originList] = values as [string, string, string, string, string, string];
+  const officeEndpoint = env.ONLYOFFICE_STORAGE_ENDPOINT?.trim();
   const origins = originList.split(',').map(origin => origin.trim()).filter(Boolean);
   try {
-    for (const value of [endpoint, publicEndpoint, ...origins]) {
+    for (const value of [endpoint, publicEndpoint, ...(officeEndpoint ? [officeEndpoint] : []), ...origins]) {
       const url = new URL(value);
       if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash || url.pathname !== '/') throw new Error();
     }
     if (!origins.length || origins.some(origin => new URL(origin).origin !== origin)) throw new Error();
     if (!/^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/.test(bucket)) throw new Error();
   } catch { throw new Error('asset_storage_configuration'); }
-  return new SeaweedStorage({ endpoint, publicEndpoint, bucket, accessKey, secretKey, origins });
+  return new SeaweedStorage({ endpoint, publicEndpoint, officeEndpoint, bucket, accessKey, secretKey, origins });
 }

@@ -158,3 +158,13 @@ it('exports a viewer for lightweight file kinds without fetching every filmstrip
   expect(within(dialog).getByRole('group', { name: 'Attached files' }).querySelectorAll('img')).toHaveLength(1);
   expect(vi.mocked(fetch)).toHaveBeenCalledTimes(1);
 });
+
+it('opens Markdown as formatted text and does not load embedded HTML or remote images', async () => {
+  previews({ md: { kind: 'text', language: 'markdown', text: '# Billing runbook\n\n- Check the ledger\n\n![logo](https://example.org/logo.png)\n\n<script>bad()</script>', truncated: false } });
+  render(<AssetAttachments assets={[asset('md', 'billing.md')]} />);
+  await userEvent.click(await screen.findByRole('button', { name: 'Open preview of billing.md' }));
+  const dialog = screen.getByRole('dialog');
+  expect(await within(dialog).findByRole('heading', { name: 'Billing runbook' })).toBeTruthy();
+  expect(within(dialog).getByRole('listitem').textContent).toBe('Check the ledger');
+  expect(dialog.querySelector('img, script')).toBeNull();
+});

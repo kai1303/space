@@ -121,3 +121,47 @@ test('a nonresponsive upstream is canceled during initialization', async () => {
   await assert.rejects(remote.discover({ url: 'https://example.com/mcp' }, AbortSignal.timeout(50)));
   assert.ok(closed > 0);
 });
+
+test('external knowledge v1 negotiates discovery and returns validated MCP structured results', async () => {
+  const { RemoteMcp } = await import('./remote.js');
+  const { discoverKnowledge, callKnowledge } = await import('./knowledge.js');
+  const connectionId = '15c4b38e-75fb-46b1-b519-a4f09a600142';
+  const ref = { connectionId, recordId: 'billing' };
+  const hit = { ref, title: 'Billing', evidence: 'The finance team owns Billing.',
+    citation: { label: 'Catalog', url: 'https://catalog.example/billing' } };
+  const context = { connectionId, workspaceId: 'workspace', installationId: 'agent', requesterId: 'user',
+    audience: { kind: 'channel' as const, channelId: 'room' } };
+  const pluginManifest = { apiVersion: 1 as const, name: 'Catalog', description: 'Find owners' };
+  const app = Fastify();
+  const handler = createMcpHandler(({ requestInfo }) => {
+    assert.equal(requestInfo?.headers.get('authorization'), 'Bearer catalog-credential');
+    const server = new McpServer({ name: 'catalog', version: '1' }, { capabilities: { tools: {} } });
+    server.server.setRequestHandler('tools/list', async () => ({ tools:
+      ['knowledge_search','knowledge_resolve','knowledge_manifest'].map(name => ({ name, inputSchema: { type: 'object' as const } })),
+    }));
+    server.server.setRequestHandler('tools/call', async request => {
+      const { name, arguments: args } = request.params;
+      if (name === 'knowledge_manifest') return { content: [], structuredContent: pluginManifest };
+      assert.deepEqual(args?.context, context);
+      return { content: [], structuredContent: name === 'knowledge_search' ? { hits: [hit] } : { hit } };
+    });
+    return server;
+  });
+  const node = toNodeHandler(handler);
+  app.all('/mcp', async (req, reply) => { reply.hijack(); await node(req.raw, reply.raw, req.body); });
+  const address = await app.listen({ port: 0, host: '127.0.0.1' });
+  const remote = new RemoteMcp(async (_url, signal) => ({
+    fetch: (input, init) => fetch(input, { ...init, signal }), close: async () => {},
+  }));
+  const connection = { id: connectionId, kind: 'knowledge' as const, url: address + '/mcp', token: 'catalog-credential' };
+  const local = { manifest: pluginManifest, search: async () => { throw Error('unexpected directory call'); } };
+  const signal = AbortSignal.timeout(5000);
+  try {
+    assert.deepEqual((await discoverKnowledge(remote, connection, signal)).map(t => t.name), ['knowledge_search','knowledge_resolve']);
+    const result = await callKnowledge(local, remote, connection, 'knowledge_search', { query: 'owner' }, context, signal);
+    assert.deepEqual(result.structuredContent, { hits: [hit] });
+    const exact = await callKnowledge(local, remote, connection, 'knowledge_resolve', { ref }, context, signal);
+    assert.deepEqual(exact.structuredContent, { hit });
+    await assert.rejects(callKnowledge(local, remote, connection, 'knowledge_resolve', { ref: { ...ref, recordId: 'different' } }, context, signal), /invalid_knowledge_response/);
+  } finally { await handler.close(); await app.close(); }
+});

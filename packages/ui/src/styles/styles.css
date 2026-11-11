@@ -811,7 +811,7 @@
 /* Mentions share the same inline treatment in the editor and sent messages. */
 .sp-mention-token{display:inline;border:0;border-radius:var(--sp-radius-sm);background:var(--sp-info-soft);color:var(--sp-info);font:inherit;padding:0 2px;text-decoration:none;white-space:pre-wrap}
 .sp-mention-token:is(button){cursor:pointer}
-.sp-mention-token:is(button):hover{text-decoration:underline}
+.sp-mention-token:is(button,a):hover{text-decoration:underline}
 .sp-mention-token.is-self{background:var(--sp-warning-soft);color:var(--sp-warning)}
 .sp-mention-suggestions{position:absolute;left:0;bottom:calc(100% + 4px);z-index:15;display:flex;flex-direction:column;width:min(560px,100%);max-height:min(320px,50dvh);overflow:hidden;border:1px solid var(--sp-border);border-radius:var(--sp-radius-lg);background:var(--sp-surface-raised);box-shadow:var(--sp-shadow);color:var(--sp-text)}
 .sp-mention-options{min-height:0;overflow-y:auto;overscroll-behavior:contain;padding:var(--sp-space-1) 0}

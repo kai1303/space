@@ -1,10 +1,14 @@
 import Fastify from 'fastify';
 import { createMcpHandler, McpServer } from '@modelcontextprotocol/server';
 import { toNodeHandler } from '@modelcontextprotocol/node';
-import { AppError, record, uuid } from '@space/contracts';
+import { AppError, isDirectoryKind, record, uuid } from '@space/contracts';
 import type { OutboundStore } from '@space/postgres/outbound';
 import type { OutboundClaims } from '@space/postgres/outbound-security';
 import { watchOutboundChanges } from '@space/postgres/outbound-changes';
+import { ChannelDirectory } from '@space/postgres/channel-knowledge';
+import { PeopleDirectory } from '@space/postgres/people-knowledge';
+import { callKnowledge, discoverKnowledge } from './knowledge.js';
+import { isLocalPgKnowledge } from './local-pg-knowledge.js';
 import { RemoteMcp } from './remote.js';
 import { validateArguments } from './schema.js';
 type Remote = Pick<RemoteMcp, 'discover' | 'call'>;
@@ -13,6 +17,7 @@ export function createGateway(
   store: OutboundStore,
   options: { remote?: Remote; publicUrl?: string; trustedProxies?: string[] } = {},
 ) {
+  const directories = { people: new PeopleDirectory(store.pool), channels: new ChannelDirectory(store.pool) };
   const remote = options.remote ?? new RemoteMcp(),
     app = Fastify({
       bodyLimit: 262144,
@@ -125,7 +130,9 @@ export function createGateway(
         const connection = await store.credentials(scope, id);
         if (connection.revision !== v.revision) throw new AppError(409, 'connection_changed');
         try {
-          const tools = await remote.discover(connection, signal);
+          const tools = connection.kind !== 'mcp'
+            ? await discoverKnowledge(remote, connection, signal)
+            : await remote.discover(connection, signal);
           signal.throwIfAborted();
           return await store.catalog(scope, id, connection.revision, tools);
         } catch (e) {
@@ -141,13 +148,14 @@ export function createGateway(
   });
   const handler = createMcpHandler(async ({ requestInfo }) => {
     const claims = verify(requestInfo?.headers.get('authorization'));
-    await store.authority(claims);
+    const scope = await store.authority(claims);
     const server = new McpServer({ name: 'space-outbound', version: '1.0.0' }, { capabilities: { tools: {} } });
     server.server.setRequestHandler('tools/list', async () => ({
-      tools: (await store.allowed(claims)).map(({ name, description, inputSchema }) => ({
+      tools: (await store.allowed(claims)).map(({ name, description, inputSchema, kind, url, upstreamName }) => ({
         name,
         description,
         inputSchema: inputSchema as { type: 'object' },
+        ...(isDirectoryKind(kind) || (upstreamName === 'knowledge_search' && isLocalPgKnowledge({ kind, url })) ? { annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false } } : {}),
       })),
     }));
     server.server.setRequestHandler('tools/call', async (request, context) => {
@@ -175,7 +183,13 @@ export function createGateway(
             let status: 'succeeded' | 'failed' | 'uncertain' = 'uncertain';
             try {
               signal.throwIfAborted();
-              const result = await remote.call(call.connection, call.tool.upstreamName, args, signal);
+              const result = call.connection.kind === 'mcp'
+                ? await remote.call(call.connection, call.tool.upstreamName, args, signal)
+                : await callKnowledge(isDirectoryKind(call.connection.kind) ? directories[call.connection.kind] : undefined, remote, call.connection, call.tool.upstreamName, args, {
+                    workspaceId: scope.workspaceId, requesterId: claims.requester ?? claims.owner,
+                    installationId: claims.installation, connectionId: call.connection.id,
+                    audience: { kind: 'channel', channelId: scope.channelId },
+                  }, signal);
               const allowed = await store.allowedTool(claims, request.params.name);
               if (allowed?.dispatchRevision !== call.tool.dispatchRevision) throw new AppError(403, 'outbound_access_revoked');
               signal.throwIfAborted();
@@ -185,6 +199,9 @@ export function createGateway(
               if (result.isError)
                 return { isError: true, content: [{ type: 'text' as const, text: 'upstream_tool_failed' }] };
               return result;
+            } catch (error) {
+              if (call.connection.kind !== 'mcp') status = 'failed';
+              throw error;
             } finally {
               await store.finish(call.id, status, Date.now() - started);
             }

@@ -11,6 +11,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "exports": {
+    "./channel-knowledge": {"types":"./dist/channel-knowledge.d.ts","default":"./dist/channel-knowledge.js"},
+    "./people-knowledge": {"types":"./dist/people-knowledge.d.ts","default":"./dist/people-knowledge.js"},
     "./tool-approvals": {"types":"./dist/tool-approvals.d.ts","default":"./dist/tool-approvals.js"},
     "./help-workflows": {"types":"./dist/help-workflows.d.ts","default":"./dist/help-workflows.js"},
     "./huddles": {

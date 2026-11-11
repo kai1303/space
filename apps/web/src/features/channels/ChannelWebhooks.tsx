@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Button } from '@space/ui/primitives';
+import { Button, toast } from '@space/ui/primitives';
 import { request } from '../../shared/api/request.js';
 
 type Hook = { id: string; name: string };
@@ -34,11 +34,11 @@ export function ChannelWebhooks({ channel }: { channel: string }) {
       setHooks(items => items?.filter(item => item.id !== id));
       if (created?.id === id) setCreated(undefined);
       setRevoking(undefined);
+      toast.success('Webhook revoked');
     } catch (e) { setError(e instanceof Error ? e.message : 'Could not revoke webhook'); }
     finally { setBusy(false); }
   }
-  return <div className="space-channel-card"><section><h3>Incoming webhooks</h3>
-    <p>Give an external service a URL to post messages in this channel.</p>
+  return <div className="space-channel-webhooks">
     {error && <p role="alert">{error.replaceAll('_', ' ')} {!hooks && <Button onClick={() => { setError(''); setRetry(n => n+1); }}>Retry</Button>}</p>}
     {hooks ? <form className="chat-form" onSubmit={e => { e.preventDefault(); if (!busy && name.trim()) void create(); }}>
       <label>Integration name<input value={name} maxLength={80} required placeholder="Build Bot" onChange={e => setName(e.target.value)} /></label>
@@ -48,7 +48,6 @@ export function ChannelWebhooks({ channel }: { channel: string }) {
       <p>Copy this secret URL now. Send a JSON POST with <code>{'{"text":"Build passed"}'}</code> to publish a message.</p>
       <Button onClick={() => { void navigator.clipboard.writeText(created.url).then(() => setCopied(true)).catch(() => setError('Select and copy the URL manually.')); }}>{copied ? 'Copied' : 'Copy URL'}</Button>
     </div>}
-  </section>
     {hooks?.map(hook => <section key={hook.id}><div className="space-channel-field-heading"><h3>{hook.name}</h3>
       {revoking !== hook.id && <Button size="sm" disabled={busy} onClick={() => setRevoking(hook.id)}>Revoke</Button>}</div>
       {revoking === hook.id && <><p>Revoking this URL stops {hook.name} from posting.</p>

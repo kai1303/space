@@ -27,6 +27,7 @@ export function registerChatRoutes(app: FastifyInstance, chat: ChatStore) {
   app.post<{ Params: { workspaceId: string } }>('/v1/workspaces/:workspaceId/notifications/read', r => chat.notifications.markAllRead(r.actorId, uuid(r.params.workspaceId), r.body));
   app.post<{ Params: { workspaceId: string; id: string } }>('/v1/workspaces/:workspaceId/notifications/:id/claim', r => chat.notifications.claim(r.actorId, uuid(r.params.workspaceId), r.params.id, r.body));
   app.get<{ Params: { workspaceId: string } }>('/v1/workspaces/:workspaceId/notification-settings', r => chat.notifications.settings(r.actorId, uuid(r.params.workspaceId)));
+  app.patch<{ Params: { channelId: string } }>('/v1/channels/:channelId/notification-settings', r => chat.notifications.updateChannelSettings(r.actorId, uuid(r.params.channelId), r.body));
   app.patch<{ Params: { workspaceId: string } }>('/v1/workspaces/:workspaceId/notification-settings', r => chat.notifications.updateSettings(r.actorId, uuid(r.params.workspaceId), r.body));
   app.get<{ Params: { threadId: string } }>('/v1/threads/:threadId/notification-subscription', r => chat.notifications.subscription(r.actorId, uuid(r.params.threadId)));
   app.patch<{ Params: { threadId: string } }>('/v1/threads/:threadId/notification-subscription', r => chat.notifications.subscription(r.actorId, uuid(r.params.threadId), record(r.body, ['following'])));

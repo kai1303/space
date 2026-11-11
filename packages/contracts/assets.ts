@@ -8,6 +8,7 @@ export type AssetAttachment = { id: string; name: string; size: number; type: st
 export type AssetUpload = { asset: AssetAttachment; upload: { url: string; fields: Record<string, string> }; expires_at: string };
 export type AssetPreview =
   | { kind: 'image'; mime: 'image/webp' | 'image/gif'; width: number; height: number }
+  | { kind: 'office'; fileType: 'docx' | 'xlsx' | 'pptx' | 'odt' | 'ods' | 'odp' }
   | { kind: 'pdf'; mime: 'application/pdf'; thumbnail?: boolean }
   | { kind: 'audio' | 'video'; mime: string }
   | { kind: 'text'; text: string; language: string; truncated: boolean }

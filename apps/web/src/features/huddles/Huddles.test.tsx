@@ -50,3 +50,18 @@ it('shows active authorized rooms and clears them on workspace revocation',async
  await screen.findByRole('button',{name:'#design'});await act(async()=>{mocks.listeners.find(x=>x.scope==='workspace')!.revoke();});
  expect(screen.queryByRole('button',{name:'#design'})).toBeNull();expect(screen.getByRole('alert').textContent).toContain('no longer have access');
 });
+
+it('opens a copied channel huddle link at the prejoin dialog before requesting media', async () => {
+ const original=location.pathname+location.search;
+ const id='550e8400-e29b-41d4-a716-446655440000';
+ const originalRequest=mocks.request.getMockImplementation()!;
+ mocks.request.mockImplementation(async (path:string,...args:unknown[]) => path==='/channels/'+id
+  ? {id,name:'design',joined:true,kind:'channel',archived_at:null} : originalRequest(path,...args));
+ history.replaceState(null,'','/c/VQ6EAOKbQdSnFkRmVUQAAA?huddle=1');
+ try {
+  mount();
+  await screen.findByRole('dialog',{name:'Join huddle in #design'});
+  expect(mocks.rooms).toHaveLength(0);
+  expect(mocks.request.mock.calls.some(([path])=>String(path).endsWith('/join'))).toBe(false);
+ } finally { history.replaceState(null,'',original); }
+});

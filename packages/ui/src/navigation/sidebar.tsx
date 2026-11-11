@@ -1,10 +1,10 @@
+import { SidebarRowMenu, type SidebarAction } from "./sidebar-row-menu.js";
 import { NavigationIcon } from "./navigation-icons.js";
 import { useEffect, useId, useState, type ReactNode } from "react";
 import { LayoutGroup, motion, stagger, useAnimate, useReducedMotion } from "motion/react";
 import { motionTransition } from "../motion/motion.js";
 import { Reveal } from "../motion/reveal.js";
 import {
-  DotsThree,
   CaretRight,
   Hash,
   Lock,
@@ -12,23 +12,25 @@ import {
   Sparkle,
   Star,
   ChatCircle,
-  PencilSimple,
   Headset,
   SquaresFour,
   BookmarkSimple,
   AddressBook,
 } from "@phosphor-icons/react";
-import { Avatar, ChannelItem, IconButton, Menu } from "../primitives/primitives.js";
+import { Avatar, ChannelItem, IconButton } from "../primitives/primitives.js";
 export type SidebarChannel = {
   id: string;
   name: string;
   section: "starred" | "channels" | "direct" | "sessions" | "apps";
   unread?: number;
+  badgeCount?: number;
   private?: boolean;
   initials?: string;
   image?: string | null;
   agentName?: string;
   onDetails?: () => void;
+  actions?: SidebarAction[];
+  onSplit?: () => void;
   onRename?: () => void;
   online?: boolean;
   typing?: boolean;
@@ -219,23 +221,17 @@ export function WorkspaceSidebar({
                 </span>
               </motion.button>
               <Reveal open={isOpen} clip={false}>
-                {items.map((c) => (
-                  <motion.div key={c.id} initial={false}
-                    className={c.onRename || c.onDetails ? "sp-sidebar-action-row" : undefined}
-                    onContextMenu={c.onRename || c.onDetails ? event => {
-                      event.preventDefault();
-                      const trigger = event.currentTarget.querySelector<HTMLElement>("summary");
-                      trigger?.focus();
-                      if (trigger?.getAttribute("aria-expanded") === "false") trigger.click();
-                    } : undefined}
-                    layout={reduced ? false : "position"}
-                    layoutId={reduced ? undefined : `conversation:${workspaceId}:${c.id}`}
-                    transition={{ layout: moveTransition }}>
-                  <ChannelItem
+                {items.map(c => {
+                  const actions = [...(c.actions ?? [])];
+                  if (c.onDetails) actions.push({ label: "Channel details", select: c.onDetails, divider: actions.length > 0 });
+                  if (c.onRename) actions.push({ label: "Rename…", select: c.onRename });
+                  const item = <ChannelItem
                     name={c.name}
+                    hasMenu={actions.length > 0}
                     selected={c.id === selectedId}
                     unread={c.unread}
-                    onClick={() => onSelect(c.id)}
+                    badgeCount={c.badgeCount}
+                    onClick={event => { if (c.onSplit && (event.metaKey || event.ctrlKey) && event.altKey) c.onSplit(); else onSelect(c.id); }}
                     icon={
                       c.typing && c.id !== selectedId ? (
                         <DirectTypingIcon name={c.name} label={c.agentName ? `${c.agentName} is working` : undefined} size={c.section === "starred" && !c.agentName ? 16 : 20}/>
@@ -253,11 +249,12 @@ export function WorkspaceSidebar({
                         <NavigationIcon name="channel" size={17}/>
                       )
                     }
-                  />
-                  {(c.onRename || c.onDetails) && <Menu label={`Actions for ${c.name}`} className="sp-sidebar-row-menu" floating
-                    trigger={<DotsThree size={18} weight="bold"/>} items={c.onDetails ? [{label:"Channel details",onSelect:c.onDetails}] : [{label:"Rename…",icon:<PencilSimple size={16}/>,onSelect:c.onRename!}]}/>}
-                  </motion.div>
-                ))}
+                  />;
+                  return <motion.div key={c.id} initial={false} layout={reduced ? false : "position"}
+                    layoutId={reduced ? undefined : `conversation:${workspaceId}:${c.id}`} transition={{ layout: moveTransition }}>
+                    {actions.length ? <SidebarRowMenu name={c.name} actions={actions}>{item}</SidebarRowMenu> : item}
+                  </motion.div>;
+                })}
                 {sectionFooters?.[section]}
                 {section === "channels" && onCreateChannel && <button className="sp-sidebar-section-toggle sp-sidebar-create" type="button" onClick={onCreateChannel}><NavigationIcon name="plus" size={17}/> Add channel</button>}
               </Reveal>

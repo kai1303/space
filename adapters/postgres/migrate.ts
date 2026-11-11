@@ -18,7 +18,8 @@ export const migrationFiles = [
   '049_realtime_targets.sql', '050_message_search.sql', '051_dm_calls.sql', '052_sidekick_sessions.sql', '053_session_sidebar.sql', '054_agent_session_stars.sql', '055_claude_provider.sql', '056_direct_codex_turns.sql', '057_navigator_orchestration.sql', '058_personal_outbound_mcp.sql',
   '059_channel_huddles.sql', '060_tool_approvals.sql', '061_channel_permissions.sql', '062_message_event_operation.sql', '063_message_deletion.sql',
   '064_session_refresh.sql', '065_notification_sounds.sql', '066_agent_session_creation_title.sql', '067_workspace_outbound_mcp.sql',
-  '068_session_sidebar_activity.sql', '069_thread_reply_summary.sql', '070_outbound_authority_notifications.sql', '071_workflow_messages.sql', '072_channel_webhooks.sql', '073_published_help_workflows.sql', '074_workflow_edits.sql', '075_channel_message_pins.sql', '076_channel_tabs.sql', '077_channel_tab_order.sql',
+  '068_session_sidebar_activity.sql', '069_thread_reply_summary.sql', '070_outbound_authority_notifications.sql', '071_workflow_messages.sql', '072_channel_webhooks.sql', '073_published_help_workflows.sql', '074_workflow_edits.sql', '075_channel_message_pins.sql', '076_channel_tabs.sql', '077_channel_tab_order.sql', '078_channel_notification_preferences.sql', '079_knowledge_plugins.sql', '080_channel_notification_controls.sql', '081_channel_knowledge.sql', '082_thread_knowledge.sql',
+  '083_office_previews.sql', '084_markdown_knowledge.sql',
 ] as const;
 
 export async function migrate(pool: Pool): Promise<void> {

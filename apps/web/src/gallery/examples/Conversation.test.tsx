@@ -241,7 +241,9 @@ it('dismisses mentions with Escape, ignores addresses and code, and deletes a se
  const find=vi.fn(async()=>({items:[{kind:'user' as const,id:'00000000-0000-4000-8000-000000000001',label:'Kai',detail:'Member'}],member_count:2}));
  render(<RichComposer channel="mentions" findMentions={find} onSend={()=>{}}/>);
  const editor=await screen.findByRole('textbox',{name:'Message mentions'});
- await userEvent.type(editor,'@Ka');await screen.findByRole('option',{name:/Kai/});await userEvent.keyboard('{Escape}');
+ await userEvent.type(editor,'@Ka');await screen.findByRole('option',{name:/Kai/});
+ expect(find.mock.calls).toEqual([['Ka']]);
+ await userEvent.keyboard('{Escape}');
  expect(screen.queryByRole('listbox',{name:'Mention suggestions'})).toBeNull();
  await userEvent.keyboard('{Control>}a{/Control}');
  // Use the mention button to exercise selection restoration, then choose with Tab.

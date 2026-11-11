@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState } from 'react';
-import { Tabs, Select, Button, Dialog, Badge } from '@space/ui/primitives';
+import { Tabs, Select, Button, Dialog, Badge, toast } from '@space/ui/primitives';
 import type { InvitationList, InvitationResult, WorkspaceInvitation, ChannelSummary, InvitationGuestType } from '@space/contracts';
 import { request } from '../../../shared/api/request.js';
 import { subscribeUpdates } from '../../../shared/realtime/live-updates.js';
@@ -62,6 +62,6 @@ function InvitationManager({workspace,onClose}:Props){
   {kind==='link'&&<label>Maximum uses<input type="number" min={1} max={1000} required value={limit} onChange={e=>setLimit(Number(e.target.value))}/></label>}
   {error&&<p role="alert">{error}</p>}<div className="invitation-actions"><Button disabled={busy} onClick={()=>setForm(false)}>Cancel</Button><Button type="submit" variant="primary" loading={busy} disabled={guest!=='none'&&!selected.length}>Create invitation</Button></div>
  </form></Dialog>}
- {revoke&&<Dialog open title="Revoke invitation?" onClose={()=>setRevoke(undefined)} onBeforeClose={()=>!mutation.current}><p>The invitation link will stop working. People who already joined will keep their membership.</p><div className="invitation-actions"><Button disabled={busy} onClick={()=>setRevoke(undefined)}>Cancel</Button><Button variant="danger" loading={busy} onClick={()=>void mutate(async()=>{await request(`/workspaces/${workspace}/invitations/${revoke.id}`,undefined,undefined,'DELETE');if(alive.current){if(lastLink?.id===revoke.id)setLastLink(undefined);setRevoke(undefined);setNotice('Invitation revoked.');}})}>Revoke invitation</Button></div></Dialog>}
+ {revoke&&<Dialog open title="Revoke invitation?" onClose={()=>setRevoke(undefined)} onBeforeClose={()=>!mutation.current}><p>The invitation link will stop working. People who already joined will keep their membership.</p><div className="invitation-actions"><Button disabled={busy} onClick={()=>setRevoke(undefined)}>Cancel</Button><Button variant="danger" loading={busy} onClick={()=>void mutate(async()=>{await request(`/workspaces/${workspace}/invitations/${revoke.id}`,undefined,undefined,'DELETE');if(alive.current){if(lastLink?.id===revoke.id)setLastLink(undefined);setRevoke(undefined);toast.success('Invitation revoked');}})}>Revoke invitation</Button></div></Dialog>}
  </>;
 }

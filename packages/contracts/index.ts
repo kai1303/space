@@ -78,3 +78,4 @@ export * from "./outbound.js";
 export * from './huddles.js';
 
 export * from './channel-permissions.js';
+export * from './knowledge.js';

@@ -1,9 +1,11 @@
-import { isValidElement, memo, useState, type ReactNode } from 'react';
+import { createContext, isValidElement, memo, useContext, useState, type ReactNode } from 'react';
 import { motion } from 'motion/react';
 import { fadeStreamedWords, useStreamingText, wordFadeMs, words } from './streaming-text.js';
-import Markdown, { type Components } from 'react-markdown';
+import Markdown, { type Components, type ExtraProps } from 'react-markdown';
+import type { ElementContent } from 'hast';
 import remarkGfm from 'remark-gfm';
 import type { AgentResponse as Response, AgentText, AgentTool } from '@space/contracts';
+import { isChannelPath, isAssetDownloadPath, isMessagePath, parseWorkspaceProfileLink } from '@space/contracts';
 import { CodeBlock } from '../rich-text/code-block.js';
 import { FileToolDetails } from './FileToolDetails.js';
 import { ToolExecution } from './work-items.js';
@@ -24,11 +26,42 @@ const StreamedWords = memo(function StreamedWords({ text, from }: { text: string
   return <>{parts}</>;
 });
 
+export const AgentProfileLinkContext = createContext<{
+  workspace: string;
+  viewer: string;
+  open: (target: { kind: 'user' | 'agent'; id: string }) => void;
+} | null>(null);
+
+function inlineText(nodes: ElementContent[]): string {
+  return nodes.map(node => node.type === 'text' ? node.value : node.type === 'element' ? inlineText(node.children) : '').join('');
+}
+
+function AgentLink({ href, children, node }: ExtraProps & { href?: string; children?: ReactNode }) {
+  const profiles = useContext(AgentProfileLinkContext);
+  if (!href) return <span>{children}</span>;
+  if (isMessagePath(href) || isAssetDownloadPath(href)) return <a href={href} target="_blank" rel="noopener noreferrer">{children}</a>;
+  if (isChannelPath(href)) {
+    const tag = inlineText(node?.children ?? []).trim().startsWith('#');
+    return <a href={href} className={tag ? 'sp-mention-token' : undefined} data-mention-kind={tag ? 'channel' : undefined}>{children}</a>;
+  }
+  const target = parseWorkspaceProfileLink(href);
+  if (!target) return <a href={href} target="_blank" rel="noopener noreferrer">{children}</a>;
+  const label = inlineText(node?.children ?? []).trim();
+  const mention = label.endsWith(' · Space profile') ? '@' + label.slice(0, -' · Space profile'.length) : label.startsWith('@') ? label : undefined;
+  const self = profiles?.viewer === target.id && target.kind === 'user';
+  return <a href={href} className={mention ? `sp-mention-token${self ? ' is-self' : ''}` : undefined}
+    data-mention-kind={mention ? target.kind : undefined} onClick={event => {
+    if (profiles?.workspace !== target.workspace || event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+    event.preventDefault();
+    profiles.open({ kind: target.kind, id: target.id });
+  }}>{mention ?? children}</a>;
+}
+
 const markdownComponents: Components = {
   span: ({ children, node }) => typeof node?.properties.dataFadeFrom === 'number' && typeof children === 'string'
     ? <StreamedWords text={children} from={node.properties.dataFadeFrom} />
     : <span>{children}</span>,
-  a: ({ href, children }) => href ? <a href={href} target="_blank" rel="noopener noreferrer">{children}</a> : <span>{children}</span>,
+  a: AgentLink,
   img: ({ alt }) => <span>{alt}</span>,
   pre: ({ children }) => {
     if (!isValidElement<{ className?: string; children?: ReactNode }>(children)) return <pre>{children}</pre>;
@@ -45,7 +78,7 @@ export function AgentMarkdown({ text, streaming = false, newArrival = false }: {
   const tailFrom = Math.max(from ?? 0, visible.text.length - 512);
   return <div className="sp-agent-markdown">
     <Markdown remarkPlugins={[remarkGfm]} rehypePlugins={from === undefined ? [] : [[fadeStreamedWords, from, tailFrom]]}
-      skipHtml urlTransform={url => safeLink(url) ?? ''} components={markdownComponents}>{visible.text}</Markdown>
+      skipHtml urlTransform={url => isAssetDownloadPath(url) || isMessagePath(url) || isChannelPath(url) || parseWorkspaceProfileLink(url) ? url : safeLink(url) ?? ''} components={markdownComponents}>{visible.text}</Markdown>
   </div>;
 }
 

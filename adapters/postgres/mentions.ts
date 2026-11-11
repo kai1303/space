@@ -122,7 +122,7 @@ export class MentionStore {
     const active=!inThread&&refs.some(ref=>ref.kind==='broadcast'&&ref.id==='here');
     if(!users.length&&!all&&!active)return;
     await c.execute(sql`INSERT INTO mention_notifications(workspace_id,channel_id,message_id,user_id,silent)
-      SELECT ${channel.workspace_id},${channel.id},${messageId},u.id,coalesce(p.paused_until>now(),false)
+      SELECT ${channel.workspace_id},${channel.id},${messageId},u.id,coalesce(p.paused_until>now(),false) OR coalesce(cm.muted_until>now(),false) OR cm.notification_mode IS NOT DISTINCT FROM 'none'
       FROM users u JOIN workspace_members wm ON wm.user_id=u.id AND wm.workspace_id=${channel.workspace_id} AND wm.active
       LEFT JOIN channel_members cm ON cm.channel_id=${channel.id} AND cm.user_id=u.id
       LEFT JOIN mention_preferences p ON p.user_id=u.id

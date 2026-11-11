@@ -8,3 +8,4 @@ export type { NavigationIconName, NavigationIconProps } from "./navigation-icons
 
 export { Spacebot } from "./spacebot.js";
 export type { SpacebotProps, BotState } from "./spacebot.js";
+export type { SidebarAction } from './sidebar-row-menu.js';
