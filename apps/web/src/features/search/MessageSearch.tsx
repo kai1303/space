@@ -1,6 +1,6 @@
 import { useContext, useEffect, useId, useRef, useState } from 'react';
 import { Avatar, Button, Dialog, IconButton, Popover } from '@space/ui/primitives';
-import { ArrowElbowDownLeft, CalendarBlank, CaretDown, Chats, Hash, LinkSimple, MagnifyingGlass, SlidersHorizontal, User, X } from '@phosphor-icons/react';
+import { ArrowElbowDownLeft, CalendarBlank, CaretDown, Chats, Clock, Hash, LinkSimple, MagnifyingGlass, SlidersHorizontal, User, X } from '@phosphor-icons/react';
 import { request } from '../../shared/api/request.js';
 import { ChannelSearchHeaderContext } from './channel-search-header.js';
 import { ConversationPanelDivider } from '../chat/ConversationPanelDivider.js';
@@ -8,7 +8,9 @@ import './message-search.css';
 
 export type MessageSearchResult = { id: string; channel_id: string; channel_name: string; channel_kind: 'channel' | 'direct'; thread_id: string; text: string; created_at: string; author: { id: string; name: string }; is_reply: boolean };
 type SearchPage = { items: MessageSearchResult[]; next_cursor: string | null };
-type Props = { workspace: string; channel?: { id: string; name: string }; open: boolean; editRequest?: number; onChannelSubmit?: () => void; onClose: () => void; onSelect: (result: MessageSearchResult) => void };
+type Recent = { label: string; onSelect: () => void };
+type Props = { workspace: string; channel?: { id: string; name: string }; open: boolean; editRequest?: number; onChannelSubmit?: () => void; onClose: () => void; onSelect: (result: MessageSearchResult) => void; recents?: Recent[] };
+const RECENT_LIMIT = 8;
 const MAX_RESULTS = 500;
 const tokens = (query: string) => query.match(/(?:[^\s"]+|"[^"]*")+/g) ?? [];
 function filterValue(query: string, key: string) {
@@ -53,7 +55,7 @@ function Filters({ query, channel, onChange }: { query: string; channel?: Props[
 export function MessageSearch(props: Props) {
   return props.open ? <SearchDialog key={`${props.workspace}:${props.channel?.id ?? ''}`} {...props} /> : null;
 }
-function SearchDialog({ workspace, channel, editRequest, onChannelSubmit, onClose, onSelect }: Props) {
+function SearchDialog({ workspace, channel, editRequest, onChannelSubmit, onClose, onSelect, recents = [] }: Props) {
   const [draft,setDraft] = useState(''), [query,setQuery] = useState(''), [cursor,setCursor] = useState<string>();
   const [attempt,setAttempt] = useState(0), [busy,setBusy] = useState(false), [showFilters,setShowFilters] = useState(false);
   const [items,setItems] = useState<MessageSearchResult[]>([]), [next,setNext] = useState<string|null>(null);
@@ -133,7 +135,7 @@ function SearchDialog({ workspace, channel, editRequest, onChannelSubmit, onClos
   const suggestions = <>
         {showFilters&&<div className="message-search-palette-filters"><Filters query={draft} channel={channel} onChange={changeFilter}/></div>}
         {error&&<p role="alert" className="message-search-notice">{error}</p>}
-        {suggestedQuery ? <button type="button" className="message-search-suggestion" aria-label={`Show results for: ${suggestedQuery}`} onClick={()=>submit()}><MagnifyingGlass size={20}/><span>Show results for: <strong>{suggestedQuery}</strong></span><kbd>Enter</kbd></button> : <div className="message-search-intro"><span>Find a message</span><p>Search your conversations, including older messages and replies.</p><button type="button" onClick={()=>{setDraft('from:me ');input.current?.focus();}}><User size={18}/>Messages from you<code>from:me</code></button><button type="button" onClick={()=>{setDraft('has:link ');input.current?.focus();}}><LinkSimple size={18}/>Messages with links<code>has:link</code></button></div>}
+        {suggestedQuery ? <button type="button" className="message-search-suggestion" aria-label={`Show results for: ${suggestedQuery}`} onClick={()=>submit()}><MagnifyingGlass size={20}/><span>Show results for: <strong>{suggestedQuery}</strong></span><kbd>Enter</kbd></button> : <div className="message-search-intro">{!channel && recents.length > 0 && <section className="message-search-recents" aria-label="Recent conversations"><span>Recent</span>{recents.slice(0, RECENT_LIMIT).map(item => <button type="button" key={item.label} onClick={item.onSelect}><Clock size={18}/>{item.label}</button>)}</section>}<span>Find a message</span><p>Search your conversations, including older messages and replies.</p><button type="button" onClick={()=>{setDraft('from:me ');input.current?.focus();}}><User size={18}/>Messages from you<code>from:me</code></button><button type="button" onClick={()=>{setDraft('has:link ');input.current?.focus();}}><LinkSimple size={18}/>Messages with links<code>has:link</code></button></div>}
         <footer className="message-search-footer"><span><ArrowElbowDownLeft size={14}/> Enter to search</span><span><kbd>esc</kbd> to close</span><span>Use “quotes” for exact phrases</span></footer>
       </>;
   const palette = !!channel || !query;

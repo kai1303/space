@@ -164,3 +164,15 @@ it('applies author and UTC date filters while preserving search text', async () 
   await waitFor(()=>expect(fetch).toHaveBeenCalledTimes(3));
   expect(new URL(String(vi.mocked(fetch).mock.calls.at(-1)![0]),'http://localhost').searchParams.get('q')).toBe('release from:"Jamie Chen" after:2026-11-01 before:2026-11-05');
 });
+
+it('opens workspace search with recent conversations, like Slack, and hides them inside a channel', async () => {
+  const open = vi.fn();
+  const recents = Array.from({ length: 10 }, (_, index) => ({ label: `#room-${index}`, onSelect: index === 0 ? open : vi.fn() }));
+  const view = render(<MessageSearch {...props} recents={recents} />);
+  const list = screen.getByRole('region', { name: 'Recent conversations' });
+  expect(list.querySelectorAll('button')).toHaveLength(8);
+  await userEvent.click(screen.getByRole('button', { name: '#room-0' }));
+  expect(open).toHaveBeenCalledOnce();
+  view.rerender(<MessageSearch {...props} recents={recents} channel={{ id: 'channel', name: 'general' }} />);
+  expect(screen.queryByRole('region', { name: 'Recent conversations' })).toBeNull();
+});
