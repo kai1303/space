@@ -134,3 +134,46 @@ test('managers turn knowledge notes on with their own route; grants and keys wor
   await api(a.owner_token, 'POST', `${path}/knowledge`, { enabled: false });
   await api(a.owner_token, 'POST', `${path}/connections`, { name: 'Late key', access: 'read' }, 409);
 });
+
+async function connect(token: string) {
+  const client = new Client({ name: 'knowledge-notes-test', version: '1.0.0' });
+  await client.connect(new StreamableHTTPClientTransport(new URL(`${address}/mcp/memory`), { requestInit: { headers: { Authorization: `Bearer ${token}` } } }));
+  return client;
+}
+function data(result: any) { assert.notEqual(result.isError, true, JSON.stringify(result)); return JSON.parse(result.content[0].text); }
+function code(result: any) { assert.equal(result.isError, true, JSON.stringify(result)); return result.content[0].text as string; }
+async function knowledgeKey(token: string, channel: string, access: 'read' | 'contribute' | 'write', installation?: string) {
+  const path = `/channels/${channel}/memory`;
+  await api(token, 'POST', `${path}/knowledge`, { enabled: true });
+  if (installation) await api(token, 'POST', `${path}/agents/${installation}`, { access: access === 'read' ? 'read' : 'contribute' });
+  return (await api(token, 'POST', `${path}/connections`, { name: `Key ${randomUUID().slice(0, 8)}`, access, ...(installation ? { installation_id: installation } : {}) }, 201)).token as string;
+}
+
+test('knowledge tools over a real MCP client: contribute adds, write edits, the switch hides them', async () => {
+  const a = await bootstrap(pool);
+  const root = await post(a.owner_token, a.channel_id, 'Dedupe on idempotency_key');
+  const contribute = await connect(await knowledgeKey(a.owner_token, a.channel_id, 'contribute', a.installation_id));
+  const write = await connect(await knowledgeKey(a.owner_token, a.channel_id, 'write'));
+  try {
+    const names = (await contribute.listTools()).tools.map(t => t.name);
+    assert.ok(names.includes('knowledge_add') && names.includes('knowledge_list'));
+    assert.ok(!names.includes('knowledge_update') && !names.includes('knowledge_remove'));
+    const id = randomUUID();
+    const args = { id, kind: 'decision', title: 'Duplicate charge fix', content: 'Dedupe on idempotency_key.', message_ids: [root.id] };
+    assert.equal(data(await contribute.callTool({ name: 'knowledge_add', arguments: args })).revision, 1);
+    assert.equal(code(await contribute.callTool({ name: 'knowledge_add', arguments: { ...args, id: randomUUID() } })), 'title_taken');
+    assert.equal(data(await write.callTool({ name: 'knowledge_list', arguments: {} })).notes[0].id, id);
+    assert.equal(code(await write.callTool({ name: 'knowledge_update', arguments: { id, revision: 9, content: 'x' } })), 'note_conflict');
+    assert.equal(data(await write.callTool({ name: 'knowledge_update', arguments: { id, revision: 1, content: 'Dedupe in Postgres.' } })).revision, 2);
+    assert.equal(data(await write.callTool({ name: 'knowledge_remove', arguments: { id, revision: 2 } })).revision, 3);
+    await api(a.owner_token, 'POST', `/channels/${a.channel_id}/memory/knowledge`, { enabled: false });
+    // With memory still on, the key keeps working but Knowledge tools are gone.
+    await api(a.owner_token, 'POST', `/channels/${a.channel_id}/memory/settings`, { enabled: true });
+    await api(a.owner_token, 'POST', `/channels/${a.channel_id}/memory/knowledge`, { enabled: false });
+    assert.ok(!(await contribute.listTools()).tools.some(t => t.name.startsWith('knowledge_')));
+    assert.ok((await contribute.callTool({ name: 'knowledge_add', arguments: { ...args, id: randomUUID(), title: 'Later' } })).isError);
+    // With both switches off, the endpoint refuses the key.
+    await api(a.owner_token, 'POST', `/channels/${a.channel_id}/memory/settings`, { enabled: false });
+    await assert.rejects(contribute.callTool({ name: 'knowledge_list', arguments: {} }), /memory_disabled/);
+  } finally { await contribute.close(); await write.close(); }
+});
