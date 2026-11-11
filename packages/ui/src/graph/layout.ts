@@ -57,6 +57,23 @@ export function layoutGraph(nodes: { id: string }[], links: { id: string; source
   }));
 }
 
+// Where a link's label sits: the curve midpoint, rotated to read left to right.
+export function linkLabelAnchor(from: { x: number; y: number }, to: { x: number; y: number }, index: number, count: number) {
+  const dx = to.x - from.x, dy = to.y - from.y, length = Math.hypot(dx, dy) || 1, ux = dx / length, uy = dy / length;
+  const bend = count <= 1 ? 0 : (index - (count - 1) / 2) * 36 || 18;
+  const midX = (from.x + to.x) / 2 - uy * bend / 2, midY = (from.y + to.y) / 2 + ux * bend / 2;
+  let angle = Math.atan2(dy, dx) * 180 / Math.PI;
+  if (angle > 90) angle -= 180; else if (angle < -90) angle += 180;
+  return { x: Math.round(midX * 10) / 10, y: Math.round(midY * 10) / 10, angle: Math.round(angle * 10) / 10 };
+}
+
+// Donut slice between two radii, from start to end angle (radians, 0 = 3 o'clock, clockwise).
+export function arcPath(inner: number, outer: number, start: number, end: number, pad = 0.03): string {
+  const a0 = start + pad / 2, a1 = end - pad / 2, large = a1 - a0 > Math.PI ? 1 : 0;
+  const p = (r: number, a: number) => `${Math.round(r * Math.cos(a) * 100) / 100},${Math.round(r * Math.sin(a) * 100) / 100}`;
+  return `M${p(outer, a0)}A${outer},${outer} 0 ${large} 1 ${p(outer, a1)}L${p(inner, a1)}A${inner},${inner} 0 ${large} 0 ${p(inner, a0)}Z`;
+}
+
 // Edge to edge, so arrowheads sit on the circle. Parallel links between one pair bend apart.
 export function linkPath(from: { x: number; y: number }, to: { x: number; y: number }, index: number, count: number): string {
   const dx = to.x - from.x, dy = to.y - from.y, length = Math.hypot(dx, dy) || 1;

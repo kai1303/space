@@ -614,27 +614,3 @@
 .sp-sidebar-context-menu .sp-menu-group-title{display:block;padding:3px 8px;color:var(--sp-text-secondary);font-size:12px}
 .sp-sidebar-context-menu kbd{font:inherit;color:var(--sp-text-secondary)}
 
-/* Graph view (memory graph and future graph views) */
-.sp-graph { display: grid; grid-template-rows: auto 1fr; height: 100%; min-height: 420px; border: 1px solid var(--sp-border); border-radius: var(--sp-radius-md); background: var(--sp-surface); overflow: hidden; }
-.sp-graph-toolbar { display: flex; gap: 6px; align-items: center; padding: 6px 8px; border-bottom: 1px solid var(--sp-border); }
-.sp-graph-toolbar > button { width: 28px; height: 28px; border-radius: var(--sp-radius-sm); border: 1px solid var(--sp-border); background: transparent; color: var(--sp-text); cursor: pointer; }
-.sp-graph-toolbar > button:hover { background: var(--sp-surface-hover); }
-.sp-graph-legend { display: flex; gap: 10px; margin: 0 0 0 auto; padding: 0; list-style: none; font-size: 12px; color: var(--sp-text-secondary); text-transform: capitalize; }
-.sp-graph-legend span { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 4px; vertical-align: -1px; }
-.sp-graph-stage { position: relative; min-height: 360px; overflow: hidden; }
-.sp-graph-svg { position: absolute; inset: 0; display: block; width: 100%; height: 100%; touch-action: none; user-select: none; }
-.sp-graph-background { fill: transparent; cursor: grab; }
-.sp-graph-link path { fill: none; stroke: var(--sp-text-tertiary); stroke-width: 1.5; }
-.sp-graph-link path.sp-graph-label-path { stroke: none; }
-.sp-graph-link text { font-size: 9px; fill: var(--sp-text-tertiary); letter-spacing: 0.04em; }
-#sp-graph-arrow path { fill: var(--sp-text-tertiary); }
-.sp-graph-node { cursor: pointer; outline: none; }
-.sp-graph-node circle { stroke: var(--sp-surface); stroke-width: 3; }
-.sp-graph-node text { font-size: 11px; fill: var(--sp-text); pointer-events: none; }
-.sp-graph-node.is-selected circle, .sp-graph-node:focus-visible circle { stroke: var(--sp-focus); stroke-width: 4; }
-.sp-graph-node.is-muted text { fill: var(--sp-text-secondary); }
-.sp-graph-menu { display: flex; justify-content: center; width: max-content; margin: 0 auto; gap: 4px; padding: 4px; border-radius: var(--sp-radius-full); background: var(--sp-surface-raised); border: 1px solid var(--sp-border); box-shadow: 0 4px 16px rgb(0 0 0 / 0.24); }
-.sp-graph-menu button { border: 0; border-radius: var(--sp-radius-full); padding: 4px 10px; background: transparent; color: var(--sp-text); font-size: 12px; cursor: pointer; white-space: nowrap; }
-.sp-graph-menu button:hover, .sp-graph-menu button:focus-visible { background: var(--sp-surface-hover); }
-.sp-graph-status { padding: 16px; color: var(--sp-text-secondary); }
-@media (prefers-reduced-motion: no-preference) { .sp-graph-node { transition: transform 180ms ease-out; } }

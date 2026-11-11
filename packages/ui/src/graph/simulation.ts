@@ -39,6 +39,7 @@ export class GraphSimulation {
   }
 
   get running() { return this.frame !== undefined; }
+  get settled() { return !this.dragging && this.sim.alpha() < ALPHA_MIN; }
   get alpha() { return this.sim.alpha(); }
 
   positions(): Map<string, Point> {

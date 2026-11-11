@@ -1,6 +1,6 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
-import { GraphCanvas, type GraphNode, type GraphLink } from './index.js';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { captionLines, GraphCanvas, NODE_RADIUS, type GraphNode, type GraphLink } from './index.js';
 
 afterEach(cleanup);
 const nodes: GraphNode[] = [
@@ -12,22 +12,43 @@ const links: GraphLink[] = [{ id: 'ct', source: 'c', target: 't', label: 'HAS' }
 const palette = { channel: 'var(--sp-accent)', thread: 'var(--sp-success)', session: 'var(--sp-warning)' };
 function setup(extra: Partial<Parameters<typeof GraphCanvas>[0]> = {}) {
   const onSelect = vi.fn(), onToggleExpand = vi.fn();
-  render(<GraphCanvas label="Channel memory graph" nodes={nodes} links={links} palette={palette} expandedIds={new Set()} onSelect={onSelect} onToggleExpand={onToggleExpand} {...extra} />);
-  return { onSelect, onToggleExpand };
+  const view = render(<GraphCanvas label="Channel memory graph" nodes={nodes} links={links} palette={palette} expandedIds={new Set()} onSelect={onSelect} onToggleExpand={onToggleExpand} {...extra} />);
+  return { onSelect, onToggleExpand, view };
 }
+const node = (name: RegExp | string) => screen.getByRole('button', { name });
 
-it('renders accessible nodes, cut captions and named links', () => {
+it('renders accessible nodes with captions inside the circle and named links', () => {
   setup();
   expect(screen.getByRole('application', { name: 'Channel memory graph' })).toBeTruthy();
-  expect(screen.getByRole('button', { name: '#payments, channel' })).toBeTruthy();
-  expect(screen.getByText('Dedupe fix · in progress…')).toBeTruthy();
-  expect(screen.getByRole('button', { name: 'Codex, session, ended' })).toBeTruthy();
+  expect(node('#payments, channel')).toBeTruthy();
+  expect(node('Codex, session, ended')).toBeTruthy();
   expect(screen.getByText('HAS_SESSION')).toBeTruthy();
+  const caption = node(/^Dedupe fix/).querySelector('.sp-graph-caption')!;
+  expect(caption.getAttribute('y')).toBeNull();
+  const spans = [...caption.querySelectorAll('tspan')];
+  expect(spans.length).toBe(2);
+  for (const span of spans) expect(Math.abs(Number(span.getAttribute('y')))).toBeLessThan(NODE_RADIUS);
+  expect(spans.at(-1)!.textContent!.endsWith('…')).toBe(true);
+});
+
+it('captionLines wraps to two short lines and cuts with an ellipsis', () => {
+  expect(captionLines('Codex')).toEqual(['Codex']);
+  expect(captionLines('Dedupe fix in progress')).toEqual(['Dedupe fix', 'in…']);
+  expect(captionLines('Supercalifragilistic')).toEqual(['Supercali…']);
+});
+
+it('link labels are upright and sit in a gap in the line', () => {
+  const { view } = setup();
+  const link = view.container.querySelector('[data-link-id="ts"]')!;
+  const transform = link.querySelector('g')!.getAttribute('transform')!;
+  const angle = Number(/rotate\((-?[\d.]+)\)/.exec(transform)![1]);
+  expect(Math.abs(angle)).toBeLessThanOrEqual(90);
+  expect(link.querySelector('.sp-graph-link-gap')).toBeTruthy();
 });
 
 it('click selects, double-click and Enter toggle expand, background click clears', () => {
   const { onSelect, onToggleExpand } = setup();
-  const thread = screen.getByRole('button', { name: /^Dedupe fix/ });
+  const thread = node(/^Dedupe fix/);
   fireEvent.click(thread);
   expect(onSelect).toHaveBeenLastCalledWith('t');
   fireEvent.doubleClick(thread);
@@ -37,18 +58,52 @@ it('click selects, double-click and Enter toggle expand, background click clears
   expect(onSelect).toHaveBeenLastCalledWith(undefined);
 });
 
-it('arrow keys move focus along links, and the ring menu runs actions', () => {
-  const open = vi.fn();
-  setup({ selectedId: 't', menu: id => [{ label: 'Open thread', onClick: () => open(id) }] });
-  const channel = screen.getByRole('button', { name: '#payments, channel' });
+it('arrow keys move focus along links', () => {
+  setup();
+  const channel = node('#payments, channel');
   channel.focus();
   fireEvent.keyDown(channel, { key: 'ArrowRight' });
   expect(document.activeElement?.getAttribute('aria-label')).toMatch(/^Dedupe fix/);
-  fireEvent.click(screen.getByRole('menuitem', { name: 'Open thread' }));
-  expect(open).toHaveBeenCalledWith('t');
 });
 
-it('zoom buttons change the scale and fit resets it', () => {
+it('the ring menu is a donut of equal slices around the selected node and runs actions', () => {
+  const open = vi.fn(), hide = vi.fn();
+  setup({ selectedId: 't', menu: id => [{ label: 'Open thread', icon: '↗', onClick: () => open(id) }, { label: 'Hide', icon: '✕', onClick: hide }] });
+  const ring = screen.getByRole('menu', { name: 'Node actions' });
+  const slices = within(ring).getAllByRole('menuitem');
+  expect(slices).toHaveLength(2);
+  for (const slice of slices) expect(slice.querySelector('path')!.getAttribute('d')).toMatch(/^M.+A.+L.+A.+Z$/);
+  expect(slices[0]!.querySelector('title')!.textContent).toBe('Open thread');
+  fireEvent.click(within(ring).getByRole('menuitem', { name: 'Open thread' }));
+  expect(open).toHaveBeenCalledWith('t');
+  fireEvent.keyDown(within(ring).getByRole('menuitem', { name: 'Hide' }), { key: 'Enter' });
+  expect(hide).toHaveBeenCalled();
+});
+
+it('dragging a node pins it, adds Unpin to the ring, and Unpin frees it', () => {
+  const { view } = setup({ selectedId: 'c', menu: () => [] });
+  const channel = node('#payments, channel');
+  const svg = screen.getByRole('application');
+  fireEvent.pointerDown(channel, { clientX: 0, clientY: 0, pointerId: 1 });
+  fireEvent.pointerMove(svg, { clientX: 80, clientY: 40, pointerId: 1 });
+  fireEvent.pointerUp(svg, { pointerId: 1 });
+  expect(view.container.querySelector('[data-node-id="c"]')!.classList.contains('is-pinned')).toBe(true);
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Unpin' }));
+  expect(view.container.querySelector('[data-node-id="c"]')!.classList.contains('is-pinned')).toBe(false);
+});
+
+it('hover fades nodes and links that are not connected', () => {
+  const { view } = setup();
+  fireEvent.pointerEnter(node('Codex, session, ended'));
+  expect(node('#payments, channel').classList.contains('is-faded')).toBe(true);
+  expect(node(/^Dedupe fix/).classList.contains('is-faded')).toBe(false);
+  expect(view.container.querySelector('[data-link-id="ct"]')!.classList.contains('is-faded')).toBe(true);
+  expect(view.container.querySelector('[data-link-id="ts"]')!.classList.contains('is-faded')).toBe(false);
+  fireEvent.pointerLeave(node('Codex, session, ended'));
+  expect(node('#payments, channel').classList.contains('is-faded')).toBe(false);
+});
+
+it('zoom buttons change the scale and fit restores the fitted view', () => {
   setup();
   const scene = screen.getByTestId('sp-graph-scene');
   const before = scene.getAttribute('transform');
@@ -56,6 +111,14 @@ it('zoom buttons change the scale and fit resets it', () => {
   expect(scene.getAttribute('transform')).not.toBe(before);
   fireEvent.click(screen.getByRole('button', { name: 'Fit graph' }));
   expect(scene.getAttribute('transform')).toBe(before);
+});
+
+it('shows a collapsible details panel inside the canvas', () => {
+  setup({ details: <p>Thread details</p> });
+  const panel = screen.getByRole('complementary', { name: 'Details' });
+  expect(within(panel).getByText('Thread details')).toBeTruthy();
+  fireEvent.click(within(panel).getByRole('button', { name: 'Hide details' }));
+  expect(within(panel).queryByText('Thread details')).toBeNull();
 });
 
 it('refuses more than 500 nodes', () => {
