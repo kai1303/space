@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useAnimate, useReducedMotion } from "motion/react";
-import { Avatar, Badge, Button, Dialog, IconButton, Menu, Skeleton, Select, Switch, Tabs, TextField } from '@space/ui/primitives';
+import { Avatar, Badge, Button, Dialog, IconButton, Menu, Skeleton, Select, Switch, Tabs, TextField, toast } from '@space/ui/primitives';
 import { Message, type Reaction } from '@space/ui/conversation';
 import { RichComposer } from '@space/ui/composer';
 import { RichContent, documentText, type RichDocument } from '@space/ui/rich-text';
@@ -36,6 +36,7 @@ export function Components({ notify }: { notify: (text: string) => void }) {
   const [name, setName] = useState("");
   const [submitted, setSubmitted] = useState(false);
   const [createdChannels, setCreatedChannels] = useState<string[]>([]);
+  const [exampleArchived, setExampleArchived] = useState(false);
   const [received, setReceived] = useState(0);
   const [messageReactions, setMessageReactions] = useState<Reaction[]>([]);
   const [actionDocument, setActionDocument] = useState<RichDocument>({ ops: [{ insert: 'Review the message actions. Select text in the composer below to format it.\n' }] });
@@ -356,11 +357,11 @@ export function Components({ notify }: { notify: (text: string) => void }) {
             onReply={() => notify('Preview: reply in thread selected')}
             actions={{
               forward: () => notify('Preview: forward message selected'),
-              addTodo: () => notify('Preview: add to-do selected'),
+              addTodo: () => {},
               askAgent: () => notify('Preview: ask an agent selected'),
               edit: () => notify('Preview: edit message selected'),
               markUnread: () => notify('Preview: mark unread selected'),
-              save: () => notify('Preview: add to saved selected'),
+              save: () => {},
               remind: () => notify('Preview: add a reminder selected'),
               toggleReplyNotifications: () => notify('Preview: reply notifications selected'),
               copyLink: () => navigator.clipboard.writeText(`${location.origin}/design-system#message-actions`),
@@ -373,6 +374,35 @@ export function Components({ notify }: { notify: (text: string) => void }) {
           </Message>
           <RichComposer channel="message-actions" defaultValue={actionDocument} attachmentsEnabled={false} onSend={(_text, document) => setActionDocument(document)} />
           <span className="ds-muted">Interactive component preview. Application actions are supplied by the caller.</span>
+        </Sample>
+        <Sample id="toasts" title="Toasts" detail="Preview feedback for an action" count="09">
+          <div className="sample-row">
+            <Button onClick={() => toast.warning('Your connection is offline', { description: 'Reconnect to send messages.' })}>Preview warning</Button>
+            <Button onClick={() => toast.loading('Uploading example file…', {
+              progress: 0,
+              action: { label: 'Advance', onClick: () => ({
+                progress: 0.5, meta: '50%',
+                action: { label: 'Finish', onClick: () => ({
+                  type: 'success', title: 'Example file uploaded', progress: null, meta: null,
+                }) },
+              }) },
+            })}>Preview upload</Button>
+            <Button onClick={() => {
+              if (exampleArchived) {
+                setExampleArchived(false);
+                toast.success('Example restored');
+                return;
+              }
+              setExampleArchived(true);
+              toast.success('Example archived', { action: {
+                label: 'Undo',
+                onClick: () => {
+                  setExampleArchived(false);
+                  return { type: 'success', title: 'Example restored' };
+                },
+              } });
+            }}>{exampleArchived ? 'Restore example' : 'Archive example'}</Button>
+          </div>
         </Sample>
       </div>
       <Dialog

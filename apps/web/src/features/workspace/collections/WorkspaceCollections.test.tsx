@@ -1,6 +1,8 @@
 import { beforeAll, afterEach, expect, it, vi } from 'vitest';
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { messagePath } from '@space/contracts';
+import { toast } from '@space/ui/primitives';
 import { WorkspaceCollections } from './WorkspaceCollections.js';
 
 const updates = vi.hoisted(() => ({ read: undefined as undefined | (() => Promise<void>), revoke: undefined as undefined | ((code: string) => void) }));
@@ -44,6 +46,23 @@ it('filters files on the server, previews them and opens their source messages',
   expect(screen.queryByRole('button', { name: 'Canvases' })).toBeNull();
 });
 
+
+it('opens the source message from the toast when clipboard access is denied', async () => {
+  const channel = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
+  const message = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb';
+  fake(() => ({ items: [{ ...file, channel_id: channel, message_id: message }], next_cursor: null }));
+  const user = userEvent.setup();
+  vi.spyOn(navigator.clipboard, 'writeText').mockRejectedValueOnce(new Error('Clipboard denied'));
+  const assign = vi.fn();
+  vi.stubGlobal('location', { origin: 'https://space.test', assign });
+  render(<WorkspaceCollections view="files" workspace="workspace" onOpen={() => {}} />);
+  await user.click(await screen.findByRole('button', { name: 'More actions for proposal.pdf' }));
+  await user.click(screen.getByRole('menuitem', { name: 'Copy message link' }));
+  const notice = toast.getState().toasts.at(-1);
+  expect(notice).toMatchObject({ type: 'error', action: { label: 'Open message' } });
+  toast.act(notice!.id);
+  expect(assign).toHaveBeenCalledWith(messagePath(channel, message));
+});
 
 it('ignores an old workspace response and clears private data on revocation', async () => {
   let release: (value: unknown) => void = () => {};

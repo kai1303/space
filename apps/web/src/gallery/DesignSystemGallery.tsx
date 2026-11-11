@@ -1,6 +1,6 @@
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import { useEffect, useRef, useState } from "react";
-import { Avatar, Badge, Button } from '@space/ui/primitives';
+import { Avatar, Badge, Button, toast } from '@space/ui/primitives';
 import { surfaceMotion, useSidebarMotion } from '@space/ui/motion';
 import {
   ArrowDown,
@@ -60,6 +60,7 @@ const groups: {
       { id: "overlays", label: "Menus & dialogs" },
       { id: "message-motion", label: "Message arrivals" },
       { id: "message-actions", label: "Message actions" },
+      { id: "toasts", label: "Toasts" },
     ],
   },
   {
@@ -100,7 +101,6 @@ export function DesignSystemGallery() {
   const [mobileNav, setMobileNav] = useState(false);
   const sidebar = useSidebarMotion<HTMLElement>(mobileNav, "(max-width: 760px)");
   const reduced = useReducedMotion();
-  const [notice, setNotice] = useState("");
   const input = useRef<HTMLInputElement>(null);
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -122,11 +122,6 @@ export function DesignSystemGallery() {
     document.addEventListener("keydown", key);
     return () => document.removeEventListener("keydown", key);
   }, []);
-  useEffect(() => {
-    if (!notice) return;
-    const timer = setTimeout(() => setNotice(""), 4000);
-    return () => clearTimeout(timer);
-  }, [notice]);
   function navigate(id: string) {
     setActive(id);
     setQuery("");
@@ -456,7 +451,7 @@ export function DesignSystemGallery() {
             </div>
           </section>
           <Foundations />
-          <Components notify={setNotice} />
+          <Components notify={toast.info} />
           <Conversation />
           <WorkComponents />
           <section id="guidelines" className="ds-section">
@@ -509,14 +504,6 @@ export function DesignSystemGallery() {
           </footer>
         </div>
       </main>
-      <div role="status" className={`toast ${notice ? "toast--visible" : ""}`}>
-        {notice && (
-          <>
-            <Check size={17} />
-            {notice}
-          </>
-        )}
-      </div>
     </>
   );
 }

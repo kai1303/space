@@ -1431,29 +1431,6 @@ kbd {
   color: var(--sp-border-strong);
   font-weight: 400;
 }
-.toast {
-  position: fixed;
-  z-index: 60;
-  bottom: 22px;
-  left: calc(50% + 100px);
-  transform: translateX(-50%);
-  opacity: 0;
-  pointer-events: none;
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  max-width: calc(100% - 32px);
-  padding: 12px 18px;
-  border-radius: 8px;
-  background: var(--sp-text);
-  color: var(--sp-surface);
-  font-size: 13px;
-  box-shadow: var(--sp-shadow-modal);
-  transition: opacity var(--sp-motion-normal);
-}
-.toast--visible {
-  opacity: 1;
-}
 .sidebar-scrim {
   display: none;
 }
@@ -1801,9 +1778,6 @@ kbd {
     max-width: 200px;
     text-align: right;
     font-size: 9px;
-  }
-  .toast {
-    left: 50%;
   }
   .docs-footer > div {
     gap: 6px;

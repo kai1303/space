@@ -1,6 +1,7 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { toast } from '../primitives/toast.js';
 import { Message } from './conversation.js';
 
 afterEach(cleanup);
@@ -36,10 +37,29 @@ it('shows action failures and dismisses menus when clicking outside', async () =
   render(<Message author="Kai" initials="KA" time="12:00" actions={{ copyMessage: async () => { throw new Error('Clipboard unavailable'); } }}>Hello</Message>);
   await userEvent.click(screen.getByLabelText('More actions'));
   await userEvent.click(screen.getByRole('menuitem', { name: /Copy message/ }));
-  expect((await screen.findByRole('alert')).textContent).toContain('Could not copy message');
+  await waitFor(() => expect(toast.getState().alert).toContain('Could not copy message'));
   await userEvent.click(screen.getByLabelText('More actions'));
   await userEvent.click(screen.getByText('Hello'));
   expect(screen.queryByRole('menu')).toBeNull();
+});
+
+it('keeps the latest save result when two messages finish out of order', async () => {
+  let finishFirst!: () => void;
+  const first = new Promise<void>(resolve => { finishFirst = resolve; });
+  render(<>
+    <Message author="Alex" initials="AL" time="12:00" actions={{ save: () => first }}>First</Message>
+    <Message author="Kai" initials="KA" time="12:01" actions={{ save: async () => { throw new Error('Offline'); } }}>Second</Message>
+  </>);
+  for (const author of ['Alex', 'Kai']) {
+    const toolbar = screen.getByRole('group', { name: `Message actions for ${author}` });
+    await userEvent.click(within(toolbar).getByLabelText('More actions'));
+    await userEvent.click(screen.getByRole('menuitem', { name: 'Add to saved' }));
+    if (author === 'Alex') expect(toast.getState().status.trim()).toBe('Saving message…');
+  }
+  expect(toast.getState().alert).toContain('Try again');
+  finishFirst();
+  await first;
+  expect(toast.getState().toasts.at(-1)?.type).toBe('error');
 });
 
 it('restores the reaction picker trigger after selecting an emoji', async () => {

@@ -1,4 +1,5 @@
-import { useRef, useState } from 'react';
+import { useRef } from 'react';
+import { pendingToast, toast } from '../primitives/toast.js';
 import { ArrowBendUpRight, BellSlash, BookmarkSimple, ChatCircleDots, CheckCircle, Clock, DotsThreeVertical, Link, PencilSimple, PushPin, Smiley, Sparkle, SquaresFour, TextT, Trash, Tray } from '@phosphor-icons/react';
 import { EmojiPicker } from '../emoji/emoji-picker.js';
 import { IconButton, Menu } from '../primitives/primitives.js';
@@ -21,28 +22,43 @@ const menuActions = [
   { key: 'delete', label: 'Delete message…', icon: Trash, separatorBefore: true, danger: true },
 ] as const;
 
+const feedback: Partial<Record<MessageAction, { pending: string; success: string }>> = {
+  copyLink: { pending: 'Copying link…', success: 'Link copied' },
+  copyMessage: { pending: 'Copying message…', success: 'Message copied' },
+  save: { pending: 'Saving message…', success: 'Message saved' },
+  addTodo: { pending: 'Adding to-do…', success: 'Added to your to-dos' },
+};
+
 export function MessageActions({ author, onReply, onReact, actions = {} }: {
   author: string;
   onReply?: () => void;
   onReact?: (emoji: string) => void;
   actions?: MessageActionHandlers;
 }) {
-  const [notice, setNotice] = useState('');
-  const [failed, setFailed] = useState(false);
   const busy = useRef(false);
   async function run(key: MessageAction, label: string) {
-    if (busy.current) return;
-    busy.current = true; setNotice(''); setFailed(false);
-    try { await actions[key]?.(); if (key === 'copyLink' || key === 'copyMessage') setNotice(`${label === 'Copy link' ? 'Link' : 'Message'} copied`); else if (key === 'save') setNotice('Message saved'); else if (key === 'addTodo') setNotice('Added to your to-dos'); }
-    catch { setFailed(true); setNotice(`Could not ${label.replace('…', '').toLowerCase()}. Try again.`); }
-    finally { busy.current = false; }
+    const handler = actions[key];
+    if (!handler || busy.current) return;
+    busy.current = true;
+    const messages = feedback[key];
+    const id = messages && pendingToast(messages.pending);
+    try {
+      await handler();
+      if (id && messages) toast.update(id, { type: 'success', title: messages.success });
+    } catch {
+      const title = `Could not ${label.replace('…', '').toLowerCase()}. Try again.`;
+      if (id) toast.update(id, { type: 'error', title });
+      else toast.error(title);
+    } finally {
+      busy.current = false;
+    }
   }
   const items = menuActions.filter(item => actions[item.key]).map((item, index) => ({
     label: item.label, icon: <item.icon size={18} />, danger: 'danger' in item && item.danger,
     separatorBefore: index > 0 && 'separatorBefore' in item && item.separatorBefore,
     onSelect: () => { void run(item.key, item.label); },
   }));
-  return <>
+  return (
     <div className="sp-message-actions" role="group" aria-label={`Message actions for ${author}`}>
       {onReact && <>
         {([['✅', 'white check mark'], ['👀', 'eyes'], ['🙌', 'raised hands']] as const).map(([emoji, label]) => <IconButton key={emoji} label={`React with ${label}`} size="sm" onClick={() => onReact(emoji)}><span className="sp-message-quick-emoji" aria-hidden="true">{emoji}</span></IconButton>)}
@@ -54,6 +70,5 @@ export function MessageActions({ author, onReply, onReact, actions = {} }: {
       {actions.askAgent && <IconButton label="Ask an agent" size="sm" onClick={() => { void run('askAgent', 'Ask an agent'); }}><Sparkle size={20} /></IconButton>}
       {items.length > 0 && <Menu label="More actions" menuLabel="Message actions" className="sp-message-menu" floating trigger={<DotsThreeVertical size={20} />} items={items} />}
     </div>
-    {notice && <span className={`sp-message-action-notice${failed ? ' is-error' : ''}`} role={failed ? 'alert' : 'status'}>{notice}</span>}
-  </>;
+  );
 }

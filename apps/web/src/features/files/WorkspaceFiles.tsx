@@ -1,7 +1,6 @@
-import { messagePath } from '@space/contracts';
 import { useEffect, useRef, useState } from 'react';
-import { HUB_FILE_KINDS, type HubFile, type Page, type WorkspaceParticipant, type ChannelSummary } from '@space/contracts';
-import { Tabs, Select, Button, Dialog, IconButton, Menu, MultiSelectMenu } from '@space/ui/primitives';
+import { conversationPath, HUB_FILE_KINDS, type HubFile, type Page, type WorkspaceParticipant, type ChannelSummary } from '@space/contracts';
+import { Tabs, Select, Button, Dialog, IconButton, Menu, MultiSelectMenu, pendingToast, toast } from '@space/ui/primitives';
 import { NavigationIcon } from '@space/ui/navigation';
 import { DotsThreeVertical, DownloadSimple, File, FileCode, FilePdf, ImageSquare, MagnifyingGlass, MusicNote, SlidersHorizontal, Star, VideoCamera, X } from '@phosphor-icons/react';
 import { AssetViewer } from './AssetAttachments.js';
@@ -66,7 +65,7 @@ function FileResults({ workspace, onOpen, query, filtered, starred, clear, onRev
   const data = useCollection(workspace, 'files', query);
   const files = data.items as HubFile[];
   useEffect(() => { if (data.revoked) onRevoked(); }, [data.revoked, onRevoked]);
-  const [preview, setPreview] = useState<string | null>(null), [details, setDetails] = useState<string | null>(null), [copied, setCopied] = useState('');
+  const [preview, setPreview] = useState<string | null>(null), [details, setDetails] = useState<string | null>(null);
   const opener = useRef<HTMLElement | null>(null), viewerOrder = useRef<string[]>([]), recordedView = useRef<string | null>(null);
   useEffect(() => {
     if (!preview || data.busy || data.revoked || recordedView.current === preview || !files.some(file => file.id === preview)) return;
@@ -79,15 +78,28 @@ function FileResults({ workspace, onOpen, query, filtered, starred, clear, onRev
   }
   function closePreview() { setPreview(null); queueMicrotask(() => opener.current?.isConnected && opener.current.focus()); }
   async function copy(file: HubFile) {
-    try { await navigator.clipboard.writeText(`${location.origin}${messagePath(file.channel_id, file.message_id)}`); setCopied('Message link copied. Only people with access to the conversation can open it.'); }
-    catch { setCopied('Could not copy the link. Open the source message to try again.'); }
+    const path = file.message_id && conversationPath(file.channel_id, undefined, file.message_id);
+    if (!path) {
+      toast.error('This file has no valid message link.');
+      return;
+    }
+    const id = pendingToast('Copying link…');
+    try {
+      await navigator.clipboard.writeText(`${location.origin}${path}`);
+      toast.update(id, { type: 'success', title: 'Message link copied', description: 'Only people with access to the conversation can open it.' });
+    } catch {
+      toast.update(id, {
+        type: 'error', title: 'Could not copy the link',
+        description: 'Open the source message to try again.',
+        action: { label: 'Open message', onClick: () => location.assign(path) },
+      });
+    }
   }
   const current = files.find(file => file.id === details);
   const previewFiles = viewerOrder.current.flatMap(id => files.find(file => file.id === id) ?? []);
   return <>
     {data.error && <div className="files-error"><p role="alert">{data.error}</p>{!data.revoked && <Button size="sm" onClick={() => void data.retry()}>Retry</Button>}</div>}
     {data.writeError && <p className="files-error" role="alert">{data.writeError}. Your change could not be confirmed. Try again.</p>}
-    {copied && <p className="files-status" role="status">{copied}</p>}
     <div aria-busy={data.loading}>
       {!data.loading && !data.error && !files.length && <div className="files-empty"><NavigationIcon name={starred ? 'star' : 'files'} size={42} /><h2>{filtered ? 'No files match your filters' : starred ? 'Your important files, together' : 'No files shared yet'}</h2><p>{filtered ? 'Try another search, file type, person or conversation.' : starred ? 'Star files from All files and find them here whenever you need them.' : 'Upload a file in a conversation. Files shared in conversations you can access will appear here.'}</p>{filtered && <Button size="sm" onClick={clear}>Clear all filters</Button>}</div>}
       <ul className="files-list" aria-label="Files results">{files.map(file => <li key={file.id} className="files-row">

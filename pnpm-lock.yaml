@@ -452,6 +452,9 @@ importers:
       '@space/contracts':
         specifier: workspace:^
         version: link:../contracts
+      '@yusufceng1z/ding-react':
+        specifier: 0.0.4
+        version: 0.0.4(react@19.3.1)
       motion:
         specifier: ^14.9.0
         version: 14.9.0(react-dom@19.3.1)(react@19.3.1)
@@ -4850,6 +4853,21 @@ packages:
 
   /@xtuc/long@4.2.2:
     resolution: {integrity: sha512-NuHqBY1PB/D8xU6s/thBgOAiAP7HOYDQ32+BFZILJ8ivkUkAHQnWfn6WhL79Owj1qmUnoN/YPhktdIoucipkAQ==}
+
+  /@yusufceng1z/ding-react@0.0.4(react@19.3.1):
+    resolution: {integrity: sha512-zESyyRnDPZrFkYIkc7LQ8rGJJHbugUhOen1QBqt/NSUp+IfEwpL6pOP/F/DZaqmBJyDmYVb2MmMQOXWc7t1Xmw==}
+    engines: {node: '>=18'}
+    peerDependencies:
+      react: '>=18'
+    dependencies:
+      '@yusufceng1z/ding': 0.0.4
+      react: 19.3.1
+    dev: false
+
+  /@yusufceng1z/ding@0.0.4:
+    resolution: {integrity: sha512-bptHE+0IPUk3qEqFfZ7y9+hafwOSS3QiFRcnP9PbZBG4H2tdEW+eWd5WwFQ6y65M5DFMal9LkD4dOrkAJwE8jg==}
+    engines: {node: '>=18'}
+    dev: false
 
   /abbrev@4.0.0:
     resolution: {integrity: sha512-a1wflyaL0tHtJSmLSOVybYhy22vRih4eduhhrkcjgrWGnRfrZtovJ2FRjxuTtkkj47O/baf0R86QU5OuYpz8fA==}
