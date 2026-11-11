@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Button } from '@space/ui/primitives';
 import { GraphCanvas, type GraphLink, type GraphNode } from '@space/ui/graph';
 import type { MemoryNode, ThreadMemory } from '@space/contracts';
@@ -12,12 +12,14 @@ type Props = {
   onAccessLost(): void;
   onOpenThread?(threadId: string): void;
   onOpenSession?(threadId: string, sessionId: string): void;
+  // Shown in the graph's in-canvas details panel, like Neo4j's inspector.
+  details?: ReactNode;
 };
 const palette = { channel: 'var(--sp-accent)', thread: 'var(--sp-success)', session: 'var(--sp-warning)' };
 const key = (kind: string, id: string) => `${kind}:${id}`;
 const message = (reason: unknown, fallback: string) => reason instanceof Error ? reason.message.replaceAll('_', ' ') : fallback;
 
-export function MemoryGraph({ channel, name, onSelect, onAccessLost, onOpenThread, onOpenSession }: Props) {
+export function MemoryGraph({ channel, name, onSelect, onAccessLost, onOpenThread, onOpenSession, details }: Props) {
   const [threads, setThreads] = useState<MemoryNode[]>([]);
   const [pages, setPages] = useState(1), [cursor, setCursor] = useState<string | null>(null);
   const [expanded, setExpanded] = useState(new Map<string, ThreadMemory>());
@@ -106,18 +108,18 @@ export function MemoryGraph({ channel, name, onSelect, onAccessLost, onOpenThrea
   const menu = (id: string) => {
     const item = lookup.get(id);
     if (!item || item.kind === 'channel') return [];
-    const hide = { label: 'Hide', onClick: () => { setHidden(old => new Set(old).add(id)); select(undefined); } };
+    const hide = { label: 'Hide', icon: '✕', onClick: () => { setHidden(old => new Set(old).add(id)); select(undefined); } };
     if (item.kind === 'thread') return [
-      { label: expanded.has(item.node.ref.id) ? 'Collapse' : 'Expand', onClick: () => void toggle(id) },
-      ...(onOpenThread ? [{ label: 'Open thread', onClick: () => onOpenThread(item.node.ref.id) }] : []), hide];
-    return [...(onOpenSession ? [{ label: 'Open session', onClick: () => onOpenSession(item.threadId, item.node.ref.id) }] : []), hide];
+      { label: expanded.has(item.node.ref.id) ? 'Collapse' : 'Expand', icon: expanded.has(item.node.ref.id) ? '−' : '+', onClick: () => void toggle(id) },
+      ...(onOpenThread ? [{ label: 'Open thread', icon: '↗', onClick: () => onOpenThread(item.node.ref.id) }] : []), hide];
+    return [...(onOpenSession ? [{ label: 'Open session', icon: '↗', onClick: () => onOpenSession(item.threadId, item.node.ref.id) }] : []), hide];
   };
 
   return <div className="memory-graph">
     {error && <p role="alert">{error} <Button size="sm" onClick={() => void refresh()}>Retry</Button></p>}
     {!loaded && <p role="status">Loading memory graph…</p>}
     {loaded && <GraphCanvas label={`Memory graph for #${name}`} nodes={nodes} links={links} palette={palette}
-      selectedId={selected} expandedIds={expandedIds} onSelect={select} onToggleExpand={id => void toggle(id)} menu={menu} />}
+      selectedId={selected} expandedIds={expandedIds} onSelect={select} onToggleExpand={id => void toggle(id)} menu={menu} details={details} />}
     {loaded && !threads.length && !error && <p className="memory-graph-empty">No thread has a checkpoint in the last 7 days.</p>}
     <div className="memory-graph-actions">
       {cursor && <Button size="sm" loading={more} onClick={() => void loadMore()}>Load more threads</Button>}

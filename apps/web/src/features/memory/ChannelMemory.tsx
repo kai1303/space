@@ -97,8 +97,8 @@ function MemoryDialog({ channel, name, message, onClose, onOpenThread, onOpenSes
       { id: 'notes', label: 'Notes', panelId: `memory-${channel}-notes` },
     ]} />
     {view === 'graph' && <div id={`memory-${channel}-graph`} role="tabpanel" aria-label="Graph" className="memory-graph-view">
-      <MemoryGraph channel={channel} name={name} onSelect={setSelection} onAccessLost={onClose} onOpenThread={openThread} onOpenSession={openSession} />
-      <MemoryInspector channel={channel} selection={selection} canManage={!!data?.can_manage} onDirtyChange={setGraphDirty} onOpenThread={openThread} onOpenSession={openSession} />
+      <MemoryGraph channel={channel} name={name} onSelect={setSelection} onAccessLost={onClose} onOpenThread={openThread} onOpenSession={openSession}
+        details={<MemoryInspector channel={channel} selection={selection} canManage={!!data?.can_manage} onDirtyChange={setGraphDirty} onOpenThread={openThread} onOpenSession={openSession} />} />
     </div>}
     {view === 'notes' && <div id={`memory-${channel}-notes`} role="tabpanel" aria-label="Notes">
     <div className="channel-memory">

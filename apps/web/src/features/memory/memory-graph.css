@@ -1,4 +1,6 @@
-.memory-graph-view { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 12px; min-height: 480px; }
+.memory-graph-view { display: flex; flex-direction: column; min-height: 520px; }
+.memory-graph-view .memory-graph { flex: 1; }
+.sp-graph-details .memory-inspector { border: 0; padding: 0; }
 .memory-graph { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
 .memory-graph .sp-graph { flex: 1; }
 .memory-graph-actions { display: flex; gap: 8px; }
@@ -12,4 +14,4 @@
 .memory-inspector label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
 .memory-inspector input, .memory-inspector textarea { font: inherit; font-size: 13px; }
 .memory-inspector textarea { min-height: 160px; }
-@media (max-width: 900px) { .memory-graph-view { grid-template-columns: 1fr; } }
+
