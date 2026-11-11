@@ -254,7 +254,6 @@
 .chat-main-area{padding-bottom:env(safe-area-inset-bottom);background:var(--sp-surface)}
 /* iOS zooms into any focused field below 16px, which pushes the layout past the screen edge. */
 @media(pointer:coarse){.chat-app input,.chat-app textarea,.chat-app select,.chat-app [contenteditable=true],.chat-login input{font-size:16px}}
-@media(max-width:720px){.chat-sidebar{top:calc(40px + env(safe-area-inset-top));left:calc(52px + env(safe-area-inset-left));bottom:env(safe-area-inset-bottom)}}
 /* Phones: a Slack-style channel header with back, name and icon-only actions. */
 @media(max-width:720px){
   .chat-channel-header [aria-label="Star conversation"],.chat-channel-header [aria-label="Unstar conversation"]{display:none}

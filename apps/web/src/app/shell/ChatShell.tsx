@@ -112,8 +112,9 @@ export function ChatShell({ renderPreview, notificationDelivery, onNavigate, act
       <button className="chat-global-search" disabled={!onSearch} onClick={openSearch}><NavigationIcon name="search" size={17}/><span>{channelSearch?.label ?? `Search ${name}`}</span><kbd>⌘ K</kbd></button>
       <div className="chat-mobile-toggle" hidden={!!activeDestination || activityActive || directMessagesActive} ref={menu}><IconButton label={sidebarOpen ? 'Close conversations' : 'Open conversations'} aria-expanded={sidebarOpen} aria-controls="chat-conversations" onClick={() => setSidebarOpen(open => !open)}><List size={20} /></IconButton></div>
       <div className="chat-topbar-end">{window.spaceDesktop?.openBrowser && <IconButton label="Open browser" onClick={() => window.spaceDesktop?.openBrowser?.()}><Globe size={19}/></IconButton>}{activity}<a className="chat-system-link" href="/design-system" aria-label="Open design system"><BookOpen size={19} /></a></div>
-      {phone && <div className="chat-topbar-account"><UserSettings user={user} userId={userId} onNameChange={onNameChange} /></div>}
     </header>
+    {/* Phones: your picture sits at the right end of the Home header, as in Slack. */}
+    {phone && <div className="chat-phone-account"><UserSettings user={user} userId={userId} onNameChange={onNameChange} /></div>}
     <div className="chat-body">
       <LayoutGroup id={railId}><nav className={`chat-rail${moreOpen ? ' chat-rail--more-open' : ''}`} aria-label="Main navigation" onClick={event => {
         // Choosing a destination from the More sheet closes it; Admin opens its own menu in place.
@@ -127,6 +128,10 @@ export function ChatShell({ renderPreview, notificationDelivery, onNavigate, act
         <button type="button" className="chat-rail-item chat-rail-more" aria-expanded={moreOpen} onClick={() => setMoreOpen(open => !open)}>
           <span className="chat-rail-icon"><span className="chat-rail-glyph"><DotsThree size={24} weight="bold" aria-hidden="true"/></span></span><span>More</span>
         </button>
+        {/* iOS 26 Slack keeps search at the bottom, beside the tabs. Phones only; desktop searches from the top bar. */}
+        {onSearch && <button type="button" className="chat-rail-search" aria-label={channelSearch?.label ?? `Search ${name}`} onClick={() => { setMoreOpen(false); openSearch(); }}>
+          <NavigationIcon name="search" size={22}/>
+        </button>}
         <div className="chat-rail-bottom">
           <IconButton label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} theme`} onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}>{theme === 'dark' ? <Sun size={21} /> : <Moon size={21} />}</IconButton>
           {!phone && <UserSettings user={user} userId={userId} onNameChange={onNameChange} />}

@@ -122,7 +122,7 @@ it('on phones makes Home the conversation list, offers a way back to it and move
     const view = render(<ChatShell {...props} directMessagesActive><Back/></ChatShell>);
     const app = view.container.querySelector('.chat-app')!;
     expect(app.classList.contains('chat-app--sidebar-open')).toBe(false);
-    expect(view.container.querySelector('.chat-topbar-account')).toBeTruthy();
+    expect(view.container.querySelector('.chat-phone-account')).toBeTruthy();
     expect(view.container.querySelector('.chat-rail-bottom .space-user-settings')).toBeNull();
     await userEvent.click(screen.getByRole('link', { name: 'Home', exact: true }));
     expect(props.onHome).toHaveBeenCalledOnce();
@@ -135,6 +135,6 @@ it('on phones makes Home the conversation list, offers a way back to it and move
 
 it('keeps the desktop layout without a back button or a top bar account', () => {
   const view = render(<ChatShell name="Team" user="Kai" onHome={() => {}}><main>Home</main></ChatShell>);
-  expect(view.container.querySelector('.chat-topbar-account')).toBeNull();
+  expect(view.container.querySelector('.chat-phone-account')).toBeNull();
   expect(view.container.querySelector('.chat-rail-bottom .space-user-settings')).toBeTruthy();
 });

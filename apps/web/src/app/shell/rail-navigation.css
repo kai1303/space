@@ -111,20 +111,27 @@
 }
 /* Phones: Slack-style bottom tab bar with Home, DMs, Activity and More.
    More expands the bar upward into a grid with the remaining destinations. */
-.chat-rail-more { display: none; }
+.chat-rail-more, .chat-rail-search { display: none; }
 @media (min-width:721px) { .chat-conversation-back { display: none; } }
 @media (max-width:720px) {
   html:has(.chat-app) { background: var(--sp-chrome); }
   .chat-app .chat-body { flex-direction: column; }
   .chat-app .chat-main-area { order: 1; padding-bottom: 0; border-top: 0; }
   .chat-app .chat-rail {
-    order: 2; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); align-items: stretch;
+    order: 2; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)) 64px; align-items: stretch;
     width: auto; min-width: 0; height: auto; gap: 0; overflow: visible;
     padding: 2px env(safe-area-inset-right) max(4px, env(safe-area-inset-bottom)) env(safe-area-inset-left);
     border-top: 1px solid #ffffff1f;
   }
   .chat-app .chat-rail .chat-rail-item { width: auto; min-height: 52px; padding: 4px 0 2px; gap: 2px; font-size: 10px; margin: 0; border: 0; border-radius: 8px; }
   .chat-app .chat-rail .chat-rail-more { display: flex; }
+  .chat-app .chat-rail .chat-rail-search {
+    display: grid; place-items: center; order: 11; align-self: center; justify-self: center;
+    width: 48px; height: 48px; padding: 0; border: 1px solid #ffffff2e; border-radius: 50%;
+    background: #ffffff1f; color: var(--sp-chrome-text); cursor: pointer;
+  }
+  /* One header per screen, like Slack: the desktop top bar goes away on phones. */
+  .chat-app .chat-topbar { display: none; }
   .chat-app .chat-rail > :is(.chat-workspace-switcher-anchor, .chat-workspace-mark, .chat-rail-bottom),
   .chat-app .chat-rail [data-rail-tab]:not([data-rail-tab="home"], [data-rail-tab="dms"], [data-rail-tab="activity"]) { display: none; }
   /* Open: secondary items fill rows above; the four tabs stay on the last row. */
@@ -135,16 +142,18 @@
   .chat-app .chat-rail :is([data-rail-tab="home"], [data-rail-tab="dms"], [data-rail-tab="activity"]), .chat-app .chat-rail .chat-rail-more { order: 10; }
   .chat-app .chat-rail--more-open .chat-rail-more { color: #fff; background: #ffffff19; }
   /* Home is the conversation list: it fills the screen between the top bar and the tab bar. */
-  .chat-app .chat-sidebar { left: 0; right: 0; width: auto; padding-left: env(safe-area-inset-left); padding-right: env(safe-area-inset-right); bottom: calc(63px + env(safe-area-inset-bottom)); }
+  .chat-app .chat-sidebar { top: env(safe-area-inset-top); left: 0; right: 0; width: auto; padding-left: env(safe-area-inset-left); padding-right: env(safe-area-inset-right); bottom: calc(63px + env(safe-area-inset-bottom)); }
   .chat-app .chat-sidebar-backdrop { display: none; }
   .chat-app .chat-mobile-toggle { display: none; }
-  .chat-topbar-account { display: flex; flex-shrink: 0; }
+  .chat-phone-account { position: fixed; z-index: 30; top: calc(env(safe-area-inset-top) + 12px); right: calc(12px + env(safe-area-inset-right)); display: flex; }
+  .chat-app:not(.chat-app--sidebar-open) .chat-phone-account { display: none; }
+  .chat-app .chat-sidebar .sp-workspace-heading { padding-right: 60px; }
   /* Slack's floating compose button, bottom right of the conversation list. */
   .chat-app .chat-sidebar .sp-sidebar-compose {
     position: absolute; right: 16px; bottom: 16px; z-index: 3; width: 56px; height: 56px; min-height: 56px; border-radius: 16px;
     background: var(--sp-accent); color: var(--sp-on-accent); box-shadow: 0 6px 20px #0000004d;
   }
   .chat-app .chat-sidebar .sp-sidebar-compose svg { width: 24px; height: 24px; }
-  .chat-topbar-account .space-account-menu > summary { padding: 0; }
+  .chat-phone-account .space-account-menu > summary { padding: 0; }
   .rail-peek { width: min(360px, calc(100vw - 16px)); }
 }
