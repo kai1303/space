@@ -49,7 +49,7 @@ export class EventBus {
     const config = {
       name,
       num_replicas: replicas,
-      subjects: search ? [`${prefix}.search.>`] : chat ? [`${prefix}.chat.>`] : [...['task', 'navigator', 'connection', 'delivery', 'asset', 'todo', 'invitation', 'retention', 'call', 'huddle', 'huddle_failure', 'scheduled'].map(kind => `${prefix}.${kind}.>`), `${prefix}.schedule.>`],
+      subjects: search ? [`${prefix}.search.>`] : chat ? [`${prefix}.chat.>`] : [...['task', 'navigator', 'connection', 'delivery', 'asset', 'todo', 'invitation', 'retention', 'call', 'huddle', 'huddle_failure', 'scheduled', 'memory'].map(kind => `${prefix}.${kind}.>`), `${prefix}.schedule.>`],
       retention: search ? RetentionPolicy.Interest : chat ? RetentionPolicy.Limits : RetentionPolicy.Workqueue,
       max_age: chat ? nanos(24 * 60 * 60 * 1000) : 0,
       storage: StorageType.File,
