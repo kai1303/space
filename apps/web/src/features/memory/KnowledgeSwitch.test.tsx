@@ -21,5 +21,5 @@ it('shows the error code in words when the change fails', async () => {
   vi.stubGlobal('fetch', vi.fn(async () => response({ error: 'channel_management_forbidden' }, 403)));
   render(<KnowledgeSwitch path="/channels/c/memory" enabled={false} onChange={() => {}} />);
   await userEvent.click(screen.getByRole('switch', { name: 'Knowledge notes' }));
-  expect(await screen.findByRole('alert')).toHaveTextContent('channel management forbidden');
+  expect((await screen.findByRole('alert')).textContent).toBe('channel management forbidden');
 });
