@@ -79,14 +79,10 @@ const post = async (token: string, channel: string, text: string, thread?: strin
 test('a message reaches the real worker through CDC and NATS, and the worker writes topics and facts', { skip: !ready, timeout: 90000 }, async () => {
   const a = await bootstrap(pool!);
   await pool!.query('UPDATE channels SET memory_enabled=true WHERE id=$1', [a.channel_id]);
-  const root = await post(a.owner_token, a.channel_id, 'Customers are charged twice after checkout retries');
-  const fix = await post(a.owner_token, a.channel_id, 'We dedupe on the idempotency key', root.thread_id);
+  const early = await post(a.owner_token, a.channel_id, 'Before any worker has a model');
+  assert.equal((await pool!.query('SELECT count(*)::int AS n FROM memory_extract_threads WHERE thread_id=$1', [early.thread_id])).rows[0].n, 0, 'no model yet: nothing queued');
   const vector = JSON.stringify(Array.from({ length: 384 }, () => 0.1));
-  // The graph reader is not part of this test, so the store gets the thread and its messages directly.
-  await graph!.query('INSERT INTO kb.m_channels(id,workspace_id,name,is_private,memory_enabled,version) VALUES($1,$2,$3,false,true,1)', [a.channel_id, a.workspace_id, 'general']);
-  await graph!.query('INSERT INTO kb.m_threads(id,workspace_id,channel_id,version) VALUES($1,$2,$3,1)', [root.thread_id, a.workspace_id, a.channel_id]);
-  for (const m of [root, fix]) await graph!.query(`INSERT INTO kb.m_messages(id,workspace_id,thread_id,sequence,revision,created_at,memory,knowledge,body,embedding,version)
-    VALUES($1,$2,$3,$4,1,now(),true,false,$5,$6,1)`, [m.id, a.workspace_id, root.thread_id, m.sequence, m.text, vector]);
+  let root: any, fix: any;
   try {
     worker = spawn(process.execPath, [fileURLToPath(new URL('../../apps/worker/dist/main.js', import.meta.url))], {
       env: { ...process.env, DATABASE_URL: url!.href, NATS_URL: natsUrl, OLLAMA_URL: ollamaUrl,
@@ -96,6 +92,15 @@ test('a message reaches the real worker through CDC and NATS, and the worker wri
     let log = '';
     worker.stdout!.on('data', chunk => { log += chunk; });
     await until(async () => log.includes('Worker ready'), 20000);
+    assert.equal((await pool!.query('SELECT enabled FROM memory_extract_config')).rows[0].enabled, true, 'a worker with a model turns extraction on');
+
+    root = await post(a.owner_token, a.channel_id, 'Customers are charged twice after checkout retries');
+    fix = await post(a.owner_token, a.channel_id, 'We dedupe on the idempotency key', root.thread_id);
+    // The graph reader is not part of this test, so the store gets the thread and its messages directly.
+    await graph!.query('INSERT INTO kb.m_channels(id,workspace_id,name,is_private,memory_enabled,version) VALUES($1,$2,$3,false,true,1)', [a.channel_id, a.workspace_id, 'general']);
+    await graph!.query('INSERT INTO kb.m_threads(id,workspace_id,channel_id,version) VALUES($1,$2,$3,1)', [root.thread_id, a.workspace_id, a.channel_id]);
+    for (const m of [root, fix]) await graph!.query(`INSERT INTO kb.m_messages(id,workspace_id,thread_id,sequence,revision,created_at,memory,knowledge,body,embedding,version)
+      VALUES($1,$2,$3,$4,1,now(),true,false,$5,$6,1)`, [m.id, a.workspace_id, root.thread_id, m.sequence, m.text, vector]);
 
     // The 60 s debounce is long for a test. Moving the deadline re-emits the event through the outbox, like a new message does.
     await pool!.query("UPDATE memory_extract_threads SET available_at = now() + interval '2 seconds' WHERE thread_id=$1", [root.thread_id]);

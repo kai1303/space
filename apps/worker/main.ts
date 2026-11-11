@@ -66,6 +66,8 @@ try {
   if (extract && process.env.MEMORY_GRAPH_WRITE_URL) {
     const graph = createPool(process.env.MEMORY_GRAPH_WRITE_URL);
     const cap = Number(process.env.MEMORY_EXTRACT_HOURLY_CAP ?? 60);
+    // Messages start queuing extraction runs only once a worker that can run them exists.
+    await pool.query('UPDATE memory_extract_config SET enabled = true WHERE NOT enabled');
     await bus.subscribe('memory.extract.ready.*', {durable:'memory-extractors',queue:'memory-extractors',maxPending:4}, handle(async event => {
       const id=event.data.thread_id;
       if(typeof id!=='string')throw new Error('thread_id required');

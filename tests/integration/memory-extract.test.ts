@@ -29,6 +29,10 @@ test('messages in memory-on channels queue one debounced extraction per thread; 
   const off = await post(a.owner_token, a.channel_id, 'Before the switch');
   assert.equal(await state(off.thread_id), undefined, 'memory off: nothing queued');
   await pool.query('UPDATE channels SET memory_enabled=true WHERE id=$1', [a.channel_id]);
+  const noModel = await post(a.owner_token, a.channel_id, 'No worker has a model yet');
+  assert.equal(await state(noModel.thread_id), undefined, 'no model: nothing queued');
+  assert.equal(await events(noModel.thread_id), 0, 'and no event for the broker');
+  await pool.query('UPDATE memory_extract_config SET enabled=true');
   const root = await post(a.owner_token, a.channel_id, 'Customers are charged twice');
   for (let i = 0; i < 5; i++) await post(a.owner_token, a.channel_id, `Reply ${i}`, root.thread_id);
   const s = await state(root.thread_id);
@@ -42,6 +46,7 @@ test('a run writes topics and facts with evidence, replays change nothing, failu
   const graph = new Pool({ connectionString: process.env.MEMORY_GRAPH_URL });
   const a = await bootstrap(pool);
   await pool.query('UPDATE channels SET memory_enabled=true WHERE id=$1', [a.channel_id]);
+  await pool.query('UPDATE memory_extract_config SET enabled=true');
   const root = await post(a.owner_token, a.channel_id, 'Customers are charged twice after checkout retries');
   const fix = await post(a.owner_token, a.channel_id, 'We will dedupe on the idempotency key', root.thread_id);
   const vector = JSON.stringify(Array.from({ length: 384 }, () => 0.1));
