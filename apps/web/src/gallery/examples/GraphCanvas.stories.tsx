@@ -2,7 +2,7 @@ import type { Meta, StoryObj } from '@storybook/react-vite';
 import { useState } from 'react';
 import { GraphCanvas, type GraphLink, type GraphNode } from '@space/ui/graph';
 
-const palette = { channel: 'var(--sp-accent)', thread: 'var(--sp-success)', session: 'var(--sp-warning)' };
+const palette = { channel: 'var(--sp-accent)', thread: 'var(--sp-success)', session: 'var(--sp-info)' };
 function Demo({ threads, parallel }: { threads: number; parallel?: boolean }) {
   const [selected, setSelected] = useState<string>();
   const [expanded, setExpanded] = useState(new Set<string>());

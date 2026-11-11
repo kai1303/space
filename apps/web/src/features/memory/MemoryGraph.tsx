@@ -15,7 +15,8 @@ type Props = {
   // Shown in the graph's in-canvas details panel, like Neo4j's inspector.
   details?: ReactNode;
 };
-const palette = { channel: 'var(--sp-accent)', thread: 'var(--sp-success)', session: 'var(--sp-warning)' };
+// Space semantic colours: aubergine channel, green thread, blue agent session.
+const palette = { channel: 'var(--sp-accent)', thread: 'var(--sp-success)', session: 'var(--sp-info)' };
 const key = (kind: string, id: string) => `${kind}:${id}`;
 const message = (reason: unknown, fallback: string) => reason instanceof Error ? reason.message.replaceAll('_', ' ') : fallback;
 

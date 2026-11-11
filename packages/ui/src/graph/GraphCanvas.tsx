@@ -1,6 +1,8 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode, type WheelEvent } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent, type ReactNode, type WheelEvent } from 'react';
 import { AnimatePresence, MotionConfig, animate, motion as m, useReducedMotion, type AnimationPlaybackControls } from 'motion/react';
+import { CaretDown, CaretUp, CornersOut, MagnifyingGlassMinus, MagnifyingGlassPlus } from '@phosphor-icons/react';
 import { surfaceMotion } from '../motion/motion.js';
+import { Button, IconButton } from '../primitives/primitives.js';
 import { arcPath, linkLabelAnchor, linkPath, NODE_RADIUS, type Point } from './layout.js';
 import { GraphSimulation } from './simulation.js';
 import { GraphIcon, isGraphIcon } from './icons.js';
@@ -168,19 +170,24 @@ export function GraphCanvas({ nodes, links, palette, selectedId, expandedIds, on
   const items = selectedId ? (menu?.(selectedId) ?? []).slice(0, 4) : [];
   const inner = Math.max(NODE_RADIUS + 8, 20), segment = items.length ? (2 * Math.PI) / items.length : 0;
 
-  const press = reduced ? {} : { whileTap: { scale: 0.9 }, transition: fade };
+  const press = reduced ? {} : { whileTap: { scale: 0.92 }, transition: fade };
   return <MotionConfig reducedMotion="user"><div className="sp-graph">
     <div className="sp-graph-toolbar">
-      <m.button type="button" aria-label="Zoom in" onClick={() => zoomBy(1.25)} {...press}>+</m.button>
-      <m.button type="button" aria-label="Zoom out" onClick={() => zoomBy(1 / 1.25)} {...press}>−</m.button>
-      <m.button type="button" aria-label="Fit graph" onClick={() => { autoFit.current = true; animateView(fit(positions)); }} {...press}>⤢</m.button>
+      <m.div className="sp-graph-tools" {...press}><IconButton size="sm" label="Zoom in" onClick={() => zoomBy(1.25)}><MagnifyingGlassPlus size={16} /></IconButton></m.div>
+      <m.div className="sp-graph-tools" {...press}><IconButton size="sm" label="Zoom out" onClick={() => zoomBy(1 / 1.25)}><MagnifyingGlassMinus size={16} /></IconButton></m.div>
+      <m.div className="sp-graph-tools" {...press}><IconButton size="sm" label="Fit graph" onClick={() => { autoFit.current = true; animateView(fit(positions)); }}><CornersOut size={16} /></IconButton></m.div>
       <ul className="sp-graph-legend" aria-label="Legend">{Object.entries(palette).map(([kind, color]) =>
-        <li key={kind}><span style={{ background: color }} />{kind}</li>)}</ul>
+        <li key={kind}><span className="sp-graph-legend-dot" style={{ '--sp-graph-kind': color } as CSSProperties} />{kind}</li>)}</ul>
     </div>
     <div className="sp-graph-stage">
       <svg ref={svg} role="application" aria-label={label} className={`sp-graph-svg${hovered ? ' has-hover' : ''}`} viewBox={`${-VIEW_W / 2} ${-VIEW_H / 2} ${VIEW_W} ${VIEW_H}`}
         onWheel={onWheel} onPointerMove={moveDrag} onPointerUp={endDrag}>
-        <defs><marker id="sp-graph-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0L10,5L0,10z" /></marker></defs>
+        <defs>
+          <marker id="sp-graph-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0L10,5L0,10z" /></marker>
+          {/* Dotted canvas, like Space's empty-state surfaces. */}
+          <pattern id="sp-graph-grid" width="24" height="24" patternUnits="userSpaceOnUse"><circle cx="1" cy="1" r="1" className="sp-graph-grid-dot" /></pattern>
+        </defs>
+        <rect x={-5000} y={-5000} width={10000} height={10000} fill="url(#sp-graph-grid)" pointerEvents="none" />
         <rect data-testid="sp-graph-background" x={-5000} y={-5000} width={10000} height={10000} className="sp-graph-background"
           onPointerDown={event => startDrag(event)} onClick={() => { if (!wasDrag()) onSelect(undefined); }} />
         <g data-testid="sp-graph-scene" transform={`translate(${view.x},${view.y}) scale(${view.k})`}>
@@ -206,7 +213,7 @@ export function GraphCanvas({ nodes, links, palette, selectedId, expandedIds, on
           {/* Nodes pop in with a spring when added and shrink away when removed. */}
           <AnimatePresence initial={false}>{nodes.map(n => {
             const p = positions.get(n.id); if (!p) return null;
-            const color = n.muted ? 'var(--sp-text-tertiary)' : palette[n.kind] ?? 'var(--sp-accent)';
+            const color = n.muted ? 'var(--sp-border-strong)' : palette[n.kind] ?? 'var(--sp-accent)';
             const lines = captionLines(n.caption);
             return <m.g key={n.id} exit={{ opacity: 0 }} transition={fade}><g data-node-id={n.id} role="button" tabIndex={0} aria-label={`${n.caption}, ${n.kind}${n.muted ? ', ended' : ''}`}
               aria-pressed={selectedId === n.id} aria-expanded={expandedIds.has(n.id)} transform={`translate(${p.x},${p.y})`}
@@ -223,7 +230,8 @@ export function GraphCanvas({ nodes, links, palette, selectedId, expandedIds, on
                 <AnimatePresence>{(selectedId === n.id || hovered === n.id) && <m.circle key={selectedId === n.id ? 'selected' : 'hover'}
                   className={`sp-graph-halo${selectedId === n.id ? '' : ' is-hover'}`}
                   initial={{ r: NODE_RADIUS, opacity: 0 }} animate={{ r: NODE_RADIUS + 4, opacity: 1 }} exit={{ r: NODE_RADIUS, opacity: 0 }} transition={spring} />}</AnimatePresence>
-                <circle className="sp-graph-dot" r={NODE_RADIUS} style={{ fill: `color-mix(in srgb, ${color} 88%, white)`, stroke: `color-mix(in srgb, ${color} 62%, black)` }} />
+                {/* Kind colour drives a soft fill and a solid ring, the Space badge treatment, in both themes. */}
+                <circle className="sp-graph-dot" r={NODE_RADIUS} style={{ '--sp-graph-kind': color } as CSSProperties} />
                 <text className="sp-graph-caption" textAnchor="middle" dominantBaseline="central">
                   {lines.map((line, i) => <tspan key={i} x={0} y={(i - (lines.length - 1) / 2) * 11}>{line}</tspan>)}
                 </text>
@@ -256,7 +264,9 @@ export function GraphCanvas({ nodes, links, palette, selectedId, expandedIds, on
       {/* The details panel slides in from the right and resizes smoothly when collapsed. */}
       <AnimatePresence>{details && <m.aside key="details" className={`sp-graph-details${detailsOpen ? '' : ' is-collapsed'}`} aria-label="Details"
         layout={!reduced} {...surfaceMotion(reduced, 'right')}>
-        <button type="button" className="sp-graph-details-toggle" aria-expanded={detailsOpen} onClick={() => setDetailsOpen(open => !open)}>{detailsOpen ? 'Hide details' : 'Details'}</button>
+        <Button size="sm" variant="ghost" className="sp-graph-details-toggle" aria-expanded={detailsOpen} onClick={() => setDetailsOpen(open => !open)}>
+          {detailsOpen ? 'Hide details' : 'Details'}{detailsOpen ? <CaretUp size={12} /> : <CaretDown size={12} />}
+        </Button>
         <AnimatePresence initial={false} mode="popLayout">{detailsOpen && <m.div key="body" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={fade}>{details}</m.div>}</AnimatePresence>
       </m.aside>}</AnimatePresence>
     </div>
