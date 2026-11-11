@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { captionLines, GraphCanvas, NODE_RADIUS, type GraphNode, type GraphLink } from './index.js';
 
 afterEach(cleanup);
@@ -120,12 +120,31 @@ it('zoom buttons change the scale and fit restores the fitted view', () => {
   expect(scene.getAttribute('transform')).toBe(before);
 });
 
-it('shows a collapsible details panel inside the canvas', () => {
+it('shows a collapsible details panel inside the canvas', async () => {
   setup({ details: <p>Thread details</p> });
   const panel = screen.getByRole('complementary', { name: 'Details' });
   expect(within(panel).getByText('Thread details')).toBeTruthy();
   fireEvent.click(within(panel).getByRole('button', { name: 'Hide details' }));
-  expect(within(panel).queryByText('Thread details')).toBeNull();
+  await waitFor(() => expect(within(panel).queryByText('Thread details')).toBeNull());
+});
+
+it('added nodes and links animate in with motion; the first paint does not', async () => {
+  const { view } = setup();
+  const firstScale = view.container.querySelector('[data-node-id="s"] > g')!;
+  expect(firstScale.getAttribute('style') ?? '').not.toMatch(/scale\(0\)/);
+  view.rerender(<GraphCanvas label="Channel memory graph" nodes={[...nodes, { id: 'n', kind: 'session', caption: 'New' }]}
+    links={[...links, { id: 'tn', source: 't', target: 'n', label: 'HAS_SESSION' }]} palette={palette} expandedIds={new Set()} onSelect={() => {}} onToggleExpand={() => {}} />);
+  expect(node('New, session')).toBeTruthy();
+  expect(view.container.querySelector('[data-node-id="n"] > g')!.getAttribute('style') ?? '').toMatch(/scale\(0\)/);
+  expect(view.container.querySelector('[data-link-id="tn"] path')).toBeTruthy();
+  await waitFor(() => expect(view.container.querySelector('[data-node-id="n"] > g')!.getAttribute('style') ?? '').not.toMatch(/scale\(0\)/));
+});
+
+it('removed nodes leave through an exit animation', async () => {
+  const { view } = setup();
+  view.rerender(<GraphCanvas label="Channel memory graph" nodes={nodes.slice(0, 2)} links={links.slice(0, 1)} palette={palette} expandedIds={new Set()} onSelect={() => {}} onToggleExpand={() => {}} />);
+  await waitFor(() => expect(screen.queryByRole('button', { name: 'Codex, session, ended' })).toBeNull());
+  expect(view.container.querySelector('[data-link-id="ts"]')).toBeNull();
 });
 
 it('refuses more than 500 nodes', () => {

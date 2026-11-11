@@ -1,4 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode, type WheelEvent } from 'react';
+import { AnimatePresence, MotionConfig, animate, motion as m, useReducedMotion, type AnimationPlaybackControls } from 'motion/react';
+import { surfaceMotion } from '../motion/motion.js';
 import { arcPath, linkLabelAnchor, linkPath, NODE_RADIUS, type Point } from './layout.js';
 import { GraphSimulation } from './simulation.js';
 import { GraphIcon, isGraphIcon } from './icons.js';
@@ -66,19 +68,19 @@ export function GraphCanvas({ nodes, links, palette, selectedId, expandedIds, on
     const k = clamp(Math.min(VIEW_W * (1 - 2 * FIT_PADDING) / (maxX - minX), VIEW_H * (1 - 2 * FIT_PADDING) / (maxY - minY), MAX_SCALE));
     return { x: -((minX + maxX) / 2) * k, y: -((minY + maxY) / 2) * k, k };
   };
-  const motion = useRef({ reduced: reducedMotion(), frame: undefined as number | undefined });
+  const prefersReduced = useReducedMotion();
+  const motionState = useRef({ reduced: reducedMotion(), zoom: undefined as AnimationPlaybackControls | undefined });
+  const reduced = motionState.current.reduced || !!prefersReduced;
   const viewRef = useRef(view); viewRef.current = view;
-  // Ease the view to a target over ZOOM_MS (immediately with reduced motion).
+  // Ease the view to a target with motion.dev (immediately with reduced motion).
   const animateView = (target: { x: number; y: number; k: number }) => {
-    if (motion.current.frame !== undefined) cancelAnimationFrame(motion.current.frame);
-    if (motion.current.reduced || typeof requestAnimationFrame !== 'function') { setView(target); return; }
-    const from = viewRef.current, start = performance.now();
-    const step = () => {
-      const t = Math.min(1, (performance.now() - start) / ZOOM_MS), e = 1 - (1 - t) ** 3;
-      setView({ x: from.x + (target.x - from.x) * e, y: from.y + (target.y - from.y) * e, k: from.k + (target.k - from.k) * e });
-      motion.current.frame = t < 1 ? requestAnimationFrame(step) : undefined;
-    };
-    motion.current.frame = requestAnimationFrame(step);
+    motionState.current.zoom?.stop();
+    if (motionState.current.reduced) { setView(target); return; }
+    const from = viewRef.current;
+    motionState.current.zoom = animate(0, 1, {
+      duration: ZOOM_MS / 1000, ease: [0.2, 0, 0, 1],
+      onUpdate: t => setView({ x: from.x + (target.x - from.x) * t, y: from.y + (target.y - from.y) * t, k: from.k + (target.k - from.k) * t }),
+    });
   };
   const wasSettled = useRef(false);
   const simulation = useRef<GraphSimulation>(null as unknown as GraphSimulation);
@@ -87,10 +89,16 @@ export function GraphCanvas({ nodes, links, palette, selectedId, expandedIds, on
     // Like Neo4j, fit once the layout comes to rest (not on every frame), until the user takes over.
     const settled = simulation.current?.settled !== false;
     if (autoFit.current && settled && !wasSettled.current) animateView(fit(next));
-    else if (autoFit.current && settled && motion.current.reduced) setView(fit(next));
+    else if (autoFit.current && settled && motionState.current.reduced) setView(fit(next));
     wasSettled.current = settled;
-  }, { reducedMotion: motion.current.reduced });
-  useEffect(() => () => { simulation.current.stop(); if (motion.current.frame !== undefined) cancelAnimationFrame(motion.current.frame); }, []);
+  }, { reducedMotion: motionState.current.reduced });
+  useEffect(() => () => { simulation.current.stop(); motionState.current.zoom?.stop(); }, []);
+  // Nodes and links in the first laid-out picture appear in place; anything added later animates in.
+  const firstPicture = useRef<{ nodes: Set<string>; links: Set<string> }>(undefined);
+  if (!firstPicture.current && positions.size) firstPicture.current = { nodes: new Set(positions.keys()), links: new Set(links.map(l => l.id)) };
+  const enters = (kind: 'nodes' | 'links', id: string) => !!firstPicture.current && !firstPicture.current[kind].has(id);
+  const spring = reduced ? { duration: 0 } : { type: 'spring' as const, stiffness: 420, damping: 26 };
+  const fade = { duration: reduced ? 0 : 0.18, ease: [0.2, 0, 0, 1] as const };
 
   // Re-run the layout only when the set of nodes or links changes, not on caption updates.
   const shape = useMemo(() => `${nodes.map(n => n.id).join(',')}|${links.map(l => `${l.source}>${l.target}`).join(',')}`, [nodes, links]);
@@ -151,11 +159,12 @@ export function GraphCanvas({ nodes, links, palette, selectedId, expandedIds, on
   const items = selectedId ? [...(menu?.(selectedId) ?? []), ...(selected?.pinned ? [{ label: 'Unpin', icon: 'unpin', onClick: () => simulation.current.unpin(selectedId) }] : [])].slice(0, 4) : [];
   const inner = Math.max(NODE_RADIUS + 8, 20), segment = items.length ? (2 * Math.PI) / items.length : 0;
 
-  return <div className="sp-graph">
+  const press = reduced ? {} : { whileTap: { scale: 0.9 }, transition: fade };
+  return <MotionConfig reducedMotion="user"><div className="sp-graph">
     <div className="sp-graph-toolbar">
-      <button type="button" aria-label="Zoom in" onClick={() => zoomBy(1.25)}>+</button>
-      <button type="button" aria-label="Zoom out" onClick={() => zoomBy(1 / 1.25)}>−</button>
-      <button type="button" aria-label="Fit graph" onClick={() => { autoFit.current = true; animateView(fit(positions)); }}>⤢</button>
+      <m.button type="button" aria-label="Zoom in" onClick={() => zoomBy(1.25)} {...press}>+</m.button>
+      <m.button type="button" aria-label="Zoom out" onClick={() => zoomBy(1 / 1.25)} {...press}>−</m.button>
+      <m.button type="button" aria-label="Fit graph" onClick={() => { autoFit.current = true; animateView(fit(positions)); }} {...press}>⤢</m.button>
       <ul className="sp-graph-legend" aria-label="Legend">{Object.entries(palette).map(([kind, color]) =>
         <li key={kind}><span style={{ background: color }} />{kind}</li>)}</ul>
     </div>
@@ -166,26 +175,31 @@ export function GraphCanvas({ nodes, links, palette, selectedId, expandedIds, on
         <rect data-testid="sp-graph-background" x={-5000} y={-5000} width={10000} height={10000} className="sp-graph-background"
           onPointerDown={event => startDrag(event)} onClick={() => { if (!endDrag()) onSelect(undefined); }} onDoubleClick={() => simulation.current.unpin()} />
         <g data-testid="sp-graph-scene" transform={`translate(${view.x},${view.y}) scale(${view.k})`}>
-          {links.map(l => {
+          {/* Links draw themselves in when added and fade out when removed. */}
+          <AnimatePresence initial={false}>{links.map(l => {
             const from = positions.get(l.source), to = positions.get(l.target);
             if (!from || !to) return null;
             const group = pairs.get(pairKey(l.source, l.target))!, index = group.indexOf(l.id);
             const anchor = linkLabelAnchor(from, to, index, group.length), width = l.label.length * 6 + 8;
             const faded = related && !(related.has(l.source) && related.has(l.target) && (l.source === hovered || l.target === hovered));
-            return <g key={l.id} data-link-id={l.id} className={`sp-graph-link${faded ? ' is-faded' : ''}`}>
-              <path d={linkPath(from, to, index, group.length)} markerEnd="url(#sp-graph-arrow)" />
+            return <m.g key={l.id} data-link-id={l.id} className={`sp-graph-link${faded ? ' is-faded' : ''}`}
+              initial={enters('links', l.id) ? { opacity: 0 } : false} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={fade}>
+              <m.path d={linkPath(from, to, index, group.length)} markerEnd="url(#sp-graph-arrow)"
+                initial={enters('links', l.id) ? { pathLength: 0 } : false} animate={{ pathLength: 1 }} transition={reduced ? { duration: 0 } : { duration: 0.35, ease: [0.2, 0, 0, 1] }} />
               {/* The label sits in a gap cut out of the line, always upright. */}
-              {view.k >= LABEL_MIN_SCALE && <g transform={`translate(${anchor.x},${anchor.y}) rotate(${anchor.angle})`}>
+              <AnimatePresence initial={false}>{view.k >= LABEL_MIN_SCALE && <m.g key="label" transform={`translate(${anchor.x},${anchor.y}) rotate(${anchor.angle})`}
+                initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={fade}>
                 <rect className="sp-graph-link-gap" x={-width / 2} y={-7} width={width} height={14} rx={3} />
                 <text textAnchor="middle" dominantBaseline="central">{l.label}</text>
-              </g>}
-            </g>;
-          })}
-          {nodes.map(n => {
+              </m.g>}</AnimatePresence>
+            </m.g>;
+          })}</AnimatePresence>
+          {/* Nodes pop in with a spring when added and shrink away when removed. */}
+          <AnimatePresence initial={false}>{nodes.map(n => {
             const p = positions.get(n.id); if (!p) return null;
             const color = n.muted ? 'var(--sp-text-tertiary)' : palette[n.kind] ?? 'var(--sp-accent)';
             const lines = captionLines(n.caption);
-            return <g key={n.id} data-node-id={n.id} role="button" tabIndex={0} aria-label={`${n.caption}, ${n.kind}${n.muted ? ', ended' : ''}`}
+            return <m.g key={n.id} exit={{ opacity: 0 }} transition={fade}><g data-node-id={n.id} role="button" tabIndex={0} aria-label={`${n.caption}, ${n.kind}${n.muted ? ', ended' : ''}`}
               aria-pressed={selectedId === n.id} aria-expanded={expandedIds.has(n.id)} transform={`translate(${p.x},${p.y})`}
               className={`sp-graph-node${selectedId === n.id ? ' is-selected' : ''}${n.muted ? ' is-muted' : ''}${related && !related.has(n.id) ? ' is-faded' : ''}${p.pinned ? ' is-pinned' : ''}`}
               onPointerEnter={() => { setHovered(n.id); simulation.current.hold(n.id); }}
@@ -194,37 +208,48 @@ export function GraphCanvas({ nodes, links, palette, selectedId, expandedIds, on
               onClick={event => { event.stopPropagation(); if (!endDrag()) onSelect(n.id); }}
               onDoubleClick={event => { event.stopPropagation(); onToggleExpand(n.id); }}
               onKeyDown={event => onNodeKey(event, n.id)}>
-              {selectedId === n.id && <circle className="sp-graph-halo" r={NODE_RADIUS + 4} />}
-              {selectedId !== n.id && hovered === n.id && <circle className="sp-graph-halo is-hover" r={NODE_RADIUS + 4} />}
-              <circle className="sp-graph-dot" r={NODE_RADIUS} style={{ fill: `color-mix(in srgb, ${color} 88%, white)`, stroke: `color-mix(in srgb, ${color} 62%, black)` }} />
-              <text className="sp-graph-caption" textAnchor="middle" dominantBaseline="central">
-                {lines.map((line, i) => <tspan key={i} x={0} y={(i - (lines.length - 1) / 2) * 11}>{line}</tspan>)}
-              </text>
-            </g>;
-          })}
+              <m.g initial={enters('nodes', n.id) ? { scale: 0, opacity: 0 } : false} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.4 }} transition={spring}>
+                {/* The halo grows out from the node edge on select and hover. */}
+                <AnimatePresence>{(selectedId === n.id || hovered === n.id) && <m.circle key={selectedId === n.id ? 'selected' : 'hover'}
+                  className={`sp-graph-halo${selectedId === n.id ? '' : ' is-hover'}`}
+                  initial={{ r: NODE_RADIUS, opacity: 0 }} animate={{ r: NODE_RADIUS + 4, opacity: 1 }} exit={{ r: NODE_RADIUS, opacity: 0 }} transition={spring} />}</AnimatePresence>
+                <circle className="sp-graph-dot" r={NODE_RADIUS} style={{ fill: `color-mix(in srgb, ${color} 88%, white)`, stroke: `color-mix(in srgb, ${color} 62%, black)` }} />
+                <text className="sp-graph-caption" textAnchor="middle" dominantBaseline="central">
+                  {lines.map((line, i) => <tspan key={i} x={0} y={(i - (lines.length - 1) / 2) * 11}>{line}</tspan>)}
+                </text>
+              </m.g>
+            </g></m.g>;
+          })}</AnimatePresence>
           {/* Donut ring menu: equal slices around the selected node, the first starting at 12 o'clock. */}
-          {selected && items.length > 0 && <g key={selectedId} role="menu" aria-label="Node actions" className="sp-graph-ring" transform={`translate(${selected.x},${selected.y})`}>
-            {items.map((item, i) => {
-              const start = -Math.PI / 2 + i * segment, mid = start + segment / 2, r = inner + RING_WIDTH / 2;
-              const ix = Math.round(Math.cos(mid) * r * 10) / 10, iy = Math.round(Math.sin(mid) * r * 10) / 10;
-              return <g key={item.label} role="menuitem" tabIndex={0} aria-label={item.label} className="sp-graph-ring-item"
-                onPointerDown={event => event.stopPropagation()}
-                onClick={event => { event.stopPropagation(); item.onClick(); }}
-                onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); item.onClick(); } }}>
-                <title>{item.label}</title>
-                <path className="sp-graph-ring-slice" d={arcPath(inner, inner + RING_WIDTH, start, start + segment)} />
-                {isGraphIcon(item.icon) ? <GraphIcon name={item.icon} x={ix} y={iy} />
-                  : <text x={ix} y={iy} textAnchor="middle" dominantBaseline="central">{item.icon ?? item.label.slice(0, 1)}</text>}
-              </g>;
-            })}
-          </g>}
+          {/* The ring blooms out from the node; slices fade in one after another. */}
+          <AnimatePresence>{selected && items.length > 0 && <g key={selectedId} transform={`translate(${selected.x},${selected.y})`}>
+            <m.g role="menu" aria-label="Node actions" className="sp-graph-ring"
+              initial={{ scale: 0.6, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.8, opacity: 0 }} transition={spring}>
+              {items.map((item, i) => {
+                const start = -Math.PI / 2 + i * segment, mid = start + segment / 2, r = inner + RING_WIDTH / 2;
+                const ix = Math.round(Math.cos(mid) * r * 10) / 10, iy = Math.round(Math.sin(mid) * r * 10) / 10;
+                return <m.g key={item.label} role="menuitem" tabIndex={0} aria-label={item.label} className="sp-graph-ring-item"
+                  initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ ...fade, delay: reduced ? 0 : i * 0.04 }}
+                  onPointerDown={event => event.stopPropagation()}
+                  onClick={event => { event.stopPropagation(); item.onClick(); }}
+                  onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); item.onClick(); } }}>
+                  <title>{item.label}</title>
+                  <path className="sp-graph-ring-slice" d={arcPath(inner, inner + RING_WIDTH, start, start + segment)} />
+                  {isGraphIcon(item.icon) ? <GraphIcon name={item.icon} x={ix} y={iy} />
+                    : <text x={ix} y={iy} textAnchor="middle" dominantBaseline="central">{item.icon ?? item.label.slice(0, 1)}</text>}
+                </m.g>;
+              })}
+            </m.g>
+          </g>}</AnimatePresence>
         </g>
       </svg>
-      {details && <aside className={`sp-graph-details${detailsOpen ? '' : ' is-collapsed'}`} aria-label="Details">
+      {/* The details panel slides in from the right and resizes smoothly when collapsed. */}
+      <AnimatePresence>{details && <m.aside key="details" className={`sp-graph-details${detailsOpen ? '' : ' is-collapsed'}`} aria-label="Details"
+        layout={!reduced} {...surfaceMotion(reduced, 'right')}>
         <button type="button" className="sp-graph-details-toggle" aria-expanded={detailsOpen} onClick={() => setDetailsOpen(open => !open)}>{detailsOpen ? 'Hide details' : 'Details'}</button>
-        {detailsOpen && details}
-      </aside>}
+        <AnimatePresence initial={false} mode="popLayout">{detailsOpen && <m.div key="body" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={fade}>{details}</m.div>}</AnimatePresence>
+      </m.aside>}</AnimatePresence>
     </div>
     <ul className="sp-sr-only" aria-label={`${label} items`}>{nodes.map(n => <li key={n.id}>{n.caption} ({n.kind})</li>)}</ul>
-  </div>;
+  </div></MotionConfig>;
 }
