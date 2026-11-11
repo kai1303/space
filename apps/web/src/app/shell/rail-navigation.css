@@ -130,6 +130,9 @@
     width: 48px; height: 48px; padding: 0; border: 1px solid #ffffff2e; border-radius: 50%;
     background: #ffffff1f; color: var(--sp-chrome-text); cursor: pointer;
   }
+  /* Inside a conversation, thread or session Slack hides the tab bar; the back arrow and swipe lead out. */
+  .chat-app:not(.chat-app--sidebar-open):has(.chat-main-area .chat-conversation-back) .chat-rail { display: none; }
+  .chat-app:not(.chat-app--sidebar-open):has(.chat-main-area .chat-conversation-back) .chat-main-area { padding-bottom: env(safe-area-inset-bottom); }
   /* One header per screen, like Slack: the desktop top bar goes away on phones. */
   .chat-app .chat-topbar { display: none; }
   .chat-app .chat-rail > :is(.chat-workspace-switcher-anchor, .chat-workspace-mark, .chat-rail-bottom),
