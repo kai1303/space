@@ -28,8 +28,18 @@
 .wd-bot-mark{width:140px;height:140px}
 .wd-bot-mark svg{overflow:visible}
 
-.wd-agent-identity { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; width: 100%; }
-.wd-agent-identity .sp-badge { white-space: normal; }
+/* Agent cards share one layout: avatar and status on one row, name up to two lines, one owner line, and the button on the bottom edge. */
+.wd-agent-grid { align-items: stretch; }
+.wd-agent-identity { display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%; min-width: 0; }
+.wd-agent-identity .space-profile-trigger { flex-shrink: 0; }
+.wd-agent-identity [role="status"] { min-width: 0; display: flex; justify-content: flex-end; }
+.wd-agent-identity .sp-badge { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+.wd-agent-identity .sp-status-dot { flex-shrink: 0; }
+.wd-agent-card h3 { width: 100%; min-height: calc(2 * 1.3em); line-height: 1.3; }
+.wd-agent-card h3 .space-profile-trigger { display: block; max-width: 100%; }
+.wd-agent-name { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; }
+.wd-agent-owner { display: block; width: 100%; margin-bottom: 20px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wd-agent-card > button { margin-top: auto; }
 
 .wd-tabs.sp-tabs{padding-inline:28px;overflow-x:auto;flex-shrink:0}@media(max-width:640px){.wd-tabs.sp-tabs{padding-inline:17px}}
 
