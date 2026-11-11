@@ -66,3 +66,10 @@
   }
   .dm-heading > .sp-icon-button[aria-label="New message"] svg { width: 24px; height: 24px; }
 }
+/* Phones: Slack-sized DM rows, with a bold name and a softer preview line. */
+@media (max-width: 720px) {
+  .dm-heading { min-height: 49px; padding: 8px 16px; }
+  .dm-row { padding: 10px 16px; gap: 12px; }
+  .dm-row-body strong { font-size: 16px; }
+  .dm-row-body p, .dm-row-body > span:not(:first-child) { font-size: 14px; color: var(--sp-text-secondary); }
+}

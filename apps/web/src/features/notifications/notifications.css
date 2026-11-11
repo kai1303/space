@@ -107,3 +107,12 @@
 .activity-peek-empty { flex: 1; display: flex; flex-direction: column; justify-content: center; align-items: center; padding: 0 24px; text-align: center; }
 .activity-peek-empty h3 { margin: 0 0 4px; font-size: 16px; line-height: 22px; }
 .activity-peek-empty p { margin: 0 0 12px; color: var(--sp-text-secondary); font: 400 15px/22px var(--sp-font-sans); }
+/* Phones: Slack's Activity header is a title plus a row of filter chips. */
+@media(max-width:720px){
+  .notification-heading{padding:12px 16px 8px}
+  .notification-heading p{display:none}
+  .notification-tabs.sp-tabs{gap:8px;border-bottom:0;padding-bottom:8px}
+  .notification-tabs.sp-tabs button{flex:0 0 auto;min-height:32px;margin:0;padding:0 14px;border:1px solid var(--sp-border);border-radius:999px;box-shadow:none}
+  .notification-tabs .sp-tab-indicator{display:none}
+  .notification-tabs.sp-tabs button[aria-selected=true]{background:var(--sp-text);color:var(--sp-surface);border-color:var(--sp-text)}
+}
