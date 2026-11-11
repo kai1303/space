@@ -79,6 +79,10 @@
       "types": "./dist/navigator.d.ts",
       "default": "./dist/navigator.js"
     },
+    "./layered-memory": {
+      "types": "./dist/layered-memory.d.ts",
+      "default": "./dist/layered-memory.js"
+    },
     "./thread-context": {
       "types": "./dist/thread-context.d.ts",
       "default": "./dist/thread-context.js"
