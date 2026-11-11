@@ -1,15 +1,17 @@
 // One instance per Space database schema. Reads committed changes from a logical replication slot and keeps
-// the knowledge graph current. On any failure it exits so the supervisor restarts it; the slot keeps every
-// unconfirmed change, and every graph write is guarded, so a restart repeats nothing harmful.
-//   GRAPH_SOURCE_URL       Space database; may create the publication and slot; can read messages and channels
+// the Graph RAG memory store current: nodes, links and message vectors. On any failure it exits so the
+// supervisor restarts it; the slot keeps every unconfirmed change, and every graph write is guarded, so a
+// restart repeats nothing harmful.
+//   GRAPH_SOURCE_URL       Space database; may create the publication and slot; can read the graph_source_messages view
 //   GRAPH_REPLICATION_URL  Space database role with REPLICATION
-//   GRAPH_INDEX_URL        knowledge database writer (graph.sql applied)
+//   GRAPH_INDEX_URL        knowledge database writer (memory-graph.sql applied)
 //   GRAPH_SOURCE_SCHEMA    schema holding the Space tables (default public)
+// Embeddings come from the local Ollama all-minilm:22m model.
 import { LogicalReplicationService, PgoutputPlugin } from 'pg-logical-replication';
 import { createPool } from '@space/postgres/database';
 import { TABLES, lsnToVersion, planChange } from './graph-plan.mjs';
 import { sourceLookup } from './graph-source.mjs';
-import { applyOps, publish, publishNeeded, rebuild, savedPosition } from './graph-apply.mjs';
+import { applyOps, publish, publishNeeded, rebuild, resyncChannel, savedPosition } from './graph-apply.mjs';
 
 const schema = process.env.GRAPH_SOURCE_SCHEMA ?? 'public';
 if (!/^[a-z_][a-z0-9_]*$/.test(schema)) throw new Error('Invalid GRAPH_SOURCE_SCHEMA');
@@ -25,14 +27,17 @@ let buffer = [], saved = 0n, publishTimer, publishing = Promise.resolve(), lastR
 let queue = Promise.resolve();
 const serial = work => { const next = queue.then(work); queue = next.catch(() => {}); return next; };
 
-// Column lists keep long text out of the stream: a knowledge's content never leaves Space through here.
+// Column lists keep message text and knowledge content out of the stream: only ids and flags leave Space this way.
 async function prepare() {
   const q = name => `"${schema}"."${name}"`;
   const { rowCount } = await source.query('SELECT 1 FROM pg_publication WHERE pubname=$1', [publication]);
-  if (!rowCount) await source.query(`CREATE PUBLICATION "${publication}" FOR TABLE
-    ${q('channels')} (id, workspace_id, name, private, kind, knowledge_enabled),
+  if (!rowCount) await source.query(`CREATE PUBLICATION "${publication}"`).catch(error => { if (error.code !== '42710') throw error; });
+  await source.query(`ALTER PUBLICATION "${publication}" SET (publish_via_partition_root = true)`);
+  await source.query(`ALTER PUBLICATION "${publication}" SET TABLE
+    ${q('channels')} (id, workspace_id, name, private, kind, memory_enabled, knowledge_enabled),
+    ${q('messages')} (id, workspace_id, channel_id, thread_id, agent_session_id, search_revision, deleted_at, retained_at),
     ${q('knowledge_notes')} (id, workspace_id, channel_id, kind, title, evidence, revision, removed_at),
-    ${q('agent_sessions')} (id, workspace_id, origin_thread_id, title, state)`).catch(error => { if (error.code !== '42710') throw error; });
+    ${q('agent_sessions')} (id, workspace_id, origin_thread_id, title, state)`);
   let { rows: [state] } = await source.query('SELECT wal_status FROM pg_replication_slots WHERE slot_name=$1', [slot]);
   if (state?.wal_status === 'lost') {
     console.error('Replication slot was lost; rebuilding the graph');
@@ -50,11 +55,32 @@ async function prepare() {
   saved = lsnToVersion(confirmed);
 }
 
+// Channels whose switches differ from the stored copy need their messages brought in line.
+async function channelsToResync(batch) {
+  const channels = batch.filter(c => c.table === 'channels' && c.op !== 'delete' && c.row.kind === 'channel');
+  if (!channels.length) return [];
+  const { rows } = await index.query('SELECT id, memory_enabled, knowledge_enabled FROM kb.m_channels WHERE id=ANY($1::text[])', [channels.map(c => c.row.id)]);
+  const known = new Map(rows.map(r => [r.id, r]));
+  return channels.filter(c => {
+    const k = known.get(c.row.id);
+    return k ? k.memory_enabled !== c.row.memory_enabled || k.knowledge_enabled !== c.row.knowledge_enabled
+             : c.row.memory_enabled || c.row.knowledge_enabled;
+  }).map(c => ({ id: c.row.id, version: lsnToVersion(c.lsn) }));
+}
+
 async function flush(position) {
   const batch = buffer; buffer = [];
+  const resync = await channelsToResync(batch);
+  await lookup.prefetch(batch);
+  // A message that is neither in the source view nor in the store (a direct message, a switched-off channel) needs no write.
+  const absent = [];
+  for (const c of batch) if (c.table === 'messages' && !await lookup.message(c.row.workspace_id, c.row.id)) absent.push(c);
+  const known = absent.length ? new Set((await index.query('SELECT id FROM kb.m_messages WHERE id=ANY($1::text[])', [absent.map(c => c.row.id)])).rows.map(r => r.id)) : new Set();
+  const skip = new Set(absent.filter(c => !known.has(c.row.id)));
   const ops = [];
-  for (const change of batch) ops.push(...await planChange(change, lsnToVersion(change.lsn), lookup));
+  for (const change of batch) if (!skip.has(change)) ops.push(...await planChange(change, lsnToVersion(change.lsn), lookup));
   await serial(() => applyOps(index, ops, position ? { slot, lsn: position } : undefined));
+  for (const channel of resync) await serial(() => resyncChannel(index, source, lookup, channel.id, channel.version));
   if (position) { saved = lsnToVersion(position); schedulePublish(); }
 }
 
@@ -80,7 +106,7 @@ async function onMessage(replication, lsn, message) {
   }
 }
 
-function fail(error) { console.error('Knowledge graph reader stopped:', error.code ?? error.name, error.message); process.exit(1); }
+function fail(error) { console.error('Memory graph reader stopped:', error.code ?? error.name, error.message); process.exit(1); }
 
 await prepare();
 if (await publishNeeded(index, slot)) await serial(() => publish(index, slot));
@@ -100,7 +126,7 @@ replication.on('data', async (lsn, message) => {
 });
 replication.on('error', fail);
 replication.subscribe(new PgoutputPlugin({ protoVersion: 1, publicationNames: [publication] }), slot).catch(fail);
-console.log('Knowledge graph reader ready');
+console.log('Memory graph reader ready');
 for (const name of ['SIGTERM', 'SIGINT']) process.once(name, async () => {
   clearTimeout(publishTimer);
   await replication.stop().catch(() => {}); await publishing.catch(() => {});

@@ -1,6 +1,6 @@
 // Run with TEST_DATABASE_URL (Space test DB with wal_level=logical, role with REPLICATION),
-// THREAD_INDEX_URL (knowledge DB writer with schema.sql, threads.sql and graph.sql applied) and
-// KNOWLEDGE_DATABASE_URL (knowledge DB reader role).
+// THREAD_INDEX_URL (knowledge DB writer with schema.sql and memory-graph.sql applied) and
+// KNOWLEDGE_DATABASE_URL (knowledge DB reader role). Needs the local Ollama all-minilm:22m model.
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
@@ -11,8 +11,9 @@ import { createPool, database } from '@space/postgres/database';
 import { migrate } from '@space/postgres/migrate';
 import { bootstrap } from '@space/postgres/bootstrap';
 import { ChatStore } from '@space/postgres/chat';
-import { listNoteTitles, removeNote, saveNoteByTitle } from '@space/postgres/knowledge-notes';
+import { listNoteTitles, saveNoteByTitle } from '@space/postgres/knowledge-notes';
 import { searchRelated } from './graph-related.mjs';
+import { embed } from './graph-source.mjs';
 
 const schema = 'graph_test_' + randomUUID().replaceAll('-', '');
 const slot = ('space_graph_' + schema).slice(0, 63);
@@ -28,66 +29,79 @@ const start = () => { worker = spawn(process.execPath, [fileURLToPath(new URL('.
   env: { ...process.env, GRAPH_SOURCE_URL: url.href, GRAPH_REPLICATION_URL: process.env.TEST_DATABASE_URL,
     GRAPH_INDEX_URL: process.env.THREAD_INDEX_URL, GRAPH_SOURCE_SCHEMA: schema }, stdio: ['ignore', 'inherit', 'inherit'] }); };
 async function until(fn) {
-  const deadline = Date.now() + 20000;
+  const deadline = Date.now() + 30000;
   while (Date.now() < deadline) { if (await fn()) return; await delay(150); }
   throw Error('Timed out waiting for the graph');
 }
-const count = async table => Number((await index.query(`SELECT count(*) FROM kb.${table}`)).rows[0].count);
-const titles = async () => (await index.query('SELECT title FROM kb.g_knowledge ORDER BY title')).rows.map(r => r.title);
+const count = async (table, where = 'true') => Number((await index.query(`SELECT count(*) FROM kb.${table} WHERE ${where}`)).rows[0].count);
+const thread = async id => (await index.query('SELECT reply_count, root_message_id FROM kb.m_threads WHERE id=$1', [id])).rows[0];
+const ranked = async text => {
+  const [vector] = await embed([text]);
+  return (await index.query(`SELECT source_key FROM pgcontext.query('kb_memory',$1::pgcontext.vector,$2,'text',5)`, [JSON.stringify(vector), text])).rows.map(r => r.source_key);
+};
 try {
   await admin.query('CREATE SCHEMA ' + schema);
   await migrate(source);
   const seed = await bootstrap(source), chat = new ChatStore(source), db = database(source);
-  const one = await chat.send(seed.owner_id, seed.channel_id, { client_message_id: randomUUID(), text: 'Retries double charge.' });
-  const two = await chat.send(seed.owner_id, seed.channel_id, { client_message_id: randomUUID(), text: 'Rotate keys quarterly.' });
-  await source.query('UPDATE channels SET knowledge_enabled=true WHERE id=$1', [seed.channel_id]);
+  const send = (text, thread_id) => chat.send(seed.owner_id, seed.channel_id, { client_message_id: randomUUID(), text, ...(thread_id ? { thread_id } : {}) });
+  const rootA = await send('Customers are charged twice when checkout retries after a timeout.');
+  const replyA = await send('The fix is to dedupe charges on the idempotency key.', rootA.thread_id);
+  const rootB = await send('Rotate the API signing keys every quarter.');
+  await source.query('UPDATE channels SET memory_enabled=true, knowledge_enabled=true WHERE id=$1', [seed.channel_id]);
   const scope = { workspaceId: seed.workspace_id, channelId: seed.channel_id }, codex = { id: 'codex', name: 'Codex' };
   const save = (title, id) => saveNoteByTitle(db, scope, { kind: 'fact', title, content: title + ' body.', message_ids: [id] }, codex);
-  await save('A', one.id); await save('B', one.id); await save('C', two.id);
+  await save('A', rootA.id); await save('B', rootA.id); await save('C', rootB.id);
 
   start();
-  await until(async () => (await count('g_knowledge')) === 3);
-  assert.deepEqual(await titles(), ['A', 'B', 'C'], 'first start rebuilds from the snapshot');
-  assert.equal(await count('g_evidence'), 3);
-  assert.equal(await count('g_channels'), 1);
+  await until(async () => (await count('m_messages')) === 3 && (await count('m_knowledge')) === 3);
+  assert.equal(await count('m_messages', 'embedding IS NOT NULL'), 3, 'every message has a vector');
+  assert.deepEqual(await thread(rootA.thread_id), { reply_count: 1, root_message_id: rootA.id }, 'thread counts and root');
+  assert.equal(await count('m_knowledge_evidence', `message_id='${rootA.id}'`), 2, 'knowledge evidence is message level');
+  assert.ok(await count('m_people') >= 1);
+  const top = await ranked('why are customers charged twice on retry');
+  assert.ok([rootA.id, replyA.id].includes(top[0]), 'meaning search finds the right thread first: ' + top.join());
 
   const ids = Object.fromEntries((await listNoteTitles(db, seed.channel_id)).notes.map(n => [n.title, n.id]));
   const ctx = requesterId => ({ workspaceId: seed.workspace_id, requesterId, connectionId: randomUUID(), audience: { channelId: seed.channel_id } });
-  assert.deepEqual((await searchRelated(reader, source, ctx(seed.owner_id), 'note/' + ids.A, 5)).map(h => h.title), ['B'], 'A and B cite the same thread');
+  assert.deepEqual((await searchRelated(reader, source, ctx(seed.owner_id), 'note/' + ids.A, 5)).map(h => h.title), ['B'], 'A and B cite the same message');
   assert.deepEqual(await searchRelated(reader, source, ctx(randomUUID()), 'note/' + ids.A, 5), [], 'unknown requester sees nothing');
   await assert.rejects(() => searchRelated(reader, source, ctx(seed.owner_id), 'message/' + ids.A, 5), /Invalid related reference/);
 
-  await save('D', two.id);                       // live change through the slot
-  await until(async () => (await count('g_knowledge')) === 4);
-  const evidenceOfB = async thread => (await index.query(`SELECT 1 FROM kb.g_evidence e JOIN kb.g_knowledge k ON k.id=e.knowledge_id WHERE k.title='B' AND e.thread_id=$1`, [thread])).rowCount;
-  await save('B', two.id);                       // same title, new evidence: B moves to the other thread
-  await until(async () => (await evidenceOfB(two.thread_id)) === 1);
-  assert.equal(await evidenceOfB(one.thread_id), 0, 'old evidence edge is gone');
+  const replyB = await send('Also record the rollout date.', rootA.thread_id);   // live change through the slot
+  await until(async () => (await count('m_messages')) === 4);
+  assert.equal((await thread(rootA.thread_id)).reply_count, 2);
 
-  await stop();                                   // reader offline
-  const a = (await listNoteTitles(db, seed.channel_id)).notes.find(n => n.title === 'A');
-  await removeNote(db, seed.channel_id, a.id, a.revision, codex);
-  await save('E', one.id);
-  start();                                        // restart: the slot replays what was missed
-  await until(async () => (await titles()).join() === 'B,C,D,E');
+  await chat.deleteMessage(seed.owner_id, seed.channel_id, replyB.id);          // delete removes the row and its vector point
+  await until(async () => (await count('m_messages')) === 3);
+  assert.equal((await thread(rootA.thread_id)).reply_count, 1);
+  assert.ok(!(await ranked('record the rollout date')).includes(replyB.id), 'the vector point is gone too');
+
+  await stop();                                                                  // reader offline
+  const replyC = await send('Offline message about invoices.', rootB.thread_id);
+  start();                                                                       // restart: the slot replays what was missed
+  await until(async () => (await count('m_messages')) === 4);
+  assert.equal(await count('m_messages', `id='${replyC.id}'`), 1);
   await until(async () => (await index.query('SELECT lsn=published_lsn AS same FROM kb.graph_position WHERE slot=$1', [slot])).rows[0].same);
 
-  await stop(); start();                          // restart with nothing new changes nothing
-  await delay(1500);
-  assert.deepEqual(await titles(), ['B', 'C', 'D', 'E']);
+  await source.query('UPDATE channels SET memory_enabled=false WHERE id=$1', [seed.channel_id]);   // switch off: messages leave
+  await until(async () => (await count('m_messages')) === 0);
+  assert.equal(await count('m_knowledge'), 3, 'knowledge stays while the memory switch is off');
+  await source.query('UPDATE channels SET memory_enabled=true WHERE id=$1', [seed.channel_id]);    // switch on: backfill
+  await until(async () => (await count('m_messages')) === 4);
 
-  const before = await count('g_evidence');
-  await source.query('UPDATE channels SET knowledge_enabled=false WHERE id=$1', [seed.channel_id]);
-  await until(async () => (await index.query('SELECT enabled FROM kb.g_channels')).rows[0].enabled === false);
-  assert.equal(await count('g_evidence'), before, 'switching off hides knowledge on read; the graph keeps it');
-  console.log('PASS: snapshot start, live change, evidence move, removal while offline, replay, idempotent restart, switch.');
+  await stop(); start();                                                         // restart with nothing new changes nothing
+  await delay(2000);
+  assert.equal(await count('m_messages'), 4);
+  console.log('PASS: snapshot, vectors, meaning search, related knowledge, live change, delete, offline replay, switch off and on, idempotent restart.');
 } finally {
   await stop();
   for (let i = 0; i < 20; i++) {
     try { await admin.query('SELECT pg_drop_replication_slot($1)', [slot]); break; } catch { await delay(250); }
   }
   await admin.query(`DROP PUBLICATION IF EXISTS "${slot}"`).catch(() => {});
-  await index.query('DELETE FROM kb.g_channels').catch(() => {});
+  await index.query("SELECT pgcontext.delete_points('kb_memory', ARRAY(SELECT id FROM kb.m_messages))").catch(() => {});
+  await index.query('DELETE FROM kb.m_channels').catch(() => {});
+  await index.query('DELETE FROM kb.m_people').catch(() => {});
   await index.query('DELETE FROM kb.graph_position WHERE slot=$1', [slot]).catch(() => {});
   await admin.query('DROP SCHEMA IF EXISTS ' + schema + ' CASCADE');
   await Promise.all([admin.end(), index.end(), reader.end(), source.end()]);

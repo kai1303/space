@@ -1,5 +1,5 @@
 import { planChange } from './graph-plan.mjs';
-import { snapshot } from './graph-source.mjs';
+import { snapshotPages } from './graph-source.mjs';
 
 const SNAPSHOT_VERSION = 1n;
 const run = async (client, ops) => { for (const op of ops) await client.query(op.text, op.values); };
@@ -13,6 +13,13 @@ async function inTransaction(index, work) {
     return result;
   } catch (error) { await client.query('ROLLBACK'); throw error; }
   finally { client.release(); }
+}
+
+export async function planAll(changes, version, lookup) {
+  await lookup.prefetch(changes);
+  const ops = [];
+  for (const change of changes) ops.push(...await planChange(change, typeof version === 'function' ? version(change) : version, lookup));
+  return ops;
 }
 
 export async function savedPosition(index, slot) {
@@ -41,7 +48,7 @@ export async function publishNeeded(index, slot) {
 export async function publish(index, slot) {
   const position = await savedPosition(index, slot);
   if (!position) return;
-  await index.query("SELECT * FROM graph.build_graph('space_knowledge', true)");
+  await index.query("SELECT * FROM graph.build_graph('space_memory', true)");
   await index.query('UPDATE kb.graph_position SET published_lsn=$2::pg_lsn WHERE slot=$1 AND published_lsn<$2::pg_lsn', [slot, position]);
 }
 
@@ -50,14 +57,43 @@ export async function publish(index, slot) {
 // slot existed; everything the snapshot may have missed is later in the stream.
 export function rebuild(index, source, lookup, slot, position) {
   return inTransaction(index, async client => {
-    await client.query('DELETE FROM kb.g_channels');
+    await client.query("SELECT pgcontext.delete_points('kb_memory', ARRAY(SELECT id FROM kb.m_messages))");
+    await client.query("SELECT pgcontext.delete_points('kb_memory_facts', ARRAY(SELECT id FROM kb.m_facts))");
+    await client.query('DELETE FROM kb.m_channels');
+    await client.query('DELETE FROM kb.m_people');
+    await client.query('DELETE FROM kb.m_topics');
     await client.query('DELETE FROM kb.graph_position WHERE slot=$1', [slot]);
-    let ops = [];
-    for await (const change of snapshot(source)) {
-      ops.push(...await planChange(change, SNAPSHOT_VERSION, lookup));
-      if (ops.length >= 500) { await run(client, ops); ops = []; }
-    }
-    await run(client, ops);
+    for await (const page of snapshotPages(source)) await run(client, await planAll(page, SNAPSHOT_VERSION, lookup));
     await client.query('INSERT INTO kb.graph_position(slot,lsn) VALUES($1,$2::pg_lsn)', [slot, position]);
   });
+}
+
+// A channel's switches changed. Bring its messages in line with the source view, in bounded pages:
+// first add or refresh what the view shows, then delete indexed messages the view no longer shows.
+export async function resyncChannel(index, source, lookup, channelId, version) {
+  let after = null;
+  for (;;) {
+    const { rows } = await source.query(
+      `SELECT id::text, workspace_id::text, channel_id::text FROM graph_source_messages
+       WHERE channel_id=$1 AND ($2::uuid IS NULL OR id>$2) ORDER BY id LIMIT 200`, [channelId, after]);
+    if (!rows.length) break;
+    const ops = await planAll(rows.map(row => ({ table: 'messages', op: 'insert', row })), version, lookup);
+    await applyOps(index, ops);
+    after = rows.at(-1).id;
+    if (rows.length < 200) break;
+  }
+  let cursor = '';
+  for (;;) {
+    const { rows } = await index.query(
+      `SELECT m.id FROM kb.m_messages m JOIN kb.m_threads t ON t.id=m.thread_id
+       WHERE t.channel_id=$1 AND m.id>$2 ORDER BY m.id LIMIT 200`, [channelId, cursor]);
+    if (!rows.length) break;
+    const { rows: live } = await source.query(
+      'SELECT id::text FROM graph_source_messages WHERE channel_id=$1 AND id=ANY($2::uuid[])', [channelId, rows.map(r => r.id)]);
+    const keep = new Set(live.map(r => r.id));
+    const gone = rows.filter(r => !keep.has(r.id)).map(r => ({ table: 'messages', op: 'delete', row: { id: r.id, channel_id: channelId } }));
+    if (gone.length) await applyOps(index, await planAll(gone, version, lookup));
+    cursor = rows.at(-1).id;
+    if (rows.length < 200) break;
+  }
 }
