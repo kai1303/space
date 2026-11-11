@@ -93,3 +93,20 @@ it('uses an immediate highlight when reduced motion is requested',()=>{
  expect(highlight).toBeTruthy();expect(highlight.style.transform).toBe('');expect(highlight.getAnimations?.()??[]).toHaveLength(0);
  expect(screen.getByRole('link',{name:'Home',exact:true}).querySelector('.chat-rail-active')).toBeNull();
 });
+
+it('expands the phone tab bar with More and collapses it after choosing a destination', async () => {
+  const navigate = vi.fn();
+  render(<ChatShell name="Team" user="Kai" onHome={() => {}} onDirectMessages={() => {}} onActivity={() => {}} onNavigate={navigate}><main>Home</main></ChatShell>);
+  const rail = screen.getByRole('navigation', { name: 'Main navigation' });
+  const more = screen.getByRole('button', { name: 'More', exact: true });
+  expect(more.getAttribute('aria-expanded')).toBe('false');
+  await userEvent.click(more);
+  expect(more.getAttribute('aria-expanded')).toBe('true');
+  expect(rail.classList.contains('chat-rail--more-open')).toBe(true);
+  await userEvent.click(screen.getByRole('button', { name: 'Files', exact: true }));
+  expect(navigate).toHaveBeenCalledWith('files');
+  expect(more.getAttribute('aria-expanded')).toBe('false');
+  await userEvent.click(more);
+  await userEvent.keyboard('{Escape}');
+  expect(more.getAttribute('aria-expanded')).toBe('false');
+});

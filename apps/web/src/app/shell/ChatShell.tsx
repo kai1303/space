@@ -8,7 +8,7 @@ import { AnimatePresence, LayoutGroup, motion, useReducedMotion } from 'motion/r
 import { IconButton, Menu } from '@space/ui/primitives';
 import { NavigationIcon } from '@space/ui/navigation';
 import { motionTransition, surfaceMotion, useSidebarMotion } from '@space/ui/motion';
-import { BookOpen, Globe, List, Moon, Sun, X } from '@phosphor-icons/react';
+import { BookOpen, DotsThree, Globe, List, Moon, Sun, X } from '@phosphor-icons/react';
 import { ChannelSearchHeaderContext, type ChannelSearchHeader } from '../../features/search/channel-search-header.js';
 import { UserSettings } from '../../features/profile/UserProfile.js';
 import { SpaceLogo } from '../../shared/branding/SpaceLogo.js';
@@ -49,7 +49,9 @@ export function ChatShell({ renderPreview, notificationDelivery, onNavigate, act
   const shell = useSidebarMotion<HTMLDivElement>(sidebarOpen, '(max-width: 720px)', '.chat-sidebar', workspace);
   const reduced = useReducedMotion();
   const railId = useId();
-  useEffect(() => { setSidebarOpen(false); }, [activeDestination, activityActive, directMessagesActive]);
+  // Phones show the rail as a bottom tab bar; "More" reveals the remaining destinations above it.
+  const [moreOpen, setMoreOpen] = useState(false);
+  useEffect(() => { setSidebarOpen(false); setMoreOpen(false); }, [activeDestination, activityActive, directMessagesActive]);
   const menu = useRef<HTMLDivElement>(null);
   const [channelSearch, setChannelSearch] = useState<ChannelSearchHeader | null>(null);
   function openSearch() { setSidebarOpen(false); (channelSearch?.edit ?? onSearch)?.(); }
@@ -64,10 +66,11 @@ export function ChatShell({ renderPreview, notificationDelivery, onNavigate, act
         event.preventDefault(); setSidebarOpen(false); onSearch();
       }
       if (event.key === 'Escape' && sidebarOpen) { setSidebarOpen(false); menu.current?.querySelector('button')?.focus(); }
+      if (event.key === 'Escape' && moreOpen && !event.defaultPrevented) setMoreOpen(false);
     };
     document.addEventListener('keydown', key);
     return () => document.removeEventListener('keydown', key);
-  }, [onSearch, sidebarOpen]);
+  }, [onSearch, sidebarOpen, moreOpen]);
   return <div ref={shell} className={`chat-app ${sidebarOpen ? 'chat-app--sidebar-open' : ''}`} style={{ '--chat-sidebar-width': `${sidebarWidth}px` } as CSSProperties}>
     <a className="chat-skip" href="#chat-messages">Skip to messages</a>
     <header className="chat-topbar">
@@ -82,17 +85,25 @@ export function ChatShell({ renderPreview, notificationDelivery, onNavigate, act
       <div className="chat-topbar-end">{window.spaceDesktop?.openBrowser && <IconButton label="Open browser" onClick={() => window.spaceDesktop?.openBrowser?.()}><Globe size={19}/></IconButton>}{activity}<a className="chat-system-link" href="/design-system" aria-label="Open design system"><BookOpen size={19} /></a></div>
     </header>
     <div className="chat-body">
-      <LayoutGroup id={railId}><nav className="chat-rail" aria-label="Main navigation">
+      <LayoutGroup id={railId}><nav className={`chat-rail${moreOpen ? ' chat-rail--more-open' : ''}`} aria-label="Main navigation" onClick={event => {
+        // Choosing a destination from the More sheet closes it; Admin opens its own menu in place.
+        const item = (event.target as Element).closest('.chat-rail-item');
+        if (item && !item.matches('.chat-rail-more, [data-rail-tab="admin"]')) setMoreOpen(false);
+      }}>
         {onWorkspaceChange ? <WorkspaceSwitcher items={workspaces} value={workspace} onChange={onWorkspaceChange} onCreate={onCreateWorkspace} /> : <div className="chat-workspace-mark" title={name}><SpaceLogo icon /></div>}
         <RailNavigation key={workspace} active={activeDestination ?? (activityActive ? 'activity' : directMessagesActive ? 'dms' : 'home')}
           onHome={onHome} onNavigate={onNavigate} onDirectMessages={onDirectMessages} onActivity={onActivity}
           adminItems={adminItems} notificationCount={notificationCount} renderPreview={renderPreview}/>
+        <button type="button" className="chat-rail-item chat-rail-more" aria-expanded={moreOpen} onClick={() => setMoreOpen(open => !open)}>
+          <span className="chat-rail-icon"><span className="chat-rail-glyph"><DotsThree size={24} weight="bold" aria-hidden="true"/></span></span><span>More</span>
+        </button>
         <div className="chat-rail-bottom">
           <IconButton label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} theme`} onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}>{theme === 'dark' ? <Sun size={21} /> : <Moon size={21} />}</IconButton>
           <UserSettings user={user} userId={userId} onNameChange={onNameChange} />
         </div>
       </nav></LayoutGroup>
       <div className="chat-main-area" onClick={event => {
+        setMoreOpen(false);
         if ((event.target as Element).closest('.sp-channel, .sp-sidebar-create, .sp-sidebar-compose, .sp-sidebar-utilities button')) setSidebarOpen(false);
       }}><ChannelSearchHeaderContext.Provider value={setChannelSearch}>{children}</ChannelSearchHeaderContext.Provider></div>
       <AnimatePresence>{sidebarOpen && <motion.button {...surfaceMotion(reduced, 'scrim')} key="sidebar-scrim" className="chat-sidebar-backdrop" aria-label="Close conversation navigation" onClick={() => { setSidebarOpen(false); menu.current?.querySelector('button')?.focus(); }}><X size={22} /></motion.button>}</AnimatePresence>

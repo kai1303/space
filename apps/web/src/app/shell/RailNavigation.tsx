@@ -154,7 +154,7 @@ export function RailNavigation({active, onNavigate, onDirectMessages, onActivity
     </span><span>{label}</span></>;
     const className = 'chat-rail-item' + (selected ? ' is-active' : '') + (expanded ? ' is-peeking' : '');
     const motionProps = {initial:false as const, animate:expanded && !reduced ? 'hovered' : 'idle', whileHover:reduced ? undefined : 'hovered'};
-    if (tab === 'home') return <motion.a {...motionProps} key={tab} href="/chat" aria-current={selected ? 'page' : undefined} className={className} onClick={event => { close(); if (onHome) { event.preventDefault(); onHome(); } }}>{contents}</motion.a>;
+    if (tab === 'home') return <motion.a {...motionProps} key={tab} href="/chat" data-rail-tab={tab} aria-current={selected ? 'page' : undefined} className={className} onClick={event => { close(); if (onHome) { event.preventDefault(); onHome(); } }}>{contents}</motion.a>;
     return <motion.button {...motionProps} type="button" key={tab} className={className} data-rail-tab={tab} aria-current={selected ? 'page' : undefined}
       aria-label={tab === 'activity' && notificationCount ? `Activity (${notificationCount} unread)` : label}
       aria-haspopup={canPeek ? tab === 'admin' ? 'menu' : 'dialog' : undefined} aria-expanded={canPeek ? expanded : undefined} aria-controls={expanded ? id : undefined}
