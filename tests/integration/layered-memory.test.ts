@@ -127,6 +127,12 @@ test('the Graph RAG store ranks by meaning but can only name messages of the sco
     const fallback = await readThreadMemory(db(), a.channel_id, root.thread_id, 'anything');
     assert.deepEqual(fallback.related, [], 'memory still reads when the store is down');
     assert.ok(fallback.context.root);
+
+    const fact = (id: string, ids: string[]) => ({ id, kind: 'decision' as const, text: `Fact ${id}`, topic: 'billing', message_ids: ids });
+    useMemoryIndex({ related: async () => [], threadKnowledge: async () => ({ topics: ['billing'], facts: [fact('ok', [early.id]), fact('mixed', [early.id, foreign.id]), fact('empty', [])] }) });
+    const knowing = await readThreadMemory(db(), a.channel_id, root.thread_id);
+    assert.deepEqual(knowing.topics, ['billing']);
+    assert.deepEqual(knowing.facts.map(f => f.id), ['ok'], 'a fact with any evidence outside this thread is hidden');
   } finally { useMemoryIndex(undefined); }
 });
 

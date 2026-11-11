@@ -14,7 +14,8 @@ export interface MemoryNode {
   state?: 'active' | 'ended';
 }
 export interface ChannelMemoryPage { channel_id: string; nodes: MemoryNode[]; next_cursor: string | null }
-export interface ThreadMemory { node: MemoryNode; context: ThreadContext; sessions: MemoryNode[]; related: ThreadContextMessage[] }
+export interface MemoryFact { id: string; kind: 'fact' | 'decision' | 'procedure' | 'answer'; text: string; topic: string | null; message_ids: string[] }
+export interface ThreadMemory { node: MemoryNode; context: ThreadContext; sessions: MemoryNode[]; related: ThreadContextMessage[]; topics: string[]; facts: MemoryFact[] }
 export interface SessionMemory { node: MemoryNode; messages: ThreadContextMessage[]; related: ThreadContextMessage[] }
 export interface ChannelCursor { as_of: string; created_at: string; thread_id: string }
 

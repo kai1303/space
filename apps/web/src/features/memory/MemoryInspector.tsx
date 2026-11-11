@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Button } from '@space/ui/primitives';
-import type { SessionMemory, ThreadContextMessage, ThreadMemory } from '@space/contracts';
+import type { MemoryFact, SessionMemory, ThreadContextMessage, ThreadMemory } from '@space/contracts';
 import { memoryApi } from './memory-api.js';
 import type { MemorySelection } from './MemoryGraph.js';
 
@@ -9,11 +9,11 @@ type Props = {
   onOpenThread?(threadId: string): void;
   onOpenSession?(threadId: string, sessionId: string): void;
 };
-type Detail = { messages: ThreadContextMessage[]; related: ThreadContextMessage[]; ended: boolean };
+type Detail = { messages: ThreadContextMessage[]; related: ThreadContextMessage[]; ended: boolean; topics: string[]; facts: MemoryFact[] };
 // Memory is built from messages, so the inspector only shows what the conversation holds.
 const toDetail = (data: ThreadMemory | SessionMemory): Detail => 'context' in data
-  ? { messages: [...(data.context.root && !data.context.messages.some(m => m.id === data.context.root!.id) ? [data.context.root] : []), ...data.context.messages], related: data.related, ended: false }
-  : { messages: data.messages, related: data.related, ended: data.node.state === 'ended' };
+  ? { messages: [...(data.context.root && !data.context.messages.some(m => m.id === data.context.root!.id) ? [data.context.root] : []), ...data.context.messages], related: data.related, ended: false, topics: data.topics ?? [], facts: data.facts ?? [] }
+  : { messages: data.messages, related: data.related, ended: data.node.state === 'ended', topics: [], facts: [] };
 
 export function MemoryInspector(props: Props) {
   const { selection } = props;
@@ -49,6 +49,9 @@ function NodeInspector({ channel, selection, onOpenThread, onOpenSession }: Prop
       <small>{selection.kind}{detail.ended ? ' · ended' : ''}{selection.node.updated_at ? ` · ${selection.node.updated_at}` : ''}</small>
       <Messages label="Messages" messages={detail.messages} />
       <Messages label="Related" messages={detail.related} />
+      {detail.topics.length > 0 && <p aria-label="Topics">{detail.topics.join(' · ')}</p>}
+      {detail.facts.length > 0 && <details open><summary>Facts ({detail.facts.length})</summary>
+        <ul>{detail.facts.map(f => <li key={f.id}><small>{f.kind}</small> {f.text}</li>)}</ul></details>}
       {selection.kind === 'thread' && onOpenThread && <Button size="sm" variant="ghost" onClick={() => onOpenThread(id)}>Open thread →</Button>}
       {selection.kind === 'session' && onOpenSession && <Button size="sm" variant="ghost" onClick={() => onOpenSession(selection.threadId, id)}>Open session →</Button>}
     </>}

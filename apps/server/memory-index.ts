@@ -1,4 +1,5 @@
 import { createPool } from '@space/postgres/database';
+import type { MemoryFact } from '@space/contracts';
 import type { MemoryIndex, MemoryScope } from '@space/postgres/layered-memory';
 
 // Ranks messages by meaning in the Graph RAG store (knowledge database). It only proposes ids inside the
@@ -36,6 +37,18 @@ export function graphMemoryIndex(url = process.env.MEMORY_GRAPH_URL): MemoryInde
         ORDER BY q.score DESC, m.id LIMIT $7`,
         [vector, query, CANDIDATES, scope.channelId, scope.threadId ?? null, scope.sessionId ?? null, limit]);
       return rows.map(row => row.id);
+    },
+    async threadKnowledge(scope) {
+      const { rows: topics } = await pool.query<{ name: string }>(`
+        SELECT t.name FROM kb.m_thread_topics l JOIN kb.m_topics t ON t.id = l.topic_id
+        JOIN kb.m_threads th ON th.id = l.thread_id AND th.channel_id = $2
+        WHERE l.thread_id = $1 ORDER BY t.name LIMIT 5`, [scope.threadId, scope.channelId]);
+      const { rows: facts } = await pool.query<MemoryFact>(`
+        SELECT f.id, f.kind, f.text, t.name AS topic, coalesce(array_agg(e.message_id) FILTER (WHERE e.message_id IS NOT NULL), '{}') AS message_ids
+        FROM kb.m_facts f JOIN kb.m_threads th ON th.id = f.thread_id AND th.channel_id = $2
+        LEFT JOIN kb.m_topics t ON t.id = f.topic_id LEFT JOIN kb.m_fact_evidence e ON e.fact_id = f.id
+        WHERE f.thread_id = $1 GROUP BY f.id, t.name ORDER BY f.id LIMIT 8`, [scope.threadId, scope.channelId]);
+      return { topics: topics.map(t => t.name), facts };
     },
   };
 }

@@ -2,7 +2,7 @@ import { sql } from 'drizzle-orm';
 import {
   AppError, uuid, encodeChannelCursor, parseChannelCursor,
   CHANNEL_MEMORY_DAYS, CHANNEL_PAGE_DEFAULT, CHANNEL_PAGE_MAX, SUMMARY_LIMIT,
-  type ChannelMemoryPage, type MemoryNode, type SessionMemory, type ThreadMemory, type ThreadContextMessage,
+  type ChannelMemoryPage, type MemoryFact, type MemoryNode, type SessionMemory, type ThreadMemory, type ThreadContextMessage,
 } from '@space/contracts';
 import type { DbSession } from './database.js';
 import { contextMessage, messageColumns, readThreadContext, rows, type MessageRow } from './thread-context.js';
@@ -14,6 +14,8 @@ import { contextMessage, messageColumns, readThreadContext, rows, type MessageRo
 export interface MemoryScope { channelId: string; threadId?: string; sessionId?: string }
 export interface MemoryIndex {
   related(scope: MemoryScope, query: string, limit: number): Promise<string[]>;
+  // Topics and facts the extraction step wrote for one thread. Facts are checked against Space before they are shown.
+  threadKnowledge?(scope: MemoryScope & { threadId: string }): Promise<{ topics: string[]; facts: MemoryFact[] }>;
 }
 let index: MemoryIndex | undefined;
 export function useMemoryIndex(next: MemoryIndex | undefined) { index = next; }
@@ -102,10 +104,23 @@ export async function readThreadMemory(c: DbSession, channelId: string, threadId
   const sessions = await sessionNodes(c, context.thread_id);
   const [last] = await rows<{ last_at: string }>(c, sql`SELECT max(created_at)::text AS last_at FROM messages WHERE channel_id = ${channelId} AND thread_id = ${context.thread_id} AND agent_session_id IS NULL AND ${live}`);
   const shown = new Set([context.root?.id, ...context.messages.map(m => m.id)].filter((id): id is string => Boolean(id)));
+  const { topics, facts } = await threadKnowledge(c, channelId, context.thread_id);
   return {
     node: { ref: { kind: 'thread', id: context.thread_id }, parent: { kind: 'channel', id: channelId }, summary: (context.root?.text ?? '').split('\n')[0]!.trim().slice(0, SUMMARY_LIMIT), updated_at: last?.last_at ?? '', children: { kind: 'session', count: sessions.length } },
-    context, sessions, related: await relatedMessages(c, { channelId, threadId: context.thread_id }, asked, shown),
+    context, sessions, related: await relatedMessages(c, { channelId, threadId: context.thread_id }, asked, shown), topics, facts,
   };
+}
+
+// A fact is shown only if every one of its evidence messages is a live message of this thread, so derived
+// text never says more than its sources. Topics are shown only when at least one fact or the thread survives.
+async function threadKnowledge(c: DbSession, channelId: string, threadId: string): Promise<{ topics: string[]; facts: MemoryFact[] }> {
+  if (!index?.threadKnowledge) return { topics: [], facts: [] };
+  let found: { topics: string[]; facts: MemoryFact[] };
+  try { found = await index.threadKnowledge({ channelId, threadId }); } catch { return { topics: [], facts: [] }; }
+  const cited = [...new Set(found.facts.flatMap(f => f.message_ids))].filter(id => /^[0-9a-f-]{36}$/.test(id)).slice(0, 128);
+  const alive = cited.length ? new Set((await rows<{ id: string }>(c, sql`SELECT id FROM messages WHERE channel_id = ${channelId} AND thread_id = ${threadId} AND agent_session_id IS NULL AND ${live} AND id = ANY(${sql.param(cited)}::uuid[])`)).map(r => r.id)) : new Set<string>();
+  const facts = found.facts.filter(f => f.message_ids.length && f.message_ids.every(id => alive.has(id))).slice(0, 8);
+  return { topics: found.topics.slice(0, 5), facts };
 }
 
 async function sessionRow(c: DbSession, channelId: string, sessionId: string) {

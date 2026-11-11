@@ -8,6 +8,16 @@ import { MockConnector } from '@space/mock/connector';
 import { deliverOne } from '@space/core/worker';
 import { AgUiConnector } from '@space/core/ag-ui';
 import { EventBus, type EventDelivery } from '@space/events';
+import { ollamaExtractor } from '@space/core/memory-extract';
+import { runMemoryExtract } from '@space/postgres/memory-extract';
+async function embedTexts(texts: string[]): Promise<number[][]> {
+  const response = await fetch(`${process.env.OLLAMA_URL ?? 'http://127.0.0.1:11434'}/api/embed`, { method: 'POST', headers: { 'content-type': 'application/json' },
+    signal: AbortSignal.timeout(30_000), body: JSON.stringify({ model: 'all-minilm:22m', input: texts }) });
+  if (!response.ok) throw new Error('memory_embedding_failed');
+  const vectors = (await response.json() as { embeddings?: number[][] }).embeddings;
+  if (vectors?.length !== texts.length || !vectors.every(v => v.length === 384 && v.every(Number.isFinite))) throw new Error('memory_embedding_invalid');
+  return vectors;
+}
 const pool = createPool(process.env.DATABASE_URL);
 const store = new PostgresStore(pool);
 store.memoryReader = createAgentMemoryReader(new MemoryStore(pool));
@@ -51,6 +61,18 @@ try {
     }
     return undefined;
   }));
+  // Graph RAG memory: topics and facts. Off unless a local model and the knowledge database are configured.
+  const extract = ollamaExtractor(process.env);
+  if (extract && process.env.MEMORY_GRAPH_WRITE_URL) {
+    const graph = createPool(process.env.MEMORY_GRAPH_WRITE_URL);
+    const cap = Number(process.env.MEMORY_EXTRACT_HOURLY_CAP ?? 60);
+    await bus.subscribe('memory.extract.ready.*', {durable:'memory-extractors',queue:'memory-extractors',maxPending:4}, handle(async event => {
+      const id=event.data.thread_id;
+      if(typeof id!=='string')throw new Error('thread_id required');
+      const outcome=await runMemoryExtract(pool,graph,extract,embedTexts,id,cap);
+      return outcome.delayMs;
+    }));
+  }
   console.info('Worker ready');
   await stopping;
 } finally { await bus.close(); await pool.end(); }

@@ -39,6 +39,10 @@
       "types": "./dist/reply-suggestion.d.ts",
       "default": "./dist/reply-suggestion.js"
     },
+    "./memory-extract": {
+      "types": "./dist/memory-extract.d.ts",
+      "default": "./dist/memory-extract.js"
+    },
     "./navigator-provider": {
       "types": "./dist/navigator-provider.d.ts",
       "default": "./dist/navigator-provider.js"

@@ -10,7 +10,8 @@ const response = (body: unknown, status = 200) => ({ ok: status < 400, status, j
 
 it('shows the root, the recent messages and the related ones, and offers no Edit', async () => {
   vi.stubGlobal('fetch', vi.fn(async () => response({
-    node, sessions: [], related: [message(3, 'Duplicates came from retries')],
+    node, sessions: [], related: [message(3, 'Duplicates came from retries')], topics: ['checkout retries'],
+    facts: [{ id: 'f1', kind: 'decision', text: 'Dedupe on the idempotency key.', topic: 'checkout retries', message_ids: [message(2, '').id] }],
     context: { thread_id: th, through_sequence: '2', root: message(1, 'Fix duplicate charges'), messages: [message(2, 'Dedupe on the key')], has_earlier_messages: false },
   })));
   render(<MemoryInspector channel={ch} selection={{ kind: 'thread', node }} />);
@@ -18,6 +19,8 @@ it('shows the root, the recent messages and the related ones, and offers no Edit
   expect(screen.getByText('Dedupe on the key')).toBeTruthy();
   expect(screen.getByText('Duplicates came from retries')).toBeTruthy();
   expect(screen.getByText(/Related \(1\)/)).toBeTruthy();
+  expect(screen.getByLabelText('Topics').textContent).toBe('checkout retries');
+  expect(screen.getByText('Dedupe on the idempotency key.')).toBeTruthy();
   expect(screen.queryByRole('button', { name: 'Edit' })).toBeNull();
   expect(screen.queryByRole('textbox')).toBeNull();
 });
