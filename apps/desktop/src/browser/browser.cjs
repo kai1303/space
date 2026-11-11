@@ -6,6 +6,7 @@ const { runBrowserTask } = require('./agent.cjs');
 const maxTabs = 12;
 const dividerWidth = 8;
 const minPaneWidth = 320;
+const paneTransitionMs = 300;
 const isolated = { sandbox: true, contextIsolation: true, webSecurity: true, nodeIntegration: false, webviewTag: false };
 function webAddress(input) {
   if (typeof input !== 'string' || !input.trim() || input.length > 8192) return;
@@ -18,16 +19,23 @@ function webAddress(input) {
 function createBrowser(win, base, workspace) {
   const origin = new URL(base).origin;
   const owner = win.webContents;
-  let full = false, splitRatio = 0.5, theme = 'dark';
+  let full = false, splitRatio, navigationWidth = 0, theme = 'dark';
   let currentActor, profile, toolbar, active, task, visible = false, ready = false, barHeight = 64;
   let generation = 0, opening = false, notice = '';
-  let lastLayoutAnimated = false;
+  let frameTimer, closingTab;
   const tabs = new Map();
   const pane = new View();
   pane.setVisible(false);
   win.contentView.addChildView(pane);
   function splitWidth(width) {
-    return Math.max(minPaneWidth, Math.min(width - dividerWidth - minPaneWidth, Math.round(width * splitRatio)));
+    const zoom = owner.getZoomFactor();
+    // Share the area after Space's navigation between the conversation and browser.
+    // Keep chat above its 720 CSS pixel mobile breakpoint when both panes fit.
+    const desktopMinimum = navigationWidth ? Math.ceil(721 * zoom) : minPaneWidth;
+    const preferred = splitRatio === undefined
+      ? Math.max(desktopMinimum, Math.round((width - dividerWidth + navigationWidth * zoom) / 2))
+      : Math.round(width * splitRatio);
+    return Math.max(minPaneWidth, Math.min(width - dividerWidth - minPaneWidth, preferred));
   }
   function state() {
     const [width] = win.getContentSize();
@@ -37,46 +45,69 @@ function createBrowser(win, base, workspace) {
       forward: !!tabs.get(active)?.view.webContents.navigationHistory.canGoForward(), maxTabs };
   }
   function publish() {
-    if (ready && !win.isDestroyed() && toolbar && !toolbar.webContents.isDestroyed()) toolbar.webContents.send('browser-state', state());
+    if (visible && ready && !win.isDestroyed() && toolbar && !toolbar.webContents.isDestroyed()) toolbar.webContents.send('browser-state', state());
   }
   function layoutGuest() {
     const { width, height } = toolbar.getBounds();
     const gutter = full ? 0 : dividerWidth;
     tabs.get(active)?.view.setBounds({ x: gutter, y: barHeight, width: Math.max(0, width - gutter), height: Math.max(0, height - barHeight) });
   }
-  function layout(enter = false) {
+  function releaseTab(tab) {
+    if (!win.isDestroyed()) pane.removeChildView(tab.view);
+    if (!tab.view.webContents.isDestroyed()) tab.view.webContents.close({ waitForBeforeUnload: false });
+  }
+  function layout(transition = false) {
+    clearTimeout(frameTimer);
+    frameTimer = undefined;
+    if (closingTab) { releaseTab(closingTab); closingTab = undefined; }
     if (win.isDestroyed()) return;
     const [width, height] = win.getContentSize();
     const shown = visible && ready;
-    const split = shown && !full;
-    const left = split ? splitWidth(width) : 0;
-    const bounds = { x: left, y: 0, width: width - left, height };
-    const animate = enter && split && win.isVisible() && !systemPreferences.getAnimationSettings().prefersReducedMotion;
-    // A direct setBounds doesn't cancel an in-flight native layer animation.
-    const preempt = lastLayoutAnimated && !animate;
-    const options = { animate: animate || preempt ? { duration: animate ? 220 : 0, easing: 'ease-out' } : false };
-    lastLayoutAnimated = animate;
-    if (animate) pane.setBounds({ ...bounds, x: width });
-    pane.setVisible(shown);
-    workspace.setVisible(!shown || split);
-    workspace.setBounds({ x: 0, y: 0, width: split ? left : width, height }, options);
-    if (shown || preempt) pane.setBounds(bounds, options);
-    if (!shown) return;
-    toolbar.setBounds({ ...bounds, x: 0 });
-    layoutGuest();
+    const target = shown ? (full ? 0 : splitWidth(width)) : width;
+    const start = pane.getVisible() ? pane.getBounds().x : width;
+    // Slide the guest at its settled size. Only the workspace reflows as the
+    // divider moves, and a reversal starts at the last displayed position.
+    const paneWidth = shown ? width - target : pane.getBounds().width;
+    const animate = transition && (shown || pane.getVisible()) && start !== target &&
+      win.isVisible() && !systemPreferences.getAnimationSettings().prefersReducedMotion;
+    if (shown) {
+      toolbar.setBounds({ x: 0, y: 0, width: paneWidth, height });
+      layoutGuest();
+    }
+    const started = performance.now();
+    const travel = Math.abs(target - start);
+    const duration = paneTransitionMs * Math.sqrt(Math.min(1, travel / Math.max(1, paneWidth)));
+    function draw() {
+      const progress = animate ? Math.min(1, (performance.now() - started) / duration) : 1;
+      const eased = (1 - Math.cos(Math.PI * progress)) / 2;
+      const x = Math.round(start + (target - start) * eased);
+      const moving = progress < 1;
+      workspace.setVisible(x > 0 || !shown);
+      workspace.setBounds({ x: 0, y: 0, width: x, height });
+      pane.setBounds({ x, y: 0, width: paneWidth, height });
+      pane.setVisible(shown || moving);
+      if (moving) {
+        frameTimer = setTimeout(draw, 1000 / 60);
+      } else {
+        frameTimer = undefined;
+        if (closingTab) { releaseTab(closingTab); closingTab = undefined; }
+      }
+    }
+    draw();
   }
   function stop(message = '') {
     if (task) { clearTimeout(task.timer); task.controller.abort(); task = undefined; }
     notice = message;
     publish();
   }
-  function hide() {
+  function hide(withMotion = true) {
     if (!toolbar) return;
-    stop(); visible = false; full = false;
-    for (const tab of tabs.values()) tab.view.setVisible(false);
-    toolbar.setVisible(false);
-    layout();
+    const slide = withMotion && visible && ready;
+    visible = false;
+    full = false;
+    stop();
     if (!owner.isDestroyed()) owner.focus();
+    layout(slide);
   }
   function select(id, enter = false) {
     if (!tabs.has(id)) return;
@@ -90,17 +121,16 @@ function createBrowser(win, base, workspace) {
     if (!tab) return;
     tabs.delete(id);
     if (id === active) {
-      stop();
       active = undefined;
       if (tabs.size) select([...tabs.keys()].at(-1)); else hide();
     }
-    if (!win.isDestroyed()) pane.removeChildView(tab.view);
-    if (!tab.view.webContents.isDestroyed()) tab.view.webContents.close({ waitForBeforeUnload: false });
+    if (frameTimer && !tabs.size) closingTab = tab;
+    else releaseTab(tab);
     publish();
   }
   function reset() {
     generation++;
-    hide();
+    hide(false);
     for (const id of [...tabs.keys()]) remove(id);
     if (toolbar) {
       if (!win.isDestroyed()) pane.removeChildView(toolbar);
@@ -227,6 +257,11 @@ function createBrowser(win, base, workspace) {
     opening = true;
     const version = generation;
     try {
+      if (!visible && !pane.getVisible() && splitRatio === undefined) {
+        navigationWidth = await owner.executeJavaScript(`Array.from(document.querySelectorAll('.chat-rail, .chat-sidebar'))
+          .filter(element => !['fixed', 'absolute'].includes(getComputedStyle(element).position))
+          .reduce((width, element) => width + element.getBoundingClientRect().width, 0)`);
+      }
       const response = await owner.session.fetch(origin + '/v1/me', { credentials: 'include', redirect: 'error', cache: 'no-store', signal: AbortSignal.timeout(6000) });
       if (!response.ok) throw new Error();
       const { id } = await response.json();
@@ -255,7 +290,7 @@ function createBrowser(win, base, workspace) {
     if (removed && cause !== 'overwrite' && /(?:session_token|space\.refresh)$/.test(cookie.name) && new URL(origin).hostname === cookie.domain.replace(/^\./, '')) reset();
   };
   cookies.on('changed', cookieChanged);
-  owner.on('did-start-navigation', (_e, _url, inPage, main) => { if (main && !inPage) { generation++; hide(); } });
+  owner.on('did-start-navigation', (_e, _url, inPage, main) => { if (main && !inPage) { generation++; hide(false); } });
   owner.on('render-process-gone', reset);
   win.on('resize', () => { layout(); publish(); });
   layout();

@@ -22,6 +22,11 @@ export interface ChatMessage {
   attachments?: AssetAttachment[];
   author: { kind: 'human' | 'agent' | 'app' | 'workflow'; id: string; name: string };
 }
+export const defaultChannelTabOrder = ['files', 'pins', 'memory', 'navigator'] as const;
+export type ManagedChannelTab = (typeof defaultChannelTabOrder)[number];
+export interface ChannelTabsState { order: ManagedChannelTab[]; has_files: boolean; has_links: boolean; has_pins: boolean; visibility: Partial<Record<ManagedChannelTab, boolean>> }
+export type ChannelLinkMessage = { id: string; urls: string[]; created_at: string }
+export type ChannelPin = { id: string; author: string; created_at: string; text: string };
 export interface ChatTaskEvent {
   task_id: string; type: string; actor_id: string; installation_id: string; owner_id: string; data: Record<string, unknown>;
 }

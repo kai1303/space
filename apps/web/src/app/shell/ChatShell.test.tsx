@@ -1,7 +1,8 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { ChatShell, WorkspacePicker } from './ChatShell.js';
+import { ChatShell } from './ChatShell.js';
+import { WorkspaceActions } from './WorkspaceActions.js';
 
 vi.mock('../../features/auth/AuthScreen.js', () => ({ SignOutButton: () => <button>Sign out</button> }));
 const motionPreference=vi.hoisted(()=>({reduced:false}));
@@ -19,16 +20,21 @@ it('opens the personal browser from the desktop top bar', async () => {
   } finally { vi.unstubAllGlobals(); }
 });
 
-it('uses a keyboard-accessible workspace popover instead of a native select', async () => {
-  const change = vi.fn(), members = vi.fn();
-  render(<WorkspacePicker items={workspaces} value="one" onChange={change} onMembers={members} />);
-  expect(screen.queryByRole('combobox')).toBeNull();
-  await userEvent.click(screen.getByRole('button', { name: 'Team Actions' }));
-  await userEvent.click(screen.getByRole('menuitem', { name: 'Another team' }));
-  expect(change).toHaveBeenCalledWith('two');
-  await userEvent.click(screen.getByRole('button', { name: 'Team Actions' }));
+it('opens workspace actions from the name and keeps switching in the rail', async () => {
+  const members = vi.fn(), settings = vi.fn();
+  render(<WorkspaceActions workspace={workspaces[0]!} onMembers={members} onSettings={settings}/>);
+  const trigger = screen.getByRole('button', { name: 'Team Actions' });
+  trigger.focus();
+  await userEvent.keyboard('{ArrowDown}');
+  const invite = await screen.findByRole('menuitem', { name: 'Invite people to Team' });
+  await waitFor(() => expect(document.activeElement).toBe(invite));
+  expect(screen.getByText(`${window.location.host}/chat?workspace=one`)).toBeTruthy();
+  expect(screen.queryByRole('menuitem', { name: 'Team' })).toBeNull();
   await userEvent.click(screen.getByRole('menuitem', { name: 'Workspace members' }));
   expect(members).toHaveBeenCalledOnce();
+  await userEvent.click(trigger);
+  await userEvent.click(screen.getByRole('menuitem', { name: 'Workspace settings' }));
+  expect(settings).toHaveBeenCalledOnce();
 });
 
 it('opens workspace switching from the rail and connects navigation history controls', async () => {

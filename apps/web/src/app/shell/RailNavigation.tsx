@@ -1,6 +1,6 @@
-import { Fragment, useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
-import { animate, motion, useMotionValue, useReducedMotion } from 'motion/react';
+import { animate, AnimatePresence, motion, useIsPresent, useMotionValue, useReducedMotion } from 'motion/react';
 import { NavigationIcon } from '@space/ui/navigation';
 import { motionTransition } from '@space/ui/motion';
 import './rail-navigation.css';
@@ -8,7 +8,7 @@ import './rail-navigation.css';
 export type RailDestination = 'spacebot' | 'files' | 'todos' | 'agents';
 export type RailPreview = 'spacebot' | 'dms' | 'activity' | 'files' | 'todos';
 type Tab = RailDestination | 'home' | 'dms' | 'activity' | 'admin';
-type Panel = { tab: RailPreview | 'admin'; anchor: HTMLElement; pinned: boolean; keyboard: boolean };
+type Panel = { tab: RailPreview | 'admin'; anchor: HTMLElement; pinned: boolean; keyboard: boolean; direction?: 1 | -1 };
 const labels = { spacebot:'Spacebot', home:'Home', dms:'DMs', activity:'Activity', files:'Files', todos:'To-dos', agents:'Agents & tools', admin:'Admin' } as const;
 const order = ['spacebot','home','dms','activity','files','todos','agents','admin'] as const;
 const glyphMotion = { idle:{scale:1}, hovered:{scale:1.15} };
@@ -17,7 +17,23 @@ const glyphTransition = {duration:.125, ease:[.17,.67,.55,1.09] as const};
 // deliberate moves switch cards without mounting every tab the pointer crosses.
 const initialDwell = 300;
 const handoffDwell = 65;
+const activeContent = '.rail-peek-content:not([inert])';
 const enabledControl = 'button:not(:disabled):not([tabindex="-1"]), a[href], input:not(:disabled), summary, [tabindex="0"]';
+
+const contentVariants = {
+  enter: (direction: number) => ({ y: direction * 20, opacity: 0 }),
+  visible: { y: 0, opacity: 1 },
+  exit: (direction: number) => ({ y: -direction * 20, opacity: 0 }),
+};
+
+function PreviewContent({ direction, children }: { direction: number; children: ReactNode }) {
+  const present = useIsPresent();
+  return <motion.div className="rail-peek-content" inert={!present} aria-hidden={!present || undefined}
+    custom={direction} variants={contentVariants} initial="enter" animate="visible" exit="exit"
+    transition={{ duration: .14, ease: [.25, 1, .5, 1] }}>
+    {children}
+  </motion.div>;
+}
 
 export interface RailProps {
   onHome?: () => void;
@@ -75,7 +91,7 @@ export function RailNavigation({active, onNavigate, onDirectMessages, onActivity
     const reposition = () => position();
     rail?.addEventListener('scroll', reposition);
     window.addEventListener('resize', reposition);
-    if (panel.keyboard) (card.querySelector<HTMLElement>(enabledControl) ?? card).focus();
+    if (panel.keyboard) (card.querySelector(activeContent)?.querySelector<HTMLElement>(enabledControl) ?? card).focus();
     return () => {
       panelTop.stop();
       observer?.disconnect();
@@ -114,6 +130,16 @@ export function RailNavigation({active, onNavigate, onDirectMessages, onActivity
     }, 150);
   }
 
+  const preview = panel && (panel.tab === 'admin' ? <>
+    <header className="rail-peek-header"><h2>Admin tools</h2></header>
+    <div className="rail-peek-admin-items">
+      {adminItems?.map(item => <button key={item.label} type="button" role="menuitem" className="rail-peek-row"
+        onClick={() => { panel.anchor.focus(); close(); item.onSelect(); }}>
+        {item.label}
+      </button>)}
+    </div>
+  </> : renderPreview?.(panel.tab, close));
+
   const actions = {home:onHome, dms:onDirectMessages, activity:onActivity, files:onNavigate, todos:onNavigate, agents:onNavigate, spacebot:onNavigate, admin:adminItems?.length};
   return <>{order.map(tab => {
     if (tab !== 'home' && !actions[tab]) return null;
@@ -137,7 +163,8 @@ export function RailNavigation({active, onNavigate, onDirectMessages, onActivity
         stopTimer();
         if (!expanded) {
           const anchor = event.currentTarget;
-          timer.current = setTimeout(() => setPanel({tab, anchor, pinned:false, keyboard:false}), panel ? handoffDwell : initialDwell);
+          const direction = panel && order.indexOf(tab) < order.indexOf(panel.tab) ? -1 : 1;
+          timer.current = setTimeout(() => setPanel({ tab, anchor, pinned:false, keyboard:false, direction }), panel ? handoffDwell : initialDwell);
         }
       }}
       onPointerLeave={leave}
@@ -163,9 +190,11 @@ export function RailNavigation({active, onNavigate, onDirectMessages, onActivity
     {panel && createPortal(<motion.div style={{top:0, y:panelTop}} id={id} ref={panelRef} role={panel.tab === 'admin' ? 'menu' : 'dialog'} aria-label={panel.tab === 'admin' ? 'Admin tools' : labels[panel.tab]}
       tabIndex={-1} className={'rail-peek rail-peek--' + panel.tab} onPointerEnter={stopTimer} onPointerLeave={leave}
       onKeyDown={event => {
+        const content = event.currentTarget.querySelector(activeContent);
+        if (!content) return;
         if (event.key === 'Tab' && !event.defaultPrevented) {
           // Continue in rail order even though the card is portaled to the body.
-          const controls = event.currentTarget.querySelectorAll<HTMLElement>(enabledControl);
+          const controls = content.querySelectorAll<HTMLElement>(enabledControl);
           const edge = event.shiftKey ? controls[0] : controls[controls.length - 1];
           if (!edge || edge === document.activeElement) {
             if (event.shiftKey) event.preventDefault();
@@ -175,14 +204,18 @@ export function RailNavigation({active, onNavigate, onDirectMessages, onActivity
           return;
         }
         if (panel.tab !== 'admin' || !['ArrowDown','ArrowUp','Home','End'].includes(event.key)) return;
-        const items = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>('[role=menuitem]'));
+        const items = Array.from(content.querySelectorAll<HTMLButtonElement>('[role=menuitem]'));
         const index = items.indexOf(document.activeElement as HTMLButtonElement);
         event.preventDefault();
         const next = event.key === 'Home' ? 0 : event.key === 'End' ? items.length - 1 : (index + items.length + (event.key === 'ArrowUp' ? -1 : 1)) % items.length;
         items[next]?.focus();
       }}>
       <motion.div className="rail-peek-card" initial={reduced ? false : {opacity:0,x:-8}} animate={{opacity:1,x:0}} transition={{duration:reduced ? 0 : .16,ease:[.25,1,.5,1]}}>
-        <Fragment key={panel.tab}>{panel.tab === 'admin' ? <><header className="rail-peek-header"><h2>Admin tools</h2></header><div className="rail-peek-admin-items">{adminItems?.map(item => <button key={item.label} type="button" role="menuitem" className="rail-peek-row" onClick={() => { panel.anchor.focus(); close(); item.onSelect(); }}>{item.label}</button>)}</div></> : renderPreview?.(panel.tab, close)}</Fragment>
+        {reduced || panel.keyboard
+          ? <div className="rail-peek-content" key={panel.tab}>{preview}</div>
+          : <AnimatePresence initial={false} custom={panel.direction ?? 1}>
+              <PreviewContent key={panel.tab} direction={panel.direction ?? 1}>{preview}</PreviewContent>
+            </AnimatePresence>}
       </motion.div>
     </motion.div>, document.body)}
   </>;

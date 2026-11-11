@@ -10,7 +10,7 @@ const initials = (name: string) => {
   const words = name.trim().split(/\s+/);
   return (words.length > 1 ? words.slice(0, 2).map(word => word[0]).join('') : name.trim().slice(0, 2)).toUpperCase() || 'W';
 };
-const address = (id: string) => `${window.location.host}${workspacePath(id)}`;
+export const workspaceAddress = (id: string) => `${window.location.host}${workspacePath(id)}`;
 
 export function WorkspaceIcon({ workspace, className = 'workspace-switcher-icon' }: { workspace: Pick<WorkspaceChoice, 'name' | 'icon_url'>; className?: string }) {
   return <span className={`${className} workspace-logo`} aria-hidden="true"><Avatar name={workspace.name} initials={initials(workspace.name)} image={workspace.icon_url}/></span>;
@@ -46,6 +46,7 @@ export function WorkspaceSwitcher({ items, value, onChange, onCreate }: {
           <button type="button" role="menuitem" aria-label={name} aria-current="true" className="workspace-switcher-current" onClick={() => dismiss()}>
             <WorkspaceIcon workspace={current ?? { name }}/>
             <span className="workspace-switcher-identity"><strong>{name}</strong></span>
+            <Check size={16} aria-hidden="true"/>
           </button>
           {items.some(item => item.id !== value) && <hr role="separator"/>}
           {items.filter(item => item.id !== value).map(item => <button type="button" role="menuitem" aria-label={item.name} className="workspace-switcher-other" key={item.id} onClick={() => { dismiss(); onChange(item.id); }}>
@@ -69,7 +70,7 @@ export function WorkspaceSwitcher({ items, value, onChange, onCreate }: {
           <p>Workspaces available to your current account.</p>
           <label className="workspace-add-search"><MagnifyingGlass size={18} aria-hidden="true"/><input type="search" aria-label="Search workspaces" placeholder="Search workspaces" autoFocus value={query} onChange={event => setQuery(event.target.value)}/></label>
           <div className="workspace-find-results">{items.filter(item => item.name.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase())).map(item => <button type="button" aria-label={`Open ${item.name}`} key={item.id} onClick={() => { close(); if (item.id !== value) onChange(item.id); }}>
-            <WorkspaceIcon workspace={item}/><span className="workspace-switcher-identity"><strong>{item.name}</strong><small>{address(item.id)}</small></span>{item.id === value && <Check size={16} aria-hidden="true"/>}
+            <WorkspaceIcon workspace={item}/><span className="workspace-switcher-identity"><strong>{item.name}</strong><small>{workspaceAddress(item.id)}</small></span>{item.id === value && <Check size={16} aria-hidden="true"/>}
           </button>)}</div>
           {!items.some(item => item.name.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase())) && <p role="status">No matching workspaces</p>}
           <small>Missing a workspace? Ask its owner to add your account.</small>

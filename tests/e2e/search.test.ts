@@ -40,7 +40,7 @@ test('browser searches actual Typesense across history, channels and replies wit
   });
   await admin.query(`CREATE SCHEMA ${schema}`);await migrate(pool);await engine.initialize();await bridge.start();
   const seed=await bootstrap(pool),outsider=await bootstrap(pool),chat=new ChatStore(pool);
-  const old=await chat.send(seed.owner_id,seed.channel_id,{client_message_id:randomUUID(),text:'Old browserneedle deployment message'});
+  const old=await chat.send(seed.owner_id,seed.channel_id,{client_message_id:randomUUID(),text:'Old browserneedle deployment message README.md'});
   for(let i=0;i<60;i++)await chat.send(seed.owner_id,seed.channel_id,{client_message_id:randomUUID(),text:`Recent message ${i}`});
   const second=await chat.createChannel(seed.owner_id,seed.workspace_id,{name:'search-engineering',private:false});
   const root=await chat.send(seed.owner_id,second.id,{client_message_id:randomUUID(),text:'Crosschannelneedle deployment discussion'});
@@ -87,7 +87,7 @@ test('browser searches actual Typesense across history, channels and replies wit
     await field.fill(q);
     await expect(dialog.getByRole('button',{name:`Show results for: ${q}`,exact:true})).toBeVisible();
     await expect(dialog.getByRole('list',{name:'Search results'})).toHaveCount(0);
-    await field.press('Enter');return dialog;
+    await field.press('Enter');return channel ? page.getByRole('complementary',{name:'Search results in general'}) : dialog;
   }
   let dialog=await search('browserneedle');
   await expect(dialog.getByRole('button',{name:/Old browserneedle deployment message/})).toBeVisible({timeout:20000});
@@ -96,7 +96,7 @@ test('browser searches actual Typesense across history, channels and replies wit
   await expect(dialog.locator('mark')).toHaveText('browserneedle');
   await dialog.getByRole('button',{name:/Old browserneedle deployment message/}).click();
   let source=page.getByRole('dialog',{name:'Original message in #general',exact:true});
-  await expect(source.getByText('Old browserneedle deployment message',{exact:true})).toBeVisible();await page.keyboard.press('Escape');
+  await expect(source.getByText('Old browserneedle deployment message README.md',{exact:true})).toBeVisible();await page.keyboard.press('Escape');
   dialog=await search('crosschannelneedle');await expect(dialog.getByRole('button',{name:/Crosschannelneedle/})).toBeVisible();await dialog.getByRole('button',{name:/Crosschannelneedle/}).click();
   source=page.getByRole('dialog',{name:'Original message in #search-engineering',exact:true});await expect(source.getByText('Crosschannelneedle deployment discussion',{exact:true})).toBeVisible();await page.keyboard.press('Escape');
   dialog=await search('replybrowserneedle is:thread');await expect(dialog.getByRole('button',{name:/Replybrowserneedle/})).toBeVisible();await dialog.getByRole('button',{name:/Replybrowserneedle/}).click();
@@ -120,6 +120,23 @@ test('browser searches actual Typesense across history, channels and replies wit
   dialog=await search('otherworkspaceneedle');await expect(dialog.getByText('No messages found',{exact:true})).toBeVisible();await page.keyboard.press('Escape');
   await page.goto(`${web}/chat?workspace=${seed.workspace_id}&channel=${seed.channel_id}`);
   await expect(page.getByRole('button',{name:'Search in general',exact:true})).toBeVisible();
+  dialog=await search('README',true);
+  const match=dialog.getByRole('button',{name:/Old browserneedle deployment message README.md/});
+  await match.click();
+  await expect(page.getByRole('region',{name:'Original message in #general'})).toContainText('README.md');
+  await expect(match).toBeVisible();
+  await page.getByRole('button',{name:/^in:general README/}).click();
+  const edit=page.getByRole('searchbox',{name:'Search messages'});
+  await expect(edit).toBeFocused();
+  await expect(edit).toHaveValue('README');
+  await edit.press('Escape');
+  await expect(match).toBeVisible();
+  await page.setViewportSize({width:390,height:844});
+  const conversationBounds=await page.getByRole('main').boundingBox(), resultsBounds=await dialog.boundingBox();
+  assert.ok(conversationBounds && resultsBounds && resultsBounds.y >= conversationBounds.y + conversationBounds.height - 1);
+  assert.ok(await dialog.evaluate(element=>element.scrollWidth<=element.clientWidth+1));
+  await page.setViewportSize({width:1440,height:1000});
+  await dialog.getByRole('button',{name:'Close search results'}).click();
   dialog=await search('crosschannelneedle',true);await expect(dialog.getByText('No messages found',{exact:true})).toBeVisible();await page.keyboard.press('Escape');
   dialog=await search('Recent message');await expect(dialog.getByRole('list',{name:'Search results'}).getByRole('button')).toHaveCount(20);await dialog.getByRole('button',{name:'Load more results',exact:true}).click();await expect(dialog.getByRole('list',{name:'Search results'}).getByRole('button')).toHaveCount(40);
   await page.keyboard.press('Escape');

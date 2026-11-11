@@ -34,6 +34,7 @@
   inset: 0 -10px 0 100%;
 }
 .rail-peek-card {
+  position: relative;
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
@@ -47,7 +48,20 @@
 .rail-peek--spacebot .rail-peek-card, .rail-peek--admin .rail-peek-card {
   height: auto;
   max-height: min(65vh, calc(100vh - 20px));
-  overflow-y: auto;
+}
+.rail-peek-content {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+}
+.rail-peek--spacebot .rail-peek-content, .rail-peek--admin .rail-peek-content { overflow-y: auto; }
+/* Only the current preview sizes the card and handles input during a handoff. */
+.rail-peek-content[inert] {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
 }
 .rail-peek-header {
   display: flex;

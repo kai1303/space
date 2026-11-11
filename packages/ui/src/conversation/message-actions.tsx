@@ -25,6 +25,7 @@ const menuActions = [
 const feedback: Partial<Record<MessageAction, { pending: string; success: string }>> = {
   copyLink: { pending: 'Copying link…', success: 'Link copied' },
   copyMessage: { pending: 'Copying message…', success: 'Message copied' },
+  pin: { pending: 'Pinning message…', success: 'Message pinned to channel' },
   save: { pending: 'Saving message…', success: 'Message saved' },
   addTodo: { pending: 'Adding to-do…', success: 'Added to your to-dos' },
 };

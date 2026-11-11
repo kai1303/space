@@ -182,6 +182,8 @@ export type TabItem = {
   label: string;
   icon?: ReactNode;
   panelId?: string;
+  fixed?: boolean;
+  opensDialog?: boolean;
 };
 export function Tabs({
   className = "",
@@ -189,14 +191,18 @@ export function Tabs({
   value,
   onChange,
   label,
+  onReorder,
 }: {
   className?: string;
   items: TabItem[];
   value: string;
   onChange: (id: string) => void;
   label: string;
+  onReorder?: (id: string, target: string, side: "before" | "after") => void;
 }) {
   const refs = useRef(new Map<string, HTMLButtonElement>());
+  const [drag, setDrag] = useState<{id:string; target?:string}>();
+  const side = (id:string, target:string) => items.findIndex(item => item.id === id) < items.findIndex(item => item.id === target) ? "after" : "before";
   const indicatorId = useId();
   const reduced = useReducedMotion();
   return (
@@ -209,10 +215,31 @@ export function Tabs({
             else refs.current.delete(item.id);
           }}
           type="button"
-          role="tab"
-          aria-selected={item.id === value}
+          role={item.opensDialog ? "button" : "tab"}
+          aria-haspopup={item.opensDialog ? "dialog" : undefined}
+          aria-selected={item.opensDialog ? undefined : item.id === value}
+          draggable={onReorder && !item.fixed ? true : undefined}
+          data-drop-side={drag?.target === item.id && drag.id !== item.id ? side(drag.id,item.id) : undefined}
+          onDragStart={onReorder && !item.fixed ? e => {
+            e.dataTransfer.effectAllowed = "move";
+            e.dataTransfer.setData("text/plain",item.label);
+            setDrag({id:item.id});
+          } : undefined}
+          onDragOver={onReorder && drag && !item.fixed && drag.id !== item.id ? e => {
+            e.preventDefault(); e.dataTransfer.dropEffect = "move";
+            if (drag.target !== item.id) setDrag({...drag,target:item.id});
+          } : undefined}
+          onDragLeave={drag?.target === item.id ? e => {
+            if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDrag({id:drag.id});
+          } : undefined}
+          onDrop={onReorder && drag && !item.fixed && drag.id !== item.id ? e => {
+            e.preventDefault();
+            onReorder(drag.id,item.id,side(drag.id,item.id));
+            setDrag(undefined);
+          } : undefined}
+          onDragEnd={onReorder ? () => setDrag(undefined) : undefined}
           aria-controls={item.panelId}
-          tabIndex={item.id === value ? 0 : -1}
+          tabIndex={item.id === value || item.opensDialog ? 0 : -1}
           onClick={() => onChange(item.id)}
           onKeyDown={(event) => {
             const keys = ["ArrowRight", "ArrowLeft", "Home", "End"];
@@ -229,7 +256,7 @@ export function Tabs({
                     items.length;
             const target = items[next];
             if (target) {
-              onChange(target.id);
+              if (!target.opensDialog) onChange(target.id);
               refs.current.get(target.id)?.focus();
             }
           }}

@@ -1,5 +1,5 @@
 import { subscribeUpdates } from '../../shared/realtime/live-updates.js';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Select, Button, Dialog } from '@space/ui/primitives';
 import type { NavigatorCandidate, NavigatorRule, NavigationDecision } from '@space/contracts';
 import { request } from '../../shared/api/request.js';
@@ -38,7 +38,7 @@ function NavigatorObservations({channel}:{channel:string}) {
   </article>)}
  </section>;
 }
-export function NavigatorSettings({channel,onCandidates}:{channel:string;onCandidates:(candidates:NavigatorCandidate[])=>void}) {
+export function NavigatorSettings({channel,onCandidates,renderTrigger}:{renderTrigger?:(open:()=>void)=>ReactNode;channel:string;onCandidates:(candidates:NavigatorCandidate[])=>void}) {
  const [open,setOpen]=useState(false),[config,setConfig]=useState<Configuration&{channel:string}>(),[settings,setSettings]=useState<Settings>(),[ruleText,setRuleText]=useState(''),[error,setError]=useState(''),[busy,setBusy]=useState(false);
  const saveScope=useRef<object|undefined>(undefined);
  const canManage=config?.channel===channel&&config.can_manage;
@@ -59,7 +59,7 @@ export function NavigatorSettings({channel,onCandidates}:{channel:string;onCandi
   finally{if(saveScope.current===scope)setBusy(false);}
  }
  return <>
-  <button aria-label="Navigator settings" onClick={()=>setOpen(true)}>Navigator</button>
+  {renderTrigger ? renderTrigger(() => setOpen(true)) : <button aria-label="Navigator settings" onClick={()=>setOpen(true)}>Navigator</button>}
   <Dialog open={open} onClose={()=>setOpen(false)} title="Navigator">
    <div className="navigator-settings">
     {error&&<p role="alert">{error}</p>}

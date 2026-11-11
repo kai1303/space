@@ -11,7 +11,7 @@ import { UnreadStore } from './unread.js';
 import { createHash, randomUUID } from 'node:crypto';
 import type { Pool } from 'pg';
 import { and, eq, gt, lt, gte, lte, asc, desc, or, exists, inArray, isNull, sql } from 'drizzle-orm';
-import { AppError, parseReactionInput, parseMessageInput, parseChannelInput, parseChannelUpdate, parseMessagePage, parsePage, record, uuid, chatCursor, type ChatMessage, type ChatEvent, type ChatHistory, type MessagePage, type ChannelSummary, type ChannelDetails } from '@space/contracts';
+import { AppError, parseReactionInput, parseMessageInput, parseChannelInput, parseChannelUpdate, parseMessagePage, parsePage, record, uuid, chatCursor, type ChatMessage, type ChatEvent, type ChatHistory, type MessagePage, type ChannelSummary, type ChannelDetails, type ChannelPin, type ChannelTabsState, type ChannelLinkMessage } from '@space/contracts';
 import { database, type DbSession } from './database.js';
 import { hasChannelAccess, requireWorkspaceAccess, lockWorkspace, hasThreadAccess } from './access.js';
 import { page } from './membership.js';
@@ -299,6 +299,99 @@ export class ChatStore {
         await c.execute(sql`SELECT append_chat_event(${channelId},${message.thread_id},'message.updated',chat_message_payload(messages)) FROM messages WHERE channel_id=${channelId} AND id=${messageId}`);
       }
       return this.message(c, messageId, channelId);
+    });
+  }
+  async channelTabs(actor: string, channelId: string) {
+    return this.db.transaction(async c => {
+      const channel = await this.authorize(c, actor, channelId);
+      if (channel.kind !== 'channel') throw notFound();
+      const visible = sql`channel_id=${channelId} AND agent_session_id IS NULL AND deleted_at IS NULL AND retained_at IS NULL`;
+      const result = await c.execute<ChannelTabsState & Record<string, unknown>>(sql`SELECT
+        EXISTS(SELECT 1 FROM messages WHERE ${visible} AND attachments <> '[]') AS has_files,
+        EXISTS(SELECT 1 FROM messages WHERE ${visible} AND cardinality(channel_shared_urls(text,document)) > 0) AS has_links,
+        EXISTS(SELECT 1 FROM messages WHERE ${visible} AND pin_order IS NOT NULL) AS has_pins,
+        coalesce((SELECT jsonb_object_agg(tab,visible) FROM channel_tab_visibility WHERE channel_id=${channelId}), '{}') AS visibility,
+        tab_order AS "order" FROM channels WHERE id=${channelId}`);
+      return result.rows[0]!;
+    }, { isolationLevel: 'repeatable read', accessMode: 'read only' });
+  }
+
+  async moveChannelTab(actor: string, channelId: string, input: unknown) {
+    const {tab, target, side} = record(input, ['tab','target','side']);
+    if (typeof tab !== 'string' || typeof target !== 'string' || tab === target || (side !== 'before' && side !== 'after'))
+      throw new AppError(400, 'invalid_tab_move');
+    return sessionTransaction(this.db, async c => {
+      const channel = await this.authorize(c, actor, channelId);
+      if (channel.kind !== 'channel') throw notFound();
+      if (channel.archived_at) throw new AppError(409, 'channel_archived');
+      const result = await c.execute<{tab_order: string[]}>(sql`SELECT tab_order FROM channels WHERE id=${channelId}`);
+      const order = result.rows[0]!.tab_order;
+      if (!order.includes(tab) || !order.includes(target)) throw new AppError(400, 'invalid_tab_move');
+      // Apply the relative move to the latest committed order on serialization retries.
+      const next = order.filter(id => id !== tab);
+      next.splice(next.indexOf(target) + (side === 'after' ? 1 : 0), 0, tab);
+      if (order.indexOf(tab) === next.indexOf(tab)) return;
+      await c.execute(sql`UPDATE channels SET tab_order=ARRAY[${sql.join(next.map(id => sql`${id}`), sql`,`)}]::text[] WHERE id=${channelId}`);
+    });
+  }
+
+  async setTabVisibility(actor: string, channelId: string, tab: string, input: unknown) {
+    const { visible } = record(input, ['visible']);
+    if (!['files','pins','memory','navigator'].includes(tab) || typeof visible !== 'boolean') throw new AppError(400, 'invalid_tab');
+    return sessionTransaction(this.db, async c => {
+      const channel = await this.authorize(c, actor, channelId);
+      if (channel.kind !== 'channel') throw notFound();
+      if (channel.archived_at) throw new AppError(409, 'channel_archived');
+      await c.execute(sql`INSERT INTO channel_tab_visibility(channel_id,workspace_id,tab,visible)
+        VALUES(${channelId},${channel.workspace_id},${tab},${visible})
+        ON CONFLICT (channel_id,tab) DO UPDATE SET visible=excluded.visible
+        WHERE channel_tab_visibility.visible IS DISTINCT FROM excluded.visible`);
+    });
+  }
+
+  async channelLinks(actor: string, channelId: string, input: unknown) {
+    const query = record(input, ['before']);
+    const before = query.before === undefined ? undefined : chatCursor(query.before);
+    return this.db.transaction(async c => {
+      const channel = await this.authorize(c, actor, channelId);
+      if (channel.kind !== 'channel') throw notFound();
+      const result = await c.execute<ChannelLinkMessage & { sequence: string }>(sql`
+        SELECT id, created_at, sequence::text AS sequence, channel_shared_urls(text,document) AS urls
+        FROM messages m WHERE channel_id=${channelId} AND agent_session_id IS NULL AND deleted_at IS NULL AND retained_at IS NULL
+          AND cardinality(channel_shared_urls(text,document)) > 0 ${before ? sql`AND m.sequence < ${before}::bigint` : sql``}
+        ORDER BY m.sequence DESC LIMIT 21`);
+      return page(result.rows, 20, row => row.sequence);
+    }, { isolationLevel: 'repeatable read', accessMode: 'read only' });
+  }
+
+  async channelPins(actor: string, channelId: string, input: unknown) {
+    const query = record(input, ['before']);
+    const before = query.before === undefined ? undefined : chatCursor(query.before);
+    return this.db.transaction(async c => {
+      const channel = await this.authorize(c, actor, channelId);
+      if (channel.kind !== 'channel') throw notFound();
+      const result = await c.execute<ChannelPin & { pin_order: string }>(sql`
+        SELECT m.id, m.pin_order::text, m.created_at, left(m.text,1200) AS text,
+          chat_message_payload(m)->'author'->>'name' AS author
+        FROM messages m
+        WHERE m.channel_id=${channelId} AND m.pin_order IS NOT NULL
+          ${before ? sql`AND m.pin_order < ${before}::bigint` : sql``}
+        ORDER BY m.pin_order DESC LIMIT 26`);
+      return page(result.rows, 25, row => row.pin_order);
+    }, { isolationLevel: 'repeatable read', accessMode: 'read only' });
+  }
+
+  async setChannelPin(actor: string, channelId: string, messageId: string, active: boolean) {
+    return sessionTransaction(this.db, async c => {
+      const channel = await this.authorize(c, actor, channelId);
+      if (channel.kind !== 'channel') throw notFound();
+      if (channel.archived_at) throw new AppError(409, 'channel_archived');
+      const eligible = sql`channel_id=${channelId} AND id=${messageId} AND deleted_at IS NULL
+        AND retained_at IS NULL AND agent_session_id IS NULL`;
+      const changed = await c.execute(sql`UPDATE messages
+        SET pin_order=${active ? sql`nextval('channel_pin_order_seq')` : sql`NULL`}
+        WHERE ${eligible} AND ${active ? sql`pin_order IS NULL` : sql`pin_order IS NOT NULL`} RETURNING id`);
+      if (!changed.rows.length && !(await c.execute(sql`SELECT 1 FROM messages WHERE ${eligible}`)).rows.length) throw notFound();
     });
   }
   async sourceMessage(actor: string, channel: string, id: string): Promise<ChatMessage> {

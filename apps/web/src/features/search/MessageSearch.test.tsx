@@ -18,6 +18,7 @@ it('searches remote history with fixed channel scope and selects complete result
   render(<MessageSearch {...props} channel={{ id: 'channel', name: 'general' }} />);
   expect(fetch).not.toHaveBeenCalled();
   const field = screen.getByRole('searchbox', { name: 'Search messages' });
+  expect(document.getElementById(field.getAttribute('aria-describedby')!)?.textContent).toBe('in:general');
   expect(field.getAttribute('maxlength')).toBe('500');
   fireEvent.change(field, { target: { value: '"old phrase" from:me' } });
   submit();
@@ -28,7 +29,9 @@ it('searches remote history with fixed channel scope and selects complete result
   expect(url.searchParams.get('channel_id')).toBe('channel');
   await userEvent.click(screen.getByRole('button', { name: /Result old/ }));
   expect(props.onSelect).toHaveBeenCalledWith(item('old'));
-  expect(props.onClose).toHaveBeenCalledTimes(1);
+  expect(props.onClose).not.toHaveBeenCalled();
+  expect(screen.getByRole('complementary', {name:'Search results in general'})).toBeTruthy();
+  expect(screen.queryByRole('dialog')).toBeNull();
 });
 
 it('aborts pending queries and ignores late results when query, scope or visibility changes', async () => {

@@ -125,7 +125,7 @@ The main chat shell now has popover workspace controls in the sidebar and rail, 
 
 ## Motion
 
-The frontend uses [Motion for React](https://motion.dev/docs/react) (`motion/react`). A root `MotionConfig` respects the system motion preference; shared `motionTransition` supplies authored 180ms timing and cubic-bezier `[0.2, 0, 0, 1]`, with 120ms for composer pickers. Dialogs fade/scale in, emoji and mention panels rise in, sidebar groups reposition, the mobile drawer slides in, search results enter from the right, and newly submitted messages fade/rise in. Existing messages do not replay on channel navigation.
+The frontend uses [Motion for React](https://motion.dev/docs/react) (`motion/react`). A root `MotionConfig` respects the system motion preference; shared `motionTransition` supplies authored 180ms timing and cubic-bezier `[0.2, 0, 0, 1]`, with 120ms for composer pickers. Dialogs fade/scale in, emoji and mention panels rise in, sidebar groups reposition, the mobile drawer slides in, search results enter from the right, and new messages glide 14px from the left while fading in over 260ms. Existing messages do not replay on channel navigation.
 
 Reduced motion sets these durations to zero, removes entrance displacement, and disables sidebar layout animation. Native dialog/picker dismissal and mobile hiding remain immediate to preserve focus and keyboard behavior. CSS still handles small hover/switch feedback. These timings are authored for Space; Slack's exact animation durations and easing have not been measured.
 

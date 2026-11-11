@@ -46,12 +46,12 @@ export function AuthScreen({ embedded = false, onAuthenticated, onBusyChange }: 
   </motion.form>;
   return embedded ? form : <AccessFrame screen={mode} step={mode === 'sign-up' ? 1 : undefined} title={mode === 'sign-in' ? 'Welcome back.' : 'Create your account.'} description={mode === 'sign-in' ? 'Sign in to pick up where you left off.' : 'First, your account. Next, a workspace for your team.'}>{form}</AccessFrame>;
 }
-export function SignOutButton() {
+export function SignOutButton({ role }: { role?: 'menuitem' } = {}) {
   const [busy, setBusy] = useState(false), [error, setError] = useState('');
   async function signOut() {
     setBusy(true); setError('');
     try { const result = await authClient.signOut(); if (result.error) setError('Could not sign out. Try again.'); }
     catch { setError('Could not sign out. Try again.'); } finally { setBusy(false); }
   }
-  return <><Button variant="ghost" size="sm" loading={busy} onClick={() => void signOut()}>Sign out</Button>{error && <span role="alert">{error}</span>}</>;
+  return <><Button role={role} variant="ghost" size="sm" loading={busy} onClick={() => void signOut()}>Sign out</Button>{error && <span role="alert">{error}</span>}</>;
 }

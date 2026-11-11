@@ -8,10 +8,11 @@ import { AnimatePresence, LayoutGroup, motion, useReducedMotion } from 'motion/r
 import { IconButton, Menu } from '@space/ui/primitives';
 import { NavigationIcon } from '@space/ui/navigation';
 import { motionTransition, surfaceMotion, useSidebarMotion } from '@space/ui/motion';
-import { ArrowLeft, ArrowRight, BookOpen, Globe, CaretDown, Check, ClockCounterClockwise, House, ChatCircle, Bell, List, MagnifyingGlass, Moon, Sun, Users, X, Robot, Files, CheckCircle, Sparkle, GearSix } from '@phosphor-icons/react';
+import { BookOpen, Globe, List, Moon, Sun, X } from '@phosphor-icons/react';
+import { ChannelSearchHeaderContext, type ChannelSearchHeader } from '../../features/search/channel-search-header.js';
 import { UserSettings } from '../../features/profile/UserProfile.js';
 import { SpaceLogo } from '../../shared/branding/SpaceLogo.js';
-import { WorkspaceIcon, WorkspaceSwitcher, type WorkspaceChoice } from './WorkspaceSwitcher.js';
+import { WorkspaceSwitcher, type WorkspaceChoice } from './WorkspaceSwitcher.js';
 
 export function ChatShell({ renderPreview, notificationDelivery, onNavigate, activeDestination, adminItems, onActivity, activityActive = false, notificationCount = 0, onHome, onDirectMessages, directMessagesActive = false, name, user, userId, onNameChange, onSearch, onMembers, workspaces = [], workspace = '', onWorkspaceChange, onCreateWorkspace, sidebarWidth = 220, onBack, onForward, history = [], activity, children }: {
   renderPreview?: RailProps['renderPreview'];
@@ -50,7 +51,8 @@ export function ChatShell({ renderPreview, notificationDelivery, onNavigate, act
   const railId = useId();
   useEffect(() => { setSidebarOpen(false); }, [activeDestination, activityActive, directMessagesActive]);
   const menu = useRef<HTMLDivElement>(null);
-  function openSearch() { setSidebarOpen(false); onSearch?.(); }
+  const [channelSearch, setChannelSearch] = useState<ChannelSearchHeader | null>(null);
+  function openSearch() { setSidebarOpen(false); (channelSearch?.edit ?? onSearch)?.(); }
   const [theme, setTheme] = useState(readChatTheme);
   useLayoutEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -75,8 +77,8 @@ export function ChatShell({ renderPreview, notificationDelivery, onNavigate, act
         <IconButton label="Forward in history" disabled={!onForward} onClick={onForward}><NavigationIcon name="forward" size={20}/></IconButton>
         {history.length ? <Menu label="Show history" menuLabel="Recent conversations" className="chat-history-menu" floating trigger={<NavigationIcon name="history" size={20}/>} items={history} /> : <IconButton label="Show history" disabled><NavigationIcon name="history" size={20}/></IconButton>}
       </div>
+      <button className="chat-global-search" disabled={!onSearch} onClick={openSearch}><NavigationIcon name="search" size={17}/><span>{channelSearch?.label ?? `Search ${name}`}</span><kbd>⌘ K</kbd></button>
       <div className="chat-mobile-toggle" hidden={!!activeDestination || activityActive || directMessagesActive} ref={menu}><IconButton label={sidebarOpen ? 'Close conversations' : 'Open conversations'} aria-expanded={sidebarOpen} aria-controls="chat-conversations" onClick={() => setSidebarOpen(open => !open)}><List size={20} /></IconButton></div>
-      <button className="chat-global-search" disabled={!onSearch} onClick={openSearch}><NavigationIcon name="search" size={17}/><span>Search {name}</span><kbd>⌘ K</kbd></button>
       <div className="chat-topbar-end">{window.spaceDesktop?.openBrowser && <IconButton label="Open browser" onClick={() => window.spaceDesktop?.openBrowser?.()}><Globe size={19}/></IconButton>}{activity}<a className="chat-system-link" href="/design-system" aria-label="Open design system"><BookOpen size={19} /></a></div>
     </header>
     <div className="chat-body">
@@ -92,18 +94,8 @@ export function ChatShell({ renderPreview, notificationDelivery, onNavigate, act
       </nav></LayoutGroup>
       <div className="chat-main-area" onClick={event => {
         if ((event.target as Element).closest('.sp-channel, .sp-sidebar-create, .sp-sidebar-compose, .sp-sidebar-utilities button')) setSidebarOpen(false);
-      }}>{children}</div>
+      }}><ChannelSearchHeaderContext.Provider value={setChannelSearch}>{children}</ChannelSearchHeaderContext.Provider></div>
       <AnimatePresence>{sidebarOpen && <motion.button {...surfaceMotion(reduced, 'scrim')} key="sidebar-scrim" className="chat-sidebar-backdrop" aria-label="Close conversation navigation" onClick={() => { setSidebarOpen(false); menu.current?.querySelector('button')?.focus(); }}><X size={22} /></motion.button>}</AnimatePresence>
     </div>
   </div>;
-}
-
-export function WorkspacePicker({ items, value, onChange, onMembers, compact = false }: { items: WorkspaceChoice[]; value: string; onChange: (value: string) => void; onMembers?: () => void; compact?: boolean }) {
-  const name = items.find(item => item.id === value)?.name ?? 'Workspace';
-  return <Menu label={compact ? `Switch workspaces… (${name})` : `${name} Actions`} menuLabel="Workspaces" className={compact ? 'chat-workspace-switcher' : 'chat-workspace-picker'} floating align="start"
-    trigger={compact ? <span className="chat-workspace-mark"><SpaceLogo icon /></span> : <><span>{name}</span><NavigationIcon name="chevron" size={15}/></>}
-    items={[
-      ...items.map(item => ({ label: item.name, icon: <><WorkspaceIcon workspace={item} className="chat-workspace-menu-icon"/>{item.id === value && <Check size={14} aria-hidden="true"/>}</>, onSelect: () => { if (item.id !== value) onChange(item.id); } })),
-      ...(onMembers ? [{ label: 'Workspace members', icon: <Users size={18} />, separatorBefore: true, onSelect: onMembers }] : []),
-    ]} />;
 }

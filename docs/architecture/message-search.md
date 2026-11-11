@@ -1,16 +1,16 @@
 # Message search
 
-Space searches accessible workspace conversations through Typesense. PostgreSQL remains authoritative for message content, revision and access. The top search button searches across channels and direct messages without leaving the current view; a conversation's search button fixes the scope to that conversation. Results include older history and ordinary thread replies. Selecting a result uses the existing source-message API, which checks access again, and opens the thread for a reply.
+Space searches accessible workspace conversations through Typesense. PostgreSQL remains authoritative for message content, revision and access. The top search button searches across channels and direct messages without leaving the current view; a conversation's search button fixes the scope to that conversation. Results include older history and ordinary thread replies. Channel search opens the top search field with a channel token, then shows a resizable results list beside the conversation. Selecting a loaded message reveals it in the timeline. Older messages and replies open an inline preview through the source-message API, which rechecks access. A reply preview can open its thread.
 
 Agent-session messages are excluded. Search covers up to 32,000 characters of message text and rich-text link targets per indexed document. It does not extract attachment contents or search channel memory. Semantic/vector search and relevance customization are not implemented. The browser highlights literal query terms in authorized message text; it does not render engine-provided HTML. The production UI uses remote search; gallery demonstrations retain their local examples.
 
 ## Search interface
 
-The entry palette is aligned with the top search bar. Typing shows a “Show results for” action; Enter expands a wide results surface. From, In, Has a link, Threads only and Date controls compose the supported query syntax. Channel search keeps its fixed channel scope. Author/channel text and UTC date inputs are available through filter popovers; there are no unsupported source tabs or AI search actions.
+The entry palette is aligned with the top search bar. Typing shows a “Show results for” action. Enter opens the results pane for channel searches or a wide dialog for workspace searches. From, In, Has a link, Threads only and Date controls compose the supported query syntax. Channel search keeps its fixed channel scope. Author/channel text and UTC date inputs are available through filter popovers; there are no unsupported source tabs or AI search actions.
 
 Results show author avatars, conversation names, timestamps, safe term highlighting and reply labels. Counts describe the messages loaded so far, with a plus when a continuation exists. Sort order is explicitly newest first. Escape closes a focused filter popover first, then search; selecting a result opens the existing authorized source context.
 
-This layout is grounded in live Slack browser observations on 2026-11-04. Space adapts Slack’s full-page results to its shared modal dialog, so keyboard focus remains contained until search closes. Slack’s navigation route, relevance ranking, recent-place suggestions and exact total counts are not reproduced.
+This layout is grounded in live Slack browser observations on 2026-11-04. Workspace-wide results use a modal dialog. Channel results leave the conversation interactive and stack below it on narrow screens. Slack’s navigation route, relevance ranking, recent-place suggestions and exact total counts are not reproduced.
 
 ## Query syntax
 
@@ -18,7 +18,7 @@ This layout is grounded in live Slack browser observations on 2026-11-04. Space 
 
 | Input | Meaning |
 | --- | --- |
-| `release checklist` | Search message text using Typesense token matching. Prefix matching, typo tolerance and token dropping are disabled. |
+| `release checklist` | Search message text using Typesense token matching. The final query term matches token prefixes, so `README` finds `README.md`. Typo tolerance and token dropping are disabled. |
 | `"release checklist"` | Quoted phrase, passed to Typesense as a phrase. |
 | `in:general` or `in:#general` | Exact channel name, compared case-insensitively. Quoted names may contain spaces. |
 | `from:me` | The current actor's messages. |

@@ -33,7 +33,7 @@ before(async () => {
   secondAddress = await second.listen({ host: '127.0.0.1', port: 0 });
 });
 after(async () => { await app.close(); await second.close(); await pool.end(); await admin.query(`DROP SCHEMA ${schema} CASCADE`); await admin.end(); });
-async function api(token: string, method: 'GET' | 'POST' | 'DELETE', path: string, body?: object, status = 200) {
+async function api(token: string, method: 'GET' | 'POST' | 'PUT' | 'DELETE', path: string, body?: object, status = 200) {
   const response = await app.inject({ method, url: `/v1${path}`, headers: { authorization: `Bearer ${token}` }, ...(body ? { payload: body } : {}) });
   assert.equal(response.statusCode, status, `${path}: ${response.body}`);
   return status === 204 ? undefined : response.json();
@@ -62,6 +62,59 @@ async function socket(token: string, base = address) {
     });
   } };
 }
+
+test('channel members share pins, retries are idempotent, and deletion removes the pin', async () => {
+  const team = await bootstrap(pool), outsider = await bootstrap(pool);
+  const base = `/channels/${team.channel_id}`;
+  const msg = await api(team.owner_token, 'POST', base + '/messages', {client_message_id:randomUUID(), text:'Shared release notes'}, 201);
+  const pin = base + '/pins/' + msg.id;
+  await Promise.all([team.owner_token, team.collaborator_token].map(token => api(token, 'PUT', pin, {}, 204)));
+  const list = await api(team.collaborator_token, 'GET', base + '/pins');
+  assert.deepEqual(list.items.map((item: {id:string}) => item.id), [msg.id]);
+  await api(outsider.owner_token, 'GET', base + '/pins', undefined, 404);
+  await api(outsider.owner_token, 'DELETE', pin, undefined, 404);
+  await api(team.owner_token, 'PUT', base + '/pins/' + randomUUID(), {}, 404);
+  await api(team.collaborator_token, 'DELETE', pin, undefined, 204);
+  await api(team.collaborator_token, 'DELETE', pin, undefined, 204);
+  assert.deepEqual((await api(team.owner_token, 'GET', base + '/pins')).items, []);
+  await api(team.owner_token, 'PUT', pin, {}, 204);
+  await api(team.owner_token, 'DELETE', base + '/messages/' + msg.id);
+  assert.deepEqual((await api(team.owner_token, 'GET', base + '/pins')).items, []);
+  await api(team.owner_token, 'PUT', pin, {}, 404);
+});
+
+test('channel tabs include visible shares and persist independent member edits', async () => {
+  const a = await bootstrap(pool), foreign = await bootstrap(pool), base = '/channels/'+a.channel_id;
+  const tabs = () => api(a.collaborator_token, 'GET', base+'/tabs');
+  assert.deepEqual(await tabs(), {has_files:false,has_links:false,has_pins:false,visibility:{},order:['files','pins','memory','navigator']});
+  const text = 'See this guide and (https://example.test/page).';
+  const msg = await api(a.owner_token, 'POST', base+'/messages', {client_message_id:randomUUID(),text,
+    document:{ops:[{insert:'See '},{insert:'this guide',attributes:{link:'https://example.test/guide'}},{insert:' and (https://example.test/page).'}]}}, 201);
+  assert.equal((await tabs()).has_links,true);
+  assert.deepEqual((await api(a.collaborator_token,'GET',base+'/links')).items[0].urls,['https://example.test/guide','https://example.test/page']);
+  await Promise.all([api(a.owner_token,'PUT',base+'/tabs/files',{visible:false},204),api(a.collaborator_token,'PUT',base+'/tabs/memory',{visible:true},204)]);
+  assert.deepEqual((await tabs()).visibility,{files:false,memory:true});
+  await api(foreign.owner_token,'GET',base+'/links',undefined,404);
+  await api(foreign.owner_token,'PUT',base+'/tabs/pins',{visible:false},404);
+  await api(a.owner_token,'PUT',base+'/tabs/messages',{visible:false},400);
+  await api(a.owner_token,'DELETE',base+'/messages/'+msg.id);
+  assert.equal((await tabs()).has_links,false);
+  assert.deepEqual((await api(a.collaborator_token,'GET',base+'/links')).items,[]);
+});
+
+test('channel tab moves merge independent edits, preserve membership and keep Messages fixed', async () => {
+  const team = await bootstrap(pool), outsider = await bootstrap(pool);
+  const base = '/channels/'+team.channel_id+'/tabs';
+  const move = (token:string,tab:string,target:string,side:string,status=204) => api(token,'PUT',base+'/order',{tab,target,side},status);
+  await Promise.all([move(team.owner_token,'pins','files','before'),move(team.collaborator_token,'navigator','memory','before')]);
+  await move(team.owner_token,'pins','files','before');
+  for (const [tab,target] of [['messages','files'],['pins','messages'],['unknown','files'],['pins','pins']] as const)
+    await move(team.owner_token,tab,target,'before',400);
+  await move(outsider.owner_token,'memory','files','before',404);
+  assert.deepEqual((await api(team.collaborator_token,'GET',base)).order,['pins','files','navigator','memory']);
+  await pool.query('UPDATE channels SET archived_at=now() WHERE id=$1',[team.channel_id]);
+  await move(team.owner_token,'pins','files','after',409);
+});
 
 test('channel discovery respects public/private membership and management', async () => {
   const a = await bootstrap(pool), outsider = await bootstrap(pool);

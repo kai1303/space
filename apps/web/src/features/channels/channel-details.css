@@ -64,3 +64,21 @@
 .chat-app .space-channel-permissions .space-channel-candidates>label{align-items:center;padding:8px}.chat-app .space-channel-permissions .space-channel-candidates input{margin-top:0}.space-channel-permission-check>span{min-width:0}
 .sp-dialog[open]:has(>.space-channel-permissions){display:flex;flex-direction:column;overflow:hidden;max-height:calc(100dvh - 32px)}.sp-dialog:has(>.space-channel-permissions)>.sp-dialog-header{flex:none}
 .space-channel-editor.space-channel-permissions{display:flex;flex-direction:column;min-height:0;max-height:calc(100dvh - 110px);overflow:hidden}.space-channel-permissions>fieldset{min-height:0;overflow:auto;overscroll-behavior:contain;padding:0 2px 2px}.space-channel-permissions>footer{flex:none;padding:20px 0}.space-channel-permissions>.space-channel-error,.space-channel-permissions>p[role=status]{flex:none}
+
+.space-channel-details > .sp-tabs { overflow-x:auto; scrollbar-width:thin; }
+.space-channel-details > .sp-tabs > button { flex:none; }
+.channel-tab-manager { padding:16px 20px; }
+.channel-tab-manager ul { list-style:none; margin:12px 0 8px; padding:0; }
+.channel-tab-manager li { position:relative; display:flex; align-items:center; gap:8px; min-height:44px; padding:0 8px; border-radius:6px; }
+.channel-tab-manager li > svg { flex:none; }
+.channel-tab-manager li[data-hidden] { color:var(--sp-text-secondary); }
+.channel-tab-manager li small { margin-left:auto; font-size:13px; }
+.channel-tab-manager li:hover,.channel-tab-manager li:focus-within { background:var(--sp-surface-hover); }
+.channel-tab-actions { display:flex; align-items:center; gap:2px; margin-left:auto; }
+.channel-tab-manager small + .channel-tab-actions { margin-left:0; }
+@media (hover:hover) and (pointer:fine) {
+  .channel-tab-manager li:not(:hover):not(:focus-within) .channel-tab-actions { opacity:0; }
+  .channel-tab-manager li[data-hidden] .channel-tab-actions { position:absolute; right:8px; }
+  .channel-tab-manager li[data-hidden]:is(:hover,:focus-within) small { visibility:hidden; }
+}
+.channel-tab-manager > .sp-menu { display:inline-block; }

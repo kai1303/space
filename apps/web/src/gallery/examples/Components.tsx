@@ -38,6 +38,7 @@ export function Components({ notify }: { notify: (text: string) => void }) {
   const [createdChannels, setCreatedChannels] = useState<string[]>([]);
   const [exampleArchived, setExampleArchived] = useState(false);
   const [received, setReceived] = useState(0);
+  const [arrivalStyle, setArrivalStyle] = useState<"fade" | "glide">("glide");
   const [messageReactions, setMessageReactions] = useState<Reaction[]>([]);
   const [actionDocument, setActionDocument] = useState<RichDocument>({ ops: [{ insert: 'Review the message actions. Select text in the composer below to format it.\n' }] });
   const valid = /^[a-z0-9][a-z0-9-]{0,79}$/.test(name);
@@ -328,19 +329,26 @@ export function Components({ notify }: { notify: (text: string) => void }) {
         <Sample
           id="message-motion"
           title="Message arrivals"
-          detail="A subtle fade and rise when a message arrives"
+          detail="Choose an entrance and replay it"
           count="07"
         >
-          <Button onClick={() => setReceived((count) => count + 1)}>
-            Receive a message
-          </Button>
+          <div className="sample-row">
+            <Select aria-label="Message arrival motion" value={arrivalStyle} onChange={event => {
+              setArrivalStyle(event.target.value === "glide" ? "glide" : "fade");
+              setReceived(count => count + 1);
+            }}>
+              <option value="glide">Glide in</option>
+              <option value="fade">Fade in</option>
+            </Select>
+            <Button onClick={() => setReceived(count => count + 1)}>Receive a message</Button>
+          </div>
           <Message
             key={received}
             author="Jamie Chen"
             initials="JC"
             tone="orange"
             time={received ? "Just now" : "10:44 AM"}
-            arrival={received > 0}
+            arrival={received > 0 && arrivalStyle}
           >
             {received
               ? ["The latest updates look good!", "Ready when you are.", "Thanks for the update 🙌"][(received - 1) % 3]

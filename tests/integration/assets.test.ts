@@ -323,7 +323,11 @@ async function shareFile(seed: Awaited<ReturnType<typeof bootstrap>>, name: stri
 
 test('channel files list safe metadata including old thread replies without reading or backfilling storage', async () => {
   const a = await bootstrap(pool);
+  const tabs = async () => (await api(a.collaborator_token,'GET',`/channels/${a.channel_id}/tabs`)).json();
+  await upload(a);
+  assert.equal((await tabs()).has_files,false,'an unshared upload cannot create a channel tab');
   const root = await shareFile(a, 'Readme.TXT', { kind: 'text', text: 'PRIVATE CONTENT', language: 'text', truncated: false });
+  assert.equal((await tabs()).has_files,true);
   const reply = await shareFile(a, 'Legacy.bin', null, root.message.thread_id);
   await pool.query("UPDATE messages SET created_at='2001-01-01T00:00:00.123456Z' WHERE id=$1", [reply.message.id]);
   await upload(a); // Ready, but never shared.

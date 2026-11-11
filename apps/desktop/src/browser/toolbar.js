@@ -41,8 +41,15 @@ const tabElements = new Map();
 function renderTabs(tabs, active) {
   for (const [id, group] of tabElements) {
     if (!tabs.some(tab => tab.id === id)) {
-      group.remove();
       tabElements.delete(id);
+      group.inert = true;
+      if (reducedMotion.matches || !tabs.length) {
+        group.remove();
+      } else {
+        group.style.overflow = 'hidden';
+        animate(group, { width: [group.offsetWidth + 'px', '0px'], opacity: 0 },
+          { duration: 0.14, ease: 'easeOut' }).then(() => group.remove());
+      }
     }
   }
   for (const { id, title } of tabs) {

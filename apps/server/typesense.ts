@@ -57,7 +57,7 @@ export class TypesenseSearch {
   }
   async candidates(q:string,filter:string):Promise<SearchDocument[]> {
     await this.initialize();
-    const params=new URLSearchParams({q,query_by:'text',filter_by:filter,limit:'50',sort_by:'created_at:desc,search_order:desc,revision:desc',prefix:'false',num_typos:'0',drop_tokens_threshold:'0',highlight_fields:'none',include_fields:'id,message_id,workspace_id,channel_id,revision,created_at,search_order'});
+    const params=new URLSearchParams({q,query_by:'text',filter_by:filter,limit:'50',sort_by:'created_at:desc,search_order:desc,revision:desc',prefix:'true',num_typos:'0',drop_tokens_threshold:'0',highlight_fields:'none',include_fields:'id,message_id,workspace_id,channel_id,revision,created_at,search_order'});
     const response=await this.request(`collections/${this.collection}/documents/search?${params}`);
     if(!response.ok)throw new AppError(503,'search_unavailable');
     const result=await response.json() as {hits?:{document:SearchDocument}[]};

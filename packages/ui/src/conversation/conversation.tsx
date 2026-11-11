@@ -38,18 +38,19 @@ export function Message({
   onAuthorClick?: () => void;
   replyCount?: number;
   tone?: "purple" | "blue" | "green" | "orange";
-  arrival?: boolean;
+  arrival?: boolean | "glide" | "fade";
   actions?: MessageActionHandlers;
   footer?: ReactNode;
   grouped?: boolean;
 }) {
   const reduced = useReducedMotion();
+  const glide = arrival !== "fade";
   return (
     <motion.article
       className={`sp-message${grouped ? " sp-message--grouped" : ""}`}
-      initial={arrival && !reduced ? { opacity: 0 } : false}
-      animate={{ opacity: 1 }}
-      transition={motionTransition(reduced, 0.14)}
+      initial={arrival && !reduced ? { opacity: 0, ...(glide && { x: -14 }) } : false}
+      animate={{ opacity: 1, x: 0 }}
+      transition={motionTransition(reduced, glide ? 0.26 : 0.14)}
     >
       {grouped ? <span className="sp-message-compact-time" aria-hidden="true">{time}</span> : <>{onAuthorClick ? <button type="button" className="sp-message-author-avatar" aria-label={`View ${author}’s profile`} onClick={onAuthorClick}><Avatar name={author} initials={initials} tone={tone}/></button> : <Avatar name={author} initials={initials} tone={tone}/>}</>}
       <div className="sp-message-body">

@@ -99,7 +99,7 @@ it('hands an open hover card to the next tab without a second entrance or a seco
     act(() => vi.advanceTimersByTime(100));
     expect(screen.getByRole('dialog', { name: 'Files' })).toBe(dialog);
     expect(dialog.firstElementChild).toBe(card);
-    expect(within(dialog).queryByText('Open dms row')).toBeNull();
+    expect(within(dialog).queryByRole('button', {name:'Open dms row'})).toBeNull();
     expect(within(dialog).getByText('Open files row')).toBeTruthy();
     expect(document.activeElement).not.toBe(dialog);
   } finally { vi.useRealTimers(); }

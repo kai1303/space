@@ -55,6 +55,25 @@ export function registerChatRoutes(app: FastifyInstance, chat: ChatStore) {
   app.get<{ Params: { channelId: string } }>('/v1/channels/:channelId', r => chat.details(r.actorId, uuid(r.params.channelId)));
   app.patch<{ Params: { channelId: string } }>('/v1/channels/:channelId', r => chat.updateChannel(r.actorId, uuid(r.params.channelId), r.body));
   app.get<{ Params: { channelId: string } }>('/v1/channels/:channelId/members', r => chat.members(r.actorId, uuid(r.params.channelId), r.query));
+  app.get<{ Params: { channelId: string } }>('/v1/channels/:channelId/tabs', r => chat.channelTabs(r.actorId, uuid(r.params.channelId)));
+  app.get<{ Params: { channelId: string } }>('/v1/channels/:channelId/links', r => chat.channelLinks(r.actorId, uuid(r.params.channelId), r.query));
+  app.put<{ Params: { channelId: string } }>('/v1/channels/:channelId/tabs/order', async (r, reply) => {
+    await chat.moveChannelTab(messageActor(r), uuid(r.params.channelId), r.body);
+    return reply.code(204).send();
+  });
+  app.put<{ Params: { channelId: string; tab: string } }>('/v1/channels/:channelId/tabs/:tab', async (r, reply) => {
+    await chat.setTabVisibility(messageActor(r), uuid(r.params.channelId), r.params.tab, r.body);
+    return reply.code(204).send();
+  });
+  app.get<{ Params: { channelId: string } }>('/v1/channels/:channelId/pins', r => chat.channelPins(r.actorId, uuid(r.params.channelId), r.query));
+  app.put<{ Params: { channelId: string; messageId: string } }>('/v1/channels/:channelId/pins/:messageId', async (r, reply) => {
+    await chat.setChannelPin(messageActor(r), uuid(r.params.channelId), uuid(r.params.messageId), true);
+    return reply.code(204).send();
+  });
+  app.delete<{ Params: { channelId: string; messageId: string } }>('/v1/channels/:channelId/pins/:messageId', async (r, reply) => {
+    await chat.setChannelPin(messageActor(r), uuid(r.params.channelId), uuid(r.params.messageId), false);
+    return reply.code(204).send();
+  });
   app.get<{ Params: { channelId: string } }>('/v1/channels/:channelId/history', r => chat.history(r.actorId, uuid(r.params.channelId), r.query));
   app.get<{ Params: { channelId: string } }>('/v1/channels/:channelId/messages', r => chat.messageHistory(r.actorId, uuid(r.params.channelId), r.query));
   app.get<{ Params: { channelId: string; messageId: string } }>('/v1/channels/:channelId/messages/:messageId', r => chat.sourceMessage(r.actorId, uuid(r.params.channelId), uuid(r.params.messageId)));

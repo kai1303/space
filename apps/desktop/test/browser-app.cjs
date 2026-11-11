@@ -15,6 +15,9 @@ const server = createServer((req, res) => {
     if (!req.headers.cookie?.includes('signed-in=yes')) return res.writeHead(401).end();
     return res.setHeader('content-type', 'application/json').end(JSON.stringify({ id: actor }));
   }
+  if (req.url === '/chat') {
+    return res.setHeader('content-type', 'text/html').end('<nav class="chat-rail" style="width:68px"></nav><aside class="chat-sidebar" style="width:300px"></aside><textarea></textarea>');
+  }
   res.setHeader('content-type', 'text/html').end('<title>Reports</title><label>Quarter<select id="quarter"><option>Q1</option><option>Q2</option></select></label><p>Quarterly revenue</p>');
 });
 function waitFor(contents, selector, text) {
@@ -70,10 +73,21 @@ app.whenReady().then(async () => {
   const chat = win.contentView.children.find(view => view.webContents === win.webContents);
   assert.ok(chat, 'chat remains mounted beside the browser');
   assert.equal(chat.getBounds().width, panel.getBounds().x);
-  assert.equal(await win.webContents.executeJavaScript('innerWidth'), Math.round(width / 2));
   const gutter = await bar.executeJavaScript('document.getElementById("divider").offsetWidth');
+  const chatWidth = await win.webContents.executeJavaScript('innerWidth');
+  assert.ok(chatWidth > 720, 'opening the browser keeps desktop navigation visible at the default window width');
+  assert.ok(Math.abs((chatWidth - 68 - 300) - (panel.getBounds().width - gutter)) <= 1,
+    'the conversation and browser split the space after navigation');
   assert.equal(await first.executeJavaScript('innerWidth'), panel.getBounds().width - gutter);
   assert.ok(await bar.executeJavaScript('document.querySelector("header").offsetHeight <= 65'));
+  const height = win.getContentSize()[1];
+  for (const [windowWidth, expectedWorkspace] of [[1070, 721], [800, 472], [width, chatWidth]]) {
+    win.setContentSize(windowWidth, height);
+    // Hidden smoke windows can defer the native resize event on macOS.
+    win.emit('resize');
+    assert.equal(chat.getBounds().width, expectedWorkspace);
+    assert.ok(panel.getBounds().width - gutter >= 320);
+  }
   const expectedLeft = chat.getBounds().width + 80;
   bar.debugger.attach();
   const pointer = (type, x, buttons) => bar.debugger.sendCommand('Input.dispatchMouseEvent', {
@@ -106,6 +120,7 @@ app.whenReady().then(async () => {
   await send('space');
   assert.equal(chat.getBounds().width, width);
   await win.spaceBrowser.open();
+  assert.equal(chat.getBounds().width, expectedLeft, 'reopening restores the dragged split');
   assert.equal(first.getURL(), base + '/report');
   assert.equal(await first.executeJavaScript('typeof spaceDesktop + ":" + typeof browserBar + ":" + typeof require'), 'undefined:undefined:undefined');
   assert.equal(await first.executeJavaScript('document.cookie.includes("signed-in")'), false);

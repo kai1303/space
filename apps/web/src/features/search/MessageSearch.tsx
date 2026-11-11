@@ -1,12 +1,14 @@
-import { useEffect, useRef, useState } from 'react';
+import { useContext, useEffect, useId, useRef, useState } from 'react';
 import { Avatar, Button, Dialog, IconButton, Popover } from '@space/ui/primitives';
 import { ArrowElbowDownLeft, CalendarBlank, CaretDown, Chats, Hash, LinkSimple, MagnifyingGlass, SlidersHorizontal, User, X } from '@phosphor-icons/react';
 import { request } from '../../shared/api/request.js';
+import { ChannelSearchHeaderContext } from './channel-search-header.js';
+import { ConversationPanelDivider } from '../chat/ConversationPanelDivider.js';
 import './message-search.css';
 
 export type MessageSearchResult = { id: string; channel_id: string; channel_name: string; channel_kind: 'channel' | 'direct'; thread_id: string; text: string; created_at: string; author: { id: string; name: string }; is_reply: boolean };
 type SearchPage = { items: MessageSearchResult[]; next_cursor: string | null };
-type Props = { workspace: string; channel?: { id: string; name: string }; open: boolean; onClose: () => void; onSelect: (result: MessageSearchResult) => void };
+type Props = { workspace: string; channel?: { id: string; name: string }; open: boolean; editRequest?: number; onChannelSubmit?: () => void; onClose: () => void; onSelect: (result: MessageSearchResult) => void };
 const MAX_RESULTS = 500;
 const tokens = (query: string) => query.match(/(?:[^\s"]+|"[^"]*")+/g) ?? [];
 function filterValue(query: string, key: string) {
@@ -51,12 +53,31 @@ function Filters({ query, channel, onChange }: { query: string; channel?: Props[
 export function MessageSearch(props: Props) {
   return props.open ? <SearchDialog key={`${props.workspace}:${props.channel?.id ?? ''}`} {...props} /> : null;
 }
-function SearchDialog({ workspace, channel, onClose, onSelect }: Props) {
+function SearchDialog({ workspace, channel, editRequest, onChannelSubmit, onClose, onSelect }: Props) {
   const [draft,setDraft] = useState(''), [query,setQuery] = useState(''), [cursor,setCursor] = useState<string>();
   const [attempt,setAttempt] = useState(0), [busy,setBusy] = useState(false), [showFilters,setShowFilters] = useState(false);
   const [items,setItems] = useState<MessageSearchResult[]>([]), [next,setNext] = useState<string|null>(null);
   const [error,setError] = useState(''), [searched,setSearched] = useState(false);
+  const scopeId = useId();
   const input = useRef<HTMLInputElement>(null);
+  const [editing, setEditing] = useState(true);
+  const [selected, setSelected] = useState<string>();
+  const publishHeader = useContext(ChannelSearchHeaderContext);
+  const pane = useRef<HTMLElement>(null);
+  const channelName = channel?.name;
+  useEffect(() => { setEditing(true); }, [editRequest]);
+  useEffect(() => {
+    if (!channelName || !query || !publishHeader) return;
+    publishHeader({ label: `in:${channelName}${query === '*' ? '' : ' ' + query}`, edit: () => setEditing(true) });
+    return () => publishHeader(null);
+  }, [channelName, query, publishHeader]);
+  useEffect(() => {
+    if (channel && !editing) pane.current?.focus({ preventScroll: true });
+  }, [channel?.id, editing]);
+  function closePalette() {
+    if (channel && query) { setDraft(query === '*' ? '' : query); setEditing(false); }
+    else onClose();
+  }
   useEffect(() => {
     if (!query) return;
     const controller = new AbortController();
@@ -73,33 +94,31 @@ function SearchDialog({ workspace, channel, onClose, onSelect }: Props) {
     return () => controller.abort();
   },[workspace,channel?.id,query,cursor,attempt]);
   function submit(value=draft) {
-    const trimmed=value.trim();
+    const trimmed=value.trim() || (channel ? '*' : '');
     if(!trimmed){input.current?.focus();return;}
     if(trimmed.length>500){setError('Keep your search under 500 characters.');return;}
-    setDraft(trimmed);setQuery(trimmed);setCursor(undefined);setItems([]);setNext(null);setError('');setSearched(false);setAttempt(value=>value+1);
+    if (channel) { onChannelSubmit?.(); setEditing(false); setSelected(undefined); }
+    setDraft(trimmed === '*' && channel ? '' : trimmed);setQuery(trimmed);setCursor(undefined);setItems([]);setNext(null);setError('');setSearched(false);setAttempt(value=>value+1);
     input.current?.focus();
   }
-  function changeFilter(value:string){if(query)submit(value || '*');else setDraft(value);}
-  return <Dialog open title={channel ? `Search in ${channel.name}` : 'Search workspace'} onClose={onClose}>
-    <div className={`message-search ${query ? 'message-search--results' : 'message-search--palette'}`} onKeyDown={event => {
-      if(event.key==='Escape') {event.preventDefault();event.stopPropagation();const details=(event.target as HTMLElement).closest('details');if(details?.open){details.open=false;details.querySelector('summary')?.focus();}else onClose();}
-    }}>
-      <form className="message-search-input" role="search" onSubmit={event => {event.preventDefault();submit();}}>
+  function changeFilter(value:string){if(query && !(channel && editing))submit(value || '*');else setDraft(value);}
+  const field = <form className="message-search-input" role="search" onSubmit={event => {event.preventDefault();submit();}}>
         <MagnifyingGlass size={21} aria-hidden="true"/>
-        <input ref={input} autoFocus type="search" aria-label="Search messages" placeholder={channel ? `Search in ${channel.name}` : 'Search messages and replies'} maxLength={500} value={draft} onChange={event=>setDraft(event.target.value)}/>
+        {channel && <span id={scopeId} className="message-search-channel-token" title={`in:${channel.name}`}>in:{channel.name}</span>}
+        <input ref={input} autoFocus type="search" aria-label="Search messages" aria-describedby={channel ? scopeId : undefined} placeholder={channel ? 'Search messages' : 'Search messages and replies'} maxLength={500} value={draft} onChange={event=>setDraft(event.target.value)}/>
         {draft && <IconButton label="Clear search text" onClick={()=>{setDraft('');input.current?.focus();}}><X size={17}/></IconButton>}
-        {query ? <Button size="sm" type="submit">Search</Button> : <IconButton label="Show filters" aria-expanded={showFilters} onClick={()=>setShowFilters(value=>!value)}><SlidersHorizontal size={18}/></IconButton>}
-        <IconButton label="Close search" onClick={onClose}><X size={20}/></IconButton>
-      </form>
-      {query ? <div className="message-search-content">
-        <h2><span>Results for:</span> {query}</h2>
+        {query && !channel ? <Button size="sm" type="submit">Search</Button> : <IconButton label="Show filters" aria-expanded={showFilters} onClick={()=>setShowFilters(value=>!value)}><SlidersHorizontal size={18}/></IconButton>}
+        <IconButton label="Close search" onClick={closePalette}><X size={20}/></IconButton>
+      </form>;
+  const results = <div className="message-search-content">
+        {!channel && <h2><span>Results for:</span> {query}</h2>}
         <Filters query={query} channel={channel} onChange={changeFilter}/>
         <div className="message-search-summary"><span>Newest first</span>{searched&&!error&&<span>{items.length}{next ? '+' : ''} {items.length===1&&!next ? 'message' : 'messages'} shown</span>}</div>
         <div className="message-search-results" aria-busy={busy}>
           {busy&&<p role="status">Searching messages…</p>}
           {error&&<div className="message-search-notice" role="alert"><p>{error}</p><Button size="sm" onClick={()=>setAttempt(value=>value+1)}>Retry search</Button></div>}
           {!busy&&!error&&searched&&!items.length&&<div className="message-search-empty"><MagnifyingGlass size={40}/><h3>No messages found</h3><p>Try a different keyword or remove a filter.</p></div>}
-          {!!items.length&&<ul aria-label="Search results">{items.map(item=><li key={item.id}><button type="button" className="message-search-result" onClick={()=>{onClose();onSelect(item);}}>
+          {!!items.length&&<ul aria-label="Search results">{items.map(item=><li key={item.id}><button type="button" className="message-search-result" aria-current={channel && selected === item.id ? true : undefined} onClick={()=>{if (channel) setSelected(item.id); else onClose(); onSelect(item);}}>
             <Avatar name={item.author.name} initials={item.author.name.split(/\s+/).map(word=>word[0]).slice(0,2).join('').toUpperCase()} size="md"/>
             <span className="message-search-message"><span className="message-search-meta"><strong>{item.author.name}</strong><span>{item.channel_kind==='direct' ? 'Direct message · ' : '# '}{item.channel_name}</span><time dateTime={item.created_at}>{new Date(item.created_at).toLocaleString([], {month:'short',day:'numeric',year:'numeric',hour:'numeric',minute:'2-digit'})}</time></span>
               <span className="message-search-snippet"><Highlight text={item.text||'Shared a file'} query={query}/></span>
@@ -109,12 +128,38 @@ function SearchDialog({ workspace, channel, onClose, onSelect }: Props) {
           {next&&!error&&items.length<MAX_RESULTS&&<Button disabled={busy} onClick={()=>setCursor(next)}>Load more results</Button>}
           {items.length>=MAX_RESULTS&&<p>Showing the first {MAX_RESULTS} results. Refine your search to find more.</p>}
         </div>
-      </div> : <>
+      </div>;
+  const suggestedQuery = draft.trim() || (channel ? `in:${channel.name}` : '');
+  const suggestions = <>
         {showFilters&&<div className="message-search-palette-filters"><Filters query={draft} channel={channel} onChange={changeFilter}/></div>}
         {error&&<p role="alert" className="message-search-notice">{error}</p>}
-        {draft.trim() ? <button type="button" className="message-search-suggestion" aria-label={`Show results for: ${draft.trim()}`} onClick={()=>submit()}><MagnifyingGlass size={20}/><span>Show results for: <strong>{draft.trim()}</strong></span><kbd>Enter</kbd></button> : <div className="message-search-intro"><span>Find a message</span><p>Search your conversations, including older messages and replies.</p><button type="button" onClick={()=>{setDraft('from:me ');input.current?.focus();}}><User size={18}/>Messages from you<code>from:me</code></button><button type="button" onClick={()=>{setDraft('has:link ');input.current?.focus();}}><LinkSimple size={18}/>Messages with links<code>has:link</code></button></div>}
+        {suggestedQuery ? <button type="button" className="message-search-suggestion" aria-label={`Show results for: ${suggestedQuery}`} onClick={()=>submit()}><MagnifyingGlass size={20}/><span>Show results for: <strong>{suggestedQuery}</strong></span><kbd>Enter</kbd></button> : <div className="message-search-intro"><span>Find a message</span><p>Search your conversations, including older messages and replies.</p><button type="button" onClick={()=>{setDraft('from:me ');input.current?.focus();}}><User size={18}/>Messages from you<code>from:me</code></button><button type="button" onClick={()=>{setDraft('has:link ');input.current?.focus();}}><LinkSimple size={18}/>Messages with links<code>has:link</code></button></div>}
         <footer className="message-search-footer"><span><ArrowElbowDownLeft size={14}/> Enter to search</span><span><kbd>esc</kbd> to close</span><span>Use “quotes” for exact phrases</span></footer>
-      </>}
-    </div>
-  </Dialog>;
+      </>;
+  const palette = !!channel || !query;
+  return <>
+    {channel && query && <>
+      <ConversationPanelDivider files={false}/>
+      <aside ref={pane} tabIndex={-1} className="channel-search-pane" aria-label={`Search results in ${channel.name}`}
+        onKeyDown={event => { if (event.key === 'Escape' && !event.defaultPrevented) { event.stopPropagation(); onClose(); } }}>
+        <header>
+          <button type="button" className="channel-search-query" onClick={() => setEditing(true)}>
+            <MagnifyingGlass size={17}/><span>{query === '*' ? 'All messages' : query} in {channel.name}</span>
+          </button>
+          <IconButton label="Close search results" onClick={onClose}><X size={19}/></IconButton>
+        </header>
+        {results}
+      </aside>
+    </>}
+    {(!channel || editing) && <Dialog open title={channel ? `Search in ${channel.name}` : 'Search workspace'} onClose={closePalette}>
+      <div data-scope={channel ? 'channel' : 'workspace'} className={`message-search message-search--${palette ? 'palette' : 'results'}`} onKeyDown={event => {
+        if (event.key === 'Escape' && !event.defaultPrevented && !(event.target as HTMLElement).closest('details[open]')) {
+          event.preventDefault(); event.stopPropagation(); closePalette();
+        }
+      }}>
+        {field}
+        {palette ? suggestions : results}
+      </div>
+    </Dialog>}
+  </>;
 }

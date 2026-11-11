@@ -1,10 +1,11 @@
 import { useMemberProfile } from '../profile/MemberProfile.js';
 import type {ComponentProps,ReactNode} from 'react';
-import type {ChatMessage,MentionReference} from '@space/contracts';
-import { IconButton } from '@space/ui/primitives';
+import type {ChatMessage,ManagedChannelTab,MentionReference} from '@space/contracts';
+import { IconButton, Tabs } from '@space/ui/primitives';
 import { Message } from '@space/ui/conversation';
 import { RichComposer } from '@space/ui/composer';
 import {ArrowLeft,ChatCircle,X} from '@phosphor-icons/react';
+import {channelTabIcons,channelTabNames} from '../channels/ChannelTabs.js';
 import {AgentMessageBody} from '../agents/AgentMessageBody.js';
 import {AssetAttachments} from '../files/AssetAttachments.js';
 
@@ -13,8 +14,17 @@ export function ConversationHeader({title,channel,icon=<ChatCircle size={20}/>,s
 }) {
  return <header className="chat-channel-header">{heading??<div className="chat-thread-title">{icon}<h2>{title}</h2>{channel&&<span>#{channel}</span>}{status&&<span role="status" className="chat-thread-status">{status}</span>}</div>}{topic}<div className="chat-header-actions">{onBack&&<IconButton label={backLabel} onClick={onBack}><ArrowLeft size={20}/></IconButton>}{actions}{onClose&&<IconButton label={`Close ${title.toLowerCase()}`} onClick={onClose}><X size={20}/></IconButton>}</div></header>;
 }
-export function ConversationNavigation({children}:{children:ReactNode}) {
- return <div className="chat-channel-tabs"><span><ChatCircle size={15}/> Messages</span>{children}</div>;
+export function ConversationNavigation({children, order, view, onChange, onReorder}: {
+  children: ReactNode; order: readonly ManagedChannelTab[]; view: string; onChange: (id: string) => void;
+  onReorder?: (tab:string,target:string,side:'before'|'after')=>void;
+}) {
+  const items = [{id:'messages', label:'Messages', icon:<ChatCircle size={15}/>, fixed:true},
+    ...order.map(id => {
+      const Icon = channelTabIcons[id];
+      return {id,label:channelTabNames[id],icon:<Icon size={15}/>,panelId:id === 'files' ? 'channel-shared-content' : undefined,
+        opensDialog:id === 'memory' || id === 'navigator'};
+    })];
+  return <div className="chat-channel-tabs"><Tabs label="Channel views" items={items} value={view} onChange={onChange} onReorder={onReorder}/>{children}</div>;
 }
 export function ConversationIntroduction({title,icon,children}:{title:string;icon:ReactNode;children:ReactNode}) {
  return <div className="chat-channel-welcome dm-conversation-intro"><div className="chat-empty-icon">{icon}</div><h2>{title}</h2><p>{children}</p></div>;
