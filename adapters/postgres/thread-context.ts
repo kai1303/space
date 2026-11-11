@@ -2,7 +2,7 @@ import { sql } from 'drizzle-orm';
 import { AppError, chatCursor, uuid, type ThreadContext, type ThreadContextMessage, type ThreadCheckpoint, type ThreadCheckpointInput } from '@space/contracts';
 import type { DbSession } from './database.js';
 
-async function rows<T>(c: DbSession, query: Parameters<DbSession['execute']>[0]): Promise<T[]> {
+export async function rows<T>(c: DbSession, query: Parameters<DbSession['execute']>[0]): Promise<T[]> {
   return (await c.execute(query)).rows as T[];
 }
 export async function assertContextThread(c: DbSession, channelId: string, threadId: string) {
@@ -18,17 +18,19 @@ function message(row: ThreadContextMessage & { author_id: string; author_type: '
 const columns = sql`id, sequence::text, left(text,1000) AS text, length(text) AS text_length,
   coalesce(user_id,installation_id,webhook_id) AS author_id, author_type, attachments`;
 type Row = Parameters<typeof message>[0];
+export const checkpointColumns = sql`revision,through_sequence::text,content,summary,source_message_ids,producer_id,producer_name,created_at::text`;
 async function checkpoint(c: DbSession, threadId: string, through: string): Promise<ThreadCheckpoint | null> {
-  const [row] = await rows<ThreadCheckpoint>(c, sql`SELECT revision,through_sequence::text,content,source_message_ids,producer_id,producer_name,created_at::text
-    FROM thread_checkpoints WHERE thread_id=${threadId} AND through_sequence<=${through}::bigint ORDER BY revision DESC LIMIT 1`);
+  const [row] = await rows<ThreadCheckpoint>(c, sql`SELECT ${checkpointColumns}
+    FROM thread_checkpoints WHERE thread_id=${threadId} AND session_id IS NULL AND through_sequence<=${through}::bigint ORDER BY revision DESC LIMIT 1`);
   return row ?? null;
 }
-export async function readThreadContext(c: DbSession, channelId: string, threadId: string, through?: string): Promise<ThreadContext> {
+export async function readThreadContext(c: DbSession, channelId: string, threadId: string, through?: string, options: { includeSessions?: boolean } = {}): Promise<ThreadContext> {
   await assertContextThread(c, channelId, threadId);
-  const [latest] = await rows<{ sequence: string }>(c, sql`SELECT sequence::text FROM messages WHERE channel_id=${channelId} AND thread_id=${threadId} ORDER BY messages.sequence DESC LIMIT 1`);
+  const visible = options.includeSessions === false ? sql`AND agent_session_id IS NULL` : sql``;
+  const [latest] = await rows<{ sequence: string }>(c, sql`SELECT sequence::text FROM messages WHERE channel_id=${channelId} AND thread_id=${threadId} ${visible} ORDER BY messages.sequence DESC LIMIT 1`);
   const watermark = through === undefined ? latest?.sequence ?? '0' : chatCursor(through);
-  const recent = await rows<Row>(c, sql`SELECT ${columns} FROM messages WHERE channel_id=${channelId} AND thread_id=${threadId} AND sequence<=${watermark}::bigint ORDER BY messages.sequence DESC LIMIT 17`);
-  const [root] = await rows<Row>(c, sql`SELECT ${columns} FROM messages WHERE channel_id=${channelId} AND thread_id=${threadId} AND sequence<=${watermark}::bigint ORDER BY messages.sequence LIMIT 1`);
+  const recent = await rows<Row>(c, sql`SELECT ${columns} FROM messages WHERE channel_id=${channelId} AND thread_id=${threadId} ${visible} AND sequence<=${watermark}::bigint ORDER BY messages.sequence DESC LIMIT 17`);
+  const [root] = await rows<Row>(c, sql`SELECT ${columns} FROM messages WHERE channel_id=${channelId} AND thread_id=${threadId} ${visible} AND sequence<=${watermark}::bigint ORDER BY messages.sequence LIMIT 1`);
   return { thread_id: threadId, through_sequence: watermark, root: root ? message(root) : null,
     messages: recent.slice(0,16).reverse().map(message), checkpoint: await checkpoint(c, threadId, watermark), has_earlier_messages: recent.length > 16 };
 }
@@ -39,21 +41,26 @@ export async function readThreadMessages(c: DbSession, channelId: string, thread
   const page = found.slice(0,limit);
   return { messages: page.map(message), cursor: page.at(-1)?.sequence ?? cursor, has_more: found.length > limit };
 }
+// The watermark may be any message in the thread, so turn-end saves can use the latest one.
+export async function assertCheckpointSources(c: DbSession, channelId: string, threadId: string, input: ThreadCheckpointInput, scope: 'thread' | 'session') {
+  const [boundary] = await rows(c, sql`SELECT id FROM messages WHERE channel_id=${channelId} AND thread_id=${threadId} AND sequence=${input.through_sequence}::bigint`);
+  if (!boundary) throw new AppError(400, `invalid_${scope}_watermark`);
+  const found = await rows<{ id: string }>(c, sql`SELECT id FROM messages WHERE channel_id=${channelId} AND thread_id=${threadId}
+    AND id = ANY(${sql.param(input.source_message_ids)}::uuid[]) AND sequence<=${input.through_sequence}::bigint`);
+  if (found.length !== input.source_message_ids.length) throw new AppError(400, `invalid_${scope}_source`);
+}
+
+// Optimistic concurrency: the partial unique index on (thread_id, revision) rejects a competing insert.
 export async function writeThreadCheckpoint(c: DbSession, channelId: string, threadId: string, input: ThreadCheckpointInput, producer: { id: string; name: string }): Promise<ThreadCheckpoint> {
   await assertContextThread(c, channelId, threadId);
-  // Serialize competing agents on the thread, including first-checkpoint races.
-  await c.execute(sql`SELECT id FROM threads WHERE id=${threadId} FOR UPDATE`);
   const current = await checkpoint(c, threadId, '9223372036854775807');
   if ((current?.revision ?? 0) !== input.revision) throw new AppError(409, 'thread_checkpoint_conflict');
   if (current && BigInt(input.through_sequence) < BigInt(current.through_sequence)) throw new AppError(409, 'thread_checkpoint_watermark_conflict');
-  const [boundary] = await rows(c, sql`SELECT id FROM messages WHERE channel_id=${channelId} AND thread_id=${threadId} AND sequence=${input.through_sequence}::bigint`);
-  if (!boundary) throw new AppError(400, 'invalid_thread_watermark');
-  for (const id of input.source_message_ids) {
-    const [source] = await rows(c, sql`SELECT id FROM messages WHERE channel_id=${channelId} AND thread_id=${threadId} AND id=${id} AND sequence<=${input.through_sequence}::bigint`);
-    if (!source) throw new AppError(400, 'invalid_thread_source');
-  }
-  const [saved] = await rows<ThreadCheckpoint>(c, sql`INSERT INTO thread_checkpoints(thread_id,revision,through_sequence,content,source_message_ids,producer_id,producer_name)
-    VALUES(${threadId},${input.revision+1},${input.through_sequence}::bigint,${input.content},${sql.param(input.source_message_ids)}::uuid[],${producer.id},${producer.name})
-    RETURNING revision,through_sequence::text,content,source_message_ids,producer_id,producer_name,created_at::text`);
-  return saved!;
+  await assertCheckpointSources(c, channelId, threadId, input, 'thread');
+  const [saved] = await rows<ThreadCheckpoint>(c, sql`INSERT INTO thread_checkpoints(thread_id,channel_id,revision,through_sequence,content,summary,source_message_ids,producer_id,producer_name)
+    VALUES(${threadId},${channelId},${input.revision+1},${input.through_sequence}::bigint,${input.content},${input.summary},${sql.param(input.source_message_ids)}::uuid[],${producer.id},${producer.name})
+    ON CONFLICT (thread_id, revision) WHERE session_id IS NULL DO NOTHING
+    RETURNING ${checkpointColumns}`);
+  if (!saved) throw new AppError(409, 'thread_checkpoint_conflict');
+  return saved;
 }

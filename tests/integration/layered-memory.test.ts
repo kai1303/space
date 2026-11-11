@@ -49,3 +49,40 @@ test('migration backfills summary and channel_id and allows session rows', async
   await assert.rejects(pool.query(`INSERT INTO thread_checkpoints(thread_id,channel_id,revision,through_sequence,content,summary,source_message_ids,producer_id,producer_name)
     VALUES($1,$2,1,$3,'dup','dup',ARRAY[$4]::uuid[],$5,'x')`, [root.thread_id, a.channel_id, root.sequence, root.id, a.owner_id]), /duplicate key/);
 });
+
+async function threadKey(token: string, channel: string, thread: string, access: 'read' | 'write' = 'write') {
+  return (await api(token, 'POST', `/channels/${channel}/threads/${thread}/context/connections`, { name: `Agent ${randomUUID().slice(0, 8)}`, access }, 201)).token as string;
+}
+
+test('concurrent thread checkpoints: one wins, the other gets 409, both revisions stay readable', async () => {
+  const a = await bootstrap(pool);
+  const root = await post(a.owner_token, a.channel_id, 'Start');
+  const client = await connect(await threadKey(a.owner_token, a.channel_id, root.thread_id));
+  try {
+    const context = data(await client.callTool({ name: 'thread_context', arguments: {} }));
+    const input = { revision: 0, through_sequence: context.through_sequence, content: '# Decisions\nA', summary: 'A', source_message_ids: [root.id] };
+    const results = await Promise.all([
+      client.callTool({ name: 'thread_checkpoint', arguments: input }),
+      client.callTool({ name: 'thread_checkpoint', arguments: { ...input, content: '# Decisions\nB', summary: 'B' } }),
+    ]);
+    assert.equal(results.filter(r => !r.isError).length, 1);
+    assert.equal(code(results.find(r => r.isError)), 'thread_checkpoint_conflict');
+    const second = data(await client.callTool({ name: 'thread_checkpoint', arguments: { ...input, revision: 1, summary: 'C' } }));
+    assert.equal(second.revision, 2);
+    const stored = await pool.query('SELECT revision FROM thread_checkpoints WHERE thread_id=$1 AND session_id IS NULL ORDER BY revision', [root.thread_id]);
+    assert.deepEqual(stored.rows.map(r => r.revision), [1, 2]);
+  } finally { await client.close(); }
+});
+
+test('thread checkpoint validates summary and size with stable codes', async () => {
+  const a = await bootstrap(pool);
+  const root = await post(a.owner_token, a.channel_id, 'Start');
+  const client = await connect(await threadKey(a.owner_token, a.channel_id, root.thread_id));
+  try {
+    const context = data(await client.callTool({ name: 'thread_context', arguments: {} }));
+    const input = { revision: 0, through_sequence: context.through_sequence, content: 'ok', summary: 'ok', source_message_ids: [root.id] };
+    assert.equal(code(await client.callTool({ name: 'thread_checkpoint', arguments: { ...input, content: 'x'.repeat(6001) } })), 'checkpoint_too_large');
+    assert.equal(code(await client.callTool({ name: 'thread_checkpoint', arguments: { ...input, summary: 'x'.repeat(281) } })), 'invalid_summary');
+    assert.equal(code(await client.callTool({ name: 'thread_checkpoint', arguments: { ...input, revision: 5 } })), 'thread_checkpoint_conflict');
+  } finally { await client.close(); }
+});

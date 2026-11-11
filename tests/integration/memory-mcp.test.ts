@@ -171,7 +171,7 @@ test('thread-scoped MCP works with channel memory off and preserves source-backe
     assert.equal(initial.root.text_truncated, true);
     assert.equal(data(await client.callTool({ name: 'thread_message', arguments: { message_id: root.id } })).text, root.text);
     assert.equal(initial.checkpoint, null);
-    const checkpoint = { revision: 0, through_sequence: initial.through_sequence, content: '# Decisions\nUse TypeScript.\n\n# Open questions\nWho is the audience?', source_message_ids: [root.id] };
+    const checkpoint = { revision: 0, through_sequence: initial.through_sequence, content: '# Decisions\nUse TypeScript.\n\n# Open questions\nWho is the audience?', summary: 'Decisions', source_message_ids: [root.id] };
     const saved = data(await client.callTool({ name: 'thread_checkpoint', arguments: checkpoint }));
     assert.equal(saved.revision, 1);
     assert.deepEqual(saved.source_message_ids, [root.id]);
@@ -227,7 +227,7 @@ test('checkpoint races reject stale writes and earlier context excludes future s
     const initial = data(await client.callTool({ name: 'thread_context', arguments: {} }));
     const later = await api(a.owner_token, 'POST', `/channels/${a.channel_id}/messages`, { client_message_id: randomUUID(), thread_id: root.thread_id, text: 'Later decision' }, 201);
     const current = data(await client.callTool({ name: 'thread_context', arguments: {} }));
-    const input = { revision: 0, through_sequence: current.through_sequence, content: '# Decision\nLater decision', source_message_ids: [later.id] };
+    const input = { revision: 0, through_sequence: current.through_sequence, content: '# Decision\nLater decision', summary: 'Decisions', source_message_ids: [later.id] };
     const results = await Promise.all([client.callTool({ name: 'thread_checkpoint', arguments: input }), client.callTool({ name: 'thread_checkpoint', arguments: { ...input, content: 'Conflicting summary' } })]);
     assert.equal(results.filter(r => !r.isError).length, 1);
     const { readThreadContext } = await import('@space/postgres/thread-context');
