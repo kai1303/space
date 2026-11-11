@@ -138,3 +138,29 @@ it('keeps the desktop layout without a back button or a top bar account', () => 
   expect(view.container.querySelector('.chat-phone-account')).toBeNull();
   expect(view.container.querySelector('.chat-rail-bottom .space-user-settings')).toBeTruthy();
 });
+
+it('on phones a swipe from the left edge presses the top screen back button', async () => {
+  const media = { matches: true, addEventListener: () => {}, removeEventListener: () => {} };
+  vi.stubGlobal('matchMedia', vi.fn(() => media));
+  try {
+    const { fireEvent } = await import('@testing-library/react');
+    const channelBack = vi.fn(), threadBack = vi.fn();
+    const view = render(<ChatShell name="Team" user="Kai" onHome={() => {}}><main>
+      <button className="chat-conversation-back" onClick={channelBack}>Back to conversations</button>
+      <button className="chat-conversation-back" onClick={threadBack}>Back to #general</button>
+    </main></ChatShell>);
+    for (const button of view.container.querySelectorAll('.chat-conversation-back')) button.getClientRects = () => [{}] as unknown as DOMRectList;
+    const app = view.container.querySelector('.chat-app')!;
+    const swipe = (x0: number, x1: number, dy = 0) => {
+      fireEvent.touchStart(app, { touches: [{ clientX: x0, clientY: 300 }] });
+      fireEvent.touchEnd(app, { changedTouches: [{ clientX: x1, clientY: 300 + dy }] });
+    };
+    swipe(120, 260);
+    swipe(8, 40);
+    swipe(8, 200, 90);
+    expect(threadBack).not.toHaveBeenCalled();
+    swipe(8, 200);
+    expect(threadBack).toHaveBeenCalledOnce();
+    expect(channelBack).not.toHaveBeenCalled();
+  } finally { vi.unstubAllGlobals(); }
+});

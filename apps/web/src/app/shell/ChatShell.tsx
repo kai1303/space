@@ -81,6 +81,28 @@ export function ChatShell({ renderPreview, notificationDelivery, onNavigate, act
     onHome();
   });
   const openList = () => { setMoreOpen(false); setSidebarOpen(true); };
+  // Slack's edge swipe: a rightward swipe from the left edge presses the top screen's own back button.
+  useEffect(() => {
+    const root = shell.current;
+    if (!phone || !root) return;
+    let from: { x: number; y: number } | undefined;
+    const start = (event: TouchEvent) => {
+      const touch = event.touches[0];
+      from = event.touches.length === 1 && touch && touch.clientX <= 24 ? { x: touch.clientX, y: touch.clientY } : undefined;
+    };
+    const end = (event: TouchEvent) => {
+      const touch = event.changedTouches[0];
+      if (!from || !touch) return;
+      const dx = touch.clientX - from.x, dy = Math.abs(touch.clientY - from.y);
+      from = undefined;
+      if (dx < 70 || dy > 40) return;
+      const backs = [...root.querySelectorAll<HTMLButtonElement>('.chat-main-area .chat-conversation-back')].filter(button => button.getClientRects().length);
+      backs.at(-1)?.click();
+    };
+    root.addEventListener('touchstart', start, { passive: true });
+    root.addEventListener('touchend', end, { passive: true });
+    return () => { root.removeEventListener('touchstart', start); root.removeEventListener('touchend', end); };
+  }, [phone, shell]);
   const menu = useRef<HTMLDivElement>(null);
   const [channelSearch, setChannelSearch] = useState<ChannelSearchHeader | null>(null);
   function openSearch() { setSidebarOpen(false); (channelSearch?.edit ?? onSearch)?.(); }
