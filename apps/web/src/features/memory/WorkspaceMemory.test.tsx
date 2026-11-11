@@ -1,46 +1,66 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import { cleanup, render, screen } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { ChannelSummary } from '@space/contracts';
-import { WorkspaceMemory } from './WorkspaceMemory.js';
+import { MAX_CHANNELS, WorkspaceMemory } from './WorkspaceMemory.js';
 
-const dirty = vi.hoisted(() => ({ value: false }));
-vi.mock('./ChannelMemory.js', async () => {
-  const { useEffect } = await import('react');
-  return { ChannelMemory: ({ channel, name, onDirtyChange }: { channel: string; name: string; onDirtyChange?: (dirty: boolean) => void }) => {
-    useEffect(() => { onDirtyChange?.(dirty.value); }, [onDirtyChange]);
-    return <p data-channel={channel}>Memory for {name}</p>;
-  } };
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
+
+const uuid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
+const channel = (n: number, name: string, joined = true) => ({ id: uuid(n), name, joined, private: false, workspace_id: 'w' }) as unknown as ChannelSummary;
+const thread = (n: number, ch: number) => ({ ref: { kind: 'thread', id: uuid(n) }, parent: { kind: 'channel', id: uuid(ch) }, summary: `Thread ${n}`, updated_at: '2026-11-11 10:00:00+00', children: { kind: 'session', count: 1 } });
+const response = (body: unknown, status = 200) => ({ ok: status < 400, status, json: async () => body });
+function stub(threads: Record<number, unknown[]>, failing: number[] = []) {
+  const fetch = vi.fn(async (path: string) => {
+    const match = /\/channels\/([^/]+)\/memory\/layers/.exec(path);
+    if (match) {
+      const n = Number(match[1]!.slice(-12));
+      if (failing.includes(n)) return response({ error: 'memory_disabled' }, 409);
+      return response({ channel_id: match[1], nodes: threads[n] ?? [], next_cursor: null });
+    }
+    if (path.includes('/threads/')) return response({ node: thread(11, 1), context: { thread_id: uuid(11), through_sequence: '1', root: null, messages: [], checkpoint: null, has_earlier_messages: false },
+      sessions: [{ ref: { kind: 'session', id: uuid(900) }, parent: { kind: 'thread', id: uuid(11) }, summary: 'Run', updated_at: 'x', children: null, title: 'Run', agent: 'Codex', state: 'active' }], checkpoint_chars: 0, limit: 6000 });
+    return response({}, 404);
+  });
+  vi.stubGlobal('fetch', fetch);
+  return fetch;
+}
+
+it('draws every joined channel and its threads in one graph', async () => {
+  const fetch = stub({ 1: [thread(11, 1), thread(12, 1)], 2: [thread(21, 2)] });
+  render(<WorkspaceMemory channels={[channel(1, 'general'), channel(2, 'payments'), channel(3, 'secret', false)]} onOpenChannel={() => {}} />);
+  await screen.findByRole('button', { name: '#general, channel' });
+  expect(screen.getByRole('button', { name: '#payments, channel' })).toBeTruthy();
+  expect(screen.queryByRole('button', { name: '#secret, channel' })).toBeNull();
+  expect(screen.getAllByRole('button', { name: /, thread$/ })).toHaveLength(3);
+  expect(screen.getByRole('status').textContent).toBe('2 channels · 3 threads from the last 7 days');
+  expect(fetch.mock.calls.some(([path]) => String(path).includes(uuid(3)))).toBe(false);
 });
-afterEach(() => { cleanup(); dirty.value = false; vi.restoreAllMocks(); });
 
-const channel = (id: string, name: string, joined = true) => ({ id, name, joined, private: false, workspace_id: 'w' }) as unknown as ChannelSummary;
-const channels = [channel('a', 'general'), channel('b', 'payments'), channel('c', 'secret-plans', false)];
+it('keeps a channel whose memory cannot be read, and expands a thread into sessions', async () => {
+  stub({ 1: [thread(11, 1)] }, [2]);
+  render(<WorkspaceMemory channels={[channel(1, 'general'), channel(2, 'off')]} onOpenChannel={() => {}} />);
+  await screen.findByRole('button', { name: '#off, channel' });
+  fireEvent.doubleClick(screen.getByRole('button', { name: 'Thread 11, thread' }));
+  await screen.findByRole('button', { name: 'Codex, session' });
+});
 
-it('lists only joined channels and shows the first one’s memory', async () => {
+it('opens the channel from the channel details', async () => {
+  stub({ 1: [] });
   const open = vi.fn();
-  render(<WorkspaceMemory channels={channels} onOpenChannel={open} />);
-  expect(screen.getByText('Memory for general')).toBeTruthy();
-  const options = Array.from(screen.getByRole('combobox', { name: 'Channel' }).closest('label')!.querySelectorAll('option')).map(option => option.value);
-  expect(options).toEqual(['a', 'b']);
-  await userEvent.click(screen.getByRole('button', { name: 'Open channel' }));
-  expect(open).toHaveBeenCalledWith('a');
+  render(<WorkspaceMemory channels={[channel(1, 'general')]} onOpenChannel={open} />);
+  fireEvent.click(await screen.findByRole('button', { name: '#general, channel' }));
+  fireEvent.click(await screen.findByRole('button', { name: 'Open channel' }));
+  expect(open).toHaveBeenCalledWith(uuid(1));
 });
 
-it('asks before switching channels with unsaved edits', async () => {
-  dirty.value = true;
-  const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
-  render(<WorkspaceMemory channels={channels} onOpenChannel={() => {}} />);
-  const select = screen.getByRole('combobox', { name: 'Channel' }).closest('label')!.querySelector('select')!;
-  await userEvent.selectOptions(select, 'b');
-  expect(confirm).toHaveBeenCalled();
-  expect(screen.getByText('Memory for general')).toBeTruthy();
-  confirm.mockReturnValue(true);
-  await userEvent.selectOptions(select, 'b');
-  expect(screen.getByText('Memory for payments')).toBeTruthy();
+it('reads at most the channel cap', async () => {
+  const fetch = stub({});
+  render(<WorkspaceMemory channels={Array.from({ length: MAX_CHANNELS + 5 }, (_, i) => channel(i + 1, `c${i + 1}`))} onOpenChannel={() => {}} />);
+  await screen.findByText(`Showing the first ${MAX_CHANNELS} channels you joined.`);
+  await waitFor(() => expect(fetch.mock.calls.filter(([path]) => String(path).includes('/memory/layers'))).toHaveLength(MAX_CHANNELS));
 });
 
 it('explains what to do when no channel is joined', () => {
-  render(<WorkspaceMemory channels={[channel('c', 'secret-plans', false)]} onOpenChannel={() => {}} />);
+  render(<WorkspaceMemory channels={[channel(3, 'secret', false)]} onOpenChannel={() => {}} />);
   expect(screen.getByRole('heading', { name: 'No channel memory to show' })).toBeTruthy();
 });
