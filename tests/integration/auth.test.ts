@@ -289,3 +289,19 @@ test('production rejects legacy token mode and insecure auth configuration', () 
     assert.throws(() => createAuthentication(pool, { secret: 'short', baseURL: 'https://space.example' }), /32 characters/);
   } finally { if (original === undefined) delete process.env.NODE_ENV; else process.env.NODE_ENV = original; }
 });
+
+test('a native client keeps its session with explicit Cookie and same-origin headers', async () => {
+  const user = await signup();
+  const jar = new Map(user.cookie.split('; ').map(pair => [pair.slice(0, pair.indexOf('=')), pair.slice(pair.indexOf('=') + 1)] as const));
+  const header = () => [...jar].map(([name, value]) => `${name}=${value}`).join('; ');
+  const initialRefresh = jar.get('space.refresh');
+  const created = await call(header(), '/workspaces', { name: 'Native workspace' });
+  assert.equal(created.statusCode, 201, created.body);
+  const renewed = await call(header(), '/auth/refresh', {});
+  assert.equal(renewed.statusCode, 200, renewed.body);
+  for (const cookie of renewed.cookies) jar.set(cookie.name, cookie.value);
+  assert.notEqual(jar.get('space.refresh'), initialRefresh);
+  assert.equal((await call(header(), '/me')).json().id, user.user.id);
+  const client = await socket(header());
+  client.disconnect();
+});
