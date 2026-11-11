@@ -672,7 +672,13 @@
   opacity: 1;
   pointer-events: auto;
 }
-@media(hover:none){.sp-message-actions{position:static;grid-column:2;justify-self:start;margin-top:8px;opacity:1;pointer-events:auto}}
+/* Touch: actions stay hidden until a long press (useLongPress sets data-actions-open). iOS keeps :hover after a tap, so override it. */
+@media(hover:none){
+  .sp-message{-webkit-touch-callout:none}
+  .sp-message:hover:not([data-actions-open]) .sp-message-actions{opacity:0;pointer-events:none}
+  .sp-message[data-actions-open]{background:var(--sp-surface-hover)}
+  .sp-message[data-actions-open] .sp-message-actions{opacity:1;pointer-events:auto;top:-28px;right:12px}
+}
 @container message (max-width:300px){.sp-message-actions>.sp-icon-button:has(.sp-message-quick-emoji){display:none}}
 .sp-composer-wrap {
   padding: 12px 20px;

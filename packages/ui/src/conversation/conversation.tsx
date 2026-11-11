@@ -4,6 +4,7 @@ import { CaretRight, ChatCircle } from "@phosphor-icons/react";
 import { motionTransition } from "../motion/motion.js";
 import { Avatar, Badge } from "../primitives/primitives.js";
 import { MessageActions, type MessageActionHandlers } from "./message-actions.js";
+import { useLongPress } from "./long-press.js";
 
 export type Reaction = { emoji: string; count: number; active?: boolean };
 export function Message({
@@ -45,8 +46,12 @@ export function Message({
 }) {
   const reduced = useReducedMotion();
   const glide = arrival !== "fade";
+  const press = useLongPress();
   return (
     <motion.article
+      ref={press.ref}
+      data-actions-open={press.open || undefined}
+      onPointerDown={press.start} onPointerMove={press.move} onPointerUp={press.cancel} onPointerCancel={press.cancel}
       className={`sp-message${grouped ? " sp-message--grouped" : ""}`}
       initial={arrival && !reduced ? { opacity: 0, ...(glide && { x: -14 }) } : false}
       animate={{ opacity: 1, x: 0 }}
