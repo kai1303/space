@@ -126,3 +126,18 @@ it('refuses more than 500 nodes', () => {
   render(<GraphCanvas label="Big" nodes={many} links={[]} palette={palette} expandedIds={new Set()} onSelect={() => {}} onToggleExpand={() => {}} />);
   expect(screen.getByRole('status').textContent).toMatch(/too many items/i);
 });
+
+it('wheel zoom keeps the scene point under the pointer still', () => {
+  setup();
+  const svg = screen.getByRole('application');
+  svg.getBoundingClientRect = () => ({ left: 0, top: 0, width: 800, height: 600, right: 800, bottom: 600, x: 0, y: 0, toJSON: () => ({}) });
+  const scene = screen.getByTestId('sp-graph-scene');
+  const read = () => { const [, x, y, k] = /translate\((-?[\d.]+),(-?[\d.]+)\) scale\(([\d.]+)\)/.exec(scene.getAttribute('transform')!)!.map(Number); return { x: x!, y: y!, k: k! }; };
+  const px = 600 - 400, py = 450 - 300;
+  const before = read();
+  fireEvent.wheel(svg, { clientX: 600, clientY: 450, deltaY: -100 });
+  const after = read();
+  expect(after.k).toBeGreaterThan(before.k);
+  expect((px - after.x) / after.k).toBeCloseTo((px - before.x) / before.k, 6);
+  expect((py - after.y) / after.k).toBeCloseTo((py - before.y) / before.k, 6);
+});
