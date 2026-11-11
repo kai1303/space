@@ -28,7 +28,7 @@ function server(routes: Record<string, Route>) {
   return { calls, http: http as unknown as typeof fetch };
 }
 function memoryStore(value: string | null = null) {
-  const store = {
+  const store: { value: string | null; get: jest.Mock; set: jest.Mock; clear: jest.Mock } = {
     value,
     get: jest.fn(async () => store.value),
     set: jest.fn(async (next: string) => { store.value = next; }),
