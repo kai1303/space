@@ -73,6 +73,21 @@ merging and retrying. Revisions retain producer identity and time in PostgreSQL;
 these are derived Markdown working notes, separate from provider-backed channel
 memory. A later-watermark checkpoint is excluded from earlier context snapshots.
 
+## Layered memory
+
+Short-term memory has three layers: channel → thread → session. Every node returns `ref`, `parent`, `summary`, `updated_at` and `children`, so agents can walk down and back up. The design is in [the layered memory spec](../superpowers/specs/2026-11-11-short-term-memory-design.md).
+
+| Tool | Key | Returns |
+| --- | --- | --- |
+| `channel_memory` | Channel | Threads with a checkpoint in the last 7 days, newest first, keyset-paged by `next_cursor` |
+| `thread_memory` | Channel | Checkpoint, recent messages (session messages excluded) and session nodes |
+| `session_memory` | Channel, bound to the session's installation | Session checkpoint and recent session turns |
+| `session_checkpoint` | Channel, contribute or write | New session revision |
+
+`thread_checkpoint` and `session_checkpoint` require `summary` (1–280 characters). Content over 6,000 characters returns `413 checkpoint_too_large`. Writes are optimistic: a stale revision returns `409`. Partial unique indexes on `(thread_id, revision)` and `(session_id, revision)` enforce this instead of row locks. PostgreSQL still takes its normal internal write locks during the insert.
+
+Tasks receive `context.agent_session_memory`, `context.working_memory` and the first page of `context.channel_memory`. The Markdown channel memory excerpt moved to `context.channel_notes`. Apply migration `085_layered_memory.sql`, and update paired connectors in the same release, because older connectors reject unknown context fields.
+
 ## Granting access
 
 As a current channel manager, send:

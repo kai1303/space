@@ -51,6 +51,10 @@ MCP keys, and creating a key does not automatically install it in an agent's con
 | `memory_remember` | Write | Save a source-backed extracted claim with producer identity and timestamp |
 | `memory_write` | Write | Replace canonical memory using its exact expected revision |
 | `memory_forget` | Write | Remove one `message:`, `document:` or `knowledge:` source section |
+| `channel_memory` | Read | Index of recent threads with summaries; `after` cursor, `limit` 1–50 |
+| `thread_memory` | Read | One thread's checkpoint, recent messages and session list |
+| `session_memory` | Read | Own session only (installation-bound key); others return `session_private` |
+| `session_checkpoint` | Contribute/Write | Revision-checked session checkpoint with summary |
 
 Read-only connections do not advertise write tools, and write permission is checked
 again when tools execute. Tools never accept a channel or workspace ID: the key
