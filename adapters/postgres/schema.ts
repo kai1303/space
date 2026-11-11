@@ -25,6 +25,7 @@ export const channels = pgTable('channels', {
   id: id(), workspace_id: uuid().notNull(), name: text().notNull().default('general'), private: boolean().notNull().default(true),
   topic: text().notNull().default(''), description: text().notNull().default(''), archived_at: timestamp({ withTimezone: true }),
   memory_enabled: boolean().notNull().default(false), memory_provider: text().notNull().default('markdown'),
+  knowledge_enabled: boolean().notNull().default(false),
   created_by: uuid(), event_sequence: bigint({ mode: 'bigint' }).notNull().default(0n), created_at: time(),
 });
 export const channelEvents = pgTable('channel_events', {
