@@ -9,6 +9,7 @@ import * as s from './schema.js';
 import { tokenHash } from './bootstrap.js';
 import { hasThreadAccess } from './access.js';
 import { readThreadContext } from './thread-context.js';
+import { readChannelMemory, readSessionMemory } from './layered-memory.js';
 import { sessionTransaction, SessionConflict } from './session-concurrency.js';
 import { traceTool, traceToolChanges, traceTurn } from './turn-trace.js';
 import { directTurnTarget, runTurn, type AdmitLocalTurn, type TurnPlan } from './direct-turn-admission.js';
@@ -253,6 +254,14 @@ export class PostgresStore implements DeliveryStore {
       const thread=(await c.select().from(s.threads).where(eq(s.threads.id,task.thread_id)))[0]!;
       const working_memory = await readThreadContext(c, thread.channel_id, task.thread_id, origin?.through_sequence);
       const context: NonNullable<InvocationRequest['context']> = { thread_id: task.thread_id, working_memory, messages: working_memory.messages.filter(m => m.text.trim()).map(m => ({ id: m.id, text: m.text, author_type: m.author.kind })) };
+      context.channel_memory = await readChannelMemory(c, thread.channel_id);
+      if (task.session_id) {
+        const own = await readSessionMemory(c, thread.channel_id, task.session_id, task.installation_id).catch(error => {
+          if (error instanceof AppError && (error.code === 'session_ended' || error.code === 'session_private')) return undefined;
+          throw error;
+        });
+        if (own) context.agent_session_memory = own;
+      }
       const [session] = await c.select().from(s.agentSessions).where(eq(s.agentSessions.id, task.session_id!));
       if (session?.handoff_context) context.handoff = session.handoff_context;
       const priorReady = session?.managed && (await c.execute(sql`SELECT 1 FROM tasks previous JOIN task_events e ON e.correlation_id=previous.id AND e.payload->>'session_ready'='true' WHERE previous.session_id=${task.session_id} AND previous.id<>${task.id} LIMIT 1`)).rows.length > 0;
@@ -270,7 +279,7 @@ export class PostgresStore implements DeliveryStore {
       await this.localConnection(c, prepared.installation.id, connectionId);
       if (!(await c.select({ id: s.outbox.id }).from(s.outbox).where(this.liveAttempt(delivery))).length) throw new AppError(409, 'stale_lease');
     });
-    if (memory) prepared.request.context!.channel_memory = memory;
+    if (memory) prepared.request.context!.channel_notes = memory;
     return prepared;
   }
 

@@ -93,7 +93,7 @@ test('a connected agent can work in its owner’s DM but cannot see another user
  const deliveryStore=new PostgresStore(pool),app=createApi(deliveryStore,{allowDevelopmentTokens:true});
  try{
   await deliveryStore.approveTask(s.owner_id,task.id);const delivery=(await deliveryStore.claimDelivery(s.connected_id))!;
-  const prepared=await deliveryStore.prepareDelivery(delivery);assert.ok(prepared);assert.equal(prepared.request.context?.channel_memory,undefined);
+  const prepared=await deliveryStore.prepareDelivery(delivery);assert.ok(prepared);assert.equal(prepared.request.context?.channel_notes,undefined);
  }finally{await app.close();}
  const self=await chat.directMessages.open(s.collaborator_id,s.workspace_id,{user_id:s.collaborator_id});
  assert.ok(!(await nav.read(s.collaborator_id,self.id)).candidates.some(c=>c.installation_id===s.connected_id));

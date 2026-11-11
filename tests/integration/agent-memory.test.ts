@@ -52,25 +52,28 @@ test('memory is a separate manager opt-in and read context is bounded and withhe
   const a = await fixture(), foreign = await fixture();
   const listing = await api(a.owner_token, 'GET', `${a.path}/agents`);
   assert.equal(listing.items.find((item: any) => item.id === a.installation_id).access, 'none');
-  assert.equal((await prepared(a))?.request.context?.channel_memory, undefined);
+  assert.equal((await prepared(a))?.request.context?.channel_notes, undefined);
   await grant(a, 'read', 403, a.collaborator_token);
   await api(foreign.owner_token, 'POST', `${a.path}/agents/${a.installation_id}`, { access: 'read' }, 404);
   await api(a.owner_token, 'POST', `${a.path}/agents/${foreign.installation_id}`, { access: 'read' }, 404);
   await grant(a, 'write', 400);
   await grant(a, 'read');
   const result = await prepared(a); assert.ok(result);
-  assert.match(result.request.context!.channel_memory!.content, /PostgreSQL/);
+  assert.match(result.request.context!.channel_notes!.content, /PostgreSQL/);
   assert.deepEqual(parseInvocation(result.request), result.request);
+  const layered = result.request.context!;
+  assert.ok(Array.isArray(layered.channel_memory!.nodes));
+  assert.equal(layered.agent_session_memory?.node.ref.id, result.request.session_id);
   const document = (await api(a.owner_token, 'GET', a.path)).document;
   await api(a.owner_token, 'POST', `${a.path}/document`, { revision: document.revision, content: '😀'.repeat(10000) });
-  const bounded = (await prepared(a))!.request.context!.channel_memory!;
+  const bounded = (await prepared(a))!.request.context!.channel_notes!;
   assert.ok(bounded.content.length <= 6000); assert.equal(bounded.truncated, true);
   assert.equal(Buffer.from(bounded.content).toString(), bounded.content);
   await api(a.owner_token, 'POST', `${a.path}/settings`, { enabled: false });
-  assert.equal((await prepared(a))?.request.context?.channel_memory, undefined);
+  assert.equal((await prepared(a))?.request.context?.channel_notes, undefined);
   await api(a.owner_token, 'POST', `${a.path}/settings`, { enabled: true });
   await grant(a, 'none');
-  assert.equal((await prepared(a))?.request.context?.channel_memory, undefined);
+  assert.equal((await prepared(a))?.request.context?.channel_notes, undefined);
 });
 
 test('installation-bound contribute keys can add evidence but cannot replace/delete, and live downgrade is enforced', async () => {
