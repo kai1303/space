@@ -10,7 +10,7 @@ import { tokenHash } from './bootstrap.js';
 import { hasThreadAccess } from './access.js';
 import { readThreadContext } from './thread-context.js';
 import { readChannelMemory, readPendingMemory, readSessionMemory, saveTurnMemory } from './layered-memory.js';
-import { saveTurnNotes } from './knowledge-notes.js';
+import { readKnowledgeContext, saveTurnNotes } from './knowledge-notes.js';
 import { sessionTransaction, SessionConflict } from './session-concurrency.js';
 import { traceTool, traceToolChanges, traceTurn } from './turn-trace.js';
 import { directTurnTarget, runTurn, type AdmitLocalTurn, type TurnPlan } from './direct-turn-admission.js';
@@ -256,6 +256,8 @@ export class PostgresStore implements DeliveryStore {
       const working_memory = await readThreadContext(c, thread.channel_id, task.thread_id, origin?.through_sequence);
       const context: NonNullable<InvocationRequest['context']> = { thread_id: task.thread_id, working_memory, messages: working_memory.messages.filter(m => m.text.trim()).map(m => ({ id: m.id, text: m.text, author_type: m.author.kind })) };
       context.channel_memory = await readChannelMemory(c, thread.channel_id);
+      const notes = await readKnowledgeContext(c, thread.channel_id, task);
+      if (notes) context.knowledge_notes = notes;
       if (task.session_id) {
         const own = await readSessionMemory(c, thread.channel_id, task.session_id, task.installation_id).catch(error => {
           if (error instanceof AppError && (error.code === 'session_ended' || error.code === 'session_private')) return undefined;

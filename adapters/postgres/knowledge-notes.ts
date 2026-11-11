@@ -4,6 +4,7 @@ import { AppError, KNOWLEDGE_TITLES_MAX, type KnowledgeNote, type KnowledgeNotes
 import type { DbSession } from './database.js';
 import { rows } from './thread-context.js';
 import { agentMemoryAccess } from './memory.js';
+import { hasChannelAccess } from './access.js';
 
 export type NoteProducer = { id: string; name: string };
 export type NoteScope = { workspaceId: string; channelId: string };
@@ -142,4 +143,13 @@ export async function saveTurnNotes(c: DbSession, input: { channelId: string; in
     results.push(await saveNoteByTitle(c, { workspaceId: channel.workspace_id, channelId: input.channelId }, { ...note, message_ids }, input.producer));
   }
   return results;
+}
+
+// Titles come from Space only, so they reach the agent even when the provider or Ollama is down.
+export async function readKnowledgeContext(c: DbSession, channelId: string, task: { installation_id: string; requester_id: string }): Promise<KnowledgeNotesContext | undefined> {
+  const [channel] = await rows<{ workspace_id: string; knowledge_enabled: boolean; kind: string }>(c, sql`SELECT workspace_id, knowledge_enabled, kind FROM channels WHERE id=${channelId}`);
+  if (!channel || channel.kind !== 'channel' || !channel.knowledge_enabled) return undefined;
+  if (!await hasChannelAccess(c, task.requester_id, channel.workspace_id, channelId)) return undefined;
+  if (!await agentMemoryAccess(c, { workspace_id: channel.workspace_id, channel_id: channelId }, task.installation_id)) return undefined;
+  return listNoteTitles(c, channelId);
 }

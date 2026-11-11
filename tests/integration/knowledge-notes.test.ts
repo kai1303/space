@@ -218,3 +218,27 @@ test('a completed turn saves block notes in the same transaction as checkpoints'
   const notes = (await pool.query('SELECT title, producer_id FROM knowledge_notes WHERE channel_id=$1', [a.channel_id])).rows;
   assert.deepEqual(notes, [{ title: 'Duplicate charge fix', producer_id: a.installation_id }]);
 });
+
+import { parseInvocation } from '@space/contracts';
+
+async function prepared(a: Awaited<ReturnType<typeof bootstrap>>) {
+  const task = await store.createTask(a.owner_id, { workspace_id: a.workspace_id, thread_id: a.thread_id, installation_id: a.installation_id, goal: 'Read notes', skill: 'demo.echo' }, randomUUID());
+  await store.approveTask(a.owner_id, task.id);
+  const outbox = (await pool.query('SELECT id FROM outbox WHERE task_id=$1', [task.id])).rows[0];
+  const delivery = await store.claimDelivery(undefined, outbox.id);
+  assert.ok(delivery); return store.prepareDelivery(delivery);
+}
+
+test('task context lists note titles only with the switch on and a read grant', async () => {
+  const a = await bootstrap(pool);
+  const root = await post(a.owner_token, a.channel_id, 'Evidence');
+  const path = `/channels/${a.channel_id}/memory`;
+  await saveNoteByTitle(db(), { workspaceId: a.workspace_id, channelId: a.channel_id }, draft(root.id), codex);
+  assert.equal((await prepared(a))?.request.context?.knowledge_notes, undefined, 'switch off');
+  await api(a.owner_token, 'POST', `${path}/knowledge`, { enabled: true });
+  assert.equal((await prepared(a))?.request.context?.knowledge_notes, undefined, 'no grant');
+  await api(a.owner_token, 'POST', `${path}/agents/${a.installation_id}`, { access: 'read' });
+  const result = (await prepared(a))!;
+  assert.equal(result.request.context?.knowledge_notes?.notes[0]?.title, 'Duplicate charge fix');
+  assert.deepEqual(parseInvocation(result.request), result.request, 'connectors accept the field');
+});
