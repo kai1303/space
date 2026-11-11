@@ -300,7 +300,7 @@ test('block notes are optional evidence, 2,000 characters, at most 3, and a bad 
   const update = parseAgentMemoryUpdate({ notes: [{ kind: 'fact', title: 'A', content: 'B' }, { kind: 'fact', title: 'C', content: 'x'.repeat(2001) }] });
   assert.deepEqual(update.notes, [{ kind: 'fact', title: 'A', content: 'B', message_ids: [] }]);
   const many = parseAgentMemoryUpdate({ thread: { base_revision: 0, summary: 's', content: 'c' }, notes: [1, 2, 3, 4].map(i => ({ kind: 'fact', title: `T${i}`, content: 'c' })) });
-  assert.equal(many.notes, undefined, 'too many notes drops the list but keeps the checkpoint');
+  assert.equal(many.notes, undefined, 'too many notes drops the list but keeps the memory');
   assert.equal(many.thread?.summary, 's');
   assert.throws(() => parseAgentMemoryUpdate({ notes: [{ kind: 'bad', title: 'A', content: 'B' }] }), (e: any) => e.code === 'invalid_memory_update');
   const block = '<space-memory>{"notes":[{"kind":"decision","title":"T","content":"C"}]}</space-memory>';
@@ -419,7 +419,7 @@ Replace the whole `parseAgentMemoryUpdate` function with:
 export function parseAgentMemoryUpdate(value: unknown): AgentMemoryUpdate {
   const v = record(value, ['session', 'thread', 'notes']);
   let notes: NoteDraft[] = [];
-  // A bad notes list never costs the checkpoints.
+  // A bad notes list never costs the memories.
   if (v.notes !== undefined) { try { notes = parseBlockNotes(v.notes); } catch { notes = []; } }
   if (v.session === undefined && v.thread === undefined && !notes.length) throw new AppError(400, 'invalid_memory_update');
   return { ...(v.session === undefined ? {} : { session: parsePart(v.session) }), ...(v.thread === undefined ? {} : { thread: parsePart(v.thread) }), ...(notes.length ? { notes } : {}) };
@@ -945,7 +945,7 @@ Expected: FAIL. `knowledge_add` is not in the tool list.
 Change the contracts import to add the note helpers:
 
 ```ts
-import { AppError, MAX_MEMORY_CHARS, NOTE_KINDS, parseNoteDraft, parseNotePatch, parseThreadCheckpoint, uuid, type MemoryConnection } from '@space/contracts';
+import { AppError, MAX_MEMORY_CHARS, NOTE_KINDS, parseNoteDraft, parseNotePatch, parseMemoryInput, uuid, type MemoryConnection } from '@space/contracts';
 ```
 
 Add the store import:
@@ -1065,7 +1065,7 @@ function agentEvent(executionId: string, sequence: number, type: AgentEvent['typ
   return { id: randomUUID(), schema_version: '1.0', execution_id: executionId, sequence, type, occurred_at: new Date().toISOString(), payload };
 }
 
-test('a completed turn saves block notes in the same transaction as checkpoints', async () => {
+test('a completed turn saves block notes in the same transaction as memories', async () => {
   const a = await bootstrap(pool);
   const path = `/channels/${a.channel_id}/memory`;
   await api(a.owner_token, 'POST', `${path}/knowledge`, { enabled: true });
@@ -1157,7 +1157,7 @@ Expected: PASS for all three files.
 
 ```bash
 git add adapters/postgres/knowledge-notes.ts adapters/postgres/turn-trace.ts adapters/postgres/store.ts tests/integration/knowledge-notes.test.ts
-git commit -m "Save turn-end notes with the checkpoints"
+git commit -m "Save turn-end notes with the memories"
 ```
 
 ---
@@ -1266,7 +1266,7 @@ Append to `apps/connector/test/memory-block.test.mjs`:
 
 ```js
 test('instructions describe notes only when knowledge_notes is supplied', () => {
-  const base = { thread_id: 't', messages: [], working_memory: { checkpoint: null } };
+  const base = { thread_id: 't', messages: [], working_memory: { memory: null } };
   assert.doesNotMatch(memoryInstructions(base), /"notes"/);
   const text = memoryInstructions({ ...base, knowledge_notes: { channel_id: 'c', notes: [{ title: 'Duplicate charge fix' }], truncated: true } });
   assert.match(text, /"notes":\[/);
@@ -1296,19 +1296,19 @@ Replace the file with:
 ```ts
 import type { InvocationRequest } from '@space/contracts';
 
-type Revisioned = { checkpoint?: { revision: number } | null };
+type Revisioned = { memory?: { revision: number } | null };
 type Titles = { notes: unknown[]; truncated: boolean };
 type Context = InvocationRequest['context'] | { working_memory?: Revisioned; agent_session_memory?: Revisioned; knowledge_notes?: Titles } | undefined;
 
 // The block rides on the agent's own final answer, so saving memory costs no extra model call.
 export function memoryInstructions(context: Context): string {
   if (!context) return '';
-  const thread = context.working_memory?.checkpoint?.revision ?? 0;
-  const session = context.agent_session_memory ? context.agent_session_memory.checkpoint?.revision ?? 0 : undefined;
+  const thread = context.working_memory?.memory?.revision ?? 0;
+  const session = context.agent_session_memory ? context.agent_session_memory.memory?.revision ?? 0 : undefined;
   const knowledge = context.knowledge_notes;
   return `\n\nAfter your answer, add one hidden memory block. People never see it:\n<space-memory>{"thread":{"base_revision":N,"summary":"…","content":"…"}${session === undefined ? '' : ',"session":{"base_revision":N,"summary":"…","content":"…"}'}}</space-memory>\n`
     + `Use thread base_revision ${thread}${session === undefined ? '' : ` and session base_revision ${session}`}. `
-    + 'Each content replaces the whole checkpoint: keep decisions, open questions and progress, drop finished items, at most 6000 characters. Each summary is one line of at most 280 characters. '
+    + 'Each content replaces the whole memory: keep decisions, open questions and progress, drop finished items, at most 6000 characters. Each summary is one line of at most 280 characters. '
     + 'Leave out a layer that did not change. If memory_conflicts is present, merge it into your update.'
     + (knowledge ? ' You may also add "notes":[{"kind":"fact|decision|procedure|answer","title":"…","content":"…","message_ids":["…"]}] for settled knowledge that other threads should find later. '
       + 'At most 3 notes, each at most 2000 characters, citing message IDs from this channel. Reuse a title from knowledge_notes to update that note instead of adding a new one.'
@@ -1799,7 +1799,7 @@ Each task receives the newest 20 titles as `context.knowledge_notes` when the sw
 
 - [ ] **Step 2: Update `docs/architecture/memory-mcp.md`**
 
-Add these rows to the tools table, after `session_checkpoint`:
+Add these rows to the tools table, after `session_memory_save`:
 
 ```markdown
 | `knowledge_list` | Read | Newest 20 live notes in this channel (id, kind, title, revision) |

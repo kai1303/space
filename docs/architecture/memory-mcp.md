@@ -52,9 +52,9 @@ MCP keys, and creating a key does not automatically install it in an agent's con
 | `memory_write` | Write | Replace canonical memory using its exact expected revision |
 | `memory_forget` | Write | Remove one `message:`, `document:` or `knowledge:` source section |
 | `channel_memory` | Read | Index of recent threads with summaries; `after` cursor, `limit` 1–50 |
-| `thread_memory` | Read | One thread's checkpoint, recent messages and session list |
+| `thread_memory` | Read | One thread's memory, recent messages and session list |
 | `session_memory` | Read | Own session only (installation-bound key); others return `session_private` |
-| `session_checkpoint` | Contribute/Write | Revision-checked session checkpoint with summary |
+| `session_memory_save` | Contribute/Write | Revision-checked session memory with summary |
 | `knowledge_list` | Read | Newest 20 live notes in this channel (id, kind, title, revision) |
 | `knowledge_add` | Contribute/Write | Save a note with a caller UUID and 1–20 channel message IDs; a used title returns `title_taken` |
 | `knowledge_update` | Write | Revision-checked change to a note; stale revisions return `note_conflict` |

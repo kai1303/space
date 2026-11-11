@@ -2,13 +2,13 @@
 
 **Goal:** Give agents permission-checked short-term thread context through MCP and the same context during invocation/navigation.
 
-**Architecture:** Keep conversations authoritative. Build bounded root/recent-message snapshots, optionally augmented by agent-written Markdown checkpoints with source IDs and sequence watermarks. Thread-scoped MCP keys are separate grants on the existing transport and do not enable channel memory.
+**Architecture:** Keep conversations authoritative. Build bounded root/recent-message snapshots, optionally augmented by agent-written Markdown memories with source IDs and sequence watermarks. Thread-scoped MCP keys are separate grants on the existing transport and do not enable channel memory.
 
 **Tech stack:** TypeScript, PostgreSQL, Drizzle, Fastify, existing MCP SDK.
 
-- [x] Add real MCP integration tests for memory-off thread grants, original request preservation, paginated evidence, checkpoint revision conflicts, isolation, read-only grants and revocation. Run to observe missing-route failure.
-- [x] Add migration 026 for thread-scoped connections and revisioned checkpoints; retain existing channel-key behavior.
-- [x] Add shared thread-context reader and checkpoint writer with bounded fields, same-thread evidence validation, sequence snapshots and optimistic concurrency.
+- [x] Add real MCP integration tests for memory-off thread grants, original request preservation, paginated evidence, memory revision conflicts, isolation, read-only grants and revocation. Run to observe missing-route failure.
+- [x] Add migration 026 for thread-scoped connections and revisioned memories; retain existing channel-key behavior.
+- [x] Add shared thread-context reader and memory writer with bounded fields, same-thread evidence validation, sequence snapshots and optimistic concurrency.
 - [x] Register human context/grant routes and thread-only MCP tools on `/mcp/memory`. Keep channel tools unavailable to thread keys.
 - [x] Include working memory in agent invocation and Navigator without changing the target pending message; preserve strict contract validation.
 - [x] Build affected packages; run MCP, Navigator, invocation contract and delivery tests. Review changes and document use and limitations.

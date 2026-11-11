@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Show layered short-term memory as a Neo4j-style graph in the channel Memory dialog, and let channel managers edit checkpoints. Spec: `docs/superpowers/specs/2026-11-11-memory-graph-ui-design.md`.
+**Goal:** Show layered short-term memory as a Neo4j-style graph in the channel Memory dialog, and let channel managers edit memories. Spec: `docs/superpowers/specs/2026-11-11-memory-graph-ui-design.md`.
 
-**Architecture:** The server gets 5 routes over the existing `@space/postgres/layered-memory` functions, plus person-facing read/write variants. Migration 087 adds a trigger so every checkpoint insert sends a channel live update. `@space/ui/graph` holds a generic `GraphCanvas`: React draws the SVG and handles zoom and drag, and `d3-force` computes the layout synchronously (300 ticks max, seeded, no timers). `apps/web/src/features/memory` adds `MemoryGraph` (data and expand state) and `MemoryInspector` (details and manager editor), and `ChannelMemory` gets Graph and Notes views.
+**Architecture:** The server gets 5 routes over the existing `@space/postgres/layered-memory` functions, plus person-facing read/write variants. Migration 087 adds a trigger so every memory insert sends a channel live update. `@space/ui/graph` holds a generic `GraphCanvas`: React draws the SVG and handles zoom and drag, and `d3-force` computes the layout synchronously (300 ticks max, seeded, no timers). `apps/web/src/features/memory` adds `MemoryGraph` (data and expand state) and `MemoryInspector` (details and manager editor), and `ChannelMemory` gets Graph and Notes views.
 
 **Tech Stack:** TypeScript, Fastify, PostgreSQL, React 19, `d3-force` 3 (ISC), Vitest + Testing Library, `node:test` + `tsx`.
 
@@ -23,9 +23,9 @@
 
 | File | Responsibility |
 | --- | --- |
-| Create `adapters/postgres/migrations/087_memory_updates.sql` | Trigger: checkpoint insert → `chat_delivery_outbox` row (`metadata`) |
+| Create `adapters/postgres/migrations/087_memory_updates.sql` | Trigger: memory insert → `chat_delivery_outbox` row (`metadata`) |
 | Modify `adapters/postgres/migrate.ts` | Register 087 |
-| Modify `adapters/postgres/layered-memory.ts` | `readSessionMemoryForPerson`, `writeThreadCheckpointForPerson`, `writeSessionCheckpointForPerson` |
+| Modify `adapters/postgres/layered-memory.ts` | `readSessionMemoryForPerson`, `writeThreadMemoryForPerson`, `writeSessionMemoryForPerson` |
 | Modify `apps/server/memory.ts` | 5 routes |
 | Modify `apps/server/api.ts` | Pass a session locator into `registerMemoryRoutes` |
 | Create `tests/integration/memory-graph.test.ts` | Route and trigger tests |
@@ -98,7 +98,7 @@ async function agentSave(a: { channel_id: string; installation_id: string }, thr
     memory: { [part]: { base_revision: revision, summary, content: `# ${summary}` } } });
 }
 
-test('a checkpoint insert enqueues one channel metadata delivery', async () => {
+test('a memory insert enqueues one channel metadata delivery', async () => {
   const a = await bootstrap(pool);
   const root = await post(a.owner_token, a.channel_id, 'Start');
   const before = (await pool.query(`SELECT count(*)::int AS n FROM chat_delivery_outbox WHERE channel_id=$1 AND resource_scope='metadata'`, [a.channel_id])).rows[0].n;
@@ -118,14 +118,14 @@ Expected: FAIL. `afterCount - before` is `0`.
 Create `adapters/postgres/migrations/087_memory_updates.sql`:
 
 ```sql
--- Every saved checkpoint tells open memory views in the channel to re-read. One row per insert.
+-- Every saved memory tells open memory views in the channel to re-read. One row per insert.
 CREATE FUNCTION enqueue_memory_update() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
   INSERT INTO chat_delivery_outbox(channel_id, workspace_id, resource_scope)
     SELECT NEW.channel_id, c.workspace_id, 'metadata' FROM channels c WHERE c.id = NEW.channel_id;
   RETURN NULL;
 END; $$;
-CREATE TRIGGER thread_checkpoints_memory_update AFTER INSERT ON thread_checkpoints
+CREATE TRIGGER memory_revisions_memory_update AFTER INSERT ON memory_revisions
   FOR EACH ROW EXECUTE FUNCTION enqueue_memory_update();
 ```
 
@@ -142,7 +142,7 @@ Expected: PASS (1 test).
 
 ```bash
 git add adapters/postgres/migrations/087_memory_updates.sql adapters/postgres/migrate.ts tests/integration/memory-graph.test.ts
-git commit -m "Send a channel update when a memory checkpoint is saved"
+git commit -m "Send a channel update when a memory is saved"
 ```
 
 ---
@@ -158,24 +158,24 @@ git commit -m "Send a channel update when a memory checkpoint is saved"
 Append to `tests/integration/memory-graph.test.ts`:
 
 ```typescript
-import { readSessionMemoryForPerson, writeThreadCheckpointForPerson, writeSessionCheckpointForPerson } from '@space/postgres/layered-memory';
+import { readSessionMemoryForPerson, writeThreadMemoryForPerson, writeSessionMemoryForPerson } from '@space/postgres/layered-memory';
 
 test('person variants read any session and write with the person as producer', async () => {
   const a = await bootstrap(pool);
   const root = await post(a.owner_token, a.channel_id, 'Start');
   const session = await addSession(a, root.thread_id);
   const person = { id: a.owner_id, name: 'Demo owner' };
-  const thread = await writeThreadCheckpointForPerson(db(), a.channel_id, root.thread_id, { revision: 0, summary: 'Edited', content: '# Fixed by a person' }, person);
+  const thread = await writeThreadMemoryForPerson(db(), a.channel_id, root.thread_id, { revision: 0, summary: 'Edited', content: '# Fixed by a person' }, person);
   assert.equal(thread.revision, 1);
   assert.equal(thread.producer_name, 'Demo owner');
-  const own = await writeSessionCheckpointForPerson(db(), a.channel_id, session, { revision: 0, summary: 'Session edit', content: 'x' }, person);
+  const own = await writeSessionMemoryForPerson(db(), a.channel_id, session, { revision: 0, summary: 'Session edit', content: 'x' }, person);
   assert.equal(own.revision, 1);
   const read = await readSessionMemoryForPerson(db(), a.channel_id, session);
-  assert.equal(read.checkpoint?.summary, 'Session edit');
-  await assert.rejects(writeThreadCheckpointForPerson(db(), a.channel_id, root.thread_id, { revision: 0, summary: 'Stale', content: 'y' }, person), (e: any) => e.code === 'thread_checkpoint_conflict');
+  assert.equal(read.memory?.summary, 'Session edit');
+  await assert.rejects(writeThreadMemoryForPerson(db(), a.channel_id, root.thread_id, { revision: 0, summary: 'Stale', content: 'y' }, person), (e: any) => e.code === 'thread_memory_conflict');
   await pool.query(`UPDATE agent_sessions SET state='ended' WHERE id=$1`, [session]);
   assert.equal((await readSessionMemoryForPerson(db(), a.channel_id, session)).node.state, 'ended');
-  await assert.rejects(writeSessionCheckpointForPerson(db(), a.channel_id, session, { revision: 1, summary: 'Late', content: 'z' }, person), (e: any) => e.code === 'session_ended');
+  await assert.rejects(writeSessionMemoryForPerson(db(), a.channel_id, session, { revision: 1, summary: 'Late', content: 'z' }, person), (e: any) => e.code === 'session_ended');
 });
 ```
 
@@ -191,7 +191,7 @@ In `adapters/postgres/layered-memory.ts`:
 
 ```typescript
 async function sessionMemoryFor(c: DbSession, channelId: string, session: Awaited<ReturnType<typeof sessionRow>>): Promise<SessionMemory> {
-  const checkpoint = await sessionCheckpoint(c, session.id);
+  const memory = await sessionMemoryRow(c, session.id);
   const recent = await rows<{ id: string; sequence: string; text: string; text_length: number; author_id: string; attachments: ThreadContextMessage['attachments'] }>(c, sql`
     SELECT id, sequence::text, left(text, 1000) AS text, length(text) AS text_length, installation_id AS author_id, attachments
     FROM messages WHERE channel_id = ${channelId} AND thread_id = ${session.thread_id} AND agent_session_id = ${session.id}
@@ -201,8 +201,8 @@ async function sessionMemoryFor(c: DbSession, channelId: string, session: Awaite
     return { id: row.id, sequence: row.sequence, text, text_truncated: row.text_length > 1000 || text !== row.text, author: { id: row.author_id, kind: 'agent' }, attachments: row.attachments };
   });
   return {
-    node: { ref: { kind: 'session', id: session.id }, parent: { kind: 'thread', id: session.thread_id }, summary: checkpoint?.summary ?? session.title, updated_at: checkpoint?.created_at ?? session.created_at, children: null, title: session.title, agent: session.agent, state: session.state },
-    checkpoint, messages, checkpoint_chars: checkpoint?.content.length ?? 0, limit: CHECKPOINT_LIMIT,
+    node: { ref: { kind: 'session', id: session.id }, parent: { kind: 'thread', id: session.thread_id }, summary: memory?.summary ?? session.title, updated_at: memory?.created_at ?? session.created_at, children: null, title: session.title, agent: session.agent, state: session.state },
+    memory, messages, memory_chars: memory?.content.length ?? 0, limit: MEMORY_LIMIT,
   };
 }
 
@@ -218,54 +218,54 @@ export async function readSessionMemoryForPerson(c: DbSession, channelId: string
 }
 ```
 
-2. Split `writeSessionCheckpoint` the same way. Replace it with:
+2. Split `writeSessionMemory` the same way. Replace it with:
 
 ```typescript
-async function insertSessionCheckpoint(c: DbSession, channelId: string, session: Awaited<ReturnType<typeof sessionRow>>, input: ThreadCheckpointInput, producer: { id: string; name: string }): Promise<ThreadCheckpoint> {
+async function insertSessionMemory(c: DbSession, channelId: string, session: Awaited<ReturnType<typeof sessionRow>>, input: MemoryInput, producer: { id: string; name: string }): Promise<MemoryRecord> {
   if (session.state === 'ended') throw new AppError(409, 'session_ended');
   await assertContextThread(c, channelId, session.thread_id);
-  const current = await sessionCheckpoint(c, session.id);
-  if ((current?.revision ?? 0) !== input.revision) throw new AppError(409, 'session_checkpoint_conflict');
-  if (current && BigInt(chatCursor(input.through_sequence)) < BigInt(current.through_sequence)) throw new AppError(409, 'session_checkpoint_watermark_conflict');
-  await assertCheckpointSources(c, channelId, session.thread_id, input, 'session');
-  const [saved] = await rows<ThreadCheckpoint>(c, sql`INSERT INTO thread_checkpoints(thread_id,session_id,channel_id,revision,through_sequence,content,summary,source_message_ids,producer_id,producer_name)
+  const current = await sessionMemoryRow(c, session.id);
+  if ((current?.revision ?? 0) !== input.revision) throw new AppError(409, 'session_memory_conflict');
+  if (current && BigInt(chatCursor(input.through_sequence)) < BigInt(current.through_sequence)) throw new AppError(409, 'session_memory_watermark_conflict');
+  await assertMemorySources(c, channelId, session.thread_id, input, 'session');
+  const [saved] = await rows<MemoryRecord>(c, sql`INSERT INTO memory_revisions(thread_id,session_id,channel_id,revision,through_sequence,content,summary,source_message_ids,producer_id,producer_name)
     VALUES(${session.thread_id},${session.id},${channelId},${input.revision + 1},${input.through_sequence}::bigint,${input.content},${input.summary},${sql.param(input.source_message_ids)}::uuid[],${producer.id},${producer.name})
     ON CONFLICT (session_id, revision) WHERE session_id IS NOT NULL DO NOTHING
-    RETURNING ${checkpointColumns}`);
-  if (!saved) throw new AppError(409, 'session_checkpoint_conflict');
+    RETURNING ${memoryColumns}`);
+  if (!saved) throw new AppError(409, 'session_memory_conflict');
   return saved;
 }
 
 // Optimistic concurrency: the partial unique index on (session_id, revision) rejects a competing insert.
-export async function writeSessionCheckpoint(c: DbSession, channelId: string, sessionId: string, installationId: string | null, input: ThreadCheckpointInput, producer: { id: string; name: string }): Promise<ThreadCheckpoint> {
+export async function writeSessionMemory(c: DbSession, channelId: string, sessionId: string, installationId: string | null, input: MemoryInput, producer: { id: string; name: string }): Promise<MemoryRecord> {
   const session = await sessionRow(c, channelId, sessionId);
   ownSession(session, installationId);
-  return insertSessionCheckpoint(c, channelId, session, input, producer);
+  return insertSessionMemory(c, channelId, session, input, producer);
 }
 ```
 
 3. Add the person write helpers at the end of the file:
 
 ```typescript
-export interface PersonCheckpointInput { revision: number; summary: string; content: string }
+export interface PersonMemoryInput { revision: number; summary: string; content: string }
 
 // Person edits anchor to the thread's latest message, like turn-end saves.
-async function personInput(c: DbSession, channelId: string, threadId: string, input: PersonCheckpointInput): Promise<ThreadCheckpointInput> {
+async function personInput(c: DbSession, channelId: string, threadId: string, input: PersonMemoryInput): Promise<MemoryInput> {
   const [last] = await rows<{ id: string; sequence: string }>(c, sql`SELECT id, sequence::text FROM messages WHERE channel_id=${channelId} AND thread_id=${threadId} ORDER BY sequence DESC LIMIT 1`);
   if (!last) throw new AppError(409, 'thread_empty');
-  return parseThreadCheckpoint({ revision: input.revision, through_sequence: last.sequence, summary: input.summary, content: input.content, source_message_ids: [last.id] });
+  return parseMemoryInput({ revision: input.revision, through_sequence: last.sequence, summary: input.summary, content: input.content, source_message_ids: [last.id] });
 }
-export async function writeThreadCheckpointForPerson(c: DbSession, channelId: string, threadId: string, input: PersonCheckpointInput, person: { id: string; name: string }): Promise<ThreadCheckpoint> {
+export async function writeThreadMemoryForPerson(c: DbSession, channelId: string, threadId: string, input: PersonMemoryInput, person: { id: string; name: string }): Promise<MemoryRecord> {
   await assertContextThread(c, channelId, threadId);
-  return writeThreadCheckpoint(c, channelId, threadId, await personInput(c, channelId, threadId, input), person);
+  return writeThreadMemory(c, channelId, threadId, await personInput(c, channelId, threadId, input), person);
 }
-export async function writeSessionCheckpointForPerson(c: DbSession, channelId: string, sessionId: string, input: PersonCheckpointInput, person: { id: string; name: string }): Promise<ThreadCheckpoint> {
+export async function writeSessionMemoryForPerson(c: DbSession, channelId: string, sessionId: string, input: PersonMemoryInput, person: { id: string; name: string }): Promise<MemoryRecord> {
   const session = await sessionRow(c, channelId, sessionId);
-  return insertSessionCheckpoint(c, channelId, session, await personInput(c, channelId, session.thread_id, input), person);
+  return insertSessionMemory(c, channelId, session, await personInput(c, channelId, session.thread_id, input), person);
 }
 ```
 
-Add `parseThreadCheckpoint` to the `@space/contracts` import at the top of the file.
+Add `parseMemoryInput` to the `@space/contracts` import at the top of the file.
 
 - [ ] **Step 4: Run the tests**
 
@@ -313,7 +313,7 @@ test('routes: members read, managers edit, conflicts and access are enforced', a
   assert.equal(saved.producer_name, 'Demo owner');
   const stale = await app.inject({ method: 'POST', url: `/v1${base}/threads/${root.thread_id}/memory`, headers: { authorization: `Bearer ${a.owner_token}` }, payload: { revision: 1, summary: 'Old', content: 'y' } });
   assert.equal(stale.statusCode, 409);
-  assert.match(stale.body, /thread_checkpoint_conflict/);
+  assert.match(stale.body, /thread_memory_conflict/);
   await api(a.owner_token, 'POST', `${base}/threads/${root.thread_id}/memory`, { revision: 2, summary: 'x'.repeat(281), content: 'y' }, 400);
   await api(a.owner_token, 'POST', `${base}/agent-sessions/${session}/memory`, { revision: 0, summary: 'Session fixed', content: 'ok' });
 
@@ -339,7 +339,7 @@ In `apps/server/memory.ts`:
 Add imports:
 
 ```typescript
-import { readChannelMemory, readThreadMemory, readSessionMemoryForPerson, writeThreadCheckpointForPerson, writeSessionCheckpointForPerson } from '@space/postgres/layered-memory';
+import { readChannelMemory, readThreadMemory, readSessionMemoryForPerson, writeThreadMemoryForPerson, writeSessionMemoryForPerson } from '@space/postgres/layered-memory';
 import { sql } from 'drizzle-orm';
 ```
 
@@ -383,7 +383,7 @@ Inside the function, after the existing `threadPath` routes, add:
     const input = layerBody(r.body);
     return store.channel(r.actorId, r.params.channelId, async (channel, c) => {
       manager(channel);
-      return writeThreadCheckpointForPerson(c, channel.channel_id, uuid(r.params.threadId), input, await person(c, r.actorId));
+      return writeThreadMemoryForPerson(c, channel.channel_id, uuid(r.params.threadId), input, await person(c, r.actorId));
     });
   });
   app.get<{ Params: { channelId: string; sessionId: string } }>('/v1/channels/:channelId/agent-sessions/:sessionId/memory', async r => {
@@ -397,7 +397,7 @@ Inside the function, after the existing `threadPath` routes, add:
     await visibleSession(r.actorId, channelId, sessionId);
     return store.channel(r.actorId, channelId, async (channel, c) => {
       manager(channel);
-      return writeSessionCheckpointForPerson(c, channel.channel_id, sessionId, input, await person(c, r.actorId));
+      return writeSessionMemoryForPerson(c, channel.channel_id, sessionId, input, await person(c, r.actorId));
     });
   });
 ```
@@ -900,10 +900,10 @@ git commit -m "Add GraphCanvas stories"
 - [ ] **Step 1: Write the API module `memory-api.ts`**
 
 ```typescript
-import type { ChannelMemoryPage, SessionMemory, ThreadCheckpoint, ThreadMemory } from '@space/contracts';
+import type { ChannelMemoryPage, SessionMemory, MemoryRecord, ThreadMemory } from '@space/contracts';
 import { request } from '../../shared/api/request.js';
 
-export type CheckpointEdit = { revision: number; summary: string; content: string };
+export type MemoryEdit = { revision: number; summary: string; content: string };
 export const memoryApi = {
   layers: (channel: string, after?: string, signal?: AbortSignal) =>
     request<ChannelMemoryPage>(`/channels/${channel}/memory/layers${after ? `?after=${encodeURIComponent(after)}&limit=50` : ''}`, undefined, undefined, 'POST', signal),
@@ -911,10 +911,10 @@ export const memoryApi = {
     request<ThreadMemory>(`/channels/${channel}/threads/${thread}/memory`, undefined, undefined, 'POST', signal),
   session: (channel: string, session: string, signal?: AbortSignal) =>
     request<SessionMemory>(`/channels/${channel}/agent-sessions/${session}/memory`, undefined, undefined, 'POST', signal),
-  saveThread: (channel: string, thread: string, edit: CheckpointEdit) =>
-    request<ThreadCheckpoint>(`/channels/${channel}/threads/${thread}/memory`, edit),
-  saveSession: (channel: string, session: string, edit: CheckpointEdit) =>
-    request<ThreadCheckpoint>(`/channels/${channel}/agent-sessions/${session}/memory`, edit),
+  saveThread: (channel: string, thread: string, edit: MemoryEdit) =>
+    request<MemoryRecord>(`/channels/${channel}/threads/${thread}/memory`, edit),
+  saveSession: (channel: string, session: string, edit: MemoryEdit) =>
+    request<MemoryRecord>(`/channels/${channel}/agent-sessions/${session}/memory`, edit),
 };
 ```
 
@@ -943,8 +943,8 @@ function stub(pages: { nodes: unknown[]; next_cursor: string | null }[]) {
   let summary = 'Thread 1';
   const fetch = vi.fn(async (path: string) => {
     if (path.includes('/memory/layers')) return response({ channel_id: ch, ...(path.includes('after=') ? pages[1] : { ...pages[0], nodes: pages[0]!.nodes.map((n: any, i) => i === 0 ? { ...n, summary } : n) }) });
-    if (path.includes('/threads/')) return response({ node: thread(1), context: { thread_id: uuid(1), through_sequence: '1', root: null, messages: [], checkpoint: null, has_earlier_messages: false },
-      sessions: [{ ref: { kind: 'session', id: uuid(900) }, parent: { kind: 'thread', id: uuid(1) }, summary: 'Run', updated_at: 'x', children: null, title: 'Run', agent: 'Codex', state: 'ended' }], checkpoint_chars: 0, limit: 6000 });
+    if (path.includes('/threads/')) return response({ node: thread(1), context: { thread_id: uuid(1), through_sequence: '1', root: null, messages: [], memory: null, has_earlier_messages: false },
+      sessions: [{ ref: { kind: 'session', id: uuid(900) }, parent: { kind: 'thread', id: uuid(1) }, summary: 'Run', updated_at: 'x', children: null, title: 'Run', agent: 'Codex', state: 'ended' }], memory_chars: 0, limit: 6000 });
     return response({}, 404);
   });
   vi.stubGlobal('fetch', fetch);
@@ -1111,7 +1111,7 @@ export function MemoryGraph({ channel, name, onSelect, onAccessLost, onOpenThrea
     {loaded && <GraphCanvas label={`Memory graph for #${name}`} nodes={nodes} links={links} palette={palette}
       selectedId={selected} expandedIds={new Set([...expanded.keys()].map(id => key('thread', id)))}
       onSelect={select} onToggleExpand={id => void toggle(id)} menu={menu} />}
-    {loaded && !threads.length && !error && <p className="memory-graph-empty">No thread has a checkpoint in the last 7 days.</p>}
+    {loaded && !threads.length && !error && <p className="memory-graph-empty">No thread has a memory in the last 7 days.</p>}
     {cursor && <Button size="sm" loading={more} onClick={() => void loadMore()}>Load more threads</Button>}
     {hidden.size > 0 && <Button size="sm" variant="ghost" onClick={() => setHidden(new Set())}>Show hidden ({hidden.size})</Button>}
   </div>;
@@ -1170,11 +1170,11 @@ import { MemoryInspector } from './MemoryInspector.js';
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 const ch = '00000000-0000-4000-8000-0000000000c1', th = '00000000-0000-4000-8000-000000000001';
 const node = { ref: { kind: 'thread' as const, id: th }, parent: { kind: 'channel' as const, id: ch }, summary: 'Dedupe fix', updated_at: '2026-11-11 10:00:00+00', children: { kind: 'session' as const, count: 0 } };
-const checkpoint = (revision: number, content: string) => ({ revision, through_sequence: '3', content, summary: `Rev ${revision}`, source_message_ids: ['00000000-0000-4000-8000-000000000009'], producer_id: 'x', producer_name: 'Codex', created_at: '2026-11-11 10:00:00+00' });
-const detail = (revision: number, content: string) => ({ node: { ...node, summary: `Rev ${revision}` }, context: { thread_id: th, through_sequence: '3', root: null, messages: [], checkpoint: checkpoint(revision, content), has_earlier_messages: false }, sessions: [], checkpoint_chars: content.length, limit: 6000 });
+const memory = (revision: number, content: string) => ({ revision, through_sequence: '3', content, summary: `Rev ${revision}`, source_message_ids: ['00000000-0000-4000-8000-000000000009'], producer_id: 'x', producer_name: 'Codex', created_at: '2026-11-11 10:00:00+00' });
+const detail = (revision: number, content: string) => ({ node: { ...node, summary: `Rev ${revision}` }, context: { thread_id: th, through_sequence: '3', root: null, messages: [], memory: memory(revision, content), has_earlier_messages: false }, sessions: [], memory_chars: content.length, limit: 6000 });
 const response = (body: unknown, status = 200) => ({ ok: status < 400, status, json: async () => body });
 
-it('members see the checkpoint but no Edit', async () => {
+it('members see the memory but no Edit', async () => {
   vi.stubGlobal('fetch', vi.fn(async () => response(detail(3, '# Decisions\nDedupe'))));
   render(<MemoryInspector channel={ch} selection={{ kind: 'thread', node }} canManage={false} onDirtyChange={() => {}} />);
   expect(await screen.findByText(/Dedupe$/)).toBeTruthy();
@@ -1185,19 +1185,19 @@ it('members see the checkpoint but no Edit', async () => {
 it('a manager saves, and on 409 keeps the draft and shows the newer text', async () => {
   let reads = 0, saves = 0;
   vi.stubGlobal('fetch', vi.fn(async (_path: string, init?: RequestInit) => {
-    if (init?.method === 'POST') return ++saves === 1 ? response({ error: 'thread_checkpoint_conflict' }, 409) : response(checkpoint(5, 'mine'));
+    if (init?.method === 'POST') return ++saves === 1 ? response({ error: 'thread_memory_conflict' }, 409) : response(memory(5, 'mine'));
     return response(++reads === 1 ? detail(3, 'old') : detail(4, 'someone else'));
   }));
   const dirty = vi.fn();
   render(<MemoryInspector channel={ch} selection={{ kind: 'thread', node }} canManage onDirtyChange={dirty} />);
   await userEvent.click(await screen.findByRole('button', { name: 'Edit' }));
-  fireEvent.change(screen.getByRole('textbox', { name: 'Checkpoint' }), { target: { value: 'mine' } });
+  fireEvent.change(screen.getByRole('textbox', { name: 'Memory' }), { target: { value: 'mine' } });
   expect(dirty).toHaveBeenLastCalledWith(true);
-  await userEvent.click(screen.getByRole('button', { name: 'Save checkpoint' }));
+  await userEvent.click(screen.getByRole('button', { name: 'Save memory' }));
   expect(await screen.findByText(/changed while you were editing/i)).toBeTruthy();
-  expect((screen.getByRole('textbox', { name: 'Checkpoint' }) as HTMLTextAreaElement).value).toBe('mine');
+  expect((screen.getByRole('textbox', { name: 'Memory' }) as HTMLTextAreaElement).value).toBe('mine');
   expect(screen.getByText('someone else')).toBeTruthy();
-  await userEvent.click(screen.getByRole('button', { name: 'Save checkpoint' }));
+  await userEvent.click(screen.getByRole('button', { name: 'Save memory' }));
   const body = JSON.parse((vi.mocked(fetch).mock.calls.filter(([, i]) => i?.method === 'POST').at(-1)![1]!.body) as string);
   expect(body.revision).toBe(4);
   expect(await screen.findByRole('status')).toBeTruthy();
@@ -1206,7 +1206,7 @@ it('a manager saves, and on 409 keeps the draft and shows the newer text', async
 
 it('ended sessions show no Edit', async () => {
   const session = { ref: { kind: 'session' as const, id: '00000000-0000-4000-8000-000000000900' }, parent: { kind: 'thread' as const, id: th }, summary: 'Run', updated_at: 'x', children: null, title: 'Run', agent: 'Codex', state: 'ended' as const };
-  vi.stubGlobal('fetch', vi.fn(async () => response({ node: session, checkpoint: null, messages: [], checkpoint_chars: 0, limit: 6000 })));
+  vi.stubGlobal('fetch', vi.fn(async () => response({ node: session, memory: null, messages: [], memory_chars: 0, limit: 6000 })));
   render(<MemoryInspector channel={ch} selection={{ kind: 'session', node: session, threadId: th }} canManage onDirtyChange={() => {}} />);
   await screen.findByText(/ended/);
   expect(screen.queryByRole('button', { name: 'Edit' })).toBeNull();
@@ -1225,7 +1225,7 @@ Expected: FAIL, `./MemoryInspector.js` not found.
 ```tsx
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { Button } from '@space/ui/primitives';
-import type { SessionMemory, ThreadCheckpoint, ThreadMemory } from '@space/contracts';
+import type { SessionMemory, MemoryRecord, ThreadMemory } from '@space/contracts';
 import { memoryApi } from './memory-api.js';
 import type { MemorySelection } from './MemoryGraph.js';
 
@@ -1235,10 +1235,10 @@ type Props = {
   onOpenThread?(threadId: string): void;
   onOpenSession?(threadId: string, sessionId: string): void;
 };
-type Detail = { checkpoint: ThreadCheckpoint | null; chars: number; ended: boolean };
+type Detail = { memory: MemoryRecord | null; chars: number; ended: boolean };
 const toDetail = (data: ThreadMemory | SessionMemory): Detail => 'context' in data
-  ? { checkpoint: data.context.checkpoint, chars: data.checkpoint_chars, ended: false }
-  : { checkpoint: data.checkpoint, chars: data.checkpoint_chars, ended: data.node.state === 'ended' };
+  ? { memory: data.context.memory, chars: data.memory_chars, ended: false }
+  : { memory: data.memory, chars: data.memory_chars, ended: data.node.state === 'ended' };
 
 export function MemoryInspector(props: Props) {
   const { selection } = props;
@@ -1250,7 +1250,7 @@ export function MemoryInspector(props: Props) {
 function NodeInspector({ channel, selection, canManage, onDirtyChange, onOpenThread, onOpenSession }: Props & { selection: Exclude<MemorySelection, { kind: 'channel' }> }) {
   const [detail, setDetail] = useState<Detail>(), [error, setError] = useState('');
   const [editing, setEditing] = useState(false), [summary, setSummary] = useState(''), [content, setContent] = useState('');
-  const [base, setBase] = useState(0), [newer, setNewer] = useState<ThreadCheckpoint | null>(), [busy, setBusy] = useState(false), [notice, setNotice] = useState('');
+  const [base, setBase] = useState(0), [newer, setNewer] = useState<MemoryRecord | null>(), [busy, setBusy] = useState(false), [notice, setNotice] = useState('');
   const dirtyChange = useRef(onDirtyChange); dirtyChange.current = onDirtyChange;
   const id = selection.node.ref.id;
   const read = (signal?: AbortSignal) => selection.kind === 'thread' ? memoryApi.thread(channel, id, signal) : memoryApi.session(channel, id, signal);
@@ -1262,12 +1262,12 @@ function NodeInspector({ channel, selection, canManage, onDirtyChange, onOpenThr
     return () => { controller.abort(); dirtyChange.current(false); };
   }, [channel, id, selection.kind]);
 
-  const dirty = editing && (summary !== (detail?.checkpoint?.summary ?? '') || content !== (detail?.checkpoint?.content ?? ''));
+  const dirty = editing && (summary !== (detail?.memory?.summary ?? '') || content !== (detail?.memory?.content ?? ''));
   useEffect(() => { dirtyChange.current(dirty); }, [dirty]);
 
   function startEdit() {
-    setSummary(detail?.checkpoint?.summary ?? selection.node.summary); setContent(detail?.checkpoint?.content ?? '');
-    setBase(detail?.checkpoint?.revision ?? 0); setNewer(undefined); setNotice(''); setEditing(true);
+    setSummary(detail?.memory?.summary ?? selection.node.summary); setContent(detail?.memory?.content ?? '');
+    setBase(detail?.memory?.revision ?? 0); setNewer(undefined); setNotice(''); setEditing(true);
   }
   async function save(event: FormEvent) {
     event.preventDefault();
@@ -1276,19 +1276,19 @@ function NodeInspector({ channel, selection, canManage, onDirtyChange, onOpenThr
     const edit = { revision: base, summary, content };
     try {
       const saved = selection.kind === 'thread' ? await memoryApi.saveThread(channel, id, edit) : await memoryApi.saveSession(channel, id, edit);
-      setDetail(old => ({ checkpoint: saved, chars: saved.content.length, ended: old?.ended ?? false }));
+      setDetail(old => ({ memory: saved, chars: saved.content.length, ended: old?.ended ?? false }));
       setEditing(false); setNewer(undefined); setNotice(`Saved as revision ${saved.revision}.`);
     } catch (reason) {
       const code = reason instanceof Error ? reason.message : '';
-      if (code.endsWith('_checkpoint_conflict')) {
+      if (code.endsWith('_memory_conflict')) {
         const latest = toDetail(await read());
-        setNewer(latest.checkpoint); setBase(latest.checkpoint?.revision ?? 0); setDetail(old => ({ ...latest, ended: old?.ended ?? latest.ended }));
-        setError('This checkpoint changed while you were editing. Your draft is kept. Compare with the newer text, then save again.');
+        setNewer(latest.memory); setBase(latest.memory?.revision ?? 0); setDetail(old => ({ ...latest, ended: old?.ended ?? latest.ended }));
+        setError('This memory changed while you were editing. Your draft is kept. Compare with the newer text, then save again.');
       } else setError(code.replaceAll('_', ' ') || 'Could not save');
     } finally { setBusy(false); }
   }
 
-  const cp = detail?.checkpoint;
+  const cp = detail?.memory;
   const title = selection.kind === 'thread' ? selection.node.summary : `${selection.node.agent ?? 'Agent'} · ${selection.node.title ?? ''}`;
   return <aside className="memory-inspector" aria-label="Memory details">
     <h3>{title}</h3>
@@ -1296,17 +1296,17 @@ function NodeInspector({ channel, selection, canManage, onDirtyChange, onOpenThr
     {notice && <p role="status">{notice}</p>}
     {!detail && !error && <p role="status">Loading…</p>}
     {detail && <>
-      <small>{selection.kind}{detail.ended ? ' · ended' : ''}{cp ? ` · rev ${cp.revision} · ${cp.producer_name} · ${cp.created_at}` : ' · no checkpoint yet'}</small>
+      <small>{selection.kind}{detail.ended ? ' · ended' : ''}{cp ? ` · rev ${cp.revision} · ${cp.producer_name} · ${cp.created_at}` : ' · no memory yet'}</small>
       <label>Size <meter min={0} max={6000} value={detail.chars} /> {detail.chars} / 6000</label>
-      {!editing && cp && <details open><summary>Checkpoint</summary><pre>{cp.content}</pre></details>}
+      {!editing && cp && <details open><summary>Memory</summary><pre>{cp.content}</pre></details>}
       {!editing && cp && <details><summary>Sources ({cp.source_message_ids.length})</summary><ul>{cp.source_message_ids.map(m => <li key={m}><code>{m}</code></li>)}</ul></details>}
       {canManage && !detail.ended && !editing && <Button size="sm" onClick={startEdit}>Edit</Button>}
       {editing && <form onSubmit={event => void save(event)}>
         <label>Summary<input aria-label="Summary" value={summary} maxLength={280} required onChange={e => setSummary(e.target.value)} /> <small>{summary.length} / 280</small></label>
-        <label>Checkpoint<textarea aria-label="Checkpoint" value={content} maxLength={6000} required onChange={e => setContent(e.target.value)} /> <small>{content.length} / 6000</small></label>
+        <label>Memory<textarea aria-label="Memory" value={content} maxLength={6000} required onChange={e => setContent(e.target.value)} /> <small>{content.length} / 6000</small></label>
         {newer && <details open><summary>Newer version (rev {newer.revision})</summary><pre>{newer.content}</pre></details>}
-        <div><Button type="submit" size="sm" loading={busy} disabled={!summary.trim() || !content.trim()}>Save checkpoint</Button>{' '}
-          <Button type="button" size="sm" variant="ghost" onClick={() => { if (!dirty || window.confirm('Discard your checkpoint edits?')) { setEditing(false); setError(''); setNewer(undefined); } }}>Cancel</Button></div>
+        <div><Button type="submit" size="sm" loading={busy} disabled={!summary.trim() || !content.trim()}>Save memory</Button>{' '}
+          <Button type="button" size="sm" variant="ghost" onClick={() => { if (!dirty || window.confirm('Discard your memory edits?')) { setEditing(false); setError(''); setNewer(undefined); } }}>Cancel</Button></div>
       </form>}
       {selection.kind === 'thread' && onOpenThread && <Button size="sm" variant="ghost" onClick={() => onOpenThread(id)}>Open thread →</Button>}
       {selection.kind === 'session' && onOpenSession && <Button size="sm" variant="ghost" onClick={() => onOpenSession(selection.threadId, id)}>Open session →</Button>}
@@ -1315,7 +1315,7 @@ function NodeInspector({ channel, selection, canManage, onDirtyChange, onOpenThr
 }
 ```
 
-Sources are listed as IDs. The panel shows checkpoint text in `<pre>` as plain text, which follows the spec's no-HTML rule.
+Sources are listed as IDs. The panel shows memory text in `<pre>` as plain text, which follows the spec's no-HTML rule.
 
 - [ ] **Step 4: Run the inspector tests**
 
@@ -1448,7 +1448,7 @@ The layout uses `d3-force` (ISC), computed synchronously before paint. React dra
 ```markdown
 ### Memory graph
 
-The channel Memory dialog opens on a **Graph** view: channel → `HAS` → thread → `HAS_SESSION` → session. Click a node for details. Double-click a thread to show or hide its sessions. Channel managers can edit a thread or session checkpoint. A save is a normal revision, so a stale save returns `409` and keeps the draft. Routes: `GET /v1/channels/:channelId/memory/layers`, `GET|POST /v1/channels/:channelId/threads/:threadId/memory`, `GET|POST /v1/channels/:channelId/agent-sessions/:sessionId/memory`. Migration `087_memory_updates.sql` sends a channel live update on every checkpoint insert.
+The channel Memory dialog opens on a **Graph** view: channel → `HAS` → thread → `HAS_SESSION` → session. Click a node for details. Double-click a thread to show or hide its sessions. Channel managers can edit a thread or session memory. A save is a normal revision, so a stale save returns `409` and keeps the draft. Routes: `GET /v1/channels/:channelId/memory/layers`, `GET|POST /v1/channels/:channelId/threads/:threadId/memory`, `GET|POST /v1/channels/:channelId/agent-sessions/:sessionId/memory`. Migration `087_memory_updates.sql` sends a channel live update on every memory insert.
 ```
 
 - [ ] **Step 3: Typecheck and build**
@@ -1494,7 +1494,7 @@ git commit -m "Document the memory graph"
 | 500-node limit | 5 |
 | 4 node kinds and colours, `HAS` / `HAS_SESSION` | 7 |
 | 20 first, 50 per load more, 50 sessions | 3 (server limits), 7 |
-| Details panel: meta, checkpoint, sources, size bar, open actions | 8 |
+| Details panel: meta, memory, sources, size bar, open actions | 8 |
 | Manager-only edit, `409` keeps draft and shows newer text, dirty close asks, ended sessions not editable | 2, 3, 8 |
 | 5 routes with membership, manager and session access rules and error codes | 3 |
 | Migration 087 trigger and channel live refresh that keeps expansion | 1, 7 |

@@ -184,11 +184,11 @@ The Memory dialog opens on a **Graph** view. **Notes** holds the Markdown editor
 (#channel) ──HAS──► (thread) ──HAS_SESSION──► (agent session)
 ```
 
-- Click a node to see its summary, revision, writer, checkpoint text, sources and size in the right panel.
+- Click a node to see its summary, revision, writer, memory text, sources and size in the right panel.
 - Double-click a thread to show or hide its sessions. The ring menu offers Expand/Collapse, Open and Hide.
-- Threads with a checkpoint in the last 7 days appear, 20 at first and 50 per **Load more threads**.
-- Channel managers can edit a thread or session checkpoint. A save is a normal revision, so a stale save returns `409`, keeps the draft and shows the newer text. Ended sessions can't be edited.
-- Every checkpoint insert sends a channel live update (migration `087_memory_updates.sql`), so open graphs refresh without polling.
+- Threads with a memory in the last 7 days appear, 20 at first and 50 per **Load more threads**.
+- Channel managers can edit a thread or session memory. A save is a normal revision, so a stale save returns `409`, keeps the draft and shows the newer text. Ended sessions can't be edited.
+- Every memory insert sends a channel live update (migration `087_memory_updates.sql`), so open graphs refresh without polling.
 
 | Method | Path | Rule |
 | --- | --- | --- |
@@ -202,7 +202,7 @@ Save bodies are `{ revision, summary, content }`. The server anchors the save to
 
 [Thread working memory](./thread-working-memory.md) is available independently of
 channel memory opt-in. Thread-scoped MCP keys expose conversation retrieval and
-source-linked Markdown checkpoints on the existing MCP transport. Reusable channel
+source-linked Markdown memories on the existing MCP transport. Reusable channel
 knowledge keeps the provider and opt-in behavior described above.
 
 ## Installed agent permissions

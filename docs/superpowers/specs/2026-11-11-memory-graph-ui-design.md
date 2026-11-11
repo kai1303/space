@@ -2,7 +2,7 @@
 
 ## Goal
 
-Let people see the layered short-term memory (`docs/superpowers/specs/2026-11-11-short-term-memory-design.md`) as a graph. Channel managers can also correct a checkpoint.
+Let people see the layered short-term memory (`docs/superpowers/specs/2026-11-11-short-term-memory-design.md`) as a graph. Channel managers can also correct a memory.
 
 The look follows the Neo4j Browser graph view: circle nodes, named arrows, a force layout, double-click to expand, a ring menu and a right-hand details panel. **All code is written for Space.** Neo4j Browser is GPL-3.0 and Space is MIT, so no Neo4j source, logo, icons or name is copied. Only the interaction design is reused. The layout uses `d3-force` (ISC), computed synchronously before paint. React draws the SVG and handles zoom and drag, so no other d3 module is needed.
 
@@ -27,7 +27,7 @@ The Graph view works while Markdown notes are off. It needs only channel members
 │          \ HAS                                   │──────────────────│
 │ (#payments)──HAS──(Thread A)                     │ Dedupe fix ·     │
 │                      │ HAS_SESSION               │ in progress      │
-│               ┌──────┴──────┐                    │ ▸ Checkpoint     │
+│               ┌──────┴──────┐                    │ ▸ Memory     │
 │         (Codex run)   (Claude run)               │ ▸ Sources (3)    │
 │                                                  │ [Edit] (manager) │
 │ Load more threads                                │ Open thread →    │
@@ -40,7 +40,7 @@ The Graph view works while Markdown notes are off. It needs only channel members
 | --- | --- | --- | --- |
 | `GraphCanvas` | `packages/ui/src/graph/` exported as `@space/ui/graph` | Generic graph view: nodes, links, layout, zoom, drag, selection, ring menu, keyboard focus. Knows nothing about memory | d3 modules, `@space/ui` tokens |
 | `MemoryGraph` | `apps/web/src/features/memory/MemoryGraph.tsx` | Maps memory nodes to graph nodes, loads children on expand, keeps the expanded set, refreshes on live events | `GraphCanvas`, memory API, `subscribeUpdates` |
-| `MemoryInspector` | `apps/web/src/features/memory/MemoryInspector.tsx` | Right panel: node details, checkpoint, sources, editor for managers | `@space/ui/primitives` |
+| `MemoryInspector` | `apps/web/src/features/memory/MemoryInspector.tsx` | Right panel: node details, memory, sources, editor for managers | `@space/ui/primitives` |
 | Read and edit routes | `apps/server/memory.ts` | Human HTTP access to the layers | `@space/postgres/layered-memory` |
 
 ### `GraphCanvas` contract
@@ -88,9 +88,9 @@ Links: channel → thread `HAS`, thread → session `HAS_SESSION`.
 | --- | --- | --- | --- |
 | Title | `#name` | `summary` | title and agent |
 | Meta | thread count in view | revision, writer, time | state, revision, writer, time |
-| Checkpoint | — | Markdown text, collapsed | Markdown text, collapsed |
+| Memory | — | Markdown text, collapsed | Markdown text, collapsed |
 | Sources | — | links to the source messages | links to the source messages |
-| Usage | — | `checkpoint_chars / 6000` bar | same |
+| Usage | — | `memory_chars / 6000` bar | same |
 | Action | — | Open thread → | Open session → |
 | Edit | — | managers only | managers only |
 
@@ -101,7 +101,7 @@ Text is shown as plain text in a scrollable block, like the existing notes edito
 - Only **channel managers** see Edit, and the server checks the role on every save.
 - The editor has `summary` (1–280) and `content` (1–6,000), with live character counts.
 - Save sends `{ revision, summary, content }`. The server uses the thread's latest message as the watermark and source, like the turn-end save, and records the person as `producer_id` / `producer_name`.
-- On `409`, the draft is kept. The panel shows the newer checkpoint next to the draft, and the person can copy from it and save again on the new revision. Closing with unsaved changes asks first.
+- On `409`, the draft is kept. The panel shows the newer memory next to the draft, and the person can copy from it and save again on the new revision. Closing with unsaved changes asks first.
 - An edit is a normal new revision, so old revisions stay stored. An agent whose turn-end block used the old revision gets a `memory_pending` conflict and merges it on its next turn.
 - Edits to an ended session are refused with `409 session_ended`.
 
@@ -114,17 +114,17 @@ All routes require an authenticated actor and current channel membership. They r
 | GET | `/v1/channels/:channelId/memory/layers?after=&limit=` | — | `ChannelMemoryPage` | Member |
 | GET | `/v1/channels/:channelId/threads/:threadId/memory` | — | `ThreadMemory` | Member, thread in channel |
 | GET | `/v1/channels/:channelId/agent-sessions/:sessionId/memory` | — | `SessionMemory` | Member, and the actor can open the session through the existing `GET /v1/agent-sessions/:sessionId` rule |
-| POST | `/v1/channels/:channelId/threads/:threadId/memory` | `{ revision, summary, content }` | `ThreadCheckpoint` | Channel manager |
-| POST | `/v1/channels/:channelId/agent-sessions/:sessionId/memory` | `{ revision, summary, content }` | `ThreadCheckpoint` | Channel manager, session in channel |
+| POST | `/v1/channels/:channelId/threads/:threadId/memory` | `{ revision, summary, content }` | `MemoryRecord` | Channel manager |
+| POST | `/v1/channels/:channelId/agent-sessions/:sessionId/memory` | `{ revision, summary, content }` | `MemoryRecord` | Channel manager, session in channel |
 
 - The human session read needs a variant of `readSessionMemory` that skips the installation check. It is authorized by the session read rule instead.
-- The human session write needs a variant of `writeSessionCheckpoint` that skips the installation check. It is authorized by the manager role instead.
-- Errors: non-member `404`, non-manager `403`, stale revision `409 thread_checkpoint_conflict` / `409 session_checkpoint_conflict`, ended session `409 session_ended`, bad summary `400 invalid_summary`, too long `413 checkpoint_too_large`.
+- The human session write needs a variant of `writeSessionMemory` that skips the installation check. It is authorized by the manager role instead.
+- Errors: non-member `404`, non-manager `403`, stale revision `409 thread_memory_conflict` / `409 session_memory_conflict`, ended session `409 session_ended`, bad summary `400 invalid_summary`, too long `413 memory_content_too_large`.
 - Writes use the same optimistic insert as agents. No row locks are added.
 
 ## Live updates
 
-There are no timers. No delivery fires for checkpoint inserts today, so migration `087_memory_updates.sql` adds an `AFTER INSERT` trigger on `thread_checkpoints`. It inserts one `chat_delivery_outbox` row per checkpoint with `resource_scope = 'metadata'` and the checkpoint's `channel_id`. The existing `enqueue_stream_chat` trigger (migration 049) turns that into `workspace:` and `channel:<id>` keys.
+There are no timers. No delivery fires for memory inserts today, so migration `087_memory_updates.sql` adds an `AFTER INSERT` trigger on `memory_revisions`. It inserts one `chat_delivery_outbox` row per memory with `resource_scope = 'metadata'` and the memory's `channel_id`. The existing `enqueue_stream_chat` trigger (migration 049) turns that into `workspace:` and `channel:<id>` keys.
 
 `MemoryGraph` subscribes with the existing `subscribeUpdates('channel', channelId, …)`. On an update, it re-reads the loaded index pages and the expanded threads. A re-read keeps the expanded set, the selection and the node positions. Losing access closes the dialog the same way the notes view does.
 
@@ -133,7 +133,7 @@ There are no timers. No delivery fires for checkpoint inserts today, so migratio
 - Up to 20 threads on first load and 50 per "Load more".
 - Up to 50 sessions per expanded thread.
 - Up to 500 nodes on the canvas.
-- Checkpoint text is at most 6,000 characters and summaries 280, as stored.
+- Memory text is at most 6,000 characters and summaries 280, as stored.
 
 ## Tests
 

@@ -5,7 +5,7 @@
 Give agents long-term **Knowledge** they can write and that other threads can find later.
 
 - **Memory** is short-term and ages out. See [layered short-term memory](2026-11-11-short-term-memory-design.md).
-- **Knowledge** is long-term and is read from other threads. This follows the LangChain split between a per-thread checkpointer and a shared store ([LangGraph memory](https://docs.langchain.com/oss/python/langgraph/memory)).
+- **Knowledge** is long-term and is read from other threads. This follows the LangChain split between a per-thread memoryer and a shared store ([LangGraph memory](https://docs.langchain.com/oss/python/langgraph/memory)).
 
 Rule: if something is read from a different thread, it is Knowledge.
 
@@ -168,7 +168,7 @@ Evidence is resolved from the key's channel. A message ID from any other channel
 | `message_ids` | Optional, 0–20. Empty means the thread's latest human message |
 | A block with only `notes` | Valid. `session` and `thread` stay optional, but the block needs at least one of the three |
 
-`parseAgentMemoryUpdate` validates each note on its own. One bad note is dropped and the rest of the block still parses. A list longer than 3 is dropped as a whole, and the checkpoints still parse. Dropped notes never reach Space, so they leave no trace entry.
+`parseAgentMemoryUpdate` validates each note on its own. One bad note is dropped and the rest of the block still parses. A list longer than 3 is dropped as a whole, and the memories still parse. Dropped notes never reach Space, so they leave no trace entry.
 
 `saveTurnNotes` runs right after `saveTurnMemory`, in the same transaction, and saves a note when all of these hold:
 
@@ -176,7 +176,7 @@ Evidence is resolved from the key's channel. A message ID from any other channel
 - The installation's `agent_memory_grants.access` is `contribute`.
 - Every evidence message is in the thread's channel.
 
-A note that fails a check is skipped. The turn trace gets one entry per note: `note:saved`, `note:unchanged`, `note:knowledge_disabled`, `note:no_grant` or `note:foreign_evidence`. Note problems never fail the turn. The writers raise `AppError` before any SQL error, so the transaction stays usable, as it does for checkpoints today.
+A note that fails a check is skipped. The turn trace gets one entry per note: `note:saved`, `note:unchanged`, `note:knowledge_disabled`, `note:no_grant` or `note:foreign_evidence`. Note problems never fail the turn. The writers raise `AppError` before any SQL error, so the transaction stays usable, as it does for memories today.
 
 ## Reading notes
 
@@ -255,7 +255,7 @@ The block stays hidden from people, both while streaming and in the task result,
 
 ## Risks
 
-- The hidden block can now reach about 18,000 characters (12,000 for checkpoints plus 6,000 for notes). The connectors' 16,000-character check counts the block, so a long answer with a full block can fail the turn. This was left for later and is now more likely.
+- The hidden block can now reach about 18,000 characters (12,000 for memories plus 6,000 for notes). The connectors' 16,000-character check counts the block, so a long answer with a full block can fail the turn. This was left for later and is now more likely.
 - The latest same-title save wins. An agent can overwrite a person's text. The old text stays in `knowledge_note_revisions`.
 - Server and connectors must ship together because of the new context key.
 
@@ -276,6 +276,6 @@ Run on a disposable test schema, with a test provider index and local Ollama for
 | Search from a channel where one member can't see the source | No hit |
 | Note removed while the worker is down | Hidden at once, gone from `kb.notes` after restart |
 | Context title list with 25 notes | 20 titles, `truncated: true` |
-| Bad note in a block | That note is dropped. Checkpoints and other notes save |
+| Bad note in a block | That note is dropped. Memories and other notes save |
 | Real MCP client | Discovery lists the tools, and add, update and remove work end to end |
 | Connectors | A block with notes is hidden from people while streaming and in the result |
