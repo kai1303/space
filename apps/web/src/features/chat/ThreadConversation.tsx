@@ -28,8 +28,8 @@ export function ConversationNavigation({children, order, view, onChange, onReord
   const items = [{id:'messages', label:'Messages', icon:<ChatCircle size={15}/>, fixed:true},
     ...order.map(id => {
       const Icon = channelTabIcons[id];
-      return {id,label:channelTabNames[id],icon:<Icon size={15}/>,panelId:id === 'files' ? 'channel-shared-content' : undefined,
-        opensDialog:id === 'memory' || id === 'navigator'};
+      return {id,label:channelTabNames[id],icon:<Icon size={15}/>,panelId:id === 'files' ? 'channel-shared-content' : id === 'memory' ? 'channel-memory' : undefined,
+        opensDialog:id === 'navigator'};
     })];
   return <div className="chat-channel-tabs"><Tabs label="Channel views" items={items} value={view} onChange={onChange} onReorder={onReorder}/>{children}</div>;
 }

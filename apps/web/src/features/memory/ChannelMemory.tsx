@@ -1,6 +1,6 @@
 import { sessionFetch } from '../../shared/api/session-fetch.js';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
-import { Select, Badge, Button, Dialog, Tabs, toast } from '@space/ui/primitives';
+import { Select, Badge, Button, Tabs, toast } from '@space/ui/primitives';
 import { Reveal } from '@space/ui/motion';
 import { MAX_MEMORY_CHARS, MAX_MEMORY_IMPORT_BYTES, type ChannelMemory as MemoryState, type MemoryDocument, type MemoryMatch } from '@space/contracts';
 import { request } from '../../shared/api/request.js';
@@ -11,12 +11,15 @@ import { KnowledgeSwitch } from './KnowledgeSwitch.js';
 import { MemoryGraph, type MemorySelection } from './MemoryGraph.js';
 import { MemoryInspector } from './MemoryInspector.js';
 
-type Props = { channel: string; name: string; open: boolean; message?: { id: string; text: string }; onClose: () => void;
+type Props = { channel: string; name: string; message?: { id: string; text: string };
+  // The channel asks before leaving this view while either editor has unsaved edits.
+  onDirtyChange?: (dirty: boolean) => void; onAccessLost?: () => void;
   onOpenThread?: (threadId: string) => void; onOpenSession?: (threadId: string, sessionId: string) => void };
+// The Memory channel tab: shown in place of the messages, like Pins and Files.
 export function ChannelMemory(props: Props) {
-  return props.open ? <MemoryDialog key={props.channel} {...props} /> : null;
+  return <MemoryView key={props.channel} {...props} />;
 }
-function MemoryDialog({ channel, name, message, onClose, onOpenThread, onOpenSession }: Props) {
+function MemoryView({ channel, name, message, onDirtyChange, onAccessLost, onOpenThread, onOpenSession }: Props) {
   const [data, setData] = useState<MemoryState>(), [draft, setDraft] = useState('');
   const [busy, setBusy] = useState(false), [error, setError] = useState(''), [notice, setNotice] = useState('');
   const [provider, setProvider] = useState('markdown'), [conflict, setConflict] = useState(false), [comparison, setComparison] = useState(false);
@@ -28,6 +31,10 @@ function MemoryDialog({ channel, name, message, onClose, onOpenThread, onOpenSes
   const [selection, setSelection] = useState<MemorySelection>(), [graphDirty, setGraphDirty] = useState(false);
   const active = useRef(false), pending = useRef(false), generation = useRef(0);
   const path = `/channels/${channel}/memory`, dirty = data?.document != null && draft !== data.document.content;
+  // A message saved while this view is already open still lands on Notes.
+  useEffect(() => { if (message) { setView('notes'); setMessageSaved(false); } }, [message?.id]);
+  useEffect(() => { onDirtyChange?.(dirty || graphDirty); }, [dirty, graphDirty, onDirtyChange]);
+  useEffect(() => () => onDirtyChange?.(false), [onDirtyChange]);
   useEffect(() => {
     if (!dirty) return;
     const guard = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ''; };
@@ -86,18 +93,16 @@ function MemoryDialog({ channel, name, message, onClose, onOpenThread, onOpenSes
     const link = document.createElement('a'); link.href = url; link.download = `${channel}-memory.md`; link.click();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
-  const openThread = onOpenThread && ((id: string) => { onClose(); onOpenThread(id); });
-  const openSession = onOpenSession && ((thread: string, session: string) => { onClose(); onOpenSession(thread, session); });
-  return <Dialog open title={`Memory in #${name}`} description="Shared knowledge for this channel, with links to its sources." onClose={() => {
-    if (dirty || graphDirty) toast.success('Unsaved memory edits discarded');
-    onClose();
-  }} onBeforeClose={() => !(dirty || graphDirty) || window.confirm('Discard your unsaved memory edits?')}>
+  // Threads and sessions open beside this view, so the graph stays where it was.
+  const openThread = onOpenThread, openSession = onOpenSession;
+  return <section id="channel-memory" role="tabpanel" className="channel-memory-page" aria-label={`Memory in #${name}`}>
+    <header className="channel-memory-page-header"><h2>Memory in #{name}</h2><p>Shared knowledge for this channel, with links to its sources.</p></header>
     <Tabs label="Memory views" value={view} onChange={id => setView(id as 'graph' | 'notes')} items={[
       { id: 'graph', label: 'Graph', panelId: `memory-${channel}-graph` },
       { id: 'notes', label: 'Notes', panelId: `memory-${channel}-notes` },
     ]} />
     {view === 'graph' && <div id={`memory-${channel}-graph`} role="tabpanel" aria-label="Graph" className="memory-graph-view">
-      <MemoryGraph channel={channel} name={name} onSelect={setSelection} onAccessLost={onClose} onOpenThread={openThread} onOpenSession={openSession}
+      <MemoryGraph channel={channel} name={name} onSelect={setSelection} onAccessLost={() => onAccessLost?.()} onOpenThread={openThread} onOpenSession={openSession}
         details={<MemoryInspector channel={channel} selection={selection} canManage={!!data?.can_manage} onDirtyChange={setGraphDirty} onOpenThread={openThread} onOpenSession={openSession} />} />
     </div>}
     {view === 'notes' && <div id={`memory-${channel}-notes`} role="tabpanel" aria-label="Notes">
@@ -178,7 +183,7 @@ function MemoryDialog({ channel, name, message, onClose, onOpenThread, onOpenSes
       </>}
     </div>
     </div>}
-  </Dialog>;
+  </section>;
 }
 
 async function requestDelete<T = unknown>(path: string): Promise<T> {
