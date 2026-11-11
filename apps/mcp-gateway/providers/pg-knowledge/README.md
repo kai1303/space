@@ -48,13 +48,15 @@ Apply Space migration 088 and install `notes.sql` once in the provider database 
 
 The worker and provider detect `kb.notes` at startup; without it they behave as before. The worker copies notes from every channel with the Knowledge switch on, whatever its thread opt-in. It embeds the title and content, keeps only the highest revision, and removes notes that were removed, archived or switched off. Search uses `filters.source=notes`; each hit cites the note's first evidence message. Run `node notes-smoke.mjs` with the same three database URLs as `thread-smoke.mjs` to check indexing, live updates, removal while the worker is stopped, and restart recovery.
 
-## Knowledge graph from change data capture
+## Graph RAG memory and knowledge
 
-`graph-reader.mjs` reads committed changes from a logical replication slot and keeps the `space_knowledge` pgGraph graph current. It adds `filters.related` to `knowledge_search`: `note/<uuid>` returns other knowledge that cites the same conversations.
+One graph, `space_memory`, holds channels, threads, agent sessions, people, messages (with a 384-dimension vector each), topics, facts and knowledge items (`kb.m_*`). It feeds memory reads in Space, `knowledge_search` thread search and `filters.related`. Memory text shown to anyone is always read back from Space under its own access check.
+
+`graph-reader.mjs` reads committed changes from a logical replication slot (change data capture) and keeps the graph current. It embeds message text with the local Ollama `all-minilm:22m` model, so text never leaves the machine for this. The stream itself carries ids and flags only; text is read through the Space view `graph_source_messages`.
 
 The Space database needs `wal_level=logical`, PostgreSQL 15 or newer (column-list publications), and `max_slot_wal_keep_size` set so a stopped reader cannot fill the disk. If the slot passes the cap, the reader drops it and rebuilds the graph from a snapshot on its next start.
 
-1. Apply `graph.sql` to the knowledge database after `schema.sql` and `threads.sql`.
+1. Apply `memory-graph.sql`, then `memory-extract.sql`, to the knowledge database after `schema.sql` (and `threads.sql`, `markdown.sql` for file search).
 2. Run one reader per Space schema:
 
 ```sh
@@ -62,8 +64,14 @@ GRAPH_SOURCE_URL=... GRAPH_REPLICATION_URL=... GRAPH_INDEX_URL=... GRAPH_SOURCE_
   node apps/mcp-gateway/providers/pg-knowledge/graph-reader.mjs
 ```
 
-`GRAPH_SOURCE_URL` may create the publication and slot and must read `messages`, `channels` and `agent_sessions`. `GRAPH_REPLICATION_URL` needs the REPLICATION attribute. `GRAPH_INDEX_URL` writes `kb.g_*`. Restart the reader after any failure; it exits on error and the slot keeps unconfirmed changes.
+3. After it reports `Graph rebuilt from snapshot` once, run `drop-old-graph.sql` on an existing installation. It removes the old `space_knowledge` graph and the old message rows of `kb.thread_messages`. Markdown file passages stay there.
 
-pgGraph refuses `build_graph` while a source write is open, so the reader runs graph writes and publishes one at a time.
+`GRAPH_SOURCE_URL` may create the publication and slot and must read `graph_source_messages`, `channels`, `agent_sessions`, `knowledge_notes` and `knowledge_thread_channels`. `GRAPH_REPLICATION_URL` needs the REPLICATION attribute. `GRAPH_INDEX_URL` writes `kb.m_*`. Restart the reader after any failure; it exits on error and the slot keeps unconfirmed changes. pgGraph refuses `build_graph` while a source write is open, so the reader runs graph writes and publishes one at a time.
 
-Checks: `node --test apps/mcp-gateway/providers/pg-knowledge/graph-plan.test.mjs`, and `graph-smoke.mjs` with `TEST_DATABASE_URL`, `THREAD_INDEX_URL` and `KNOWLEDGE_DATABASE_URL` pointing at disposable databases.
+Space servers rank memory by meaning when `MEMORY_GRAPH_URL` (a read role on the knowledge database) is set. Without it, memory still reads, newest first.
+
+Topics and facts come from the worker (`apps/worker`) when both `MEMORY_EXTRACT_MODEL` (a local Ollama chat model) and `MEMORY_GRAPH_WRITE_URL` are set. Each thread runs at most once every 5 minutes, 60 seconds after its last message, and at most `MEMORY_EXTRACT_HOURLY_CAP` (default 60) runs per workspace per hour. Thread text goes only to the local model.
+
+`thread-worker.mjs` now keeps only Markdown files and knowledge notes.
+
+Checks: `node --test apps/mcp-gateway/providers/pg-knowledge/graph-plan.test.mjs`, and `graph-smoke.mjs` with `TEST_DATABASE_URL`, `THREAD_INDEX_URL` and `KNOWLEDGE_DATABASE_URL` pointing at disposable databases. Space tests: `integration/graph-rag-memory.test.ts` and `integration/memory-extract.test.ts`, with `MEMORY_GRAPH_URL` for the knowledge-database parts.

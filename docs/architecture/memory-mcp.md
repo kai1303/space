@@ -51,10 +51,11 @@ MCP keys, and creating a key does not automatically install it in an agent's con
 | `memory_remember` | Write | Save a source-backed extracted claim with producer identity and timestamp |
 | `memory_write` | Write | Replace canonical memory using its exact expected revision |
 | `memory_forget` | Write | Remove one `message:`, `document:` or `knowledge:` source section |
-| `channel_memory` | Read | Index of recent threads with summaries; `after` cursor, `limit` 1–50 |
-| `thread_memory` | Read | One thread's memory, recent messages and session list |
-| `session_memory` | Read | Own session only (installation-bound key); others return `session_private` |
-| `session_memory_save` | Contribute/Write | Revision-checked session memory with summary |
+| `channel_memory` | Read | Recent threads (7 days) by the first line of their root; `after`, `limit` 1–50; optional `query` ranks by meaning |
+| `thread_memory` | Read | Root, recent messages, messages related to `query`, topics, facts and the session list |
+| `session_memory` | Read | Own session only (installation-bound key); others return `session_private`. Recent turns and turns related to `query` |
+
+Memory is built from messages in the Graph RAG store, so agents no longer write it. See [Graph RAG memory](../../apps/mcp-gateway/providers/pg-knowledge/README.md#graph-rag-memory-and-knowledge).
 | `knowledge_list` | Read | Newest 20 live notes in this channel (id, kind, title, revision) |
 | `knowledge_add` | Contribute/Write | Save a note with a caller UUID and 1–20 channel message IDs; a used title returns `title_taken` |
 | `knowledge_update` | Write | Revision-checked change to a note; stale revisions return `note_conflict` |

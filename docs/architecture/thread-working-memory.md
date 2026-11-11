@@ -45,48 +45,25 @@ Channel-memory keys retain their previous tools and opt-in requirements.
 
 | Tool | Access | Purpose |
 | --- | --- | --- |
-| `thread_context` | read/write | Original request, recent messages, memory, watermark and history flag |
+| `thread_context` | read/write | Original request, recent messages, watermark and history flag |
 | `thread_messages` | read/write | Oldest-first evidence pages; optional `after` cursor and `limit` (1–50) |
 | `thread_message` | read/write | Full source text for one `message_id` in the granted thread |
-| `thread_memory_save` | write | Revision-checked, source-linked Markdown working summary |
 
-Agents should read context first, inspect relevant sources, then save useful
-decisions, constraints, open questions, user feedback and results in a memory.
-The server does not run an extra LLM or automatically generate summaries.
+Agents read context first and inspect relevant sources. They no longer write memory: it is built from the messages.
 
-Example `thread_memory_save` arguments:
+## Layered memory (Graph RAG)
 
-```json
-{
-  "revision": 0,
-  "through_sequence": "42",
-  "content": "# Decisions\nUse TypeScript.\n\n# Open questions\nWho reviews the draft?",
-  "source_message_ids": ["11111111-1111-4111-8111-111111111111"]
-}
-```
+Short-term memory has three layers: channel → thread → session. Every node returns `ref`, `parent`, `summary`, `updated_at` and `children`, so agents can walk down and back up. The design is in [the Graph RAG memory spec](../superpowers/specs/2026-11-11-graph-rag-memory-design.md).
 
-Use revision 0 initially, then the current memory revision. The watermark must
-identify a real message in this thread; every supporting source must be in the same
-thread at or before it. Content is at most 6000 characters with 1–32 source IDs.
-Competing writes serialize and stale revisions return a conflict. Re-read before
-merging and retrying. Revisions retain producer identity and time in PostgreSQL;
-these are derived Markdown working notes, separate from provider-backed channel
-memory. A later-watermark memory is excluded from earlier context snapshots.
-
-## Layered memory
-
-Short-term memory has three layers: channel → thread → session. Every node returns `ref`, `parent`, `summary`, `updated_at` and `children`, so agents can walk down and back up. The design is in [the layered memory spec](../superpowers/specs/2026-11-11-short-term-memory-design.md).
+All three layers come from messages. A change-data-capture reader copies messages, with a local embedding each, into the `space_memory` graph in the knowledge database. Readers in Space ask that graph which messages matter for a `query`, then read the text from Space in the asked scope only. Without the graph (`MEMORY_GRAPH_URL` unset) memory still reads, newest first. A worker with a local model also writes topics and facts per thread; a fact is shown only if all its evidence messages are live in that thread.
 
 | Tool | Key | Returns |
 | --- | --- | --- |
-| `channel_memory` | Channel | Threads with a memory in the last 7 days, newest first, keyset-paged by `next_cursor` |
-| `thread_memory` | Channel | Memory, recent messages (session messages excluded) and session nodes |
-| `session_memory` | Channel, bound to the session's installation | Session memory and recent session turns |
-| `session_memory_save` | Channel, contribute or write | New session revision |
+| `channel_memory` | Channel | Threads active in the last 7 days by their root line, newest first, keyset-paged by `next_cursor`; with `query`, ranked by meaning |
+| `thread_memory` | Channel | Root, recent messages (session messages excluded), up to 8 related to `query`, topics, facts and session nodes |
+| `session_memory` | Channel, bound to the session's installation | Recent session turns and up to 8 related to `query` |
 
-`thread_memory_save` and `session_memory_save` require `summary` (1–280 characters). Content over 6,000 characters returns `413 memory_content_too_large`. Writes are optimistic: a stale revision returns `409`. Partial unique indexes on `(thread_id, revision)` and `(session_id, revision)` enforce this instead of row locks. PostgreSQL still takes its normal internal write locks during the insert.
-
-Tasks receive `context.agent_session_memory`, `context.working_memory` and the first page of `context.channel_memory`. The Markdown channel memory excerpt moved to `context.channel_notes`. Apply migration `085_layered_memory.sql`, and update paired connectors in the same release, because older connectors reject unknown context fields.
+Tasks receive `context.working_memory`, `context.agent_session_memory` and the first page of `context.channel_memory`, without ranking, so preparing a task never waits on the graph. Migration `093_drop_agent_memory.sql` deletes the old agent-written memory; take a backup first. The hidden `<space-memory>` block now carries only knowledge `notes`.
 
 ## Granting access
 
