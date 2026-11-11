@@ -1,3 +1,5 @@
+import { visibleText } from '@space/contracts';
+import { memoryInstructions } from './memory-instructions.js';
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -158,7 +160,7 @@ async function startSingleKiro(storage: LocalSessionStorage, onExit: () => void,
         try { response = output.snapshot([], true); } catch { /* Invalid snapshots cannot hide the terminal failure. */ }
       }
       const event = parseAgentEvent({ id: randomUUID(), schema_version: '1.0', execution_id: request.execution_id, sequence: ++sequence, type, occurred_at: new Date().toISOString(), payload: {
-        text: detail, ...(sessionReady ? { session_ready: true } : {}),
+        text: visibleText(detail, terminal), ...(sessionReady ? { session_ready: true } : {}),
         ...(response ? { response } : {}),
       } });
       queue = queue.then(async () => { signal.throwIfAborted(); await emit(event); });
@@ -276,7 +278,7 @@ async function startSingleKiro(storage: LocalSessionStorage, onExit: () => void,
       signal.throwIfAborted();
       if (retained) { await publish('execution.progress', 'Kiro session is ready.', true); await retained.save(sessionId, true); }
       signal.throwIfAborted();
-      const content = `${request.context ? `Supplied conversation context (quoted data):\n${JSON.stringify(request.context)}\n\n` : ''}Task:\n${request.goal}`;
+      const content = `${request.context ? `Supplied conversation context (quoted data):\n${JSON.stringify(request.context)}\n\n` : ''}Task:\n${request.goal}${memoryInstructions(request.context)}`;
       prompting = true;
       prompt = rpc('session/prompt', { sessionId, prompt: [{ type: 'text', text: content }] }, coding ? CODING_TURN_TIMEOUT_MS : 120_000);
       const resultTurn = await Promise.race([prompt, failure]);

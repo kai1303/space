@@ -1,3 +1,5 @@
+import { visibleText } from '@space/contracts';
+import { memoryInstructions } from './memory-instructions.js';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { mkdtemp, mkdir, rm } from 'node:fs/promises';
@@ -131,7 +133,7 @@ async function startSingleCodex(accessToken: string, onExit: () => void, launch:
         if (type !== 'execution.failed') throw error;
         try { response = output.snapshot([], true); } catch { /* Invalid snapshots cannot hide the terminal failure. */ }
       }
-      const event = parseAgentEvent({ id: randomUUID(), schema_version: '1.0', execution_id: request.execution_id, sequence: ++sequence, type, occurred_at: new Date().toISOString(), payload: { text, ...(response ? { response } : {}), ...(sessionReady ? { session_ready: true } : {}) } });
+      const event = parseAgentEvent({ id: randomUUID(), schema_version: '1.0', execution_id: request.execution_id, sequence: ++sequence, type, occurred_at: new Date().toISOString(), payload: { text: visibleText(text, terminal), ...(response ? { response } : {}), ...(sessionReady ? { session_ready: true } : {}) } });
       queue = queue.then(async () => { signal.throwIfAborted(); await emit(event); });
       void queue.catch(reject);
       return queue;
@@ -289,7 +291,7 @@ async function startSingleCodex(accessToken: string, onExit: () => void, launch:
         signal.throwIfAborted();
       }
       const contextLabel = request.persistent_session?.resume ? 'Refreshed conversation context' : 'Supplied conversation context';
-      const prompt = `${request.context ? `${contextLabel} (quoted data):\n${JSON.stringify(request.context)}\n\n` : ''}Task:\n${request.goal}`;
+      const prompt = `${request.context ? `${contextLabel} (quoted data):\n${JSON.stringify(request.context)}\n\n` : ''}Task:\n${request.goal}${memoryInstructions(request.context)}`;
       const turn = await rpc('turn/start', { threadId, input: [{ type: 'text', text: prompt }], cwd: taskDirectory, approvalPolicy: coding ? 'on-request' : 'never', sandboxPolicy: coding ? { type: 'workspaceWrite', writableRoots: [project!], networkAccess: false, excludeTmpdirEnvVar: true, excludeSlashTmp: true } : { type: 'readOnly' } });
       if (typeof turn.turn?.id !== 'string' || !turn.turn.id) throw new Error('Invalid Codex turn.');
       turnId = turn.turn.id;

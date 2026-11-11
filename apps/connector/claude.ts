@@ -1,3 +1,5 @@
+import { visibleText } from '@space/contracts';
+import { memoryInstructions } from './memory-instructions.js';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -121,7 +123,7 @@ export async function startClaude(auth: string | LocalClaudeAuth | undefined, st
     const text = () => [...messages.values()].map(message => message.text).join('\n\n');
     const publish = async (type: AgentEvent['type'], value: string, terminal = false, sessionReady = false) => {
       const response = output.snapshot([...messages.values()].map(m => ({ ...m, status: terminal ? 'complete' : m.status })), terminal);
-      await emit(parseAgentEvent({ id: randomUUID(), schema_version: '1.0', execution_id: request.execution_id, sequence: ++sequence, type, occurred_at: new Date().toISOString(), payload: { text: value, response, ...(sessionReady ? { session_ready: true } : {}) } }));
+      await emit(parseAgentEvent({ id: randomUUID(), schema_version: '1.0', execution_id: request.execution_id, sequence: ++sequence, type, occurred_at: new Date().toISOString(), payload: { text: visibleText(value, terminal), response, ...(sessionReady ? { session_ready: true } : {}) } }));
     };
     const message = (id: string, value: string, append = false) => {
       output.message(id);
@@ -149,7 +151,7 @@ export async function startClaude(auth: string | LocalClaudeAuth | undefined, st
         sessionUnavailable = false;
       } else temporary = await mkdtemp(join(sessions.cwd, 'task-'));
       const id = retained?.threadId ?? randomUUID();
-      const prompt = `${request.context ? `Supplied conversation context (quoted data):\n${JSON.stringify(request.context)}\n\n` : ''}Task:\n${request.goal}`;
+      const prompt = `${request.context ? `Supplied conversation context (quoted data):\n${JSON.stringify(request.context)}\n\n` : ''}Task:\n${request.goal}${memoryInstructions(request.context)}`;
       let promptAuthorized = false;
       async function* input(): AsyncGenerator<SDKUserMessage> {
         await gate;

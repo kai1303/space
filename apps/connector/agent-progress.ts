@@ -1,4 +1,4 @@
-import { parseAgentResponse, type AgentActivity, type AgentText, type AgentTool, type AgentResponseItem } from '@space/contracts';
+import { extractMemoryBlock, visibleText, parseAgentResponse, type AgentActivity, type AgentText, type AgentTool, type AgentResponseItem } from '@space/contracts';
 
 // Accumulated snapshots share the existing backpressure and durable event path.
 export class AgentProgress {
@@ -39,11 +39,14 @@ export class AgentProgress {
     this.setActivity('working');
   }
   snapshot(messages: AgentText[], terminal = false) {
+    // The turn-end memory block is for Space only: hide it from people and attach it when final.
+    const memory = terminal ? extractMemoryBlock(messages.map(m => m.text).join('\n\n')) : undefined;
+    messages = messages.map(m => ({ ...m, text: visibleText(m.text, terminal) }));
     for (const message of messages) this.message(message.id);
     const messageIds = new Set(messages.map(message => message.id));
     const items = this.items.filter(item => item.type === 'tool' ? this.tools.has(item.id) : messageIds.has(item.id));
     const originals = [...this.tools.values()];
-    const snapshot = parseAgentResponse({ messages, tools: originals.map(tool => ({ ...tool, arguments: '', ...(tool.result === undefined ? {} : { result: '' }), ...(terminal && ['calling', 'running'].includes(tool.status) ? { status: 'interrupted' } : {}) })), components: [], items, ...(this.changes.size ? { outputs: { files: [], changes: [...this.changes.keys()].map(path => ({ path, patch: '' })) } } : {}), ...(!terminal ? { activity: this.activity } : {}) });
+    const snapshot = parseAgentResponse({ messages, tools: originals.map(tool => ({ ...tool, arguments: '', ...(tool.result === undefined ? {} : { result: '' }), ...(terminal && ['calling', 'running'].includes(tool.status) ? { status: 'interrupted' } : {}) })), components: [], items, ...(this.changes.size ? { outputs: { files: [], changes: [...this.changes.keys()].map(path => ({ path, patch: '' })) } } : {}), ...(!terminal ? { activity: this.activity } : {}), ...(memory ? { memory } : {}) });
     let remaining = 64000 - JSON.stringify(snapshot).length;
     if (snapshot.outputs) {
       let patchBudget = Math.min(32000, remaining);
