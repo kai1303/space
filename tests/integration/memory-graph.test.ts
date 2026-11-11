@@ -66,3 +66,35 @@ test('person variants read any session and write with the person as producer', a
   assert.equal((await readSessionMemoryForPerson(db(), a.channel_id, session)).node.state, 'ended');
   await assert.rejects(writeSessionCheckpointForPerson(db(), a.channel_id, session, { revision: 1, summary: 'Late', content: 'z' }, person), (e: any) => e.code === 'session_ended');
 });
+
+test('routes: members read, managers edit, conflicts and access are enforced', async () => {
+  const a = await bootstrap(pool), b = await bootstrap(pool);
+  const root = await post(a.owner_token, a.channel_id, 'Dedupe fix');
+  const session = await addSession(a, root.thread_id);
+  await agentSave(a, root.thread_id, session, 'thread', 0, 'Dedupe fix · in progress');
+  const base = `/channels/${a.channel_id}`;
+
+  const page = await api(a.collaborator_token, 'GET', `${base}/memory/layers`);
+  assert.equal(page.nodes[0].summary, 'Dedupe fix · in progress');
+  const thread = await api(a.collaborator_token, 'GET', `${base}/threads/${root.thread_id}/memory`);
+  assert.equal(thread.sessions.length, 1);
+  const read = await api(a.collaborator_token, 'GET', `${base}/agent-sessions/${session}/memory`);
+  assert.equal(read.node.ref.id, session);
+
+  await api(a.collaborator_token, 'POST', `${base}/threads/${root.thread_id}/memory`, { revision: 1, summary: 'Nope', content: 'x' }, 403);
+  const saved = await api(a.owner_token, 'POST', `${base}/threads/${root.thread_id}/memory`, { revision: 1, summary: 'Edited by owner', content: '# Edited' });
+  assert.equal(saved.revision, 2);
+  assert.equal(saved.producer_name, 'Demo owner');
+  const stale = await app.inject({ method: 'POST', url: `/v1${base}/threads/${root.thread_id}/memory`, headers: { authorization: `Bearer ${a.owner_token}` }, payload: { revision: 1, summary: 'Old', content: 'y' } });
+  assert.equal(stale.statusCode, 409);
+  assert.match(stale.body, /thread_checkpoint_conflict/);
+  await api(a.owner_token, 'POST', `${base}/threads/${root.thread_id}/memory`, { revision: 2, summary: 'x'.repeat(281), content: 'y' }, 400);
+  await api(a.owner_token, 'POST', `${base}/agent-sessions/${session}/memory`, { revision: 0, summary: 'Session fixed', content: 'ok' });
+
+  const outcome = await agentSave(a, root.thread_id, session, 'thread', 1, 'Agent on old revision');
+  assert.deepEqual(outcome, [{ scope: 'thread', outcome: 'pending' }]);
+
+  await api(b.owner_token, 'GET', `${base}/memory/layers`, undefined, 404);
+  await api(a.owner_token, 'GET', `/channels/${b.channel_id}/agent-sessions/${session}/memory`, undefined, 404);
+  await api(a.owner_token, 'GET', `${base}/memory/layers?after=bad!`, undefined, 400);
+});

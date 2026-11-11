@@ -6,6 +6,8 @@ import type { AgentMemoryContext, Task } from '@space/contracts';
 import type { MemoryProvider } from '@space/core/memory';
 import { MemoryStore, type MemoryChannel } from '@space/postgres/memory';
 import { readThreadContext } from '@space/postgres/thread-context';
+import { readChannelMemory, readThreadMemory, readSessionMemoryForPerson, writeThreadCheckpointForPerson, writeSessionCheckpointForPerson } from '@space/postgres/layered-memory';
+import { sql } from 'drizzle-orm';
 import { MarkdownMemoryProvider } from './markdown-memory.js';
 
 export type MemoryOptions = { directory?: string; providers?: MemoryProvider[] };
@@ -42,7 +44,8 @@ export function createAgentMemoryReader(store: MemoryStore, providers = createMe
     } finally { clearTimeout(timer); }
   });
 }
-export function registerMemoryRoutes(app: FastifyInstance, store: MemoryStore, providers = createMemoryProviders()) {
+export type SessionLocator = { location(actor: string, id: string): Promise<{ channel_id: string }> };
+export function registerMemoryRoutes(app: FastifyInstance, store: MemoryStore, providers = createMemoryProviders(), sessions?: SessionLocator) {
   const providerFor = (channel: MemoryChannel, requireEnabled = true) => {
     return memoryProviderFor(providers, channel, requireEnabled);
   };
@@ -58,6 +61,54 @@ export function registerMemoryRoutes(app: FastifyInstance, store: MemoryStore, p
   });
   app.post<{ Params: { channelId: string; threadId: string } }>(`${threadPath}/connections`, async (r, reply) =>
     reply.code(201).send(await store.createConnection(r.actorId, uuid(r.params.channelId), r.body, uuid(r.params.threadId))));
+
+  // Layered memory for people: members read, channel managers edit. Writes are optimistic revisions.
+  const layerBody = (body: unknown) => {
+    const v = record(body, ['revision', 'summary', 'content']);
+    if (!Number.isSafeInteger(v.revision) || (v.revision as number) < 0 || typeof v.summary !== 'string' || typeof v.content !== 'string') throw new AppError(400, 'invalid_memory_edit');
+    return { revision: v.revision as number, summary: v.summary, content: v.content };
+  };
+  const person = async (c: Parameters<Parameters<MemoryStore['channel']>[2]>[1], actor: string) => {
+    const { rows: [user] } = await c.execute<{ display_name: string }>(sql`SELECT display_name FROM users WHERE id=${actor}`);
+    return { id: actor, name: user?.display_name ?? 'Member' };
+  };
+  const manager = (channel: MemoryChannel) => { if (!channel.can_manage) throw new AppError(403, 'channel_management_forbidden'); };
+  const visibleSession = async (actor: string, channelId: string, sessionId: string) => {
+    if (!sessions) throw new AppError(503, 'sessions_unavailable');
+    const location = await sessions.location(actor, sessionId);
+    if (location.channel_id !== channelId) throw new AppError(404, 'not_found');
+  };
+  app.get<{ Params: { channelId: string } }>('/v1/channels/:channelId/memory/layers', r => {
+    const q = record(r.query, ['after', 'limit']);
+    const after = q.after === undefined ? undefined : text(q.after, 512);
+    const limit = q.limit === undefined ? undefined : Number(q.limit);
+    return store.channel(r.actorId, r.params.channelId, (channel, c) => readChannelMemory(c, channel.channel_id, after, limit));
+  });
+  app.get<{ Params: { channelId: string; threadId: string } }>('/v1/channels/:channelId/threads/:threadId/memory', r => {
+    record(r.query, []);
+    return store.channel(r.actorId, r.params.channelId, (channel, c) => readThreadMemory(c, channel.channel_id, uuid(r.params.threadId)));
+  });
+  app.post<{ Params: { channelId: string; threadId: string } }>('/v1/channels/:channelId/threads/:threadId/memory', r => {
+    const input = layerBody(r.body);
+    return store.channel(r.actorId, r.params.channelId, async (channel, c) => {
+      manager(channel);
+      return writeThreadCheckpointForPerson(c, channel.channel_id, uuid(r.params.threadId), input, await person(c, r.actorId));
+    });
+  });
+  app.get<{ Params: { channelId: string; sessionId: string } }>('/v1/channels/:channelId/agent-sessions/:sessionId/memory', async r => {
+    record(r.query, []);
+    const channelId = uuid(r.params.channelId), sessionId = uuid(r.params.sessionId);
+    await visibleSession(r.actorId, channelId, sessionId);
+    return store.channel(r.actorId, channelId, (channel, c) => readSessionMemoryForPerson(c, channel.channel_id, sessionId));
+  });
+  app.post<{ Params: { channelId: string; sessionId: string } }>('/v1/channels/:channelId/agent-sessions/:sessionId/memory', async r => {
+    const input = layerBody(r.body), channelId = uuid(r.params.channelId), sessionId = uuid(r.params.sessionId);
+    await visibleSession(r.actorId, channelId, sessionId);
+    return store.channel(r.actorId, channelId, async (channel, c) => {
+      manager(channel);
+      return writeSessionCheckpointForPerson(c, channel.channel_id, sessionId, input, await person(c, r.actorId));
+    });
+  });
   const path = '/v1/channels/:channelId/memory';
   app.get<{ Params: { channelId: string } }>(`${path}/agents`, r => store.agents(r.actorId, uuid(r.params.channelId)));
   app.post<{ Params: { channelId: string; installationId: string } }>(`${path}/agents/:installationId`, r =>

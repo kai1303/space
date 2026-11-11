@@ -160,7 +160,7 @@ export function createApi(store: PostgresStore, options: { workflowChat?: Workfl
   registerNavigatorRoutes(app, new NavigatorStore(store.pool));
   const memory = new MemoryStore(store.pool), memoryProviders = createMemoryProviders(options.memory);
   store.memoryReader = createAgentMemoryReader(memory, memoryProviders);
-  registerMemoryRoutes(app, memory, memoryProviders);
+  registerMemoryRoutes(app, memory, memoryProviders, new AgentSessionStore(store.pool, store));
   registerMemoryMcp(app, memory, memoryProviders, options.auth?.origins, process.env.MEMORY_MCP_ALLOWED_HOSTS?.split(',').map(host => host.trim()).filter(Boolean));
   const assets = new AssetStore(store.pool);
   registerAssetRoutes(app, assets, options.storage, options.office);
