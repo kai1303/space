@@ -4,20 +4,32 @@ import { fitMessages, parseExtraction, topicKey, type Extractor, type ExtractMes
 
 // The extraction run for one thread. Space holds the progress (memory_extract_threads, memory_extract_budget);
 // the Graph RAG store holds the topics and facts. Every step is a conditional write; nothing is locked.
-export type ExtractOutcome = { status: 'done' | 'idle' | 'later' | 'retry' | 'capped'; delayMs?: number };
+export type ExtractOutcome = { status: 'done' | 'idle' | 'later' | 'retry' | 'capped' | 'superseded'; delayMs?: number };
 type Embed = (texts: string[]) => Promise<number[][]>;
 
 const hash = (...parts: string[]) => createHash('sha256').update(parts.join('\u0000')).digest('hex').slice(0, 32);
 const MAX_ATTEMPTS = 6;
 
-export async function runMemoryExtract(space: Pool, graph: Pool, extract: Extractor, embed: Embed, threadId: string, hourlyCap = 60): Promise<ExtractOutcome> {
-  const { rows: [state] } = await space.query<{ workspace_id: string; channel_id: string; pending_through: string; done_through: string; attempts: number; wait_ms: number }>(
-    `SELECT workspace_id, channel_id, pending_through::text, done_through::text, attempts,
-       CASE WHEN isfinite(available_at) THEN greatest(0, ceil(extract(epoch FROM (available_at - now())) * 1000))::float8 ELSE 0 END AS wait_ms
-     FROM memory_extract_threads WHERE thread_id = $1`, [threadId]);
+// How long a started run owns its deadline. Longer than the model and embedding timeouts together. If the
+// worker dies mid-run, this deadline emits a new event, so the thread is retried instead of left behind.
+const RUN_WINDOW = "interval '5 minutes'";
+
+// `deadline` is the available_at carried by the event. Every message moves the deadline and emits a new
+// event, so only the event for the current deadline may run; older ones are superseded and dropped.
+export async function runMemoryExtract(space: Pool, graph: Pool, extract: Extractor, embed: Embed, threadId: string, hourlyCap = 60, deadline?: string): Promise<ExtractOutcome> {
+  const { rows: [state] } = await space.query<{ workspace_id: string; channel_id: string; pending_through: string; done_through: string; attempts: number; wait_ms: number; available_at: string; current: boolean }>(
+    `SELECT workspace_id, channel_id, pending_through::text, done_through::text, attempts, available_at::text,
+       CASE WHEN isfinite(available_at) THEN greatest(0, ceil(extract(epoch FROM (available_at - now())) * 1000))::float8 ELSE 0 END AS wait_ms,
+       ($2::timestamptz IS NULL OR available_at = $2::timestamptz) AS current
+     FROM memory_extract_threads WHERE thread_id = $1`, [threadId, deadline ?? null]);
   if (!state) return { status: 'idle' };
+  if (!state.current) return { status: 'superseded' };
   if (state.wait_ms > 0) return { status: 'later', delayMs: state.wait_ms };
   if (BigInt(state.pending_through) <= BigInt(state.done_through)) return { status: 'idle' };
+  // One compare-and-set on the deadline: of several deliveries for the same deadline, only one moves it.
+  const claimed = await space.query(`UPDATE memory_extract_threads SET available_at = now() + ${RUN_WINDOW}
+    WHERE thread_id = $1 AND available_at = $2::timestamptz AND done_through = $3::bigint`, [threadId, state.available_at, state.done_through]);
+  if (!claimed.rowCount) return { status: 'superseded' };
 
   const { rows: source } = await space.query<{ id: string; sequence: string; author: string; body: string }>(
     `SELECT m.id::text, m.sequence::text, coalesce(u.display_name, d.name, m.author_type) AS author, m.body

@@ -71,7 +71,8 @@ try {
     await bus.subscribe('memory.extract.ready.*', {durable:'memory-extractors',queue:'memory-extractors',maxPending:4}, handle(async event => {
       const id=event.data.thread_id;
       if(typeof id!=='string')throw new Error('thread_id required');
-      const outcome=await runMemoryExtract(pool,graph,extract,embedTexts,id,cap);
+      const deadline=typeof event.data.available_at==='string'?event.data.available_at:undefined;
+      const outcome=await runMemoryExtract(pool,graph,extract,embedTexts,id,cap,deadline);
       return outcome.delayMs;
     }));
   }

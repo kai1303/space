@@ -101,3 +101,41 @@ test('a run writes topics and facts with evidence, replays change nothing, failu
     await graph.end();
   }
 });
+
+test('a burst of events runs the model once: stale deadlines are dropped and one delivery claims the current one', { skip: !process.env.MEMORY_GRAPH_URL }, async () => {
+  const graph = new Pool({ connectionString: process.env.MEMORY_GRAPH_URL });
+  const a = await bootstrap(pool);
+  await pool.query('UPDATE channels SET memory_enabled=true WHERE id=$1', [a.channel_id]);
+  await pool.query('UPDATE memory_extract_config SET enabled=true');
+  const root = await post(a.owner_token, a.channel_id, 'Retries charge customers twice');
+  const deadlines: string[] = [];
+  for (let i = 0; i < 4; i++) {
+    await post(a.owner_token, a.channel_id, `Reply ${i}`, root.thread_id);
+    deadlines.push((await pool.query("SELECT payload->>'available_at' AS at FROM event_outbox WHERE kind='memory.extract.ready' AND payload->>'thread_id'=$1 ORDER BY created_at DESC, id DESC LIMIT 1", [root.thread_id])).rows[0].at);
+  }
+  await pool.query('UPDATE memory_extract_threads SET last_run_at = NULL WHERE thread_id=$1', [root.thread_id]);
+  const vector = JSON.stringify(Array.from({ length: 384 }, () => 0.1));
+  try {
+    await graph.query('INSERT INTO kb.m_channels(id,workspace_id,name,is_private,memory_enabled,version) VALUES($1,$2,$3,false,true,1)', [a.channel_id, a.workspace_id, 'general']);
+    await graph.query('INSERT INTO kb.m_threads(id,workspace_id,channel_id,version) VALUES($1,$2,$3,1)', [root.thread_id, a.workspace_id, a.channel_id]);
+    await graph.query(`INSERT INTO kb.m_messages(id,workspace_id,thread_id,sequence,revision,created_at,memory,knowledge,body,embedding,version)
+      VALUES($1,$2,$3,$4,1,now(),true,false,$5,$6,1)`, [root.id, a.workspace_id, root.thread_id, root.sequence, root.text, vector]);
+    let calls = 0;
+    const model = async (input: { messages: { id: string }[] }) => { calls++; await new Promise(r => setTimeout(r, 200));
+      return JSON.stringify({ topics: [{ name: 'retries' }], facts: [{ text: 'Retries double charge.', kind: 'fact', message_ids: [input.messages[0]!.id] }] }); };
+    const embed = async (texts: string[]) => texts.map(() => Array.from({ length: 384 }, () => 0.2));
+    // Make the newest deadline due, keeping its exact value so its event still matches.
+    const current = deadlines.at(-1)!;
+    await pool.query('UPDATE memory_extract_threads SET available_at = $2::timestamptz - interval \'1 hour\' WHERE thread_id=$1', [root.thread_id, current]);
+    const due = (await pool.query('SELECT available_at::text AS at FROM memory_extract_threads WHERE thread_id=$1', [root.thread_id])).rows[0].at;
+
+    assert.equal((await runMemoryExtract(pool, graph, model, embed, root.thread_id, 60, deadlines[0])).status, 'superseded', 'an older event is dropped');
+    const outcomes = await Promise.all([1, 2, 3, 4].map(() => runMemoryExtract(pool, graph, model, embed, root.thread_id, 60, due)));
+    assert.deepEqual(outcomes.map(o => o.status).sort(), ['done', 'superseded', 'superseded', 'superseded'], 'duplicate deliveries of one deadline: one runs');
+    assert.equal(calls, 1, 'one model call');
+    assert.equal((await pool.query('SELECT used FROM memory_extract_budget WHERE workspace_id=$1', [a.workspace_id])).rows[0].used, 1, 'one budget unit');
+  } finally {
+    await graph.query('DELETE FROM kb.m_channels WHERE id=$1', [a.channel_id]);
+    await graph.end();
+  }
+});
