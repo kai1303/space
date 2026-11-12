@@ -91,11 +91,20 @@ test('direct-message channels never enter the graph', async () => {
   assert.deepEqual(await planChange({ table: 'channels', op: 'insert', row: dm }, 4n, lookup), []);
 });
 
-test('a channel row carries both switches', async () => {
-  const row = { id: 'c1', workspace_id: ws, name: 'general', private: false, kind: 'channel', memory_enabled: true, knowledge_enabled: false };
+test('a channel row carries both switches, its topic and its description', async () => {
+  const row = { id: 'c1', workspace_id: ws, name: 'general', private: false, kind: 'channel', memory_enabled: true, knowledge_enabled: false, topic: 'Launch', description: 'Plans for the launch' };
   const [op] = await planChange({ table: 'channels', op: 'update', row }, 6n, lookup);
   assert.match(op.text, /WHERE kb\.m_channels\.version<EXCLUDED\.version/);
-  assert.deepEqual(op.values, ['c1', ws, 'general', false, true, false, '6']);
+  assert.deepEqual(op.values, ['c1', ws, 'general', false, true, false, 'Launch', 'Plans for the launch', '6']);
+});
+
+test('a channel change without topic or description keeps the stored text', async () => {
+  // An old WAL record (before these columns were published) or an unchanged TOAST value arrives without them.
+  const row = { id: 'c1', workspace_id: ws, name: 'general', private: false, kind: 'channel', memory_enabled: true, knowledge_enabled: false };
+  const [op] = await planChange({ table: 'channels', op: 'update', row }, 7n, lookup);
+  assert.deepEqual(op.values.slice(6, 8), [null, null]);
+  assert.match(op.text, /topic=coalesce\(EXCLUDED\.topic,kb\.m_channels\.topic\)/);
+  assert.match(op.text, /description=coalesce\(EXCLUDED\.description,kb\.m_channels\.description\)/);
 });
 
 test('a session in a direct-message thread is skipped, one in a channel thread is kept', async () => {

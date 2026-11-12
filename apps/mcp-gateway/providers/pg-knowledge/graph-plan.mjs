@@ -39,11 +39,15 @@ const recomputeThread = (thread, message) => sql(
 function planChannel({ op, row }, version) {
   if (op === 'delete') return [sql('DELETE FROM kb.m_channels WHERE id=$1::text AND version<=$2::bigint', [row.id, String(version)])];
   if (row.kind !== 'channel') return [];
+  // Space never stores a null topic or description, so null here means "not in this change" (an older WAL
+  // record, or an unchanged TOAST value): keep the stored text.
+  const textOf = value => typeof value === 'string' ? value : null;
   return [sql(
-    `INSERT INTO kb.m_channels(id,workspace_id,name,is_private,memory_enabled,knowledge_enabled,version) VALUES($1::text,$2::uuid,$3,$4,$5,$6,$7::bigint)
-     ON CONFLICT (id) DO UPDATE SET name=EXCLUDED.name,is_private=EXCLUDED.is_private,memory_enabled=EXCLUDED.memory_enabled,knowledge_enabled=EXCLUDED.knowledge_enabled,version=EXCLUDED.version
+    `INSERT INTO kb.m_channels(id,workspace_id,name,is_private,memory_enabled,knowledge_enabled,topic,description,version) VALUES($1::text,$2::uuid,$3,$4,$5,$6,$7,$8,$9::bigint)
+     ON CONFLICT (id) DO UPDATE SET name=EXCLUDED.name,is_private=EXCLUDED.is_private,memory_enabled=EXCLUDED.memory_enabled,knowledge_enabled=EXCLUDED.knowledge_enabled,
+       topic=coalesce(EXCLUDED.topic,kb.m_channels.topic),description=coalesce(EXCLUDED.description,kb.m_channels.description),version=EXCLUDED.version
      WHERE kb.m_channels.version<EXCLUDED.version`,
-    [row.id, row.workspace_id, row.name, row.private, row.memory_enabled, row.knowledge_enabled, String(version)])];
+    [row.id, row.workspace_id, row.name, row.private, row.memory_enabled, row.knowledge_enabled, textOf(row.topic), textOf(row.description), String(version)])];
 }
 
 async function planMessage({ op, row }, version, lookup) {

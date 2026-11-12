@@ -80,4 +80,6 @@ The worker waits for the graph to contain the exact message revisions in its bat
 
 `thread-worker.mjs` now keeps only Markdown files and knowledge notes.
 
-Checks: `node --test apps/mcp-gateway/providers/pg-knowledge/graph-plan.test.mjs`, and `graph-smoke.mjs` with `TEST_DATABASE_URL`, `THREAD_INDEX_URL` and `KNOWLEDGE_DATABASE_URL` pointing at disposable databases. Space tests: `integration/graph-rag-memory.test.ts` and `integration/memory-extract.test.ts`, with `MEMORY_GRAPH_URL` for the knowledge-database parts.
+Channel nodes also hold the channel's `topic` and `description` as people typed them. `memory-extract.sql` adds both columns to an existing `kb.m_channels`. On its next start the reader copies the current text into rows that lack it, 500 channels per page, before it starts the stream. The first page of `channel_memory` shows them and, when the topic is empty, the 5 topics discussed by the most threads of the last 7 days, counted at read time.
+
+Checks: `node --test apps/mcp-gateway/providers/pg-knowledge/graph-plan.test.mjs apps/mcp-gateway/providers/pg-knowledge/graph-apply.test.mjs`, and `graph-smoke.mjs` with `TEST_DATABASE_URL`, `THREAD_INDEX_URL` and `KNOWLEDGE_DATABASE_URL` pointing at disposable databases. Space tests: `integration/graph-rag-memory.test.ts` and `integration/memory-extract.test.ts`, with `MEMORY_GRAPH_URL` for the knowledge-database parts.

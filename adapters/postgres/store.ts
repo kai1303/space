@@ -255,7 +255,7 @@ export class PostgresStore implements DeliveryStore {
       const thread=(await c.select().from(s.threads).where(eq(s.threads.id,task.thread_id)))[0]!;
       const working_memory = await readThreadContext(c, thread.channel_id, task.thread_id, origin?.through_sequence);
       const context: NonNullable<InvocationRequest['context']> = { thread_id: task.thread_id, working_memory, messages: working_memory.messages.filter(m => m.text.trim()).map(m => ({ id: m.id, text: m.text, author_type: m.author.kind })) };
-      context.channel_memory = await readChannelMemory(c, thread.channel_id);
+      context.channel_memory = await readChannelMemory(c, thread.channel_id, undefined, undefined, undefined, { countTopics: false });
       const notes = await readKnowledgeContext(c, thread.channel_id, task);
       if (notes) context.knowledge_notes = notes;
       if (task.session_id) {

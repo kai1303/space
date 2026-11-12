@@ -59,11 +59,11 @@ All three layers come from messages. A change-data-capture reader copies message
 
 | Tool | Key | Returns |
 | --- | --- | --- |
-| `channel_memory` | Channel | Threads active in the last 7 days by their root line, newest first, keyset-paged by `next_cursor`; with `query`, ranked by meaning |
+| `channel_memory` | Channel | Threads active in the last 7 days by their root line, newest first, keyset-paged by `next_cursor`; with `query`, ranked by meaning. The first page adds `channel`: name, topic and description from Space, and `top_topics` (up to 5, counted from thread topics) when the topic is empty |
 | `thread_memory` | Channel | Root, recent messages (session messages excluded), up to 8 related to `query`, topics, facts and session nodes |
 | `session_memory` | Channel, bound to the session's installation | Recent session turns and up to 8 related to `query` |
 
-Tasks receive `context.working_memory`, `context.agent_session_memory` and the first page of `context.channel_memory`, without ranking, so preparing a task never waits on the graph. Migration `093_drop_agent_memory.sql` deletes the old agent-written memory; take a backup first. The hidden `<space-memory>` block now carries only knowledge `notes`.
+Tasks receive `context.working_memory`, `context.agent_session_memory` and the first page of `context.channel_memory`, without ranking or `top_topics`, so preparing a task never waits on the graph. Migration `093_drop_agent_memory.sql` deletes the old agent-written memory; take a backup first. The hidden `<space-memory>` block now carries only knowledge `notes`.
 
 ## Granting access
 

@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { encodeChannelCursor, parseChannelCursor, parseSessionMemory, visibleText, extractMemoryBlock, parseAgentResponse } from '@space/contracts';
+import { encodeChannelCursor, parseChannelCursor, parseChannelMemoryPage, parseSessionMemory, visibleText, extractMemoryBlock, parseAgentResponse } from '@space/contracts';
 
 test('channel cursors round-trip and reject tampering', () => {
   const cursor = { as_of: '2026-11-11 10:00:00.123456+00', created_at: '2026-11-10 09:00:00.5+00', thread_id: randomUUID() };
@@ -9,6 +9,20 @@ test('channel cursors round-trip and reject tampering', () => {
   for (const bad of ['', 'not-base64!', Buffer.from('{"as_of":1}').toString('base64url'), encodeChannelCursor({ ...cursor, thread_id: 'x' })]) {
     assert.throws(() => parseChannelCursor(bad), (e: any) => e.code === 'invalid_memory_cursor');
   }
+});
+
+test('a channel memory page may carry a channel header with topic, description and counted topics', () => {
+  const page = { channel_id: randomUUID(), nodes: [], next_cursor: null };
+  assert.equal(parseChannelMemoryPage(page).channel, undefined, 'the header is optional');
+  const channel = { name: 'launch', topic: '', description: 'Plans', top_topics: ['deploy', 'billing'] };
+  assert.deepEqual(parseChannelMemoryPage({ ...page, channel }).channel, channel);
+  for (const bad of [
+    { ...channel, topic: 'x'.repeat(251) },
+    { ...channel, description: 'x'.repeat(2001) },
+    { ...channel, top_topics: Array(6).fill('t') },
+    { ...channel, top_topics: [''] },
+    { ...channel, extra: true },
+  ]) assert.throws(() => parseChannelMemoryPage({ ...page, channel: bad }), (e: any) => e.status === 400);
 });
 
 test('session memory is a node, recent turns and related turns, with no agent note', () => {

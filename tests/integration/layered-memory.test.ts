@@ -13,6 +13,7 @@ import { readThreadContext, readThreadMessages } from '@space/postgres/thread-co
 import { MemoryStore } from '@space/postgres/memory';
 import { addNote, listNoteTitles, removeNote, saveNoteByTitle, updateNote } from '@space/postgres/knowledge-notes';
 import { createApi } from '@space/server/api';
+import { parseChannelMemoryPage } from '@space/contracts';
 import { readChannelMemory, readThreadMemory, readSessionMemory, useMemoryIndex } from '@space/postgres/layered-memory';
 
 if (!process.env.TEST_DATABASE_URL) throw new Error('TEST_DATABASE_URL is required');
@@ -84,8 +85,39 @@ test('channel memory: titles come from the root message, 7-day window, newest fi
   assert.equal(new Set(ids).size, 60);
   assert.ok(!ids.includes(old.thread_id));
   assert.equal(second.next_cursor, null);
+  assert.ok(first.channel, 'the first page carries the channel header');
+  assert.equal(second.channel, undefined, 'later pages leave it out');
   const thread = await readThreadMemory(db(), a.channel_id, old.thread_id);
   assert.equal(thread.node.summary, 'Old');
+});
+
+test('channel memory header: what people typed, and counted thread topics only when the topic is empty', async () => {
+  const a = await bootstrap(pool);
+  await post(a.owner_token, a.channel_id, 'Kickoff');
+  await pool.query("UPDATE channels SET topic='', description='Plans for the launch' WHERE id=$1", [a.channel_id]);
+  const name = (await pool.query('SELECT name FROM channels WHERE id=$1', [a.channel_id])).rows[0].name as string;
+  assert.deepEqual((await readChannelMemory(db(), a.channel_id)).channel, { name, topic: '', description: 'Plans for the launch', top_topics: [] }, 'no store, no counted topics');
+
+  const asked: unknown[] = [];
+  useMemoryIndex({ related: async () => [], channelTopics: async (scope, days, limit) => { asked.push({ scope, days, limit }); return ['deploy', 'billing']; } });
+  try {
+    const page = await readChannelMemory(db(), a.channel_id);
+    assert.deepEqual(page.channel, { name, topic: '', description: 'Plans for the launch', top_topics: ['deploy', 'billing'] });
+    assert.deepEqual(asked, [{ scope: { channelId: a.channel_id }, days: 7, limit: 5 }]);
+    assert.deepEqual(parseChannelMemoryPage(page), page, 'the header passes the task-context contract');
+
+    await pool.query("UPDATE channels SET topic='Launch week' WHERE id=$1", [a.channel_id]);
+    const typed = await readChannelMemory(db(), a.channel_id);
+    assert.equal(typed.channel?.topic, 'Launch week');
+    assert.deepEqual(typed.channel?.top_topics, [], 'a typed topic wins');
+    assert.equal(asked.length, 1, 'and nothing is counted');
+
+    await pool.query("UPDATE channels SET topic='' WHERE id=$1", [a.channel_id]);
+    assert.deepEqual((await readChannelMemory(db(), a.channel_id, undefined, undefined, undefined, { countTopics: false })).channel?.top_topics, [], 'task preparation skips the store');
+    assert.equal(asked.length, 1, 'and never calls it');
+    useMemoryIndex({ related: async () => [], channelTopics: async () => { throw new Error('store down'); } });
+    assert.deepEqual((await readChannelMemory(db(), a.channel_id)).channel?.top_topics, [], 'a store failure still reads');
+  } finally { useMemoryIndex(undefined); }
 });
 
 test('thread memory lists sessions; session memory shows the agent turns and checks the installation', async () => {

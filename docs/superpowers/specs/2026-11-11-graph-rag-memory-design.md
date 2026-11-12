@@ -62,7 +62,7 @@ Live messages in non-archived `kind = 'channel'` channels with `memory_enabled`,
 
 | Table | Key | Columns |
 | --- | --- | --- |
-| `kb.m_channels` | `id` | `workspace_id`, `name`, `is_private`, `enabled`, `version` |
+| `kb.m_channels` | `id` | `workspace_id`, `name`, `is_private`, `enabled`, `topic`, `description`, `version` |
 | `kb.m_threads` | `id` | `workspace_id`, `channel_id → m_channels`, `root_message_id`, `last_activity_at`, `reply_count`, `version` |
 | `kb.m_sessions` | `id` | `workspace_id`, `thread_id → m_threads`, `title`, `state`, `version` |
 | `kb.m_people` | `id` | `workspace_id`, `kind` (`human` or `agent`) |

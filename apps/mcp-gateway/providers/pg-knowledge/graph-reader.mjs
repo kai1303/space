@@ -11,7 +11,7 @@ import { LogicalReplicationService, PgoutputPlugin } from 'pg-logical-replicatio
 import { createPool } from '@space/postgres/database';
 import { TABLES, lsnToVersion, planChange } from './graph-plan.mjs';
 import { sourceLookup } from './graph-source.mjs';
-import { applyOps, publish, publishNeeded, rebuild, resyncChannel, savedPosition } from './graph-apply.mjs';
+import { applyOps, fillChannelText, publish, publishNeeded, rebuild, resyncChannel, savedPosition } from './graph-apply.mjs';
 
 const schema = process.env.GRAPH_SOURCE_SCHEMA ?? 'public';
 if (!/^[a-z_][a-z0-9_]*$/.test(schema)) throw new Error('Invalid GRAPH_SOURCE_SCHEMA');
@@ -29,14 +29,15 @@ let buffer = [], saved = 0n, publishTimer, publishing = Promise.resolve(), lastR
 let queue = Promise.resolve();
 const serial = work => { const next = queue.then(work); queue = next.catch(() => {}); return next; };
 
-// Column lists keep message text and knowledge content out of the stream: only ids and flags leave Space this way.
+// Column lists keep message text and knowledge content out of the stream: only ids, flags and channel
+// labels (name, topic, description) leave Space this way.
 async function prepare() {
   const q = name => `"${schema}"."${name}"`;
   const { rowCount } = await source.query('SELECT 1 FROM pg_publication WHERE pubname=$1', [publication]);
   if (!rowCount) await source.query(`CREATE PUBLICATION "${publication}"`).catch(error => { if (error.code !== '42710') throw error; });
   await source.query(`ALTER PUBLICATION "${publication}" SET (publish_via_partition_root = true)`);
   await source.query(`ALTER PUBLICATION "${publication}" SET TABLE
-    ${q('channels')} (id, workspace_id, name, private, kind, memory_enabled, knowledge_enabled),
+    ${q('channels')} (id, workspace_id, name, private, kind, memory_enabled, knowledge_enabled, topic, description),
     ${q('messages')} (id, workspace_id, channel_id, thread_id, agent_session_id, search_revision, deleted_at, retained_at),
     ${q('knowledge_notes')} (id, workspace_id, channel_id, kind, title, evidence, revision, removed_at),
     ${q('agent_sessions')} (id, workspace_id, origin_thread_id, title, state),
@@ -56,6 +57,9 @@ async function prepare() {
   }
   confirmed = await savedPosition(index, checkpoint);
   saved = lsnToVersion(confirmed);
+  // Channels copied before topic and description were watched. Runs before the stream starts.
+  const filled = await fillChannelText(index, source);
+  if (filled) console.log(JSON.stringify({ graph_reader: 'channel_text_filled', channels: filled }));
 }
 
 // Channels whose switches differ from the stored copy need their messages brought in line.

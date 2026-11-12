@@ -1,5 +1,7 @@
 -- Apply after memory-graph.sql, including on installations that used sequence-only extraction.
 BEGIN;
+-- Channel topic and description. The graph reader fills NULL rows from Space when it starts.
+ALTER TABLE kb.m_channels ADD COLUMN IF NOT EXISTS topic text, ADD COLUMN IF NOT EXISTS description text;
 ALTER TABLE kb.m_threads ADD COLUMN IF NOT EXISTS extract_version bigint NOT NULL DEFAULT 0,
   ADD COLUMN IF NOT EXISTS extract_generation bigint NOT NULL DEFAULT 0;
 -- Keep the complete original citations even if a graph message (and its edge) disappears.

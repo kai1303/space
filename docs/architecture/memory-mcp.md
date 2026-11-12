@@ -51,7 +51,7 @@ MCP keys, and creating a key does not automatically install it in an agent's con
 | `memory_remember` | Write | Save a source-backed extracted claim with producer identity and timestamp |
 | `memory_write` | Write | Replace canonical memory using its exact expected revision |
 | `memory_forget` | Write | Remove one `message:`, `document:` or `knowledge:` source section |
-| `channel_memory` | Read | Recent threads (7 days) by the first line of their root; `after`, `limit` 1–50; optional `query` ranks by meaning |
+| `channel_memory` | Read | Recent threads (7 days) by the first line of their root; `after`, `limit` 1–50; optional `query` ranks by meaning. The first page adds the channel's name, topic, description and, when the topic is empty, `top_topics` |
 | `thread_memory` | Read | Root, recent messages, messages related to `query`, topics, facts and the session list |
 | `session_memory` | Read | Own session only (installation-bound key); others return `session_private`. Recent turns and turns related to `query` |
 

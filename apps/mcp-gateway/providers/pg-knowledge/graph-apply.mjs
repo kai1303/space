@@ -83,6 +83,29 @@ export function rebuild(index, source, slot, position) {
   });
 }
 
+// Channel rows copied before topic and description were watched hold NULL. Copy the current text once,
+// in bounded pages, before the stream starts; later changes arrive through the stream. Returns rows filled.
+export async function fillChannelText(index, source, page = 500) {
+  let after = '', filled = 0;
+  for (;;) {
+    const { rows } = await index.query(
+      'SELECT id FROM kb.m_channels WHERE (topic IS NULL OR description IS NULL) AND id>$1 ORDER BY id LIMIT $2', [after, page]);
+    if (!rows.length) break;
+    const { rows: found } = await source.query(
+      "SELECT id::text, topic, description FROM channels WHERE kind='channel' AND id=ANY($1::uuid[])", [rows.map(r => r.id)]);
+    if (found.length) {
+      const result = await index.query(
+        `UPDATE kb.m_channels c SET topic=coalesce(c.topic,s.topic),description=coalesce(c.description,s.description)
+         FROM unnest($1::text[],$2::text[],$3::text[]) AS s(id,topic,description) WHERE c.id=s.id`,
+        [found.map(r => r.id), found.map(r => r.topic), found.map(r => r.description)]);
+      filled += result.rowCount;
+    }
+    after = rows.at(-1).id;
+    if (rows.length < page) break;
+  }
+  return filled;
+}
+
 // A channel's switches changed. Bring its messages in line with the source view, in bounded pages:
 // first add or refresh what the view shows, then delete indexed messages the view no longer shows.
 export async function resyncChannel(index, source, lookup, channelId, version) {

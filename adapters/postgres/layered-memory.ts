@@ -1,8 +1,8 @@
 import { sql } from 'drizzle-orm';
 import {
   AppError, uuid, encodeChannelCursor, parseChannelCursor,
-  CHANNEL_MEMORY_DAYS, CHANNEL_PAGE_DEFAULT, CHANNEL_PAGE_MAX, SUMMARY_LIMIT,
-  type ChannelMemoryPage, type MemoryFact, type MemoryNode, type SessionMemory, type ThreadMemory, type ThreadContextMessage,
+  CHANNEL_MEMORY_DAYS, CHANNEL_PAGE_DEFAULT, CHANNEL_PAGE_MAX, CHANNEL_TOP_TOPICS, SUMMARY_LIMIT, TOPIC_NAME_MAX,
+  type ChannelMemoryHeader, type ChannelMemoryPage, type MemoryFact, type MemoryNode, type SessionMemory, type ThreadMemory, type ThreadContextMessage,
 } from '@space/contracts';
 import type { DbSession } from './database.js';
 import { contextMessage, messageColumns, readThreadContext, rows, type MessageRow } from './thread-context.js';
@@ -17,6 +17,8 @@ export interface MemoryIndex {
   related(scope: MemoryScope, query: string, limit: number): Promise<string[]>;
   // Topics and facts the extraction step wrote for one thread. Facts are checked against Space before they are shown.
   threadKnowledge?(scope: MemoryScope & { threadId: string }): Promise<{ topics: string[]; facts: IndexedFact[] }>;
+  // Topic names discussed by the most threads of one channel active in the last `days`, most threads first.
+  channelTopics?(scope: { channelId: string }, days: number, limit: number): Promise<string[]>;
 }
 let index: MemoryIndex | undefined;
 export function useMemoryIndex(next: MemoryIndex | undefined) { index = next; }
@@ -42,10 +44,27 @@ function threadNode(row: ThreadRow, channelId: string): MemoryNode {
   return { ref: { kind: 'thread', id: row.thread_id }, parent: { kind: 'channel', id: channelId }, summary: row.title, updated_at: row.last_at, children: { kind: 'session', count: row.sessions } };
 }
 
-export async function readChannelMemory(c: DbSession, channelId: string, after?: string, limit = CHANNEL_PAGE_DEFAULT, query?: string): Promise<ChannelMemoryPage> {
+// What the channel is for. Name, topic and description come from Space. Counted topics stand in for an
+// empty topic; they are derived text, so a store failure only leaves them out.
+async function channelHeader(c: DbSession, channelId: string, countTopics: boolean): Promise<ChannelMemoryHeader> {
+  const [row] = await rows<{ name: string; topic: string; description: string }>(c, sql`SELECT name, topic, description FROM channels WHERE id = ${channelId}`);
+  if (!row) throw new AppError(404, 'channel_not_found');
+  let top: string[] = [];
+  if (countTopics && !row.topic.trim() && index?.channelTopics) {
+    try { top = await index.channelTopics({ channelId }, CHANNEL_MEMORY_DAYS, CHANNEL_TOP_TOPICS); } catch { top = []; }
+    top = [...new Set(top.filter(t => typeof t === 'string' && t.trim() && t.length <= TOPIC_NAME_MAX && !t.includes('\0')))].slice(0, CHANNEL_TOP_TOPICS);
+  }
+  return { name: row.name, topic: row.topic, description: row.description, top_topics: top };
+}
+
+// Task preparation passes countTopics: false so it never waits on the Graph RAG store.
+export async function readChannelMemory(c: DbSession, channelId: string, after?: string, limit = CHANNEL_PAGE_DEFAULT, query?: string,
+  { countTopics = true }: { countTopics?: boolean } = {}): Promise<ChannelMemoryPage> {
   if (!Number.isInteger(limit) || limit < 1 || limit > CHANNEL_PAGE_MAX) throw new AppError(400, 'invalid_memory_limit');
   const asked = checkedQuery(query);
   const cursor = after === undefined ? null : parseChannelCursor(after);
+  // Only the first page carries the header, so paging does not repeat it.
+  const header = cursor ? {} : { channel: await channelHeader(c, channelId, countTopics) };
   const asOf = cursor?.as_of ?? (await rows<{ now: string }>(c, sql`SELECT now()::text AS now`))[0]!.now;
   const select = (where: ReturnType<typeof sql>, order: ReturnType<typeof sql>, count: number) => rows<ThreadRow>(c, sql`
     WITH active AS (
@@ -67,7 +86,7 @@ export async function readChannelMemory(c: DbSession, channelId: string, after?:
       for (const id of hits) { const t = threadOf.get(id); if (t && !order.has(t)) order.set(t, order.size); }
       const found = await select(sql`a.thread_id = ANY(${sql.param([...order.keys()])}::uuid[])`, sql`a.last_at DESC, a.thread_id DESC`, 50);
       found.sort((a, b) => (order.get(a.thread_id) ?? 99) - (order.get(b.thread_id) ?? 99));
-      return { channel_id: channelId, nodes: found.slice(0, limit).map(row => threadNode(row, channelId)), next_cursor: null };
+      return { channel_id: channelId, ...header, nodes: found.slice(0, limit).map(row => threadNode(row, channelId)), next_cursor: null };
     }
   }
   // Snapshot at as_of so a message written between pages cannot move a thread across the cursor.
@@ -76,6 +95,7 @@ export async function readChannelMemory(c: DbSession, channelId: string, after?:
   const last = page.at(-1);
   return {
     channel_id: channelId,
+    ...header,
     nodes: page.map(row => threadNode(row, channelId)),
     next_cursor: found.length > limit && last ? encodeChannelCursor({ as_of: asOf, created_at: last.last_at, thread_id: last.thread_id }) : null,
   };
