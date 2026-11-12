@@ -1,35 +1,77 @@
+import { subscribeUpdates } from '../../shared/realtime/live-updates.js';
+import { FileDetailsForm } from './FileDetailsForm.js';
 import { sessionFetch } from '../../shared/api/session-fetch.js';
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
-import type { AssetAttachment, AssetPreview } from '@space/contracts';
-import { Button, Dialog, IconButton } from '@space/ui/primitives';
+import { conversationPath, type AssetAttachment, type AssetDetails, type AssetPreview } from '@space/contracts';
+import { Button, Dialog, IconButton, ImageStage, Menu } from '@space/ui/primitives';
 import { AgentMarkdown } from '@space/ui/agents';
 import { CodeBlock } from '@space/ui/rich-text';
-import { ArrowLeft, ArrowRight, DownloadSimple, Eye, File, FileCode, FilePdf, MagnifyingGlassMinus, MagnifyingGlassPlus, MusicNote, VideoCamera } from '@phosphor-icons/react';
+import { ArrowLeft, ArrowRight, ArrowSquareOut, ChatCircle, CloudArrowDown, DotsThree, DownloadSimple, Eye, File, FileCode, FileDoc, FilePdf, FilePpt, FileXls, PencilSimple, MusicNote, SidebarSimple, VideoCamera } from '@phosphor-icons/react';
 import type { OfficeExit } from './OfficePreview.js';
+import { imageGalleryLayout, type GalleryTile } from './imageGalleryLayout.js';
 import './asset-attachments.css';
 
 const OfficePreview = lazy(() => import('./OfficePreview.js').then(module => ({ default: module.OfficePreview })));
 const PdfPreview = lazy(() => import('./PdfPreview.js').then(module => ({ default: module.PdfPreview })));
 const assetUrl = (id: string, action: string) => `/v1/assets/${encodeURIComponent(id)}/${action}`;
-function usePreview(id: string, onAccessLost?: (status: number) => void) {
+const sharedAt = new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' });
+function usePreview(id: string, onAccessLost?: (status: number) => void, withDetails = false) {
   const accessLost = useRef(onAccessLost);
   useEffect(() => { accessLost.current = onAccessLost; }, [onAccessLost]);
-  const [state, setState] = useState<{ id: string; preview?: AssetPreview; failed?: boolean }>({ id });
+  const [state, setState] = useState<{ id: string; preview?: AssetPreview; details?: AssetDetails; failed?: boolean }>({ id });
   useEffect(() => {
     const controller = new AbortController();
     setState({ id });
-    void sessionFetch(assetUrl(id, 'preview'), { credentials: 'same-origin', signal: controller.signal }).then(async response => {
+    void sessionFetch(assetUrl(id, 'preview'), { credentials: 'same-origin', signal: controller.signal, headers: withDetails ? { 'x-space-file-details': '1' } : undefined }).then(async response => {
       if (controller.signal.aborted) return;
       if (response.status === 401) window.dispatchEvent(new Event('space:session-expired'));
       if ([401, 403, 404].includes(response.status)) accessLost.current?.(response.status);
       if (!response.ok) throw new Error('Preview unavailable');
-      const preview = await response.json() as AssetPreview;
+      const preview = await response.json() as AssetPreview & { details?: AssetDetails };
       if (!preview || !['image', 'pdf', 'audio', 'video', 'text', 'office', 'unsupported'].includes(preview.kind)) throw new Error('Invalid preview');
-      if (!controller.signal.aborted) setState({ id, preview });
+      if (!controller.signal.aborted) setState({ id, preview, details: preview.details });
     }).catch(() => { if (!controller.signal.aborted) setState({ id, failed: true }); });
     return () => controller.abort();
-  }, [id]);
-  return { ...(state.id === id ? state : { id }), fail: () => setState({ id, failed: true }) };
+  }, [id, withDetails]);
+  const channel = state.id === id ? state.details?.channel_id : undefined;
+  const readVersion = useRef(0);
+  useEffect(() => {
+    if (!channel) return;
+    const controller = new AbortController();
+    const revoke = (status: number) => {
+      if (controller.signal.aborted) return;
+      setState({ id, failed: true });
+      accessLost.current?.(status);
+    };
+    const stop = subscribeUpdates('channel', channel, async () => {
+      const version = ++readVersion.current;
+      const response = await sessionFetch(assetUrl(id, 'details'), { signal: controller.signal });
+      if ([401, 403, 404].includes(response.status)) return revoke(response.status);
+      if (!response.ok) return;
+      const details: AssetDetails = await response.json();
+      if (!controller.signal.aborted && version === readVersion.current && details.id === id)
+        setState(old => old.id === id ? { ...old, details } : old);
+    }, code => revoke(code === 'unauthorized' ? 401 : 403));
+    return () => { controller.abort(); stop(); };
+  }, [channel, id]);
+  const saved = (details: AssetDetails) => {
+    readVersion.current++;
+    setState(old => old.id === details.id ? { ...old, details } : old);
+  };
+  return { ...(state.id === id ? state : { id }), saved, fail: () => setState({ id, failed: true }) };
+}
+const officeFormats = {
+  docx: ['Word document', FileDoc, 'document'], odt: ['OpenDocument text', FileDoc, 'document'],
+  xlsx: ['Excel spreadsheet', FileXls, 'sheet'], ods: ['OpenDocument spreadsheet', FileXls, 'sheet'],
+  pptx: ['PowerPoint presentation', FilePpt, 'slides'], odp: ['OpenDocument presentation', FilePpt, 'slides'],
+} as const;
+
+function fileTypeLabel(name: string, preview?: AssetPreview) {
+  if (preview?.kind === 'office') return officeFormats[preview.fileType][0];
+  if (preview?.kind === 'text') return preview.language === 'text' ? 'Text file' : `${preview.language} file`;
+  if (preview && preview.kind !== 'unsupported') return { pdf: 'PDF document', image: 'Image', video: 'Video', audio: 'Audio' }[preview.kind];
+  const extension = name.match(/\.([a-z0-9]{1,8})$/i)?.[1];
+  return extension ? `${extension.toUpperCase()} file` : 'File';
 }
 function FileSymbol({ kind }: { kind?: AssetPreview['kind'] | 'file' }) {
   const Icon = kind === 'pdf' ? FilePdf : kind === 'text' ? FileCode : kind === 'audio' ? MusicNote : kind === 'video' ? VideoCamera : File;
@@ -39,54 +81,53 @@ function NativeMedia({ asset, kind, onError }: { asset: AssetAttachment; kind: '
   const props = { controls: true, preload: 'metadata', src: assetUrl(asset.id, 'content'), onError, 'aria-label': asset.name };
   return kind === 'audio' ? <audio {...props} /> : <video {...props} playsInline />;
 }
-function AttachmentCard({ asset, onOpen, onPreview }: { asset: AssetAttachment; onOpen: (element: HTMLElement) => void; onPreview: (id: string, preview?: AssetPreview) => void }) {
+function imageSources(id: string, preview: Extract<AssetPreview, { kind: 'image' }>, tile?: GalleryTile) {
+  if (preview.mime !== 'image/webp' || !tile) return {};
+  const { width, height } = preview;
+  const thumb = Math.max(1, Math.round(width * Math.min(1, 360 / width, 240 / height)));
+  const display = Math.max(1, Math.round(width * Math.min(1, 1600 / width, 1200 / height)));
+  if (display <= thumb) return {};
+  const fittedWidth = tile.height * width / height;
+  const slot = tile.crop ? Math.max(tile.width, fittedWidth) : Math.min(tile.width, fittedWidth);
+  return {
+    srcSet: `${assetUrl(id, 'thumbnail')} ${thumb}w, ${assetUrl(id, 'content')} ${display}w`,
+    sizes: `${Math.ceil(slot)}px`,
+  };
+}
+function AttachmentCard({ asset, tile, hidden, onOpen, onPreview }: { tile?: GalleryTile; hidden: boolean; asset: AssetAttachment; onOpen: (element: HTMLElement) => void; onPreview: (id: string, preview?: AssetPreview) => void }) {
   const { preview, failed, fail } = usePreview(asset.id);
   const [thumbnailFailed, setThumbnailFailed] = useState(false);
   useEffect(() => {
     onPreview(asset.id, preview);
     return () => onPreview(asset.id);
   }, [asset.id, preview, onPreview]);
-  return <div className={`asset-card ${preview?.kind === 'image' ? 'asset-card--image' : ''}`} style={preview?.kind === 'image' ? { width: Math.max(160, Math.min(360, preview.width, 320 * preview.width / preview.height)) } : undefined}>
-    {preview?.kind === 'image' && <button type="button" className="asset-image-button" aria-label={`Preview ${asset.name}`} onClick={event => onOpen(event.currentTarget)}>
-      <img src={assetUrl(asset.id, 'thumbnail')} alt={asset.description || asset.name} width={preview.width} height={preview.height} loading="lazy" onError={fail} />
-    </button>}
+  const office = preview?.kind === 'office' ? officeFormats[preview.fileType] : undefined;
+  const OfficeIcon = office?.[1];
+  if (preview?.kind === 'image') {
+    return <div className="asset-card asset-card--image" hidden={hidden} style={tile && { width: tile.width, height: tile.height }}>
+      <button type="button" className="asset-image-button" aria-label={tile?.overflow ? `View ${tile.overflow} more images, starting with ${asset.name}` : `Preview ${asset.name}`}
+        title={asset.name} onClick={event => onOpen(event.currentTarget)}>
+        <img src={assetUrl(asset.id, 'thumbnail')} alt={asset.description || asset.name} width={preview.width} height={preview.height}
+          {...imageSources(asset.id, preview, tile)} loading="lazy" className={tile?.crop ? 'asset-image-crop' : undefined} onError={fail} />
+        {!!tile?.overflow && <span className="asset-image-overflow" aria-hidden="true">+{tile.overflow}</span>}
+      </button>
+      {!tile?.overflow && <a className="asset-image-download sp-button sp-button--secondary sp-button--sm sp-icon-button" aria-label={`Download ${asset.name}`} title={`Download ${asset.name}`} href={assetUrl(asset.id, 'download')}><DownloadSimple size={18} /></a>}
+    </div>;
+  }
+  return <div className="asset-card">
     {(preview?.kind === 'video' || preview?.kind === 'audio') && <NativeMedia asset={asset} kind={preview.kind} onError={fail} />}
     <div className="asset-card-info">
-      {preview?.kind !== 'image' && <span className={`asset-file-icon asset-file-icon--${preview?.kind ?? 'file'}`}><FileSymbol kind={preview?.kind} /></span>}
-      <button type="button" className="asset-filename" title={asset.name} aria-label={`Open ${asset.name}`} onClick={event => onOpen(event.currentTarget)}><span>{asset.name}</span><small>{Math.max(1, Math.round(asset.size / 1024))} KB{preview?.kind === 'pdf' ? ' · PDF' : ''}</small></button>
+      <span className={`asset-file-icon asset-file-icon--${office?.[2] ?? preview?.kind ?? 'file'}`}>{OfficeIcon ? <OfficeIcon size={28} aria-hidden="true" /> : <FileSymbol kind={preview?.kind} />}</span>
+      <button type="button" className="asset-filename" title={asset.name} aria-label={`Open ${asset.name}`} onClick={event => onOpen(event.currentTarget)}><span>{asset.name}</span><small>{fileTypeLabel(asset.name, preview)} · {Math.max(1, Math.round(asset.size / 1024))} KB</small></button>
       <a className="asset-card-download sp-button sp-button--ghost sp-button--sm sp-icon-button" aria-label={`Download ${asset.name}`} title={`Download ${asset.name}`} href={assetUrl(asset.id, 'download')}><DownloadSimple size={18} aria-hidden="true" /></a>
-      {(preview || failed) && preview?.kind !== 'image' && preview?.kind !== 'text' && <IconButton label={`Preview ${asset.name}`} size="sm" onClick={event => onOpen(event.currentTarget)}><Eye size={18} aria-hidden="true" /></IconButton>}
+      {(preview || failed) && preview?.kind !== 'text' && <IconButton label={`Preview ${asset.name}`} size="sm" onClick={event => onOpen(event.currentTarget)}><Eye size={18} aria-hidden="true" /></IconButton>}
     </div>
-    {preview?.kind === 'pdf' && preview.thumbnail !== false && !thumbnailFailed && <button type="button" className="asset-pdf-thumbnail" aria-label={`Preview first page of ${asset.name}`} onClick={event => onOpen(event.currentTarget)}>
+    {(preview?.kind === 'office' || (preview?.kind === 'pdf' && preview.thumbnail !== false)) && !thumbnailFailed && <button type="button" className={`asset-pdf-thumbnail${office ? ' asset-office-thumbnail' : ''}`} aria-label={`Preview first page of ${asset.name}`} onClick={event => onOpen(event.currentTarget)}>
       <img src={assetUrl(asset.id, 'thumbnail')} alt={`First page of ${asset.name}`} loading="lazy" width={360} height={240} onError={() => setThumbnailFailed(true)} />
     </button>}
     {preview?.kind === 'text' && <div className="asset-snippet"><span className="asset-preview-label">Text preview</span><pre>{preview.text.slice(0, 600).replace(/[\uD800-\uDBFF]$/, '').split('\n').slice(0, 5).join('\n')}</pre><button type="button" className="asset-open-preview" aria-label={`Open preview of ${asset.name}`} onClick={event => onOpen(event.currentTarget)}>Open preview</button></div>}
     {(failed || preview?.kind === 'unsupported') && <p className="asset-unavailable">Preview unavailable</p>}
   </div>;
-}
-function ImagePreview({ asset, preview, onError }: { asset: AssetAttachment; preview: Extract<AssetPreview, { kind: 'image' }>; onError: () => void }) {
-  const [zoom, setZoom] = useState(1);
-  const stage = useRef<HTMLDivElement>(null);
-  const [fit, setFit] = useState(1);
-  useEffect(() => {
-    const node = stage.current;
-    if (!node) return;
-    const resize = () => setFit(Math.min(1, (node.clientWidth - 32) / preview.width, (node.clientHeight - 32) / preview.height));
-    resize();
-    const observer = typeof ResizeObserver === 'undefined' ? undefined : new ResizeObserver(resize);
-    observer?.observe(node);
-    return () => observer?.disconnect();
-  }, [preview.width, preview.height]);
-  return <>
-    <div className="asset-image-stage" ref={stage}>
-      <img src={assetUrl(asset.id, 'content')} alt={asset.description || asset.name} onError={onError} style={{ width: Math.max(1, preview.width * Math.max(0.01, fit) * zoom), height: Math.max(1, preview.height * Math.max(0.01, fit) * zoom) }} />
-    </div>
-    <div className="asset-image-tools" role="group" aria-label="Image zoom">
-      <IconButton label="Zoom out" disabled={zoom <= 0.25} onClick={() => setZoom(value => Math.max(0.25, value - 0.25))}><MagnifyingGlassMinus size={20} /></IconButton>
-      <Button variant="ghost" onClick={() => setZoom(1)} aria-label="Fit image">{Math.round(zoom * 100)}% · Fit</Button>
-      <IconButton label="Zoom in" disabled={zoom >= 4} onClick={() => setZoom(value => Math.min(4, value + 0.25))}><MagnifyingGlassPlus size={20} /></IconButton>
-    </div>
-  </>;
 }
 function FilmstripPreview({ asset, preview }: { asset: AssetAttachment; preview?: { kind: AssetPreview['kind'] | 'file' } }) {
   const [failed, setFailed] = useState(false);
@@ -122,13 +163,16 @@ function DesktopOffice({ id, close, children }: { id: string; close: () => void;
   }, [id]);
   return fallback ? children : <p role="status">Opening in the side panel…</p>;
 }
-function ViewerContent({ asset, exit, close, onAccessLost }: { asset: AssetAttachment; close: () => void; exit: OfficeExit; onAccessLost?: (status: number) => void }) {
-  const { preview, failed, fail } = usePreview(asset.id, onAccessLost);
+function ViewerContent({ asset, state, exit, close, onAccessLost, actions }: {
+  asset: AssetAttachment; state: ReturnType<typeof usePreview>; close: () => void; exit: OfficeExit;
+  onAccessLost?: (status: number) => void; actions: React.ReactNode;
+}) {
+  const { preview, failed, fail } = state;
   if (failed || preview?.kind === 'unsupported') return <div className="asset-viewer-fallback"><File size={56} /><p role="status">Preview unavailable</p><p>Download the original to open this file.</p></div>;
   if (!preview) return <p className="asset-viewer-loading" role="status">Loading preview…</p>;
   const kindLabel = { image: 'Image', pdf: 'PDF', text: 'Text', office: 'Office document', audio: 'Audio', video: 'Video' }[preview.kind];
   let content;
-  if (preview.kind === 'image') content = <ImagePreview asset={asset} preview={preview} onError={fail} />;
+  if (preview.kind === 'image') return <><span className="sp-sr-only">{kindLabel} · {preview.mime}</span><ImageStage src={assetUrl(asset.id, 'original-image')} alt={asset.description || asset.name} onClose={close} onError={fail} actions={actions} /></>;
   else if (preview.kind === 'office') {
     const office = <Suspense fallback={<p role="status">Opening document…</p>}><OfficePreview id={asset.id} exit={exit} onAccessLost={onAccessLost} /></Suspense>;
     return window.spaceDesktop?.openOffice ? <DesktopOffice id={asset.id} close={close}>{office}</DesktopOffice> : office;
@@ -152,12 +196,30 @@ export function AssetAttachments({ assets }: { assets: AssetAttachment[] }) {
   }, []);
   const opener = useRef<HTMLElement | null>(null);
   function close() { setSelected(null); queueMicrotask(() => opener.current?.isConnected && opener.current.focus()); }
+  const images = assets.filter(asset => previews[asset.id]?.kind === 'image');
+  const container = useRef<HTMLDivElement>(null);
+  const [width, setWidth] = useState(360);
+  const hasImages = images.length > 0;
+  useEffect(() => {
+    const node = container.current;
+    if (!hasImages || !node || typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(([entry]) => {
+      if (entry && entry.contentRect.width > 0) setWidth(entry.contentRect.width);
+    });
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [hasImages]);
+  const tiles = imageGalleryLayout(images.map(asset => previews[asset.id] as Extract<AssetPreview, { kind: 'image' }>), width);
+  const ordered = images.length ? [...images, ...assets.filter(asset => previews[asset.id]?.kind !== 'image')] : assets;
   return <>
-    <div className="chat-attachments asset-attachments">{assets.map(asset => <AttachmentCard key={asset.id} asset={asset} onPreview={rememberPreview} onOpen={element => { opener.current = element; setSelected(asset.id); }} />)}</div>
-    {selected && <AssetViewer assets={assets} selectedId={selected} onSelect={setSelected} onClose={close} previews={previews} />}
+    <div ref={container} className={`chat-attachments asset-attachments${hasImages ? ' asset-attachments--gallery' : ''}`} style={hasImages ? { gridTemplateColumns: tiles.map(tile => `minmax(0, ${tile.width}px)`).join(' ') } : undefined} role="group" aria-label="Message attachments">
+      {images.length === 1 && assets.length === 1 && <span className="asset-image-caption">{images[0]!.name}</span>}
+      {ordered.map((asset, index) => <AttachmentCard key={asset.id} asset={asset} tile={tiles[index]} hidden={index < images.length && index >= tiles.length} onPreview={rememberPreview} onOpen={element => { opener.current = element; setSelected(asset.id); }} />)}</div>
+    {selected && <AssetViewer assets={ordered} selectedId={selected} onSelect={setSelected} onClose={close} previews={previews} />}
   </>;
 }
-export function AssetViewer({ assets, selectedId, onSelect, onClose, onAccessLost, channelLabel, previews = {} }: {
+export function AssetViewer({ assets, selectedId, onSelect, onClose, onAccessLost, channelLabel, previews = {}, standalone = false }: {
+  standalone?: boolean;
   channelLabel?: string;
   assets: AssetAttachment[];
   selectedId: string;
@@ -170,10 +232,28 @@ export function AssetViewer({ assets, selectedId, onSelect, onClose, onAccessLos
   function leave(action: () => void) { if (exit.current) exit.current(action); else action(); }
   const viewer = useRef<HTMLDivElement>(null);
   const index = assets.findIndex(asset => asset.id === selectedId);
-  const current = assets[index];
+  const state = usePreview(selectedId, onAccessLost, true);
+  const details = state.details;
+  const asset = assets[index];
+  const current = details && asset ? { ...asset, name: details.name, description: details.description } : asset;
+  const [fileDialog, setFileDialog] = useState<{ id: string; mode: 'details' | 'alt' }>();
+  const closeFileDialog = () => setFileDialog(undefined);
+  const image = state.preview?.kind === 'image';
+  const actions = current && <>
+    <a className="sp-button sp-button--ghost sp-button--sm" href={assetUrl(current.id, 'download')} aria-label="Download original" title="Download original">{image ? <CloudArrowDown size={18}/> : <DownloadSimple size={18}/>}</a>
+    {image && details && (details.can_edit || details.description) && <Button size="sm" variant="ghost"
+      aria-label={details.description ? 'Image description' : 'Add alt text'} title={details.description ? 'Image description' : 'Add alt text'}
+      onClick={() => setFileDialog({ id: current.id, mode: 'alt' })}>{details.description ? 'ALT' : '+ ALT'}</Button>}
+    {details?.thread_id && <a className="sp-button sp-button--ghost sp-button--sm" title="Show thread" aria-label="Show thread" href={conversationPath(details.channel_id, details.thread_id) ?? undefined}>{image ? <SidebarSimple size={18}/> : <ChatCircle size={18}/>}</a>}
+    {!standalone && <a className="sp-button sp-button--ghost sp-button--sm" title="Open in new window" aria-label="Open in new window" href={`/file/${encodeURIComponent(current.id)}`} target="_blank" rel="noopener noreferrer"><ArrowSquareOut size={18}/></a>}
+    {details?.can_edit && (image
+      ? <Menu className="asset-image-menu" label="More actions" trigger={<DotsThree size={20} weight="bold"/>}
+          items={[{ label: 'Edit file details', icon: <PencilSimple size={16}/>, onSelect: () => setFileDialog({ id: current.id, mode: 'details' }) }]} />
+      : <IconButton label="Edit file details" onClick={() => setFileDialog({ id: current.id, mode: 'details' })}><PencilSimple size={18}/></IconButton>)}
+  </>;
   function navigate(direction: number) { const next = assets[index + direction]; if (next) leave(() => onSelect(next.id)); }
   function keyboard(event: globalThis.KeyboardEvent) {
-    if (event.key === 'Escape') return;
+    if (event.defaultPrevented || event.key === 'Escape' || (event.target as HTMLElement).closest('dialog') !== viewer.current?.closest('dialog')) return;
     const target = event.target as HTMLElement;
     const control = target.closest('input,textarea,select,audio,video,[contenteditable=true],[data-pdf-controls],[role=region]');
     if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || (control && target.closest('dialog')?.contains(control))) return;
@@ -185,19 +265,23 @@ export function AssetViewer({ assets, selectedId, onSelect, onClose, onAccessLos
     dialog.addEventListener('keydown', keyboard);
     return () => dialog.removeEventListener('keydown', keyboard);
   });
-  return current ? <Dialog open onClose={onClose} onBeforeClose={() => {
+  return current ? <><Dialog open onClose={onClose} onBeforeClose={() => {
       if (!exit.current) return true;
       exit.current(onClose);
       return false;
-    }} title={current.name}>
-      <div className={assets.length === 1 ? 'asset-viewer asset-viewer--single' : 'asset-viewer'} ref={viewer}>
+    }} title={current.name} subtitle={details && `Shared by ${details.uploader} · ${sharedAt.format(new Date(details.shared_at))}`}>
+      <div className={assets.length === 1 ? 'asset-viewer asset-viewer--single' : 'asset-viewer'} ref={viewer} data-image={image || undefined}>
         {channelLabel && <span className="asset-office-channel">{channelLabel}</span>}
         <div className="asset-viewer-toolbar">
           <div className="asset-file-navigation"><IconButton label="Previous file" disabled={index <= 0} onClick={() => navigate(-1)}><ArrowLeft size={20} /></IconButton><span>{index + 1} of {assets.length}</span><IconButton label="Next file" disabled={index >= assets.length - 1} onClick={() => navigate(1)}><ArrowRight size={20} /></IconButton></div>
-          <a className="sp-button sp-button--secondary sp-button--sm" href={assetUrl(current.id, 'download')}><DownloadSimple size={16} />Download original</a>
+          {!image && actions}
         </div>
-        <div key={current.id} className="asset-viewer-content"><ViewerContent asset={current} close={onClose} exit={exit} onAccessLost={onAccessLost} /></div>
-        {assets.length > 1 && <div className="asset-filmstrip" role="group" aria-label="Attached files">{assets.map((asset, position) => <button type="button" key={asset.id} aria-label={`View ${asset.name}`} aria-pressed={position === index} onClick={() => leave(() => onSelect(asset.id))}><FilmstripPreview asset={asset} preview={previews[asset.id]} /><span>{asset.name}</span></button>)}</div>}
+        <div key={current.id} className="asset-viewer-content"><ViewerContent state={state} actions={actions} asset={current} close={onClose} exit={exit} onAccessLost={onAccessLost} /></div>
+        {assets.length > 1 && <div className="asset-filmstrip" role="group" aria-label="Attached files">{assets.map((asset, position) => <button type="button" key={asset.id} aria-label={`View ${asset.id === current.id ? current.name : asset.name}`} aria-pressed={position === index} onClick={() => leave(() => onSelect(asset.id))}><FilmstripPreview asset={asset} preview={previews[asset.id]} /><span>{asset.id === current.id ? current.name : asset.name}</span></button>)}</div>}
       </div>
-    </Dialog> : null;
+    </Dialog>
+    {details && fileDialog?.id === selectedId && (details.can_edit
+      ? <FileDetailsForm key={selectedId} details={details} altOnly={fileDialog.mode === 'alt'} onSaved={state.saved} onClose={closeFileDialog} />
+      : fileDialog.mode === 'alt' && <Dialog open title="Image description" onClose={closeFileDialog}><p>{details.description}</p></Dialog>)}
+  </> : null;
 }

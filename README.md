@@ -265,8 +265,11 @@ for tested workflows and remaining checks.
 
 ### Edit Office files together
 
-Open a document, spreadsheet, or presentation from a channel’s **Files & links**
-tab. With ONLYOFFICE configured, the uploader can choose **Edit** and turn on
+Select files to preview them in the composer. Press Send while uploads are running to send the message once all selected files are ready. Open a posted image to zoom, pan, and rotate the original. Uploaders can edit the filename and description while others keep their place in the viewer.
+
+Message attachments show their file type and size. Images shared together form a gallery above the other files. PDF and Office cards show a first-page preview when available.
+
+Open a document, spreadsheet, or presentation from its message card or the channel’s **Files & links** tab. With ONLYOFFICE configured, the uploader can choose **Edit** and turn on
 **Channel editing**. Members who can post in the channel can then open the same
 file and see each other’s edits live. Space saves the working copy when the last
 editor closes the document. **Original upload** retrieves the file as first shared.

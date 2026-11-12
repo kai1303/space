@@ -6,3 +6,4 @@ export type { MultiSelectOption } from "./multiselect-menu.js";
 export { Select } from "./select.js";
 export type { SelectProps } from "./select.js";
 export { Toaster, pendingToast, toast } from "./toast.js";
+export { ImageStage } from "./image-stage.js";

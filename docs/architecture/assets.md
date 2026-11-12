@@ -387,7 +387,7 @@ pnpm migrate
 ```
 
 Restart the API with the same environment. For a containerized API, include both
-Compose files when starting the server. The browser connects to `ONLYOFFICE_URL`.
+Compose files when starting the server. The browser connects to `ONLYOFFICE_URL`. Message cards request a PNG of the first page of the saved revision without opening an editor. If your public proxy restricts conversion, set `ONLYOFFICE_INTERNAL_URL` to the Document Server address reachable from the API.
 The document server fetches a signed object URL on `ONLYOFFICE_STORAGE_ENDPOINT`
 (defaults to the API's internal storage endpoint). Use HTTPS for the browser URL
 when Space runs on HTTPS.

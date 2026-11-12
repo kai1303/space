@@ -3,7 +3,7 @@ import { fileTypeFromBuffer } from 'file-type';
 import { AppError, MAX_ASSET_BYTES, type AssetPreview } from '@space/contracts';
 
 type OfficeFile = Extract<AssetPreview, { kind: 'office' }>;
-export type OfficeSettings = { url: string; secret: string; callbackBase?: string };
+export type OfficeSettings = { url: string; secret: string; callbackBase?: string; internalUrl?: string };
 export const OFFICE_CALLBACK = '/v1/office/callback';
 export const OFFICE_CONTENT = '/v1/office/files/:assetId/:revision';
 
@@ -18,7 +18,8 @@ export function officeSettings(env = process.env): OfficeSettings | undefined {
   const url = env.ONLYOFFICE_URL, secret = env.ONLYOFFICE_JWT_SECRET;
   if (!url && !secret) return;
   if (!url || !secret || Buffer.byteLength(secret) < 32) throw new Error('onlyoffice_configuration');
-  return { url: endpoint(url), secret, callbackBase: env.ONLYOFFICE_CALLBACK_BASE && endpoint(env.ONLYOFFICE_CALLBACK_BASE) };
+  return { url: endpoint(url), secret, callbackBase: env.ONLYOFFICE_CALLBACK_BASE && endpoint(env.ONLYOFFICE_CALLBACK_BASE),
+    internalUrl: env.ONLYOFFICE_INTERNAL_URL && endpoint(env.ONLYOFFICE_INTERNAL_URL) };
 }
 
 export function officeContentUrl(settings: OfficeSettings, id: string, revision: number) {
@@ -73,7 +74,7 @@ export async function officeRequest(settings: OfficeSettings, header: string | u
   } catch { throw new AppError(401, 'invalid_office_request'); }
 }
 
-export async function readOfficeResult(settings: OfficeSettings, source: unknown, fileType: OfficeFile['fileType']) {
+export async function readOfficeResult(settings: OfficeSettings, source: unknown, fileType: OfficeFile['fileType'] | 'png') {
   if (typeof source !== 'string' || !URL.canParse(source)) throw new AppError(400, 'invalid_office_result');
   const url = new URL(source);
   if (url.origin !== new URL(settings.url).origin || url.username || url.password || !url.pathname.startsWith('/cache/files/'))
@@ -84,10 +85,23 @@ export async function readOfficeResult(settings: OfficeSettings, source: unknown
   let size = 0;
   for await (const chunk of response.body) {
     size += chunk.length;
-    if (size > MAX_ASSET_BYTES) throw new AppError(413, 'office_file_too_large');
+    if (size > (fileType === 'png' ? 2 * 1024 * 1024 : MAX_ASSET_BYTES)) throw new AppError(413, 'office_file_too_large');
     chunks.push(chunk);
   }
   const bytes = Buffer.concat(chunks, size);
   if ((await fileTypeFromBuffer(bytes))?.ext !== fileType) throw new AppError(422, 'office_format_changed');
   return bytes;
+}
+
+export async function renderOfficeThumbnail(settings: OfficeSettings, key: string, fileType: OfficeFile['fileType'], source: string) {
+  const url = settings.internalUrl ?? settings.url;
+  const params = { key, filetype: fileType, outputtype: 'png', url: source, async: false,
+    thumbnail: { aspect: 1, first: true, width: 640, height: 720 } };
+  const token = await new SignJWT(params).setProtectedHeader({ alg: 'HS256' }).setExpirationTime('2m').sign(Buffer.from(settings.secret));
+  const response = await fetch(new URL('/converter', url), { method: 'POST', redirect: 'error', signal: AbortSignal.timeout(20_000),
+    headers: { 'content-type': 'application/json', accept: 'application/json' }, body: JSON.stringify({ ...params, token }) });
+  if (!response.ok) throw new AppError(503, 'office_thumbnail_unavailable');
+  const result = await response.json();
+  if (result.endConvert !== true) throw new AppError(415, 'preview_unavailable');
+  return readOfficeResult({ ...settings, url }, result.fileUrl, 'png');
 }

@@ -2,6 +2,7 @@ import { ConversationLinkLoading } from './shell/ConversationLinkLoading.js';
 import { lazy, Suspense } from 'react';
 const LaunchPage = lazy(() => import('../features/launch/LaunchPage.js').then(module => ({ default: module.LaunchPage })));
 
+const FileWindow = lazy(() => import('../features/files/FileWindow.js'));
 const OfficePanel = lazy(() => import('../features/files/OfficePanel.js'));
 const Chat = lazy(() => import('./Chat.js').then(module => ({ default: module.Chat })));
 const Gallery = lazy(() => import('../gallery/DesignSystemGallery.js').then(module => ({ default: module.DesignSystemGallery })));
@@ -9,6 +10,8 @@ const Preview = lazy(() => import('../gallery/WorkspacePreview.js').then(module 
 
 export function App() {
   const { pathname, hash, search } = window.location;
+  const file = /^\/file\/([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})$/i.exec(pathname);
+  if (file) return <Suspense fallback={<p role="status">Opening file…</p>}><FileWindow id={file[1]!}/></Suspense>;
   const office = /^\/office\/(library|file)\/([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})$/i.exec(pathname);
   if (office) return <Suspense fallback={<p role="status">Opening Office editor…</p>}>
     <OfficePanel library={office[1] === 'library'} id={office[2]!} />

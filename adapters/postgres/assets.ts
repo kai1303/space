@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import type { Pool } from 'pg';
 import { and, asc, desc, eq, gt, isNotNull, isNull, lt, or, sql } from 'drizzle-orm';
-import { AppError, parseAssetInput, parseAssetListQuery, uuid, type AssetAttachment, type AssetPreview, type ChannelFile, type Page } from '@space/contracts';
+import { AppError, parseAssetName, parseAssetInput, parseAssetDescriptions, record, type AssetDetails, parseAssetListQuery, uuid, type AssetAttachment, type AssetPreview, type ChannelFile, type Page } from '@space/contracts';
 import { database, type DbSession } from './database.js';
 import { readChannelPermissions } from './channel-permissions.js';
 import { hasChannelAccess, lockWorkspace } from './access.js';
@@ -149,6 +149,52 @@ export class AssetStore {
   private async assertAccess(c: DbSession, actor: string, row: Asset | undefined) {
     if (!row || row.status !== 'ready' || !await hasChannelAccess(c, actor, row.workspace_id, row.channel_id)) throw notFound();
     if (!row.message_id && (row.uploader_id !== actor || row.expires_at <= new Date())) throw notFound();
+  }
+  private async readDetails(c: DbSession, actor: string, id: string): Promise<AssetDetails> {
+    const [row] = await c.select().from(assets).where(eq(assets.id, id));
+    await this.assertAccess(c, actor, row);
+    const detail = await c.execute<AssetDetails>(sql`
+      SELECT a.id, a.name, a.size, a.type, a.channel_id, m.thread_id, u.display_name AS uploader,
+        to_json(coalesce(m.created_at,a.created_at)) #>> '{}' AS shared_at,
+        a.uploader_id=${actor} AND m.id IS NOT NULL AND ch.archived_at IS NULL AS can_edit,
+        coalesce((SELECT item->>'description' FROM jsonb_array_elements(m.attachments) item
+          WHERE item->>'id'=a.id::text),'') AS description
+      FROM assets a JOIN users u ON u.id=a.uploader_id JOIN channels ch ON ch.id=a.channel_id
+      LEFT JOIN messages m ON m.channel_id=a.channel_id AND m.id=a.message_id
+      WHERE a.id=${id}`);
+    if (!detail.rows.length) throw notFound();
+    return detail.rows[0]!;
+  }
+  details(actor: string, id: string) {
+    return this.db.transaction(c => this.readDetails(c, actor, id));
+  }
+  editDetails(actor: string, id: string, input: unknown) {
+    const body = record(input, ['name','description','previous_name','previous_description']);
+    const name = parseAssetName(body.name);
+    const description = parseAssetDescriptions({ [id]: body.description }, [id])?.[id] ?? '';
+    return sessionTransaction(this.db, async c => {
+      const current = await this.readDetails(c, actor, id);
+      if (!current.can_edit) throw new AppError(403, 'file_edit_forbidden');
+      if (name === current.name && description === current.description) return current;
+      if (current.name !== body.previous_name || current.description !== body.previous_description)
+        throw new AppError(409, 'file_details_changed');
+      const [asset] = await c.update(assets).set({ name }).where(eq(assets.id, id)).returning();
+      const { channel_id: channel, workspace_id: workspace, message_id: message } = asset!;
+      const revision = await c.execute<{ seq: string }>(sql`UPDATE channels SET event_sequence=event_sequence+1
+        WHERE id=${channel} RETURNING event_sequence::text AS seq`);
+      const seq = revision.rows[0]!.seq;
+      const updated = await c.execute(sql`UPDATE messages SET reaction_sequence=${seq}::bigint,
+        attachments=(SELECT jsonb_agg(CASE WHEN item->>'id'=${id} THEN
+          (item-'description') || jsonb_strip_nulls(jsonb_build_object('name',${name}::text,'description',nullif(${description}::text,'')))
+          ELSE item END ORDER BY pos) FROM jsonb_array_elements(attachments) WITH ORDINALITY entry(item,pos))
+        WHERE channel_id=${channel} AND id=${message} AND deleted_at IS NULL AND retained_at IS NULL RETURNING id`);
+      if (!updated.rows.length) throw notFound();
+      await c.execute(sql`INSERT INTO channel_events(workspace_id,channel_id,thread_id,sequence,type,payload)
+        SELECT workspace_id,channel_id,thread_id,${seq}::bigint,'message.updated',chat_message_payload(m)
+        FROM messages m WHERE channel_id=${channel} AND id=${message}`);
+      await c.execute(sql`INSERT INTO chat_delivery_outbox(workspace_id,channel_id,resource_scope) VALUES(${workspace},${channel},'metadata')`);
+      return { ...current, name, description };
+    });
   }
   private async officeAccess(c: DbSession, actor: string, id: string) {
     const [row] = await c.select().from(assets).where(eq(assets.id, uuid(id)));

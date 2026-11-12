@@ -9,6 +9,7 @@ import { io } from 'socket.io-client';
 import { AppError } from '@space/contracts';
 import { bootstrap } from '@space/postgres/bootstrap';
 import { migrate } from '@space/postgres/migrate';
+import { AssetStore } from '@space/postgres/assets';
 import { PostgresStore } from '@space/postgres/store';
 import { WorkspaceStore } from '@space/postgres/workspace';
 import { createApi } from '@space/server/api';
@@ -229,8 +230,32 @@ test('validated image previews render through authorized content and thumbnail r
   await api(outsider.owner_token, 'GET', `/assets/${created.asset.id}/content`, undefined, 404);
   await api(a.owner_token, 'POST', `/channels/${a.channel_id}/messages`, { client_message_id: randomUUID(), text: 'Image', asset_ids: [created.asset.id] }, 201);
   await api(a.collaborator_token, 'GET', `/assets/${created.asset.id}/preview`);
+  const original = await api(a.collaborator_token, 'GET', `/assets/${created.asset.id}/original-image`, undefined, 302);
+  assert.match(original.headers.location!, /^http:\/\/storage.test\/download\//);
   await new WorkspaceStore(pool).removeMember(a.owner_id, a.workspace_id, a.collaborator_id);
-  for (const path of ['preview', 'thumbnail', 'content']) await api(a.collaborator_token, 'GET', `/assets/${created.asset.id}/${path}`, undefined, 404);
+  for (const path of ['preview', 'thumbnail', 'content', 'original-image', 'details']) await api(a.collaborator_token, 'GET', `/assets/${created.asset.id}/${path}`, undefined, 404);
+});
+
+test('file detail edits authorize the uploader and replay one consistent message after racing renames', async () => {
+  const a = await bootstrap(pool);
+  const { asset } = await upload(a);
+  const path = '/assets/' + asset.id;
+  const sent = (await api(a.owner_token, 'POST', '/channels/' + a.channel_id + '/messages', {
+    client_message_id: randomUUID(), text: '', asset_ids: [asset.id], asset_descriptions: { [asset.id]: 'draft description' },
+  }, 201)).json();
+  const edit = { name: 'renamed.txt', description: 'updated description', previous_name: asset.name, previous_description: 'draft description' };
+  await api(a.collaborator_token, 'PUT', path + '/details', edit, 403);
+  await api(a.owner_token, 'GET', path + '/original-image', undefined, 415);
+  const attempt = (name: string) => app.inject({ method:'PUT', url:'/v1'+path+'/details',
+    headers: { authorization: 'Bearer '+a.owner_token }, payload: { ...edit, name } });
+  const results = await Promise.all([attempt('first.txt'), attempt('second.txt')]);
+  assert.deepEqual(results.map(result=>result.statusCode).sort(), [200,409]);
+  const winner = results.find(result=>result.statusCode === 200)!.json().name;
+  await api(a.owner_token, 'PUT', path + '/details', { ...edit, name: winner });
+  assert.equal((await api(a.collaborator_token, 'GET', path+'/details')).json().name, winner);
+  const events = await pool.query("SELECT payload FROM channel_events WHERE channel_id=$1 AND type='message.updated' AND payload->>'id'=$2", [a.channel_id,sent.id]);
+  assert.equal(events.rows.length,1);
+  assert.deepEqual(events.rows[0].payload.attachments, [{ ...asset, name:winner, description:edit.description }]);
 });
 
 test('legacy text previews backfill once, remain escaped data, and refuse raw inline execution', async () => {
@@ -490,6 +515,43 @@ test('issues signed view-only sessions for verified Office files visible to the 
   await api(a.owner_token, 'GET', path + '/content', undefined, 415);
   const { asset } = await upload(a);
   await api(a.owner_token, 'GET', `/assets/${asset.id}/office-session`, undefined, 415);
+});
+
+test('concurrent Office card reads share a conversion and can retry after a converter failure', async t => {
+  const a = await bootstrap(pool);
+  const doc = await readFile(new URL('../fixtures/office/Runbook.docx', import.meta.url));
+  const created = (await api(a.owner_token, 'POST', `/channels/${a.channel_id}/assets`, { name: 'runbook.docx', size: doc.length }, 201)).json();
+  objects.set(created.upload.fields.key, doc.length);
+  contents.set(created.upload.fields.key, doc);
+  const path = '/assets/' + created.asset.id;
+  await api(a.owner_token, 'POST', path + '/complete', {});
+  const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jQ5sAAAAASUVORK5CYII=', 'base64');
+  let calls = 0, reads = 0;
+  let allowConversion!: () => void;
+  const bothAllowed = new Promise<void>(resolve => { allowConversion = resolve; });
+  const access = AssetStore.prototype.officeAccessFor;
+  t.mock.method(AssetStore.prototype, 'officeAccessFor', async function(this: AssetStore, ...args: Parameters<typeof access>) {
+    const row = await access.apply(this, args);
+    if (++reads === 2) allowConversion();
+    return row;
+  });
+  const converter = createServer(async (request, reply) => {
+    if (request.url !== '/converter') return reply.end(png);
+    calls++;
+    await bothAllowed;
+    if (calls === 1) return reply.writeHead(503).end();
+    reply.end(JSON.stringify({ endConvert: true, fileUrl: office.url + '/cache/files/page.png' }));
+  });
+  await new Promise<void>(resolve => converter.listen(0, '127.0.0.1', resolve));
+  const previous = office.url;
+  office.url = 'http://127.0.0.1:' + (converter.address() as AddressInfo).port;
+  t.after(() => { office.url = previous; converter.close(); });
+  await Promise.all([1, 2].map(() => api(a.owner_token, 'GET', path + '/thumbnail', undefined, 503)));
+  assert.equal(calls, 1);
+  const thumbnail = await api(a.owner_token, 'GET', path + '/thumbnail');
+  assert.deepEqual(thumbnail.rawPayload, png);
+  assert.equal(thumbnail.headers['cache-control'], 'private, no-store');
+  assert.equal(calls, 2);
 });
 
 test('shared editing checks permissions and finalizes concurrent or repeated callbacks once', async t => {

@@ -3,11 +3,12 @@ import { motion, useReducedMotion } from 'motion/react';
 import { ArrowLeft, ArrowRight, DotsSixVertical, File, FileCode, FilePdf, ImageSquare, MusicNote, VideoCamera, X } from '@phosphor-icons/react';
 import { MAX_ASSET_DESCRIPTION_LENGTH } from '@space/contracts';
 import { Button, Dialog, IconButton } from '../primitives/primitives.js';
+import { ImageStage } from '../primitives/image-stage.js';
 import { motionTransition } from '../motion/motion.js';
 import type { Attachment } from '../rich-text/rich-text.js';
 
-function DraftCard({ file, disabled, onRemove, onRetry, onDescribe }: {
-  file: Attachment; disabled: boolean; onRemove: () => void; onRetry?: () => void; onDescribe: (description: string) => void;
+function DraftCard({ file, disabled, onRemove, onRetry, onDescribe, onPreview }: {
+  file: Attachment; disabled: boolean; onRemove: () => void; onRetry?: () => void; onDescribe: (description: string) => void; onPreview: () => void;
 }) {
   const isImage = file.type.startsWith('image/');
   const [source, setSource] = useState<string>();
@@ -30,10 +31,10 @@ function DraftCard({ file, disabled, onRemove, onRetry, onDescribe }: {
   function close() { setEditing(false); queueMicrotask(() => opener.current?.isConnected && opener.current.focus()); }
   return <>
     <div className={`sp-draft-file-content ${isImage ? 'sp-draft-file-content--image' : ''}`}>
-      {isImage ? <button type="button" className="sp-draft-thumbnail" aria-label={`Preview ${file.name}`} disabled={disabled} onClick={event => open(event.currentTarget)}>
+      {isImage ? <button type="button" className="sp-draft-thumbnail" aria-label={`Preview ${file.name}`} disabled={disabled} onClick={onPreview}>
         {source && !failed ? <img src={source} alt={file.description || file.name} onError={() => setFailed(true)} /> : <Icon size={32} aria-hidden="true" />}
       </button> : <span className="sp-draft-file-icon"><Icon size={32} aria-hidden="true" /></span>}
-      <div className="sp-draft-file-info"><strong title={file.name}>{file.name}</strong><small>{Math.max(1, Math.round(file.size / 1024))} KB · {file.status === 'uploading' ? 'Uploading…' : file.status === 'error' ? 'Upload failed' : 'Ready'}</small></div>
+      <div className="sp-draft-file-info"><strong title={file.name}>{file.name}</strong><small>{Math.max(1, Math.round(file.size / 1024))} KB · {file.status === 'uploading' ? (file.progress === 100 ? 'Processing…' : 'Uploading…') : file.status === 'error' ? 'Upload failed' : 'Ready'}</small></div>
       <IconButton label={`Remove ${file.name}`} className="sp-draft-remove" size="sm" disabled={disabled} onClick={onRemove}><X size={16} /></IconButton>
     </div>
     {file.status === 'uploading' && <progress aria-label={`Uploading ${file.name}`} value={file.progress ?? 0} max={100} />}
@@ -52,6 +53,17 @@ function DraftCard({ file, disabled, onRemove, onRetry, onDescribe }: {
   </>;
 }
 
+function LocalPreview({ file }: { file: Attachment }) {
+  const [url, setUrl] = useState('');
+  useEffect(() => {
+    if (!file.file) return;
+    const url = URL.createObjectURL(file.file);
+    setUrl(url);
+    return () => URL.revokeObjectURL(url);
+  }, [file.file]);
+  return url ? <ImageStage src={url} alt={file.description || file.name} /> : null;
+}
+
 export function AttachmentDrafts({ files, onChange, disabled = false, onRetry }: {
   files: Attachment[]; onChange: (files: Attachment[]) => void; disabled?: boolean; onRetry?: (id: string) => void;
 }) {
@@ -60,6 +72,10 @@ export function AttachmentDrafts({ files, onChange, disabled = false, onRetry }:
   const dragging = useRef<{ id: string; x: number; y: number; target?: string } | null>(null);
   const [dropTarget, setDropTarget] = useState<string>();
   const [announcement, setAnnouncement] = useState('');
+  const [viewing, setViewing] = useState<string>();
+  const images = files.filter(file => file.file && file.type.startsWith('image/'));
+  const position = images.findIndex(file => (file.draftId ?? file.id) === viewing);
+  const selected = images[position];
   function move(id: string, destination: number) {
     const index = files.findIndex(file => file.id === id);
     if (disabled || index < 0 || destination < 0 || destination >= files.length || index === destination) return;
@@ -73,7 +89,7 @@ export function AttachmentDrafts({ files, onChange, disabled = false, onRetry }:
     <ol className="sp-attachment-drafts" aria-label="Attachments" ref={list}>
       {files.map((file, index) => <motion.li layout={!reduced} transition={motionTransition(reduced)} key={file.draftId ?? file.id} aria-label={file.name}
         data-attachment-id={file.id} className={dropTarget === file.id ? 'sp-draft-drop-target' : undefined}>
-        <DraftCard file={file} disabled={disabled} onRemove={() => onChange(files.filter(item => item.id !== file.id))} onRetry={() => onRetry?.(file.id)} onDescribe={description => onChange(files.map(item => item.id === file.id ? { ...item, description } : item))} />
+        <DraftCard onPreview={() => setViewing(file.draftId ?? file.id)} file={file} disabled={disabled} onRemove={() => onChange(files.filter(item => item.id !== file.id))} onRetry={() => onRetry?.(file.id)} onDescribe={description => onChange(files.map(item => item.id === file.id ? { ...item, description } : item))} />
         {files.length > 1 && <div className="sp-draft-reorder">
           <button type="button" className="sp-draft-drag" aria-label={`Drag ${file.name} to reorder`} title="Drag to reorder, or use the move buttons" disabled={disabled}
             onPointerDown={event => {
@@ -103,6 +119,16 @@ export function AttachmentDrafts({ files, onChange, disabled = false, onRetry }:
         </div>}
       </motion.li>)}
     </ol>
+    {selected && <Dialog open title={selected.name} onClose={() => setViewing(undefined)}>
+      <div className="sp-draft-media">
+        <LocalPreview key={viewing} file={selected} />
+        {images.length > 1 && <div className="sp-image-controls">
+          <IconButton label="Previous image" disabled={position === 0} onClick={() => { const prev = images[position-1]!; setViewing(prev.draftId ?? prev.id); }}><ArrowLeft /></IconButton>
+          <span>{position + 1} of {images.length}</span>
+          <IconButton label="Next image" disabled={position === images.length-1} onClick={() => { const next = images[position+1]!; setViewing(next.draftId ?? next.id); }}><ArrowRight /></IconButton>
+        </div>}
+      </div>
+    </Dialog>}
     <span className="sp-sr-only" role="status" aria-live="polite">{announcement}</span>
   </>;
 }

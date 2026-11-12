@@ -2,6 +2,7 @@ import { afterEach, beforeAll, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { AssetAttachment, AssetPreview } from '@space/contracts';
+import * as live from '../../shared/realtime/live-updates.js';
 import { AssetAttachments } from './AssetAttachments.js';
 
 const asset = (id: string, name = `${id}.png`): AssetAttachment => ({ id, name, size: 1024, type: 'application/octet-stream' });
@@ -37,13 +38,16 @@ it('shows server-approved image thumbnails and navigates files in a shared viewe
   const opener = screen.getByRole('button', { name: 'Preview a.png' });
   await userEvent.click(opener);
   const dialog = await screen.findByRole('dialog', { name: 'a.png' });
-  expect((await within(dialog).findByRole('img', { name: 'a.png' })).getAttribute('src')).toBe('/v1/assets/a/content');
+  expect((await within(dialog).findByRole('img', { name: 'a.png' })).getAttribute('src')).toBe('/v1/assets/a/original-image');
   await userEvent.click(within(dialog).getByRole('button', { name: 'Zoom in' }));
-  expect(within(dialog).getByRole('button', { name: /Fit image/ }).textContent).toContain('125%');
+  expect(within(dialog).getByRole('slider', { name: 'Zoom' }).getAttribute('aria-valuetext')).toBe('150%');
   expect(within(dialog).getByRole('group', { name: 'Attached files' }).querySelectorAll('img')).toHaveLength(2);
   expect([...within(dialog).getByRole('group', { name: 'Attached files' }).querySelectorAll('img')].every(image => image.getAttribute('loading') === 'lazy')).toBe(true);
   // Cards load once; opening revalidates the selected file, not every filmstrip item.
   expect(vi.mocked(fetch)).toHaveBeenCalledTimes(3);
+  fireEvent.keyDown(within(dialog).getByRole('button', { name: 'Close dialog' }), { key: 'ArrowRight' });
+  expect(screen.getByRole('dialog', { name: 'a.png' })).toBe(dialog);
+  fireEvent.keyDown(within(dialog).getByRole('button', { name: 'Close dialog' }), { key: '0' });
   fireEvent.keyDown(within(dialog).getByRole('button', { name: 'Close dialog' }), { key: 'ArrowRight' });
   await screen.findByRole('dialog', { name: 'b.png' });
   expect(await within(dialog).findByRole('img', { name: 'b.png' })).toBeTruthy();
@@ -51,6 +55,87 @@ it('shows server-approved image thumbnails and navigates files in a shared viewe
   await userEvent.click(within(dialog).getByRole('button', { name: 'Close dialog' }));
   await waitFor(() => expect(document.activeElement).toBe(opener));
   expect(screen.queryByRole('dialog')).toBeNull();
+});
+it('groups images ahead of mixed files and keeps the viewer in the displayed order', async () => {
+  const image = { kind: 'image', mime: 'image/webp', width: 200, height: 100 } as const;
+  previews({ doc: { kind: 'office', fileType: 'docx' }, a: image, zip: { kind: 'unsupported', reason: 'unsupported_format' }, b: image });
+  render(<AssetAttachments assets={[asset('doc', 'notes.docx'), asset('a'), asset('zip', 'archive.zip'), asset('b')]} />);
+  const attachments = screen.getByRole('group', { name: 'Message attachments' });
+  await waitFor(() => expect([...attachments.children].map(el => el.querySelector('.asset-image-button img')?.getAttribute('alt') ?? el.querySelector('.asset-filename > span')?.textContent))
+    .toEqual(['a.png', 'b.png', 'notes.docx', 'archive.zip']));
+  expect(attachments.classList.contains('asset-attachments--gallery')).toBe(true);
+  const firstPage = within(attachments).getByRole('img', { name: 'First page of notes.docx' });
+  expect(firstPage.getAttribute('src')).toBe('/v1/assets/doc/thumbnail');
+  fireEvent.error(firstPage);
+  expect(within(attachments).getByText('Word document · 1 KB')).toBeTruthy();
+  expect(within(attachments).getByText('ZIP file · 1 KB')).toBeTruthy();
+  expect(within(attachments).getByRole('link', { name: 'Download notes.docx' })).toBeTruthy();
+  expect(fetch).toHaveBeenCalledTimes(4);
+  await userEvent.click(within(attachments).getByRole('button', { name: 'Preview b.png' }));
+  expect(within(await screen.findByRole('dialog')).getByText('2 of 4')).toBeTruthy();
+});
+it('offers high-density static previews and opens the overflow tile in the viewer', async () => {
+  const image = { kind: 'image', mime: 'image/webp', width: 2400, height: 1200 } as const;
+  previews({ a: image, b: image, c: image });
+  render(<AssetAttachments assets={[asset('a'), asset('b'), asset('c')]} />);
+  const first = await screen.findByRole('img', { name: 'a.png' });
+  await waitFor(() => expect(first.getAttribute('srcset')).toBe('/v1/assets/a/thumbnail 360w, /v1/assets/a/content 1600w'));
+  await userEvent.click(await screen.findByRole('button', { name: 'View 2 more images, starting with b.png' }));
+  const dialog = await screen.findByRole('dialog', { name: 'b.png' });
+  await userEvent.click(within(dialog).getByRole('button', { name: 'Next file' }));
+  expect(await screen.findByRole('dialog', { name: 'c.png' })).toBeTruthy();
+});
+it('updates an open image title and alt text while retaining its original image element and zoom', async () => {
+  let refresh!: () => unknown;
+  const sub = vi.spyOn(live, 'subscribeUpdates').mockImplementation((_scope, _id, read) => {
+    refresh = read;
+    return () => {};
+  });
+  const initial = { id:'a', name:'a.png', description:'', uploader:'Kai', shared_at:'2026-11-12T02:00:00Z', channel_id:'channel', can_edit:true };
+  vi.stubGlobal('fetch', vi.fn(async (url: string) => ({
+    ok: true, json: async () => url.endsWith('/details') ? { ...initial, name:'renamed.png', description:'Sky at night' }
+      : { kind:'image', width:2000, height:1000, mime:'image/webp', details:initial },
+  })));
+  try {
+    render(<AssetAttachments assets={[asset('a')]} />);
+    await userEvent.click(await screen.findByRole('button', { name:'Preview a.png' }));
+    const viewer = await screen.findByRole('dialog');
+    await userEvent.click(await within(viewer).findByRole('button', { name:'Zoom in' }));
+    const image = within(viewer).getByRole('img', { name:'a.png' });
+    expect(image.getAttribute('src')).toBe('/v1/assets/a/original-image');
+    await act(async () => { await refresh(); });
+    expect(screen.getByRole('dialog', { name:'renamed.png' })).toBe(viewer);
+    expect(within(viewer).getByRole('img', { name:'Sky at night' })).toBe(image);
+    expect((within(viewer).getByRole('slider') as HTMLInputElement).getAttribute('aria-valuetext')).toBe('150%');
+  } finally { sub.mockRestore(); }
+});
+it('zooms the original image through pixel-scale stops, anchors a pinch, and resets to fit', async () => {
+  previews({ a: { kind: 'image', mime: 'image/png', width: 1766, height: 1856 } });
+  const width = vi.spyOn(Element.prototype, 'clientWidth', 'get').mockReturnValue(1456);
+  const height = vi.spyOn(Element.prototype, 'clientHeight', 'get').mockReturnValue(722);
+  try {
+    render(<AssetAttachments assets={[asset('a')]} />);
+    await userEvent.click(await screen.findByRole('button', { name: 'Preview a.png' }));
+    const dialog = await screen.findByRole('dialog');
+    const image = await within(dialog).findByRole('img', { name: 'a.png' });
+    Object.defineProperties(image, { naturalWidth: { value: 1766 }, naturalHeight: { value: 1856 } });
+    fireEvent.load(image);
+    const slider = within(dialog).getByRole('slider', { name: 'Zoom' });
+    const level = () => slider.getAttribute('aria-valuetext');
+    expect(level()).toBe('39%');
+    for (const expected of ['50%', '100%', '150%', '200%']) {
+      fireEvent.keyDown(image, { key: '+' });
+      expect(level()).toBe(expected);
+    }
+    fireEvent.keyDown(image, { key: '-' });
+    expect(level()).toBe('150%');
+    fireEvent.wheel(image, { deltaY: -10, ctrlKey: true, clientX: 100 });
+    expect(level()).toBe('160%');
+    expect(image.style.transform).not.toContain('translate(0px, 0px)');
+    fireEvent.keyDown(image, { key: '0' });
+    expect(level()).toBe('39%');
+    expect(image.style.transform).toContain('translate(0px, 0px)');
+  } finally { width.mockRestore(); height.mockRestore(); }
 });
 it('shows a lazy PDF first-page thumbnail without loading the PDF and keeps preview and download separate', async () => {
   previews({ pdf: { kind: 'pdf', mime: 'application/pdf' } });

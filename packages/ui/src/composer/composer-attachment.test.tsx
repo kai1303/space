@@ -16,3 +16,23 @@ it('sends an attachment-only message with a document accepted by the API', async
   expect(send.mock.calls[0]?.[0]).toBe('');
   expect(screen.queryByRole('alert')).toBeNull();
 });
+
+it('submits an uploading draft once with the finalized file ID and retains a failed draft', async () => {
+  const pending = { id: 'local', name: 'notes.txt', size: 10, type: 'text/plain', status: 'uploading' as const };
+  const ready = { ...pending, draftId: 'local', id: 'saved', status: 'ready' as const };
+  const send = vi.fn();
+  const ui = (file: typeof pending | typeof ready | (Omit<typeof pending,'status'> & {status:'error'})) =>
+    <RichComposer channel="qa" attachmentsEnabled attachments={[file]} onSend={send}/>;
+  const view = render(ui(pending));
+  await screen.findByRole('textbox', { name: 'Message qa' });
+  fireEvent.click(screen.getByRole('button', { name: 'Send now' }));
+  expect(send).not.toHaveBeenCalled();
+  view.rerender(ui({ ...pending, status: 'error' }));
+  await screen.findByText(/An attachment failed/);
+  expect(send).not.toHaveBeenCalled();
+  view.rerender(ui(pending));
+  fireEvent.click(screen.getByRole('button', { name: 'Send now' }));
+  view.rerender(ui(ready));
+  await waitFor(() => expect(send).toHaveBeenCalledTimes(1));
+  expect(send.mock.calls[0]?.[2]).toEqual([ready]);
+});

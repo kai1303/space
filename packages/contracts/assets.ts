@@ -5,6 +5,10 @@ export const MAX_ASSET_BYTES = 25 * 1024 * 1024;
 export const MAX_MESSAGE_ASSETS = 5;
 export const MAX_ASSET_DESCRIPTION_LENGTH = 1000;
 export type AssetAttachment = { id: string; name: string; size: number; type: string; description?: string };
+export type AssetDetails = {
+  id: string; name: string; size: number; type: string; description: string; channel_id: string; thread_id: string | null;
+  uploader: string; shared_at: string; can_edit: boolean;
+};
 export type AssetUpload = { asset: AssetAttachment; upload: { url: string; fields: Record<string, string> }; expires_at: string };
 export type AssetPreview =
   | { kind: 'image'; mime: 'image/webp' | 'image/gif'; width: number; height: number }
@@ -38,10 +42,15 @@ export function parseAssetListQuery(input: unknown): AssetListQuery {
   return { q, kind: kind as AssetListQuery['kind'], sort, ...parsePage({ limit: v.limit === undefined ? '30' : v.limit, ...(v.after === undefined ? {} : { after: v.after }) }) };
 }
 
+export function parseAssetName(value: unknown) {
+  const name = text(value, 255).trim();
+  if (/[\x00-\x1f\x7f/\\]/.test(name) || name === '.' || name === '..') throw new AppError(400, 'invalid_filename');
+  return name;
+}
+
 export function parseAssetInput(input: unknown) {
   const v = record(input, ['name', 'size', 'type']);
-  const name = text(v.name, 255).trim();
-  if (/[\x00-\x1f\x7f/\\]/.test(name) || name === '.' || name === '..') throw new AppError(400, 'invalid_filename');
+  const name = parseAssetName(v.name);
   if (!Number.isSafeInteger(v.size) || (v.size as number) < 1 || (v.size as number) > MAX_ASSET_BYTES) throw new AppError(400, 'invalid_file_size');
   const type = v.type === '' || v.type === undefined ? 'application/octet-stream' : text(v.type, 127).toLowerCase();
   if (!/^[a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+$/.test(type)) throw new AppError(400, 'invalid_file_type');

@@ -1,6 +1,7 @@
 import { readComposerDrafts, persistComposerDrafts } from './composer-drafts.js';
 import { useEffect, useRef, useState } from 'react';
 import { type Attachment, type RichDocument } from '@space/ui/rich-text';
+import { pendingToast, toast } from '@space/ui/primitives';
 import { request } from '../../shared/api/request.js';
 import { type MessageAttempt } from './message-sender.js';
 import { uploadAsset, type AssetConfig } from '../files/assets.js';
@@ -40,14 +41,30 @@ export function useAttachmentUploads(viewer: string) {
     if (!attachment.file || uploadJobs.current.has(attachment.id)) return;
     const job = { key, controller: new AbortController() };
     uploadJobs.current.set(attachment.id, job);
+    const toastId = pendingToast(`Uploading ${attachment.name}…`);
+    const { signal } = job.controller;
+    signal.addEventListener('abort', () => toast.dismiss(toastId), { once: true });
     const update = (change: (file: Attachment) => Attachment) => {
       if (uploadJobs.current.get(attachment.id) === job)
         updateAttachments(key, files => files.map(file => file.id === attachment.id ? change(file) : file));
     };
     update(file => ({ ...file, status: 'uploading', progress: 0, error: undefined }));
-    void uploadAsset(channel, attachment.file, progress => update(file => ({ ...file, progress })), job.controller.signal)
-      .then(asset => update(file => ({ ...file, ...asset, draftId: file.draftId ?? attachment.id, status: 'ready', progress: undefined, error: undefined })))
-      .catch(error => update(file => ({ ...file, status: 'error', error: errorText(error) })))
+    void uploadAsset(channel, attachment.file, progress => {
+      if (signal.aborted) return;
+      update(file => ({ ...file, progress }));
+      toast.update(toastId, { progress: progress / 100, meta: `${progress}%` });
+    }, signal)
+      .then(asset => {
+        if (signal.aborted) return;
+        update(file => ({ ...file, ...asset, draftId: file.draftId ?? attachment.id, status: 'ready', progress: undefined, error: undefined }));
+        toast.update(toastId, { type: 'success', title: `${attachment.name} is ready to send`, progress: null, meta: null });
+      })
+      .catch(error => {
+        if (signal.aborted) return;
+        const message = errorText(error);
+        update(file => ({ ...file, status: 'error', error: message }));
+        toast.update(toastId, { type: 'error', title: `Couldn’t upload ${attachment.name}`, description: message, progress: null, meta: null });
+      })
       .finally(() => { if (uploadJobs.current.get(attachment.id) === job) uploadJobs.current.delete(attachment.id); });
   }
   function changeAttachments(key: string, channel: string, files: Attachment[]) {

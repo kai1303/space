@@ -439,6 +439,8 @@
   font-size: 14px;
   margin: 12px 0 20px;
 }
+.sp-dialog-heading { min-width: 0; }
+.sp-dialog-subtitle { margin-top: 2px; color: var(--sp-text-secondary); font-size: 12px; line-height: 16px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sp-skeleton {
   display: block;
   border-radius: 4px;

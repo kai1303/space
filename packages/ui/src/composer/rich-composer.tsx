@@ -138,6 +138,25 @@ export function RichComposer({
   const [focused, setFocused] = useState(false);
   const [reply, setReply] = useState<{ source: typeof loadReplySuggestion; text: string }>();
   const blocked = sendDisabled || !!sendDisabledReason;
+  const waitingForUploads = useRef<{
+    keys: string[]; resolve: (files: Attachment[]) => void; reject: (error: Error) => void;
+  } | null>(null);
+  useEffect(() => {
+    const waiting = waitingForUploads.current;
+    if (!waiting) return;
+    const batch = waiting.keys.map(key => files.find(file => (file.draftId ?? file.id) === key));
+    if (blocked || batch.some(file => !file || file.status === "error")) {
+      waitingForUploads.current = null;
+      waiting.reject(new ComposerSendError(blocked ? "Posting unavailable." : "An attachment failed. Retry or remove it, then send again."));
+    } else if (batch.every(file => file?.status !== "uploading")) {
+      waitingForUploads.current = null;
+      waiting.resolve(batch as Attachment[]);
+    }
+  }, [files, blocked]);
+  useEffect(() => () => {
+    waitingForUploads.current?.reject(new Error("Composer closed"));
+    waitingForUploads.current = null;
+  }, []);
   const eligible = !!loadReplySuggestion && focused && text === "\n" && !files.length && !sending && !blocked;
   const visibleReply = eligible && reply?.source === loadReplySuggestion ? reply?.text : undefined;
   const replyRef = useRef(visibleReply);
@@ -213,7 +232,7 @@ export function RichComposer({
   // A scheduled send passes `at`; it shares validation, clearing and error handling with Send now.
   async function send(confirmed = false, at?: Date) {
     const q = editor.current;
-    if (!q || pending.current || blocked || filesRef.current.some(file => file.status === "uploading" || file.status === "error")) return;
+    if (!q || pending.current || blocked || filesRef.current.some(file => file.status === "error" || (at && file.status === "uploading"))) return;
     const raw = q.getText();
     const plain = raw.trim();
     if (!plain && !filesRef.current.length) return;
@@ -237,9 +256,16 @@ export function RichComposer({
     q.disable();
     try {
       const plainText = document.ops.map(op => op.insert).join("").trim();
-      if (at && callbacks.current.onSchedule) await callbacks.current.onSchedule(plainText, document, filesRef.current, at);
-      else if (confirmed) await callbacks.current.onSend(plainText, document, filesRef.current, { broadcast_confirmed: true });
-      else await callbacks.current.onSend(plainText, document, filesRef.current);
+      const selected = filesRef.current;
+      const batch = selected.some(file => file.status === "uploading")
+        ? await new Promise<Attachment[]>((resolve, reject) => {
+            waitingForUploads.current = { keys: selected.map(file => file.draftId ?? file.id), resolve, reject };
+          })
+        : selected;
+      if (editor.current !== q) return;
+      if (at && callbacks.current.onSchedule) await callbacks.current.onSchedule(plainText, document, batch, at);
+      else if (confirmed) await callbacks.current.onSend(plainText, document, batch, { broadcast_confirmed: true });
+      else await callbacks.current.onSend(plainText, document, batch);
       if (editor.current !== q) return;
       q.setText("");
       q.history.clear();
@@ -502,6 +528,7 @@ export function RichComposer({
             Loading editor…
           </p>
         )}
+        {sending && files.some(file => file.status === "uploading") && <span role="status" className="sp-draft-send-pending">Sending after upload…</span>}
         {files.length > 0 && <AttachmentDrafts files={files} onChange={setFiles} disabled={sending} onRetry={onRetryAttachment} />}
         <div
           className="sp-rich-actions"
@@ -607,7 +634,7 @@ export function RichComposer({
             label={submitLabel ?? "Send now"}
             size="sm"
             className="sp-send-rich"
-            disabled={!ready || sending || blocked || filesPending || (!text.trim() && !files.length)}
+            disabled={!ready || sending || blocked || files.some(file => file.status === "error") || (!text.trim() && !files.length)}
             data-send-disabled={sending && ready && !filesPending && Boolean(text.trim() || files.length) || undefined}
             onClick={() => { if (heldSend.current) { heldSend.current = false; return; } void send(); }}
             onPointerDown={onSchedule ? event => {

@@ -71,6 +71,11 @@ test('members preview all Office formats, co-edit a shared document and reopen t
     const uploaded=await fetch(upload.url,{method:'POST',body:form});assert(uploaded.ok,'upload '+uploaded.status);
     await post('/assets/'+asset.id+'/complete',{});
     await post('/channels/'+seed.channel_id+'/messages',{client_message_id:randomUUID(),text:'',asset_ids:[asset.id]});
+    const thumbnail='/v1/assets/'+asset.id+'/thumbnail';
+    const png=await context.request.get(web+thumbnail);
+    assert.equal(png.status(),200,name+' thumbnail');
+    assert.equal((await png.body()).subarray(0,8).toString('hex'),'89504e470d0a1a0a',name);
+    assert.equal((await app.inject({url:thumbnail,headers:{authorization:'Bearer '+seed.collaborator_token}})).statusCode,404);
     const path='/v1/assets/'+asset.id+'/office-session';
     const session=await context.request.get(web+path);assert.equal(session.status(),200,name+' '+await session.text());
     const {config}=await session.json();

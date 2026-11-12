@@ -425,6 +425,7 @@ export function Dialog({
   onClose,
   onBeforeClose,
   title,
+  subtitle,
   description,
   children,
 }: {
@@ -432,6 +433,7 @@ export function Dialog({
   onClose: () => void;
   onBeforeClose?: () => boolean;
   title: string;
+  subtitle?: string;
   description?: string;
   children: ReactNode;
 }) {
@@ -473,7 +475,7 @@ export function Dialog({
       className="sp-dialog"
       inert={closing || !open}
       aria-labelledby={`${id}-title`}
-      aria-describedby={description ? `${id}-description` : undefined}
+      aria-describedby={[subtitle && `${id}-subtitle`, description && `${id}-description`].filter(Boolean).join(" ") || undefined}
       onClose={onClose}
       onCancel={event => { event.preventDefault(); requestClose(); }}
       onClick={(event) => {
@@ -490,7 +492,10 @@ export function Dialog({
       }}
     >
       <div className="sp-dialog-header">
-        <h2 id={`${id}-title`}>{title}</h2>
+        {subtitle ? <div className="sp-dialog-heading">
+          <h2 id={`${id}-title`}>{title}</h2>
+          <div className="sp-dialog-subtitle" id={`${id}-subtitle`} title={subtitle}>{subtitle}</div>
+        </div> : <h2 id={`${id}-title`}>{title}</h2>}
         <IconButton label="Close dialog" onClick={requestClose}>
           <X size={20} />
         </IconButton>

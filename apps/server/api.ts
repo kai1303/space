@@ -169,10 +169,10 @@ export function createApi(store: PostgresStore, options: { workflowChat?: Workfl
   registerMemoryRoutes(app, memory, memoryProviders, new AgentSessionStore(store.pool, store));
   registerMemoryMcp(app, memory, memoryProviders, options.auth?.origins, process.env.MEMORY_MCP_ALLOWED_HOSTS?.split(',').map(host => host.trim()).filter(Boolean));
   const assets = new AssetStore(store.pool);
-  registerAssetRoutes(app, assets, options.storage, options.office);
   const connections = new AgentConnectionStore(store.pool, { connectors: options.pairedConnectors });
   registerAgentConnectionRoutes(app, connections);
   const { io, onOutbox, getEvents, work, health, invalidate } = registerRealtime(app, authenticate, chat, { ...options.realtime, receiptMetrics, ...(options.auth ? { allowedOrigins: [...options.auth.origins], strictOrigins: true } : {}) });
+  registerAssetRoutes(app, assets, options.storage, options.office, invalidate);
   const immediate = directTurns(app,io,store,invalidate);
   registerAgentSessionRoutes(app,new AgentSessionStore(store.pool,store),immediate.accepted,immediate.stop);
   app.get('/readyz', async (_request, reply) => {

@@ -3,7 +3,7 @@ import { AppError, MAX_ASSET_BYTES, MAX_MESSAGE_ASSETS, record, uuid } from '@sp
 import { AssetStore, assetAttachment } from '@space/postgres/assets';
 import type { AssetStorage } from './storage.js';
 import { generateAssetPreview } from './previews.js';
-import { type OfficeSettings, officeSession, officeContentUrl, officeRequest, readOfficeResult, OFFICE_CALLBACK, OFFICE_CONTENT } from './office.js';
+import { type OfficeSettings, officeSession, officeContentUrl, officeRequest, readOfficeResult, renderOfficeThumbnail, OFFICE_CALLBACK, OFFICE_CONTENT } from './office.js';
 import { generatePdfThumbnail } from './pdf-thumbnail.js';
 
 function pdfRange(value: string, size: number): { start: number; end: number } | undefined {
@@ -16,7 +16,7 @@ function pdfRange(value: string, size: number): { start: number; end: number } |
   return { start: first, end: match[2] ? Math.min(last, size - 1) : size - 1 };
 }
 
-export function registerAssetRoutes(app: FastifyInstance, assets: AssetStore, storage?: AssetStorage, office?: OfficeSettings) {
+export function registerAssetRoutes(app: FastifyInstance, assets: AssetStore, storage?: AssetStorage, office?: OfficeSettings, invalidate?: (keys: string[]) => void) {
   const enabled = () => { if (!storage) throw new AppError(503, 'uploads_unavailable'); return storage; };
   app.get('/v1/assets/config', async () => ({ enabled: !!storage, max_file_size: MAX_ASSET_BYTES, max_files: MAX_MESSAGE_ASSETS }));
   app.get<{ Params: { channelId: string } }>('/v1/channels/:channelId/assets', r => assets.list(r.actorId, uuid(r.params.channelId), r.query));
@@ -49,10 +49,26 @@ export function registerAssetRoutes(app: FastifyInstance, assets: AssetStore, st
     const backend = enabled();
     return assets.preview(actor, id, row => generateAssetPreview(backend, row.id, row.name, row.object_key, row.size));
   };
-  app.get<{ Params: { assetId: string } }>('/v1/assets/:assetId/preview', async r => {
+  app.get<{ Params: { assetId: string } }>('/v1/assets/:assetId/preview', async (r, reply) => {
     record(r.query, []);
-    const preview = await previewFor(r.actorId, uuid(r.params.assetId));
-    return preview.kind === 'office' && !office ? { kind: 'unsupported', reason: 'Office viewer is unavailable.' } : preview;
+    reply.header('cache-control', 'private, no-store').header('vary', 'x-space-file-details');
+    const id = uuid(r.params.assetId);
+    const preview = await previewFor(r.actorId, id);
+    const result = preview.kind === 'office' && !office ? { kind: 'unsupported', reason: 'Office viewer is unavailable.' } : preview;
+    return r.headers['x-space-file-details'] === '1' ? { ...result, details: await assets.details(r.actorId, id) } : result;
+  });
+  app.get<{ Params: { assetId: string } }>('/v1/assets/:assetId/details', r => assets.details(r.actorId, uuid(r.params.assetId)));
+  app.put<{ Params: { assetId: string } }>('/v1/assets/:assetId/details', async r => {
+    const details = await assets.editDetails(r.actorId, uuid(r.params.assetId), r.body);
+    invalidate?.([`channel:${details.channel_id}`, `channel-events:${details.channel_id}`]);
+    return details;
+  });
+  app.get<{ Params: { assetId: string } }>('/v1/assets/:assetId/original-image', async (r, reply) => {
+    const id = uuid(r.params.assetId);
+    if ((await previewFor(r.actorId, id)).kind !== 'image') throw new AppError(415, 'preview_unavailable');
+    const row = await assets.download(r.actorId, id);
+    // Render the verified raster in an img. Direct navigation keeps attachment disposition.
+    return reply.redirect(await enabled().download(row.object_key, row.name));
   });
   app.get<{ Params: { assetId: string } }>('/v1/assets/:assetId/office-session', async (r, reply) => {
     const query = record(r.query, ['mode']);
@@ -134,10 +150,27 @@ export function registerAssetRoutes(app: FastifyInstance, assets: AssetStore, st
     const key = preview.kind === 'image' && preview.mime === 'image/webp' ? `previews/${id}/display.webp` : row.object_key;
     return reply.redirect(await backend.inline(key, preview.mime));
   } });
+  const officeThumbnails = new Map<string, Promise<Buffer>>();
   app.get<{ Params: { assetId: string } }>('/v1/assets/:assetId/thumbnail', async (r, reply) => {
     record(r.query, []);
     const backend = enabled(), id = uuid(r.params.assetId);
     const preview = await previewFor(r.actorId, id);
+    if (preview.kind === 'office' && office) {
+      const { revision, row } = await assets.officeAccessFor(r.actorId, id);
+      const key = `${id}.thumbnail.${revision}`;
+      let pending = officeThumbnails.get(key);
+      if (!pending) {
+        if (officeThumbnails.size >= 5) throw new AppError(503, 'office_thumbnail_busy');
+        pending = (async () => {
+          const source = revision ? officeContentUrl(office, id, revision) : await backend.download(row.object_key, row.name, 'onlyoffice');
+          return renderOfficeThumbnail(office, key, preview.fileType, source);
+        })().finally(() => officeThumbnails.delete(key));
+        officeThumbnails.set(key, pending);
+      }
+      const bytes = await pending;
+      await assets.download(r.actorId, id);
+      return reply.type('image/png').header('cache-control', 'private, no-store').send(bytes);
+    }
     if (preview.kind === 'pdf') {
       const ready = await assets.pdfThumbnail(r.actorId, id, row => generatePdfThumbnail(backend, row.id, row.object_key, row.size));
       if (!ready) throw new AppError(415, 'preview_unavailable');
