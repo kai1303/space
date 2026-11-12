@@ -396,3 +396,11 @@ Space checks current access, signs a view-only configuration, and gives the view
 60 seconds to fetch the original. The ordinary download remains available if the
 viewer is disabled. Markdown attachments render inside the text preview with the
 same size limits as source code.
+
+The viewer turns off ONLYOFFICE chat (`permissions.chat`) and plugins
+(`customization.plugins`). Both would run outside Space's channel access checks.
+
+`pnpm --filter @space/tests test:office:e2e` opens every Office format from
+`tests/fixtures/office` in a real browser. It needs a running document server
+and SeaweedFS, plus `TEST_DATABASE_URL`, `NATS_URL`, the `ONLYOFFICE_*` variables
+above and the `ASSET_STORAGE_*` variables. CI does not run it.

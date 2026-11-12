@@ -19,8 +19,9 @@ export async function officeSession(settings: OfficeSettings, id: string, title:
   const types = { docx: 'word', odt: 'word', xlsx: 'cell', ods: 'cell', pptx: 'slide', odp: 'slide' } as const;
   const config = {
     documentType: types[fileType],
-    document: { key: id, title, fileType, url, permissions: { edit: false, review: false, comment: false, fillForms: false } },
-    editorConfig: { mode: 'view', customization: { anonymous: { request: false } }, coEditing: { mode: 'strict', change: false } },
+    // Viewer chat and plugins run outside Space access checks, so both stay off.
+    document: { key: id, title, fileType, url, permissions: { edit: false, review: false, comment: false, fillForms: false, chat: false } },
+    editorConfig: { mode: 'view', customization: { anonymous: { request: false }, plugins: false }, coEditing: { mode: 'strict', change: false } },
     width: '100%', height: '100%',
   };
   const token = await new SignJWT(config).setProtectedHeader({ alg: 'HS256' }).setIssuedAt().setExpirationTime('5m').sign(Buffer.from(settings.secret));

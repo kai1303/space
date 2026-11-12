@@ -479,6 +479,9 @@ test('issues signed view-only sessions for verified Office files visible to the 
   assert.deepEqual(claims.document, config.document);
   assert.equal(claims.document.key, created.asset.id);
   assert.equal(claims.document.permissions.edit, false);
+  // Viewer chat and plugins run outside Space access checks, so both stay off.
+  assert.equal(claims.document.permissions.chat, false);
+  assert.equal(claims.editorConfig.customization.plugins, false);
   assert.equal(claims.editorConfig.mode, 'view');
   assert.equal(claims.exp - claims.iat, 300);
   await api(a.collaborator_token, 'GET', path + '/office-session', undefined, 404);
