@@ -568,6 +568,12 @@ importers:
       '@space/postgres':
         specifier: workspace:*
         version: link:../adapters/postgres
+      nats:
+        specifier: 2.29.3
+        version: 2.29.3
+      pg:
+        specifier: ^8.23.1
+        version: 8.23.1
     devDependencies:
       '@types/node':
         specifier: '22'

@@ -601,6 +601,17 @@ retain up to 16 MiB for 24 hours, with database catch-up on reconnect. If storag
 fills while a scheduled message fires, its schedule remains durable; after freeing
 space, restart the broker to clear its in-flight scheduling state. Monitor capacity
 before this condition occurs.
+
+Every schema gets its own streams, and each chat stream reserves its 16 MiB up front.
+Test runs create a schema each, so about 1,000 leftover test schemas reserve the whole
+16 GB and the broker then answers `insufficient storage resources available` while
+storing almost nothing. Remove streams that belong to no live schema with:
+
+```sh
+PRUNE_DATABASE_URLS="$DATABASE_URL,$TEST_DATABASE_URL" NATS_URL="$NATS_URL" pnpm nats:prune             # dry run
+PRUNE_DATABASE_URLS="$DATABASE_URL,$TEST_DATABASE_URL" NATS_URL="$NATS_URL" pnpm nats:prune -- --delete
+```
+
 The CDC transaction spool is bounded at 1 GiB; an oversized transaction stops progress
 without advancing its checkpoint and requires operator intervention. Inspect local
 JetStream storage using `docker compose exec nats wget -qO-

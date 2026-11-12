@@ -14,11 +14,14 @@
     "demo": "cd .. && node scripts/dist/demo.js",
     "foundation:demo": "cd .. && node scripts/dist/foundation-demo.js",
     "user:create": "cd .. && node scripts/dist/user-create.js",
-    "workspace:owner": "cd .. && node scripts/dist/workspace-owner.js"
+    "workspace:owner": "cd .. && node scripts/dist/workspace-owner.js",
+    "nats:prune": "cd .. && node scripts/dist/nats-prune.js"
   },
   "dependencies": {
     "@space/contracts": "workspace:*",
-    "@space/postgres": "workspace:*"
+    "@space/postgres": "workspace:*",
+    "nats": "2.29.3",
+    "pg": "^8.23.1"
   },
   "devDependencies": {
     "typescript": "^7.0.2",
