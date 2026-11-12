@@ -1,3 +1,4 @@
+import { observeOutbox } from '../fixtures/observe-outbox.js';
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomBytes, randomUUID } from 'node:crypto';
@@ -36,7 +37,7 @@ class ProbeBus extends EventBus {
 }
 const bus = new ProbeBus('nats://unused', schema);
 const app = createApi(new PostgresStore(pool), { allowDevelopmentTokens: true, realtime: { events: bus } });
-before(async () => { await admin.query(`CREATE SCHEMA ${schema}`); await migrate(pool); await app.ready(); });
+before(async () => { await admin.query(`CREATE SCHEMA ${schema}`); await migrate(pool); await observeOutbox(pool); await app.ready(); });
 after(async () => { await app.close(); await pool.end(); await admin.query(`DROP SCHEMA ${schema} CASCADE`); await admin.end(); });
 
 const inMinutes = (minutes: number) => new Date(Date.now() + minutes * 60_000).toISOString();
@@ -63,9 +64,10 @@ test('scheduling stores the message, emits its deadline and lists it for the aut
   const { id, body } = await schedule(owner);
   assert.equal(body.status, 'pending');
   assert.equal(body.channel_name, 'general');
-  const event = (await pool.query(`SELECT payload,available_at FROM event_outbox WHERE kind='scheduled.message_due' AND aggregate_id=$1`, [id])).rows;
+  const event = (await pool.query(`SELECT payload,available_at FROM observed_outbox WHERE kind='scheduled.message_due' AND aggregate_id=$1`, [id])).rows;
   assert.equal(event.length, 1);
   assert.equal(event[0].payload.version, 1);
+  assert.equal(event[0].available_at.toISOString(), body.send_at);
   const mine = (await call(owner.owner_token, 'GET', `/v1/workspaces/${owner.workspace_id}/scheduled-messages`)).json();
   assert.deepEqual(mine.items.map((item: { id: string }) => item.id), [id]);
   const theirs = (await call(owner.collaborator_token, 'GET', `/v1/workspaces/${owner.workspace_id}/scheduled-messages`)).json();
@@ -122,7 +124,8 @@ test('rescheduling bumps the version so the old deadline never posts', async () 
   const moved = await call(owner.owner_token, 'PATCH', `/v1/scheduled-messages/${id}`, { send_at: inMinutes(30) });
   assert.equal(moved.statusCode, 200, moved.body);
   assert.equal((await pool.query('SELECT version FROM scheduled_messages WHERE id=$1', [id])).rows[0].version, 2);
-  assert.equal((await pool.query(`SELECT count(*)::int AS n FROM event_outbox WHERE kind='scheduled.message_due' AND aggregate_id=$1`, [id])).rows[0].n, 2);
+  const deadlines = await pool.query(`SELECT (payload->>'version')::int AS version FROM observed_outbox WHERE kind='scheduled.message_due' AND aggregate_id=$1 ORDER BY version`, [id]);
+  assert.deepEqual(deadlines.rows.map(row => row.version), [1, 2]);
   await pool.query(`UPDATE scheduled_messages SET send_at=now()-interval '1 second' WHERE id=$1`, [id]);
   const stale = await bus.due({ scheduled_id: id, version: 1 });
   assert.equal(stale.acknowledgments, 1);

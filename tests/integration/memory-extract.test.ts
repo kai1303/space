@@ -1,3 +1,4 @@
+import { observeOutbox } from '../fixtures/observe-outbox.js';
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomBytes, randomUUID } from 'node:crypto';
@@ -15,7 +16,7 @@ const schema = `memory_extract_${randomBytes(6).toString('hex')}`;
 const admin = new Pool({ connectionString: process.env.TEST_DATABASE_URL });
 const pool = new Pool({ connectionString: process.env.TEST_DATABASE_URL, options: `-c search_path=${schema}` });
 const app = createApi(new PostgresStore(pool), { allowDevelopmentTokens: true });
-before(async () => { await admin.query(`CREATE SCHEMA ${schema}`); await migrate(pool); });
+before(async () => { await admin.query(`CREATE SCHEMA ${schema}`); await migrate(pool); await observeOutbox(pool); });
 after(async () => { await app.close(); await pool.end(); await admin.query(`DROP SCHEMA ${schema} CASCADE`); await admin.end(); });
 
 const post = async (token: string, channel: string, text: string, thread?: string) => {
@@ -23,7 +24,7 @@ const post = async (token: string, channel: string, text: string, thread?: strin
   assert.equal(r.statusCode, 201, r.body); return r.json();
 };
 const state = async (thread: string) => (await pool.query('SELECT pending_through::text, done_through::text, attempts, available_at > now() AS waiting, isfinite(available_at) AS scheduled FROM memory_extract_threads WHERE thread_id=$1', [thread])).rows[0];
-const events = async (thread: string) => Number((await pool.query("SELECT count(*) FROM event_outbox WHERE kind='memory.extract.ready' AND payload->>'thread_id'=$1", [thread])).rows[0].count);
+const events = async (thread: string) => Number((await pool.query("SELECT count(*) FROM observed_outbox WHERE kind='memory.extract.ready' AND payload->>'thread_id'=$1", [thread])).rows[0].count);
 const due = (thread: string) => pool.query("UPDATE memory_extract_threads SET available_at=now() - interval '1 second' WHERE thread_id=$1", [thread]);
 
 test('messages in memory-on channels queue one debounced extraction per thread; others queue nothing', async () => {
@@ -116,7 +117,7 @@ test('a burst of events runs the model once: stale deadlines are dropped and one
   const messages = [root];
   for (let i = 0; i < 4; i++) {
     messages.push(await post(a.owner_token, a.channel_id, `Reply ${i}`, root.thread_id));
-    deadlines.push((await pool.query("SELECT payload->>'available_at' AS at FROM event_outbox WHERE kind='memory.extract.ready' AND payload->>'thread_id'=$1 ORDER BY created_at DESC, id DESC LIMIT 1", [root.thread_id])).rows[0].at);
+    deadlines.push((await pool.query("SELECT payload->>'available_at' AS at FROM observed_outbox WHERE kind='memory.extract.ready' AND payload->>'thread_id'=$1 ORDER BY created_at DESC, id DESC LIMIT 1", [root.thread_id])).rows[0].at);
   }
   await pool.query('UPDATE memory_extract_threads SET last_run_at = NULL WHERE thread_id=$1', [root.thread_id]);
   const vector = JSON.stringify(Array.from({ length: 384 }, () => 0.1));
