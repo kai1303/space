@@ -92,7 +92,7 @@ if (!app.requestSingleInstanceLock()) {
       { label: 'File', submenu: [{ label: 'New Browser Tab', accelerator: 'CmdOrCtrl+T', click: () => {
         if (!win || win.isDestroyed()) openWindow();
         void win.spaceBrowser.open(true);
-      } }, { label: 'Toggle Browser Panel', accelerator: 'CmdOrCtrl+Shift+B', click: () => {
+      } }, { label: 'Cycle Workspace Layout', accelerator: 'CmdOrCtrl+Shift+B', click: () => {
         if (!win || win.isDestroyed()) openWindow();
         void win.spaceBrowser.togglePanel();
       } }, { label: 'Open Space', accelerator: 'CmdOrCtrl+1', click: () => { openWindow(); win.spaceBrowser.hide(); } }, { role: 'close' }] },

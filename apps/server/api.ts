@@ -43,7 +43,7 @@ import { registerChatRoutes, incomingWebhookPath } from './chat.js';
 import { registerRealtime, type RealtimeOptions } from './realtime.js';
 import { registerWorkspaceRoutes } from './workspace.js';
 import { AssetStore } from '@space/postgres/assets';
-import type { OfficeSettings } from './office.js';
+import { OFFICE_CALLBACK, OFFICE_CONTENT, type OfficeSettings } from './office.js';
 import { registerAssetRoutes } from './assets.js';
 import type { AssetStorage } from './storage.js';
 import { MemoryStore } from '@space/postgres/memory';
@@ -81,6 +81,8 @@ export function createApi(store: PostgresStore, options: { workflowChat?: Workfl
     reply.header('x-content-type-options', 'nosniff');
     if (['/healthz','/readyz'].includes(request.routeOptions.url ?? '') && request.method === 'GET') return;
     if (request.method === 'POST' && request.routeOptions.url === incomingWebhookPath) return;
+    if ((request.method === 'POST' && request.routeOptions.url === OFFICE_CALLBACK) ||
+        (request.method === 'GET' && request.routeOptions.url === OFFICE_CONTENT)) return;
     if (request.routeOptions.url === MEMORY_MCP_PATH) return;
     if (request.routeOptions.url === HUDDLE_WEBHOOK) return;
     // This route authenticates a source-scoped token itself; it never grants actor access.

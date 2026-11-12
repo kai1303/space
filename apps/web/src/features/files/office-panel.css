@@ -1,0 +1,9 @@
+.office-panel { display:flex; flex-direction:column; height:100dvh; min-width:0; background:var(--sp-surface); color:var(--sp-text); font-family:var(--sp-font-sans); }
+.office-panel h1 { font-size:17px; margin:0; padding:14px 16px; overflow-wrap:anywhere; border-bottom:1px solid var(--sp-border); }
+.office-library { overflow:auto; padding:16px; gap:12px; }
+.office-library h1 { padding:0 0 12px; }
+.office-library input { padding:9px 12px; border-radius:6px; border:1px solid var(--sp-border); background:var(--sp-surface-raised); color:inherit; font:inherit; }
+.office-library ul { list-style:none; padding:0; margin:0; }
+.office-library a { display:flex; gap:12px; align-items:center; padding:10px 8px; color:inherit; text-decoration:none; border-radius:6px; overflow-wrap:anywhere; }
+.office-library a:hover { background:var(--sp-surface-raised); }
+.office-library small { display:block; color:var(--sp-text-secondary); }

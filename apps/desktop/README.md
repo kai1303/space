@@ -6,9 +6,13 @@ The app keeps each paired provider running when you close the workspace window. 
 
 In a Mac browser, **Open Space Desktop** carries the workspace and selected provider into the app. Sign in to Space Desktop if prompted and confirm pairing there. Opening a different server requires native confirmation. Switching servers stops the previous server’s runners.
 
-## Personal browser
+## Workspace panel
 
-Open the globe in the Space top bar or press **⌘T** to open a browser tab. The browser opens beside chat. Drag the vertical divider to resize the panes, or focus it and use the left and right arrow keys. **Enter full view** expands the selected tab, and **Enter split view** brings chat back. **⌘⇧B** shows or hides the panel, or returns from full view to split view. **⌘1** returns to chat. Tabs stay open when you return to Space. Site cookies and local storage persist on this Mac in a browser profile specific to the signed-in Space account and server. Sites control when their sessions expire.
+Open the panel icon in the Space top bar and choose **Browser** or **Office editor**. Use **+** in the tab strip to open another tool. **⌘T** opens a browser tab directly. Websites and Office documents share the tab strip. Each tab shows its own controls.
+
+Double-click the workspace icon to hide the panel. Click it once to return to the same tab. Drag the divider to resize chat and tabs, or focus it and use the arrow keys. **⌘⇧B** cycles from split view to full view to hidden tabs, then back to split view. **⌘1** shows chat. Hiding the panel keeps tabs open and preserves the split width.
+
+Choose a workspace file in **Office editor**, then **Edit**. Opening an Office attachment from chat or Files also opens its tab in the right pane. Switching tabs keeps the document open for co-editing. Website cookies and local storage use a browser profile specific to the signed-in Space account and server.
 
 Choose **Ask Codex** on an open page, enter a task and select **Start task**. This uses the locally installed Codex CLI and its sign-in. Space sends the task, visible page text and control labels to Codex. It can follow links within the site, expand sections, switch tabs within a page, change select filters, fill search fields and scroll. **Take over**, switching browser tabs, returning to Space and closing the tab cancel control. Sign-in and payment fields require manual interaction.
 

@@ -3,19 +3,20 @@
 <head>
   <meta charset="utf-8">
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; font-src 'self'">
-  <title>Space Browser</title>
+  <title>Space workspace</title>
   <link rel="stylesheet" href="../../assets/browser-style/toolbar.css">
 </head>
 <body>
   <div id="divider" role="separator" tabindex="0" aria-label="Chat width" aria-orientation="vertical" title="Drag to resize"></div>
   <header>
     <div class="row strip">
-      <nav id="tabs" aria-label="Browser tabs"></nav>
-      <button id="new" class="icon" aria-label="New browser tab" title="New tab"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg></button>
+      <nav id="tabs" aria-label="Workspace tabs"></nav>
+      <button id="add-tool" class="icon" aria-label="Add a tab" aria-expanded="false" aria-controls="tools" title="Add a tab"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg></button>
       <span class="spacer"></span>
       <button id="layout" class="icon" aria-label="Enter full view" title="Enter full view"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="2" y="2.5" width="12" height="11" rx="2"/><path id="layout-glyph" d="M6 2.5v11"/></svg></button>
-      <button id="space" class="icon" title="Hide browser" aria-label="Hide browser"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m4 4 8 8m0-8-8 8"/></svg></button>
+      <button id="space" class="icon" title="Hide workspace tabs" aria-label="Hide workspace tabs"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m4 4 8 8m0-8-8 8"/></svg></button>
     </div>
+    <div id="tool-slot"></div>
     <div id="navigation" class="row navigation">
       <div class="row history" role="group" aria-label="Page navigation">
         <button id="back" class="icon" aria-label="Back" title="Back"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m9.5 3-5 5 5 5"/></svg></button>
@@ -28,6 +29,14 @@
     <form id="task" hidden><label for="goal">What would you like Codex to do?</label><div class="row task-entry"><input id="goal" maxlength="1000" required aria-describedby="task-scope" placeholder="Describe a task"><button id="cancel" type="button">Cancel</button><button class="primary">Start task</button></div><p id="task-scope">Codex can see and control this tab until you take over.</p></form>
     <div id="feedback" hidden><output id="notice" aria-live="polite"></output><button id="dismiss" aria-label="Dismiss message">×</button></div>
   </header>
+  <main id="workspace-start" hidden>
+    <section><h1>Open a tool</h1><div id="start-tools">
+      <div id="tools" role="group" aria-label="Workspace tools">
+        <button id="new"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6"/><ellipse cx="8" cy="8" rx="2.6" ry="6"/><path d="M2 8h12"/></svg>Browser</button>
+        <button id="office"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 1.5h6l4 4v9H3zM9 1.5v4h4M5.5 9h5m-5 2.5h4"/></svg>Office editor</button>
+      </div>
+    </div></section>
+  </main>
   <main id="start" hidden>
     <div class="start-content">
       <img class="space-mark" src="../../assets/space-icon.png" width="64" height="64" alt="Space">

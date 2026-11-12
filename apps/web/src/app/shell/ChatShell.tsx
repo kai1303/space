@@ -8,7 +8,7 @@ import { AnimatePresence, LayoutGroup, motion, useReducedMotion } from 'motion/r
 import { IconButton, Menu } from '@space/ui/primitives';
 import { NavigationIcon } from '@space/ui/navigation';
 import { motionTransition, surfaceMotion, useSidebarMotion } from '@space/ui/motion';
-import { BookOpen, DotsThree, Globe, List, Moon, Sun, X } from '@phosphor-icons/react';
+import { BookOpen, DotsThree, Globe, SidebarSimple, List, Moon, Sun, X } from '@phosphor-icons/react';
 import { ChannelSearchHeaderContext, type ChannelSearchHeader } from '../../features/search/channel-search-header.js';
 import { UserSettings } from '../../features/profile/UserProfile.js';
 import { SpaceLogo } from '../../shared/branding/SpaceLogo.js';
@@ -49,6 +49,9 @@ export function ChatShell({ renderPreview, notificationDelivery, onNavigate, act
 }) {
   const deliveredCount=useNotificationDelivery(notificationDelivery?.workspace??'',notificationDelivery?.channel,notificationDelivery?.onOpen??(()=>{}));
   if(notificationDelivery)notificationCount=deliveredCount;
+  useEffect(() => window.spaceDesktop?.onOfficePicker?.(() => {
+    if (workspace) void window.spaceDesktop?.openOffice?.('library', workspace);
+  }), [workspace]);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const shell = useSidebarMotion<HTMLDivElement>(sidebarOpen, '(max-width: 720px)', '.chat-sidebar', workspace);
   const reduced = useReducedMotion();
@@ -149,7 +152,11 @@ export function ChatShell({ renderPreview, notificationDelivery, onNavigate, act
       </div>
       <button className="chat-global-search" disabled={!onSearch} onClick={openSearch}><NavigationIcon name="search" size={17}/><span>{channelSearch?.label ?? `Search ${name}`}</span><kbd>⌘ K</kbd></button>
       <div className="chat-mobile-toggle" hidden={!!activeDestination || activityActive || directMessagesActive} ref={menu}><IconButton label={sidebarOpen ? 'Close conversations' : 'Open conversations'} aria-expanded={sidebarOpen} aria-controls="chat-conversations" onClick={() => setSidebarOpen(open => !open)}><List size={20} /></IconButton></div>
-      <div className="chat-topbar-end">{window.spaceDesktop?.openBrowser && <IconButton label="Open browser" onClick={() => window.spaceDesktop?.openBrowser?.()}><Globe size={19}/></IconButton>}{activity}<a className="chat-system-link" href="/design-system" aria-label="Open design system"><BookOpen size={19} /></a></div>
+      <div className="chat-topbar-end">{window.spaceDesktop?.openWorkspacePanel
+        ? <IconButton label="Open workspace panel" aria-description="Double-click to hide the panel and keep your tabs open."
+            onClick={event => { if (event.detail < 2) window.spaceDesktop?.openWorkspacePanel?.(); }}
+            onDoubleClick={() => window.spaceDesktop?.hideWorkspacePanel?.()}><SidebarSimple size={19} style={{ transform: 'scaleX(-1)' }} /></IconButton>
+        : window.spaceDesktop?.openBrowser && <IconButton label="Open browser" onClick={() => window.spaceDesktop?.openBrowser?.()}><Globe size={19}/></IconButton>}{activity}<a className="chat-system-link" href="/design-system" aria-label="Open design system"><BookOpen size={19} /></a></div>
     </header>
     {/* Phones: your picture sits at the right end of the Home header, as in Slack. */}
     {phone && <div className="chat-phone-account"><UserSettings user={user} userId={userId} onNameChange={onNameChange} /></div>}

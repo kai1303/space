@@ -1,6 +1,8 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHmac, randomBytes, randomUUID } from 'node:crypto';
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { readFile } from 'node:fs/promises';
 import { Pool } from 'pg';
 import { io } from 'socket.io-client';
@@ -34,12 +36,12 @@ const storage = {
   async download(key: string) { return `http://storage.test/download/${key}`; },
   async remove(key: string) { removed.push(key); objects.delete(key); contents.delete(key); },
 };
-const office = { url: 'https://docs.example.test', secret: randomBytes(32).toString('hex') };
+const office = { url: 'https://docs.example.test', callbackBase: 'http://space.test', secret: randomBytes(32).toString('hex') };
 const app = createApi(new PostgresStore(pool), { allowDevelopmentTokens: true, storage, office });
 let address: string;
 before(async () => { await admin.query(`CREATE SCHEMA ${schema}`); await migrate(pool); address = await app.listen({ host: '127.0.0.1', port: 0 }); });
 after(async () => { await app.close(); await pool.end(); await admin.query(`DROP SCHEMA ${schema} CASCADE`); await admin.end(); });
-async function api(token: string, method: 'GET' | 'POST', path: string, body?: object, status = 200) {
+async function api(token: string, method: 'GET' | 'POST' | 'PUT', path: string, body?: object, status = 200) {
   const response = await app.inject({ method, url: `/v1${path}`, headers: { authorization: `Bearer ${token}` }, ...(body ? { payload: body } : {}) });
   assert.equal(response.statusCode, status, `${path}: ${response.body}`);
   return response;
@@ -488,4 +490,51 @@ test('issues signed view-only sessions for verified Office files visible to the 
   await api(a.owner_token, 'GET', path + '/content', undefined, 415);
   const { asset } = await upload(a);
   await api(a.owner_token, 'GET', `/assets/${asset.id}/office-session`, undefined, 415);
+});
+
+test('shared editing checks permissions and finalizes concurrent or repeated callbacks once', async t => {
+  const a = await bootstrap(pool);
+  const doc = await readFile(new URL('../fixtures/office/Runbook.docx', import.meta.url));
+  const documentServer = createServer((_request, reply) => reply.end(doc));
+  await new Promise<void>(resolve => documentServer.listen(0, '127.0.0.1', resolve));
+  const previous = office.url;
+  office.url = `http://127.0.0.1:${(documentServer.address() as AddressInfo).port}`;
+  t.after(() => { office.url = previous; documentServer.close(); });
+  const created = (await api(a.owner_token, 'POST', `/channels/${a.channel_id}/assets`, { name: 'sample.docx', size: doc.length }, 201)).json();
+  objects.set(created.upload.fields.key, doc.length);
+  contents.set(created.upload.fields.key, doc);
+  const id = created.asset.id, file = '/assets/' + id;
+  await api(a.owner_token, 'POST', file + '/complete', {});
+  await api(a.owner_token, 'POST', '/channels/' + a.channel_id + '/messages', { client_message_id: randomUUID(), text: '', asset_ids: [id] }, 201);
+  const open = file + '/office-session?mode=edit';
+  await api(a.collaborator_token, 'GET', open, undefined, 403);
+  await api(a.collaborator_token, 'PUT', file + '/office-sharing', { enabled: true }, 403);
+  await api(a.owner_token, 'PUT', file + '/office-sharing', { enabled: true }, 204);
+  const first = (await api(a.owner_token, 'GET', open)).json().config;
+  const peer = (await api(a.collaborator_token, 'GET', open)).json().config;
+  assert.equal(first.document.key, peer.document.key);
+  assert.notEqual(first.editorConfig.user.id, peer.editorConfig.user.id);
+  assert.equal(peer.editorConfig.coEditing.mode, 'fast');
+  const result = { status: 2, key: peer.document.key, users: [a.collaborator_id], url: office.url + '/cache/files/result.docx' };
+  function token(payload: object, operation = 'callback') {
+    const encode = (x: object) => Buffer.from(JSON.stringify(x)).toString('base64url');
+    const data = encode({alg:'HS256'}) + '.' + encode({operation, payload, exp: Math.floor(Date.now()/1000)+60});
+    return data + '.' + createHmac('sha256', office.secret).update(data).digest('base64url');
+  }
+  const callback = (jwt: string) => app.inject({method:'POST',url:'/v1/office/callback',headers:{authorization:'Bearer '+jwt},payload:result});
+  assert.equal((await callback(first.token)).statusCode,401);
+  assert.equal((await callback(token(result,'download'))).statusCode,401);
+  assert.equal((await callback(token({...result,url:'http://untrusted.invalid/file'}))).statusCode,400);
+  await api(a.owner_token, 'PUT', file + '/office-sharing', { enabled: false }, 204);
+  assert.equal((await callback(token(result))).statusCode,403);
+  await api(a.owner_token, 'PUT', file + '/office-sharing', { enabled: true }, 204);
+  assert.equal((await callback(token(result))).statusCode,403);
+  result.key = (await api(a.collaborator_token,'GET',open)).json().config.document.key;
+  for (const r of await Promise.all([callback(token(result)),callback(token(result))])) assert.deepEqual(r.json(),{error:0});
+  assert.equal((await api(a.owner_token,'GET',file+'/office-session')).json().revision,1);
+  const next = (await api(a.owner_token,'GET',open)).json().config;
+  assert.notEqual(next.document.key,first.document.key);
+  assert.deepEqual((await callback(token(result))).json(),{error:0});
+  assert.equal((await api(a.owner_token,'GET',file+'/office-session')).json().revision,1);
+  assert.deepEqual((await api(a.owner_token,'GET',file+'/download')).rawPayload,doc);
 });

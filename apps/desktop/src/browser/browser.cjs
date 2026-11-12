@@ -3,6 +3,8 @@ const { createHash } = require('node:crypto');
 const { join } = require('node:path');
 const { runBrowserTask } = require('./agent.cjs');
 
+const { isAssetDownload } = require('../policy.cjs');
+const uuid = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i;
 const maxTabs = 12;
 const dividerWidth = 8;
 const minPaneWidth = 320;
@@ -40,7 +42,7 @@ function createBrowser(win, base, workspace) {
   function state() {
     const [width] = win.getContentSize();
     const tab = tabs.get(active);
-    return { theme, newTab: !!tab && !tab.url && !tab.popup, tabs: [...tabs].map(([id, tab]) => ({ id, title: tab.title || 'New tab' })), active, full, splitWidth: splitWidth(width), minSplit: minPaneWidth, maxSplit: width - dividerWidth - minPaneWidth, notice, controlling: !!task,
+    return { theme, tool: tab ? (tab.officePath ? 'office' : 'browser') : null, newTab: !!tab && !tab.url && !tab.popup, tabs: [...tabs].map(([id, tab]) => ({ id, tool: tab.officePath ? 'office' : 'browser', title: tab.title || 'Browser' })), active, full, splitWidth: splitWidth(width), minSplit: minPaneWidth, maxSplit: width - dividerWidth - minPaneWidth, notice, controlling: !!task,
       url: tabs.get(active)?.url || '', back: !!tabs.get(active)?.view.webContents.navigationHistory.canGoBack(),
       forward: !!tabs.get(active)?.view.webContents.navigationHistory.canGoForward(), maxTabs };
   }
@@ -140,11 +142,13 @@ function createBrowser(win, base, workspace) {
     toolbar = profile = currentActor = undefined;
     ready = false;
   }
-  function add(popupContents, enter = false) {
+  function add(popupContents, enter = false, officePath) {
     if (tabs.size >= maxTabs) throw new Error('Close a tab before opening another.');
-    const view = new WebContentsView({ ...(popupContents && { webContents: popupContents }), webPreferences: { ...isolated, disableDialogs: true, session: profile } });
+    const view = new WebContentsView({ ...(popupContents && { webContents: popupContents }), webPreferences: { ...isolated, disableDialogs: true,
+      session: officePath ? owner.session : profile,
+      ...(officePath && { preload: join(__dirname, 'office-preload.cjs') }) } });
     const guest = view.webContents, id = guest.id;
-    const tab = { view, title: '', url: '', popup: !!popupContents };
+    const tab = { view, officePath, title: officePath ? 'Office editor' : '', url: officePath || '', popup: !!popupContents };
     tabs.set(id, tab);
     const manualInput = (_event, input) => {
       if (task && active === id && ['keyDown', 'mouseDown'].includes(input.type)) stop('You have control.');
@@ -152,7 +156,19 @@ function createBrowser(win, base, workspace) {
     guest.on('before-input-event', manualInput);
     guest.on('before-mouse-event', manualInput);
     guest.on('will-attach-webview', e => e.preventDefault());
+    if (officePath) {
+      const trusted = event => event.senderFrame === guest.mainFrame && guest.getURL() === origin + officePath;
+      guest.ipc.handle('office-open-file', (event, id) =>
+        trusted(event) && uuid.test(id) && openOffice('file', id));
+      guest.ipc.on('office-close-ready', (event, ready) => { if (trusted(event)) tab.closeReady = ready === true; });
+      guest.ipc.on('office-closed', event => { if (trusted(event)) remove(id); });
+    }
     const guard = (e, url, main) => {
+      if (officePath && main && url !== origin + officePath) {
+        e.preventDefault();
+        if (isAssetDownload(url, origin)) guest.downloadURL(url);
+        return;
+      }
       if (!webAddress(url) && url !== 'about:blank' && !(url === 'about:srcdoc' && !main)) { e.preventDefault(); return; }
       if (main && task && active === id && new URL(url).origin !== task.origin) {
         e.preventDefault(); stop('Site changed. You have control.');
@@ -161,7 +177,7 @@ function createBrowser(win, base, workspace) {
     guest.on('will-frame-navigate', e => guard(e, e.url, e.isMainFrame));
     guest.on('will-redirect', e => guard(e, e.url, e.isMainFrame));
     guest.setWindowOpenHandler(({ url }) => {
-      if (!visible || active !== id || task || tabs.size >= maxTabs || (!webAddress(url) && url !== 'about:blank')) return { action: 'deny' };
+      if (officePath || !visible || active !== id || task || tabs.size >= maxTabs || (!webAddress(url) && url !== 'about:blank')) return { action: 'deny' };
       return { action: 'allow', overrideBrowserWindowOptions: { webPreferences: { ...isolated, disableDialogs: true, session: profile } },
         createWindow: options => add(options.webContents).webContents };
     });
@@ -181,6 +197,7 @@ function createBrowser(win, base, workspace) {
     guest.on('destroyed', () => remove(id));
     pane.addChildView(view);
     select(id, enter);
+    if (officePath) void guest.loadURL(origin + officePath).catch(() => stop('Could not open the Office editor.'));
     return view;
   }
   function begin(goal) {
@@ -198,10 +215,20 @@ function createBrowser(win, base, workspace) {
   function command(action, arg) {
     if (!visible) return;
     const guest = tabs.get(active)?.view.webContents;
+    if (tabs.get(active)?.officePath && ['go', 'agent', 'reload', 'back', 'forward'].includes(action)) return;
     switch (action) {
+      case 'office': owner.send('space-office-picker'); break;
       case 'new': add(); break;
       case 'switch': select(arg); break;
-      case 'close': remove(arg); break;
+      case 'close': {
+        const tab = tabs.get(arg);
+        if (tab?.officePath?.startsWith('/office/file/') && tab.view.webContents.getURL() === origin + tab.officePath &&
+            !tab.view.webContents.isCrashed() && tab.closeReady) {
+          select(arg);
+          tab.view.webContents.send('office-request-close');
+        } else remove(arg);
+        break;
+      }
       case 'space': hide(); break;
       case 'layout': full = !full; layout(); publish(); break;
       case 'stop': stop('You have control.'); break;
@@ -252,7 +279,11 @@ function createBrowser(win, base, workspace) {
     pane.addChildView(toolbar);
     void chrome.loadFile(join(__dirname, 'toolbar.html')).catch(() => { if (toolbar?.webContents === chrome) reset(); });
   }
-  async function open(newTab = false) {
+  function openOffice(kind, id) {
+    if (typeof id !== 'string' || !uuid.test(id) || !['file', 'library'].includes(kind)) return false;
+    return open(false, '/office/' + kind + '/' + id);
+  }
+  async function open(newTab = false, officePath) {
     if (opening || win.isDestroyed()) return;
     opening = true;
     const version = generation;
@@ -263,6 +294,12 @@ function createBrowser(win, base, workspace) {
           .reduce((width, element) => width + element.getBoundingClientRect().width, 0)`);
       }
       const response = await owner.session.fetch(origin + '/v1/me', { credentials: 'include', redirect: 'error', cache: 'no-store', signal: AbortSignal.timeout(6000) });
+      if (version !== generation || win.isDestroyed()) return false;
+      if (response.status === 401 || response.status === 403) {
+        reset();
+        void dialog.showMessageBox(win, { message: 'Sign in to Space to open the side panel.' });
+        return false;
+      }
       if (!response.ok) throw new Error();
       const { id } = await response.json();
       if (typeof id !== 'string' || !id || id.length > 128) throw new Error();
@@ -272,11 +309,29 @@ function createBrowser(win, base, workspace) {
       if (!toolbar) createToolbar(id);
       const enter = !visible;
       visible = true; toolbar.setVisible(true);
-      if (!active || (newTab && tabs.size < maxTabs)) add(undefined, enter); else select(active, enter);
-      if (ready && (newTab || !tabs.get(active)?.url)) toolbar.webContents.send('browser-address-focus');
-      toolbar.webContents.focus();
+      if (officePath) {
+        const existing = [...tabs].find(([, tab]) => tab.officePath === officePath);
+        if (existing) select(existing[0], enter);
+        else if (tabs.size < maxTabs) add(undefined, enter, officePath);
+        else { stop('Close a tab before opening another.'); return false; }
+        tabs.get(active).view.webContents.focus();
+        return true;
+      }
+      if (newTab && tabs.size < maxTabs) add(undefined, enter);
+      else if (active) select(active, enter);
+      else { layout(enter); publish(); }
+      const selected = tabs.get(active);
+      if (selected?.url) selected.view.webContents.focus();
+      else {
+        toolbar.webContents.focus();
+        if (ready && selected) toolbar.webContents.send('browser-address-focus');
+      }
     } catch {
       if (version !== generation || win.isDestroyed()) return;
+      if ([...tabs.values()].some(tab => tab.officePath)) {
+        stop('Could not verify your Space session. Try opening the file again.');
+        return false;
+      }
       reset();
       void dialog.showMessageBox(win, { message: 'Sign in to Space to open your browser.', detail: 'Space needs a connection to verify your account.' });
     } finally { opening = false; }
@@ -297,10 +352,16 @@ function createBrowser(win, base, workspace) {
   win.once('closed', () => { cookies.off('changed', cookieChanged); reset(); });
   function togglePanel() {
     if (!visible) return open();
-    if (!full) return hide();
-    full = false; layout(); publish();
+    if (full) return hide();
+    full = true; layout(true); publish();
   }
-  return { open, hide, togglePanel, accountChanged(actor) {
+  return { open, openOffice, hide, togglePanel,
+    showPanel() { if (!visible) return open(); },
+    hidePanel() {
+      if (opening) generation++; // A pending session check must not reopen the panel.
+      hide();
+    },
+    accountChanged(actor) {
     // Renderer notifications can revoke access. Only the authenticated /me response opens a profile.
     if (currentActor && actor !== currentActor) reset();
     else if (opening && (!actor || actor !== currentActor)) generation++;

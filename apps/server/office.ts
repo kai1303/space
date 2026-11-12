@@ -1,29 +1,78 @@
-import { SignJWT } from 'jose';
-import type { AssetPreview } from '@space/contracts';
+import { jwtVerify, SignJWT } from 'jose';
+import { fileTypeFromBuffer } from 'file-type';
+import { AppError, MAX_ASSET_BYTES, type AssetPreview } from '@space/contracts';
 
 type OfficeFile = Extract<AssetPreview, { kind: 'office' }>;
+export type OfficeSettings = { url: string; secret: string; callbackBase?: string };
+export const OFFICE_CALLBACK = '/v1/office/callback';
+export const OFFICE_CONTENT = '/v1/office/files/:assetId/:revision';
 
-export type OfficeSettings = { url: string; secret: string };
+function endpoint(value: string) {
+  const url = new URL(value);
+  if (!['https:', 'http:'].includes(url.protocol) || url.username || url.password || url.search || url.hash)
+    throw new Error('onlyoffice_configuration');
+  return url.href;
+}
 
 export function officeSettings(env = process.env): OfficeSettings | undefined {
   const url = env.ONLYOFFICE_URL, secret = env.ONLYOFFICE_JWT_SECRET;
   if (!url && !secret) return;
   if (!url || !secret || Buffer.byteLength(secret) < 32) throw new Error('onlyoffice_configuration');
-  const endpoint = new URL(url);
-  if (!['https:', 'http:'].includes(endpoint.protocol) || endpoint.username || endpoint.password || endpoint.search || endpoint.hash)
-    throw new Error('onlyoffice_configuration');
-  return { url: endpoint.href, secret };
+  return { url: endpoint(url), secret, callbackBase: env.ONLYOFFICE_CALLBACK_BASE && endpoint(env.ONLYOFFICE_CALLBACK_BASE) };
 }
 
-export async function officeSession(settings: OfficeSettings, id: string, title: string, fileType: OfficeFile['fileType'], url: string) {
+export function officeContentUrl(settings: OfficeSettings, id: string, revision: number) {
+  if (!settings.callbackBase) throw new AppError(503, 'office_editing_unavailable');
+  return new URL(`/v1/office/files/${id}/${revision}`, settings.callbackBase).href;
+}
+
+type SessionOptions = { revision: number; epoch: number; edit: boolean; actor: string; name: string; dark: boolean };
+export async function officeSession(settings: OfficeSettings, id: string, title: string, fileType: OfficeFile['fileType'], url: string, options: SessionOptions) {
+  const { revision, edit, actor, name, dark } = options;
   const types = { docx: 'word', odt: 'word', xlsx: 'cell', ods: 'cell', pptx: 'slide', odp: 'slide' } as const;
+  const editKey = [id, 'edit', revision, ...(options.epoch ? [options.epoch] : [])].join('.');
+  const key = edit ? editKey : revision ? `${id}.view.${revision}` : id;
   const config = {
     documentType: types[fileType],
-    // Viewer chat and plugins run outside Space access checks, so both stay off.
-    document: { key: id, title, fileType, url, permissions: { edit: false, review: false, comment: false, fillForms: false, chat: false } },
-    editorConfig: { mode: 'view', customization: { anonymous: { request: false }, plugins: false }, coEditing: { mode: 'strict', change: false } },
+    document: { key, title, fileType, url, permissions: { edit, review: false, comment: false, fillForms: false, chat: false } },
+    editorConfig: {
+      mode: edit ? 'edit' : 'view', user: { id: actor, name },
+      ...(edit ? { callbackUrl: new URL(OFFICE_CALLBACK, settings.callbackBase).href } : {}),
+      customization: { anonymous: { request: false }, plugins: false, compactHeader: true, compactToolbar: true,
+        toolbarHideFileName: true, hideRightMenu: true, uiTheme: dark ? 'theme-dark' : 'theme-light', forcesave: false },
+      coEditing: { mode: edit ? 'fast' : 'strict', change: false },
+    },
     width: '100%', height: '100%',
   };
   const token = await new SignJWT(config).setProtectedHeader({ alg: 'HS256' }).setIssuedAt().setExpirationTime('5m').sign(Buffer.from(settings.secret));
   return { documentServerUrl: settings.url, config: { ...config, token } };
+}
+
+// Docs 10 signs outbound requests separately from the editor configuration handed to browsers.
+export async function officeRequest(settings: OfficeSettings, header: string | undefined, operation: 'callback' | 'download') {
+  try {
+    if (!header?.startsWith('Bearer ')) throw new Error();
+    const { payload } = await jwtVerify(header.slice(7), Buffer.from(settings.secret), { algorithms: ['HS256'] });
+    if (payload.operation !== operation || !payload.payload || typeof payload.payload !== 'object' || Array.isArray(payload.payload)) throw new Error();
+    return payload.payload as Record<string, unknown>;
+  } catch { throw new AppError(401, 'invalid_office_request'); }
+}
+
+export async function readOfficeResult(settings: OfficeSettings, source: unknown, fileType: OfficeFile['fileType']) {
+  if (typeof source !== 'string' || !URL.canParse(source)) throw new AppError(400, 'invalid_office_result');
+  const url = new URL(source);
+  if (url.origin !== new URL(settings.url).origin || url.username || url.password || !url.pathname.startsWith('/cache/files/'))
+    throw new AppError(400, 'invalid_office_result');
+  const response = await fetch(url, { redirect: 'error', signal: AbortSignal.timeout(20_000) });
+  if (!response.ok || !response.body) throw new AppError(502, 'office_download_failed');
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  for await (const chunk of response.body) {
+    size += chunk.length;
+    if (size > MAX_ASSET_BYTES) throw new AppError(413, 'office_file_too_large');
+    chunks.push(chunk);
+  }
+  const bytes = Buffer.concat(chunks, size);
+  if ((await fileTypeFromBuffer(bytes))?.ext !== fileType) throw new AppError(422, 'office_format_changed');
+  return bytes;
 }

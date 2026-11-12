@@ -104,9 +104,9 @@ it('shows errors with retry, distinguishes filtered empty results and refreshes 
   await waitFor(() => expect(vi.mocked(fetch)).toHaveBeenCalledTimes(count + 1));
 });
 
-it.each([401, 403, 404])('clears panel and viewer when fresh preview authorization returns %i', async status => {
+it.each([401, 403, 404])('clears panel and viewer when session or channel access is denied (%i)', async status => {
   const lost = vi.fn();
-  vi.stubGlobal('fetch', vi.fn(async (url: string) => url.endsWith('/preview') ? { ok: false, status } : response([file('secret')])));
+  vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(response([file('secret')])).mockResolvedValue({ ok: false, status }));
   render(<ChannelFiles {...props} onAccessLost={lost} />);
   await userEvent.click(await screen.findByRole('button', { name: 'Preview secret.png' }));
   await waitFor(() => expect(screen.queryAllByText('secret.png')).toHaveLength(0));

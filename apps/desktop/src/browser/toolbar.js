@@ -9,6 +9,7 @@ function reveal(node) {
 
 const el = id => document.getElementById(id);
 const send = (action, arg) => window.browserBar.command(action, arg);
+let picking = false;
 let current, shownUrl, lastNotice, splitWidth, drag;
 const divider = el('divider');
 divider.onpointerdown = event => {
@@ -52,19 +53,21 @@ function renderTabs(tabs, active) {
       }
     }
   }
-  for (const { id, title } of tabs) {
+  for (const { id, title, tool } of tabs) {
     let group = tabElements.get(id);
     const added = !group;
     if (added) {
       group = document.createElement('span');
       group.className = 'tab';
-      group.append(button(title, title, () => send('switch', id)), button('×', 'Close ' + title, () => send('close', id)));
+      const open = button('', title, () => send('switch', id));
+      open.append(el(tool === 'office' ? 'office' : 'new').querySelector('svg').cloneNode(true), document.createElement('span'));
+      group.append(open, button('×', 'Close ' + title, () => send('close', id)));
       tabElements.set(id, group);
       el('tabs').append(group);
     }
     const [open, close] = group.children;
-    if (open.textContent !== title) {
-      open.textContent = title;
+    if (open.lastElementChild.textContent !== title) {
+      open.lastElementChild.textContent = title;
       open.setAttribute('aria-label', title);
       close.setAttribute('aria-label', 'Close ' + title);
     }
@@ -78,14 +81,35 @@ function renderTabs(tabs, active) {
     }
   }
 }
+function showTools(open) {
+  picking = open;
+  el('tools').hidden = !open;
+  el('add-tool').setAttribute('aria-expanded', String(open));
+}
+el('add-tool').onclick = () => {
+  showTools(!picking);
+  if (picking) (el('new').disabled ? el('office') : el('new')).focus();
+};
+document.addEventListener('keydown', event => {
+  if (event.key === 'Escape' && picking && current != null) {
+    showTools(false);
+    el('add-tool').focus();
+  }
+});
 window.browserBar.onState(state => {
+  const empty = !state.tool;
+  const toolsSlot = el(empty ? 'start-tools' : 'tool-slot');
+  if (el('tools').parentElement !== toolsSlot) toolsSlot.append(el('tools'));
+  el('workspace-start').hidden = !empty;
+  el('add-tool').hidden = empty;
+  if (empty || current !== state.active) showTools(empty);
   document.documentElement.dataset.theme = state.theme;
   const slot = el(state.newTab ? 'start-address-slot' : 'address-slot');
   if (el('navigate').parentElement !== slot) slot.append(el('navigate'));
   const showStart = state.newTab && (el('start').hidden || current !== state.active);
   el('start').hidden = !state.newTab;
   if (showStart) reveal(el('start').firstElementChild);
-  el('navigation').hidden = state.newTab && !state.back && !state.forward;
+  el('navigation').hidden = state.tool !== 'browser' || state.newTab && !state.back && !state.forward;
   if (current !== state.active || !state.url || state.controlling) setTaskOpen(false);
   if (current !== state.active) { el('goal').value = ''; }
   renderTabs(state.tabs, state.active);
@@ -118,7 +142,10 @@ window.browserBar.onState(state => {
   el('dismiss').hidden = state.controlling;
 });
 window.browserBar.onAddressFocus(focusAddress);
-for (const action of ['space', 'layout', 'new', 'back', 'forward', 'reload', 'stop']) el(action).onclick = () => send(action);
+for (const action of ['space', 'layout', 'new', 'office', 'back', 'forward', 'reload', 'stop']) el(action).onclick = () => {
+  if (current != null) showTools(false);
+  send(action);
+};
 el('navigate').onsubmit = event => { event.preventDefault(); send('go', el('address').value); };
 function setTaskOpen(open) {
   const task = el('task');

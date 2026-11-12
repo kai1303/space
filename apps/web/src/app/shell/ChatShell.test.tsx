@@ -20,6 +20,23 @@ it('opens the personal browser from the desktop top bar', async () => {
   } finally { vi.unstubAllGlobals(); }
 });
 
+it('opens the workspace panel on click and hides it on double-click', async () => {
+  const openWorkspacePanel = vi.fn();
+  const hideWorkspacePanel = vi.fn();
+  vi.stubGlobal('spaceDesktop', { openWorkspacePanel, hideWorkspacePanel });
+  try {
+    render(<ChatShell name="Team" user="Kai"><main>Conversation</main></ChatShell>);
+    const icon = screen.getByRole('button', { name: 'Open workspace panel' });
+    await userEvent.click(icon);
+    expect(openWorkspacePanel.mock.calls).toEqual([[]]);
+    expect(hideWorkspacePanel).not.toHaveBeenCalled();
+    openWorkspacePanel.mockClear();
+    await userEvent.dblClick(icon);
+    expect(openWorkspacePanel.mock.calls).toEqual([[]]);
+    expect(hideWorkspacePanel.mock.calls).toEqual([[]]);
+  } finally { vi.unstubAllGlobals(); }
+});
+
 it('opens workspace actions from the name and keeps switching in the rail', async () => {
   const members = vi.fn(), settings = vi.fn();
   render(<WorkspaceActions workspace={workspaces[0]!} onMembers={members} onSettings={settings}/>);

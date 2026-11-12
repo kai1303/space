@@ -63,16 +63,14 @@ function ChannelFilesPanel({ direct, channel, name, revision, deletions, onClose
     return () => { deletions.current = null; };
   }, [deletions, items, selected]);
 
-  function clearAccess(status: number) {
+  function expireSession() {
     request.current?.abort();
     setItems([]); setCursor(null); setSelected(null); setLoading(false);
-    setError(status === 401 ? 'Your session has expired.' : 'You no longer have access to these files.');
-    if (status !== 401) accessLost.current?.();
+    setError('Your session has expired.');
   }
   useEffect(() => {
-    const expired = () => clearAccess(401);
-    window.addEventListener('space:session-expired', expired);
-    return () => window.removeEventListener('space:session-expired', expired);
+    window.addEventListener('space:session-expired', expireSession);
+    return () => window.removeEventListener('space:session-expired', expireSession);
   }, []);
   function load(after?: string) {
     request.current?.abort();
@@ -104,6 +102,12 @@ function ChannelFilesPanel({ direct, channel, name, revision, deletions, onClose
     load();
     return () => request.current?.abort();
   }, [channel, query, kind, sort, appliedRevision, refresh]);
+  function handlePreviewAccessLoss(status: number) {
+    if (status === 401) { expireSession(); return; }
+    // A file can disappear while its channel is still accessible. The list checks membership.
+    load();
+    searchInput.current?.focus();
+  }
   function closeViewer() { setSelected(null); queueMicrotask(() => { if (revision === appliedRevision && opener.current?.isConnected) opener.current.focus(); else searchInput.current?.focus(); }); }
   const filtered = !!query || kind !== 'all';
   return <SidePanel className="channel-files" role="region" aria-label={`Files in ${direct ? '' : '#'}${name}`}>
@@ -128,6 +132,6 @@ function ChannelFilesPanel({ direct, channel, name, revision, deletions, onClose
       {loading && <p className="channel-files-loading" role="status">Loading files…</p>}
       {!loading && !error && cursor && <div className="channel-files-more"><Button variant="secondary" onClick={() => load(cursor)}>Load more</Button></div>}
     </div>
-    {selected && <AssetViewer assets={items} selectedId={selected} onSelect={setSelected} onClose={closeViewer} onAccessLost={clearAccess} previews={Object.fromEntries(items.map(file => [file.id, { kind: file.preview_kind }]))} />}
+    {selected && <AssetViewer channelLabel={direct ? name : `#${name}`} assets={items} selectedId={selected} onSelect={setSelected} onClose={closeViewer} onAccessLost={handlePreviewAccessLoss} previews={Object.fromEntries(items.map(file => [file.id, { kind: file.preview_kind }]))} />}
   </SidePanel>;
 }

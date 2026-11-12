@@ -45,7 +45,7 @@ app.whenReady().then(async () => {
   await once(win.webContents, 'did-finish-load');
   await win.webContents.session.cookies.set({ url: base, name: 'signed-in', value: 'yes' });
   const created = once(app, 'web-contents-created');
-  await win.webContents.executeJavaScript('spaceDesktop.openBrowser()');
+  await win.webContents.executeJavaScript('spaceDesktop.openWorkspacePanel()');
   const [, bar] = await created;
   await once(bar, 'did-finish-load');
   const send = (action, arg) => bar.executeJavaScript('browserBar.command(' + JSON.stringify(action) + ',' + (JSON.stringify(arg) || 'null') + ')');
@@ -59,6 +59,9 @@ app.whenReady().then(async () => {
     await loaded;
     await waitFor(bar, '#address-slot #address', '');
   }
+  await waitFor(bar, '#workspace-start:not([hidden])', 'Open a tool');
+  assert.equal(await bar.executeJavaScript("document.querySelectorAll('#tabs .tab').length"), 0);
+  await bar.executeJavaScript("document.querySelector('#new').click()");
   for (const theme of ['light', 'dark']) {
     await win.webContents.executeJavaScript(`document.documentElement.dataset.theme = ${JSON.stringify(theme)}`);
     await waitFor(bar, `html[data-theme="${theme}"] #start:not([hidden])`, 'Open a website');
@@ -67,6 +70,41 @@ app.whenReady().then(async () => {
   }
   assert.ok(await bar.executeJavaScript("document.querySelector('.space-mark').naturalWidth > 0"));
   assert.ok(await bar.executeJavaScript("document.fonts.load('13px Lato').then(faces => faces.length > 0)"));
+  // An Office tab shares the workspace login. Ordinary browser tabs keep their own cookie jar.
+  const assetId = '282b6a70-ea37-45c3-92e6-cf889470ac99';
+  await win.webContents.executeJavaScript(`spaceDesktop.onOfficePicker(() => spaceDesktop.openOffice('library','${assetId}')); true`);
+  await bar.executeJavaScript("document.querySelector('#add-tool').click()");
+  await waitFor(bar, '#tool-slot #tools:not([hidden])', 'Office editor');
+  await bar.executeJavaScript("document.querySelector('#office').click()");
+  await waitFor(bar, '#tabs .current button', 'Reports');
+  const library = guest();
+  assert.equal(library.getURL(), base + '/office/library/' + assetId);
+  assert.equal(await library.executeJavaScript("document.cookie.includes('signed-in=yes')"), true);
+  assert.equal(await library.executeJavaScript("typeof spaceDesktop"), 'undefined');
+  assert.equal(await library.executeJavaScript(`spaceOffice.openFile('${assetId}')`), true);
+  const file = guest();
+  await waitFor(file, 'p', 'Quarterly revenue');
+  assert.equal(file.getURL(), base + '/office/file/' + assetId);
+  await send('go', base + '/report');
+  assert.equal(file.getURL(), base + '/office/file/' + assetId);
+  assert.equal(await win.webContents.executeJavaScript(`spaceDesktop.openOffice('file','${assetId}')`), true);
+  assert.equal(guest().id, file.id);
+  const tabIds = panel.children.map(view => view.webContents.id);
+  const hidden = once(win.webContents.ipc, 'space-browser-hide', { signal: AbortSignal.timeout(5000) });
+  await win.webContents.executeJavaScript('spaceDesktop.openWorkspacePanel(); spaceDesktop.hideWorkspacePanel()');
+  await hidden;
+  assert.equal(panel.getVisible(), false);
+  await win.spaceBrowser.showPanel();
+  assert.equal(panel.getVisible(), true);
+  assert.deepEqual(panel.children.map(view => view.webContents.id), tabIds);
+  assert.equal(panel.children.find(view => view.webContents === file).getVisible(), true);
+  await file.executeJavaScript("spaceOffice.onClose(done => { window.confirmClose = done; }); true");
+  await send('close', file.id);
+  assert.ok(!file.isDestroyed());
+  const removed = once(file, 'destroyed');
+  await file.executeJavaScript('window.confirmClose(); true');
+  await removed;
+  await send('close', library.id);
   await go();
   const first = guest();
   const width = win.getContentSize()[0];
@@ -114,9 +152,13 @@ app.whenReady().then(async () => {
   assert.equal(panel.getBounds().width, width);
   assert.equal(chat.getVisible(), false);
   win.spaceBrowser.togglePanel();
+  assert.equal(panel.getVisible(), false, 'cycling from full view hides tabs');
+  await win.spaceBrowser.togglePanel();
   assert.equal(chat.getVisible(), true);
   assert.equal(chat.getBounds().width, expectedLeft);
   assert.equal(panel.getBounds().x, chat.getBounds().width);
+  await win.spaceBrowser.togglePanel();
+  assert.equal(chat.getVisible(), false, 'cycling from split view expands tabs');
   await send('space');
   assert.equal(chat.getBounds().width, width);
   await win.spaceBrowser.open();
@@ -131,7 +173,7 @@ app.whenReady().then(async () => {
     const closed = once(first, 'destroyed');
     await win.webContents.executeJavaScript('spaceDesktop.browserAccountChanged("bob")');
     await closed;
-    await win.spaceBrowser.open();
+    await win.spaceBrowser.open(true);
     const second = guest();
     await second.loadURL(base + '/report');
     assert.equal(await second.executeJavaScript('localStorage.quarter ?? null'), null);

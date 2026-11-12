@@ -5,6 +5,7 @@ import { Button, Dialog, IconButton } from '@space/ui/primitives';
 import { AgentMarkdown } from '@space/ui/agents';
 import { CodeBlock } from '@space/ui/rich-text';
 import { ArrowLeft, ArrowRight, DownloadSimple, Eye, File, FileCode, FilePdf, MagnifyingGlassMinus, MagnifyingGlassPlus, MusicNote, VideoCamera } from '@phosphor-icons/react';
+import type { OfficeExit } from './OfficePreview.js';
 import './asset-attachments.css';
 
 const OfficePreview = lazy(() => import('./OfficePreview.js').then(module => ({ default: module.OfficePreview })));
@@ -105,14 +106,33 @@ function TextPreview({ preview }: { preview: Extract<AssetPreview, { kind: 'text
     {(shortened || preview.truncated) && <p role="status">{shortened ? 'Preview shortened to 20,000 characters, 32 KiB, or 1,000 lines.' : 'Showing the first 256 KiB.'} Download to read the complete file.</p>}
   </div>;
 }
-function ViewerContent({ asset, onAccessLost }: { asset: AssetAttachment; onAccessLost?: (status: number) => void }) {
+function DesktopOffice({ id, close, children }: { id: string; close: () => void; children: React.ReactNode }) {
+  const request = useRef<Promise<boolean> | undefined>(undefined);
+  const finish = useRef(close);
+  finish.current = close;
+  const [fallback, setFallback] = useState(false);
+  useEffect(() => {
+    let active = true;
+    request.current ??= window.spaceDesktop!.openOffice!('file', id);
+    void request.current.then(opened => {
+      if (active && opened) finish.current();
+      else if (active) setFallback(true);
+    }).catch(() => { if (active) setFallback(true); });
+    return () => { active = false; };
+  }, [id]);
+  return fallback ? children : <p role="status">Opening in the side panel…</p>;
+}
+function ViewerContent({ asset, exit, close, onAccessLost }: { asset: AssetAttachment; close: () => void; exit: OfficeExit; onAccessLost?: (status: number) => void }) {
   const { preview, failed, fail } = usePreview(asset.id, onAccessLost);
   if (failed || preview?.kind === 'unsupported') return <div className="asset-viewer-fallback"><File size={56} /><p role="status">Preview unavailable</p><p>Download the original to open this file.</p></div>;
   if (!preview) return <p className="asset-viewer-loading" role="status">Loading preview…</p>;
   const kindLabel = { image: 'Image', pdf: 'PDF', text: 'Text', office: 'Office document', audio: 'Audio', video: 'Video' }[preview.kind];
   let content;
   if (preview.kind === 'image') content = <ImagePreview asset={asset} preview={preview} onError={fail} />;
-  else if (preview.kind === 'office') content = <Suspense fallback={<p role="status">Opening document…</p>}><OfficePreview id={asset.id} onAccessLost={onAccessLost} /></Suspense>;
+  else if (preview.kind === 'office') {
+    const office = <Suspense fallback={<p role="status">Opening document…</p>}><OfficePreview id={asset.id} exit={exit} onAccessLost={onAccessLost} /></Suspense>;
+    return window.spaceDesktop?.openOffice ? <DesktopOffice id={asset.id} close={close}>{office}</DesktopOffice> : office;
+  }
   else if (preview.kind === 'pdf') content = <Suspense fallback={<p role="status">Loading PDF viewer…</p>}><PdfPreview assetId={asset.id} size={asset.size} /></Suspense>;
   else if (preview.kind === 'text') content = <TextPreview preview={preview} />;
   else content = <div className="asset-media-preview"><NativeMedia asset={asset} kind={preview.kind} onError={fail} /></div>;
@@ -137,7 +157,8 @@ export function AssetAttachments({ assets }: { assets: AssetAttachment[] }) {
     {selected && <AssetViewer assets={assets} selectedId={selected} onSelect={setSelected} onClose={close} previews={previews} />}
   </>;
 }
-export function AssetViewer({ assets, selectedId, onSelect, onClose, onAccessLost, previews = {} }: {
+export function AssetViewer({ assets, selectedId, onSelect, onClose, onAccessLost, channelLabel, previews = {} }: {
+  channelLabel?: string;
   assets: AssetAttachment[];
   selectedId: string;
   onSelect: (id: string) => void;
@@ -145,10 +166,12 @@ export function AssetViewer({ assets, selectedId, onSelect, onClose, onAccessLos
   previews?: Record<string, { kind: AssetPreview['kind'] | 'file' } | undefined>;
   onAccessLost?: (status: number) => void;
 }) {
+  const exit: OfficeExit = useRef(null);
+  function leave(action: () => void) { if (exit.current) exit.current(action); else action(); }
   const viewer = useRef<HTMLDivElement>(null);
   const index = assets.findIndex(asset => asset.id === selectedId);
   const current = assets[index];
-  function navigate(direction: number) { const next = assets[index + direction]; if (next) onSelect(next.id); }
+  function navigate(direction: number) { const next = assets[index + direction]; if (next) leave(() => onSelect(next.id)); }
   function keyboard(event: globalThis.KeyboardEvent) {
     if (event.key === 'Escape') return;
     const target = event.target as HTMLElement;
@@ -162,14 +185,19 @@ export function AssetViewer({ assets, selectedId, onSelect, onClose, onAccessLos
     dialog.addEventListener('keydown', keyboard);
     return () => dialog.removeEventListener('keydown', keyboard);
   });
-  return current ? <Dialog open onClose={onClose} title={current.name}>
+  return current ? <Dialog open onClose={onClose} onBeforeClose={() => {
+      if (!exit.current) return true;
+      exit.current(onClose);
+      return false;
+    }} title={current.name}>
       <div className={assets.length === 1 ? 'asset-viewer asset-viewer--single' : 'asset-viewer'} ref={viewer}>
+        {channelLabel && <span className="asset-office-channel">{channelLabel}</span>}
         <div className="asset-viewer-toolbar">
           <div className="asset-file-navigation"><IconButton label="Previous file" disabled={index <= 0} onClick={() => navigate(-1)}><ArrowLeft size={20} /></IconButton><span>{index + 1} of {assets.length}</span><IconButton label="Next file" disabled={index >= assets.length - 1} onClick={() => navigate(1)}><ArrowRight size={20} /></IconButton></div>
           <a className="sp-button sp-button--secondary sp-button--sm" href={assetUrl(current.id, 'download')}><DownloadSimple size={16} />Download original</a>
         </div>
-        <div key={current.id} className="asset-viewer-content"><ViewerContent asset={current} onAccessLost={onAccessLost} /></div>
-        {assets.length > 1 && <div className="asset-filmstrip" role="group" aria-label="Attached files">{assets.map((asset, position) => <button type="button" key={asset.id} aria-label={`View ${asset.name}`} aria-pressed={position === index} onClick={() => onSelect(asset.id)}><FilmstripPreview asset={asset} preview={previews[asset.id]} /><span>{asset.name}</span></button>)}</div>}
+        <div key={current.id} className="asset-viewer-content"><ViewerContent asset={current} close={onClose} exit={exit} onAccessLost={onAccessLost} /></div>
+        {assets.length > 1 && <div className="asset-filmstrip" role="group" aria-label="Attached files">{assets.map((asset, position) => <button type="button" key={asset.id} aria-label={`View ${asset.name}`} aria-pressed={position === index} onClick={() => leave(() => onSelect(asset.id))}><FilmstripPreview asset={asset} preview={previews[asset.id]} /><span>{asset.name}</span></button>)}</div>}
       </div>
     </Dialog> : null;
 }

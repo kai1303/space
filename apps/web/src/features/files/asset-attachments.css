@@ -16,3 +16,12 @@
 .asset-viewer--single:has(.asset-text-preview, .asset-viewer-fallback){flex:0 1 auto}
 .asset-office-preview { flex: 1; min-height: 0; }
 .asset-office-preview iframe { display: block; width: 100%; height: 100%; border: 0; }
+.asset-office-tools,.asset-office-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.asset-office-tools{justify-content:space-between;padding:8px 16px;border-bottom:1px solid var(--sp-border);background:var(--sp-surface)}
+.asset-office-mode,.asset-office-status,.asset-office-channel{font-size:12px;color:var(--sp-text-secondary)}
+.asset-office-status{margin:0;padding:6px 16px}
+.asset-office-channel{display:none}
+.asset-viewer:has(.asset-office-preview)>.asset-office-channel{display:block;padding:6px 16px 0}
+.asset-viewer:has(.asset-office-preview)>.asset-viewer-toolbar>a,
+.asset-viewer--single:has(.asset-office-preview)>.asset-viewer-toolbar{display:none}
+.asset-office-actions button[aria-pressed=true]{color:var(--sp-accent)}

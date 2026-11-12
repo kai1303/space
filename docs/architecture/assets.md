@@ -377,6 +377,7 @@ local `.env` file.
 ```dotenv
 ONLYOFFICE_URL=http://127.0.0.1:58080
 ONLYOFFICE_STORAGE_ENDPOINT=http://seaweedfs:8333
+ONLYOFFICE_CALLBACK_BASE=http://server:3000
 ONLYOFFICE_JWT_SECRET=<generated secret>
 ```
 
@@ -397,10 +398,26 @@ Space checks current access, signs a view-only configuration, and gives the view
 viewer is disabled. Markdown attachments render inside the text preview with the
 same size limits as source code.
 
+For channel documents, a reachable `ONLYOFFICE_CALLBACK_BASE` enables **Edit** for the uploader.
+The uploader can enable **Channel editing** to let other current members with posting permission
+join the same live editing session. Use the address of the Space API as seen by Document Server.
+Compose uses `http://server:3000`. With a native API, route the document server to that API's
+`/v1/office/callback` and `/v1/office/files/` endpoints. They verify the signed outgoing
+requests from ONLYOFFICE Docs 10. The browser still uses the same authenticated Space routes.
+
+The last editor closing triggers finalization. Space validates the returned format and size and
+atomically replaces the last saved working copy in `office_edits` (up to 25 MiB per attachment).
+Normal downloads return that copy. The original remains in object storage and is available under
+**Original upload**. There is no intermediate version history. Revoking channel editing retires
+the shared session key, so finish the current session before disabling sharing.
+
 The viewer turns off ONLYOFFICE chat (`permissions.chat`) and plugins
 (`customization.plugins`). Both would run outside Space's channel access checks.
 
 `pnpm --filter @space/tests test:office:e2e` opens every Office format from
 `tests/fixtures/office` in a real browser. It needs a running document server
 and SeaweedFS, plus `TEST_DATABASE_URL`, `NATS_URL`, the `ONLYOFFICE_*` variables
-above and the `ASSET_STORAGE_*` variables. CI does not run it.
+above and the `ASSET_STORAGE_*` variables. For editing tests, set `OFFICE_TEST_BIND_HOST` and
+`OFFICE_TEST_CALLBACK_HOST` to a private interface reachable from Document Server. The test
+opens two browser contexts, checks propagation, downloads their combined changes and reopens
+the saved file. CI does not run it.

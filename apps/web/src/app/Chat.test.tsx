@@ -194,6 +194,37 @@ it('browses channel files outside loaded history, opens their source and keeps d
   await act(async () => { finishOlder(messagePage([{ ...message, sequence: '0', id: 'late-history', text: 'Late private history' }])); });
   expect(screen.queryByText('Late private history')).toBeNull();
 });
+it('keeps the channel draft and pending send when an Office file disappears while opening', async () => {
+  let acknowledge!: () => void;
+  mocks.pendingSend = new Promise<void>(resolve => { acknowledge = resolve; });
+  mockPaginatedChat(() => messagePage());
+  const fallback = vi.mocked(fetch).getMockImplementation()!;
+  const file = { id: 'office', name: 'Meeting.docx', size: 4096, preview_kind: 'office', message_id: 'source', thread_id: 'thread',
+    shared_at: new Date().toISOString(), uploader: { id: 'user', name: 'Kai' } };
+  let missing = false;
+  vi.mocked(fetch).mockImplementation(async (...args) => {
+    const path = String(args[0]);
+    if (path.endsWith('/first/tabs')) return Response.json({ has_files: true, visibility: {} });
+    if (path.includes('/first/assets?')) return Response.json({ items: missing ? [] : [file], next_cursor: null });
+    if (path.endsWith('/office/preview')) return Response.json({ kind: 'office', fileType: 'docx' });
+    if (path.endsWith('/office/office-session')) { missing = true; return Response.json({error: 'not_found'}, {status: 404}); }
+    return fallback(...args);
+  });
+  render(<Chat />);
+  try {
+    const editor = await screen.findByRole('textbox', {name: 'Message first'});
+    await userEvent.type(editor, 'Still sending{Enter}');
+    await screen.findByText('Still sending');
+    await userEvent.type(editor, 'Keep this draft');
+    await userEvent.click(screen.getByRole('tab', {name: 'Files & links'}));
+    await userEvent.click(await screen.findByRole('button', {name: 'Preview Meeting.docx'}));
+    await screen.findByText('No files shared yet');
+    expect(screen.queryByRole('dialog')).toBeNull();
+    await userEvent.click(screen.getByRole('tab', {name: 'Messages'}));
+    expect(screen.getByRole('textbox', {name: 'Message first'}).textContent).toContain('Keep this draft');
+    expect(screen.getByText('Still sending')).toBeTruthy();
+  } finally { await act(async () => { acknowledge(); await mocks.pendingSend; }); }
+});
 it.each([false, true])('revalidates channel access when an older file source is unavailable: revoked=%s', async revoked => {
   let sourceRequested = false;
   const message = { id: 'loaded', channel_id: 'first', thread_id: 'thread', created_at: '2026-11-03T00:00:00Z', text: 'Cached channel message', author: { kind: 'human', id: 'user', name: 'Kai' } };

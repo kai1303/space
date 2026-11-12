@@ -5,6 +5,7 @@ import type { Pool } from 'pg';
 import { and, asc, desc, eq, gt, isNotNull, isNull, lt, or, sql } from 'drizzle-orm';
 import { AppError, parseAssetInput, parseAssetListQuery, uuid, type AssetAttachment, type AssetPreview, type ChannelFile, type Page } from '@space/contracts';
 import { database, type DbSession } from './database.js';
+import { readChannelPermissions } from './channel-permissions.js';
 import { hasChannelAccess, lockWorkspace } from './access.js';
 import { assets, channels, messages, users } from './schema.js';
 
@@ -148,6 +149,53 @@ export class AssetStore {
   private async assertAccess(c: DbSession, actor: string, row: Asset | undefined) {
     if (!row || row.status !== 'ready' || !await hasChannelAccess(c, actor, row.workspace_id, row.channel_id)) throw notFound();
     if (!row.message_id && (row.uploader_id !== actor || row.expires_at <= new Date())) throw notFound();
+  }
+  private async officeAccess(c: DbSession, actor: string, id: string) {
+    const [row] = await c.select().from(assets).where(eq(assets.id, uuid(id)));
+    await this.assertAccess(c, actor, row);
+    const state = (await c.execute<{ revision: number; edit_epoch: number; channel_editing: boolean }>(sql`
+      SELECT revision, edit_epoch, channel_editing FROM office_edits WHERE asset_id=${id}`)).rows[0];
+    const owner = row!.uploader_id === actor;
+    const channelEditing = state?.channel_editing ?? false;
+    let canWrite = false;
+    if (row!.message_id && row!.preview?.kind === 'office') {
+      const [channel] = await c.select({ kind: channels.kind }).from(channels).where(eq(channels.id, row!.channel_id));
+      if (channel?.kind === 'channel') {
+        canWrite = (await readChannelPermissions(c, actor, row!.channel_id)).capabilities.post;
+      }
+    }
+    return { row: row!, revision: state?.revision ?? 0, epoch: state?.edit_epoch ?? 0, channelEditing,
+      canShare: owner && canWrite, canEdit: canWrite && (owner || channelEditing) };
+  }
+  officeAccessFor(actor: string, id: string) {
+    return this.officeAccess(this.db, actor, id);
+  }
+  async shareOffice(actor: string, id: string, share: boolean) {
+    return sessionTransaction(this.db, async c => {
+      if (!(await this.officeAccess(c, actor, id)).canShare) throw new AppError(403, 'office_edit_forbidden');
+      await c.execute(sql`INSERT INTO office_edits(asset_id,channel_editing) VALUES(${id},${share})
+        ON CONFLICT(asset_id) DO UPDATE SET channel_editing=excluded.channel_editing,
+          edit_epoch=office_edits.edit_epoch + (office_edits.channel_editing AND NOT excluded.channel_editing)::integer`);
+    });
+  }
+  async saveOffice(actor: string, id: string, revision: number, epoch: number, content: Buffer) {
+    return sessionTransaction(this.db, async c => {
+      const access = await this.officeAccess(c, actor, id);
+      if (!access.canEdit || access.epoch !== epoch) throw new AppError(403, 'office_edit_forbidden');
+      // A finalized session has exactly one result. Replayed callbacks cannot move the head.
+      if (access.revision > revision) return;
+      if (access.revision !== revision) throw new AppError(409, 'office_revision_conflict');
+      await c.execute(sql`INSERT INTO office_edits(asset_id,revision,content)
+        VALUES(${id},${revision + 1},${content})
+        ON CONFLICT(asset_id) DO UPDATE SET revision=excluded.revision, content=excluded.content
+        WHERE office_edits.revision=${revision}`);
+    });
+  }
+  async officeContent(id: string, revision?: number): Promise<Buffer | undefined> {
+    const result = await this.pool.query<{ content: Buffer }>(
+      'SELECT content FROM office_edits WHERE asset_id=$1 AND revision>0 AND ($2::integer IS NULL OR revision=$2)',
+      [uuid(id), revision ?? null]);
+    return result.rows[0]?.content;
   }
   async preview(actor: string, id: string, generate: (asset: Asset) => Promise<AssetPreview>): Promise<AssetPreview> {
     const current = await this.download(actor, id);

@@ -24,7 +24,14 @@ function createSpaceWindow(configuredUrl, { show = true, pair } = {}) {
   win.once('closed', () => { if (!workspace.webContents.isDestroyed()) workspace.webContents.close(); });
   win.webContents.on('page-title-updated', (_event, title) => { if (!win.isDestroyed()) win.setTitle(title || 'Space'); });
   win.webContents.ipc.on('space-browser-open', event => {
-    if (event.senderFrame === win.webContents.mainFrame && navigationAction(win.webContents.getURL(), url) === 'internal') void win.spaceBrowser.open();
+    if (event.senderFrame === win.webContents.mainFrame && navigationAction(win.webContents.getURL(), url) === 'internal') void win.spaceBrowser.showPanel();
+  });
+  win.webContents.ipc.on('space-browser-hide', event => {
+    if (event.senderFrame === win.webContents.mainFrame && navigationAction(win.webContents.getURL(), url) === 'internal') win.spaceBrowser.hidePanel();
+  });
+  win.webContents.ipc.handle('space-office-open', (event, kind, id) => {
+    if (event.senderFrame !== win.webContents.mainFrame || event.senderFrame.origin !== new URL(url).origin) return false;
+    return win.spaceBrowser.openOffice(kind, id);
   });
   win.webContents.ipc.on('space-browser-account', (event, actor) => {
     if (event.senderFrame === win.webContents.mainFrame && navigationAction(win.webContents.getURL(), url) === 'internal') win.spaceBrowser.accountChanged(actor);
