@@ -1323,7 +1323,10 @@ it('keeps session management and agent follow-up controls out of the thread', as
   expect(vi.mocked(fetch).mock.calls.some(([path])=>/\/threads\/thread\/(agent-sessions|agent-subscription)$/.test(String(path)))).toBe(false);
   await userEvent.keyboard('{Enter}');
   await waitFor(()=>expect(editor.textContent?.trim()).toBe(''));
-  expect(latestChatSocket().requests.some((item:any)=>item.name==='message.send'&&item.data.thread_id==='thread'&&item.data.text==='Ordinary thread reply')).toBe(true);
+  await waitFor(() => expect(latestChatSocket().requests).toContainEqual(expect.objectContaining({
+    name: 'message.send',
+    data: expect.objectContaining({ thread_id: 'thread', text: 'Ordinary thread reply' }),
+  })));
 });
 
 it('persists emoji reaction intent and applies realtime reaction updates to the same message', async () => {
