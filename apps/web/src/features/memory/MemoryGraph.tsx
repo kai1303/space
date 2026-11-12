@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Button } from '@space/ui/primitives';
 import { GraphCanvas, type GraphLink, type GraphNode } from '@space/ui/graph';
-import type { MemoryNode, ThreadMemory } from '@space/contracts';
+import type { ChannelMemoryHeader, MemoryNode, ThreadMemory } from '@space/contracts';
 import { subscribeUpdates } from '../../shared/realtime/live-updates.js';
 import { memoryApi } from './memory-api.js';
 
-export type MemorySelection = { kind: 'channel' } | { kind: 'thread'; node: MemoryNode } | { kind: 'session'; node: MemoryNode; threadId: string };
+export type MemorySelection = { kind: 'channel'; header?: ChannelMemoryHeader } | { kind: 'thread'; node: MemoryNode } | { kind: 'session'; node: MemoryNode; threadId: string };
 type Props = {
   channel: string; name: string;
   onSelect(selection: MemorySelection | undefined): void;
@@ -22,6 +22,7 @@ const message = (reason: unknown, fallback: string) => reason instanceof Error ?
 
 export function MemoryGraph({ channel, name, onSelect, onAccessLost, onOpenThread, onOpenSession, details }: Props) {
   const [threads, setThreads] = useState<MemoryNode[]>([]);
+  const [header, setHeader] = useState<ChannelMemoryHeader>();
   const [pages, setPages] = useState(1), [cursor, setCursor] = useState<string | null>(null);
   const [expanded, setExpanded] = useState(new Map<string, ThreadMemory>());
   const [hidden, setHidden] = useState(new Set<string>());
@@ -37,8 +38,10 @@ export function MemoryGraph({ channel, name, onSelect, onAccessLost, onOpenThrea
     try {
       let after: string | undefined, next: string | null = null;
       const all: MemoryNode[] = [];
+      let channelHeader: ChannelMemoryHeader | undefined;
       for (let page = 0; page < state.current.pages; page++) {
         const result = await memoryApi.layers(channel, after);
+        if (page === 0) channelHeader = result.channel;   // only the first page carries it
         all.push(...result.nodes); next = result.next_cursor;
         if (!next) break;
         after = next;
@@ -46,7 +49,7 @@ export function MemoryGraph({ channel, name, onSelect, onAccessLost, onOpenThrea
       const reloaded = new Map<string, ThreadMemory>();
       for (const id of state.current.expanded.keys()) reloaded.set(id, await memoryApi.thread(channel, id));
       if (version !== generation.current) return;
-      setThreads(all); setCursor(next); setExpanded(reloaded); setError(''); setLoaded(true);
+      setThreads(all); setHeader(channelHeader); setCursor(next); setExpanded(reloaded); setError(''); setLoaded(true);
     } catch (reason) {
       if (version !== generation.current) return;
       const code = reason instanceof Error ? reason.message : '';
@@ -86,7 +89,7 @@ export function MemoryGraph({ channel, name, onSelect, onAccessLost, onOpenThrea
     const channelId = key('channel', channel);
     const nodes: GraphNode[] = [{ id: channelId, kind: 'channel', caption: `#${name}` }];
     const links: GraphLink[] = [];
-    const lookup = new Map<string, MemorySelection>([[channelId, { kind: 'channel' }]]);
+    const lookup = new Map<string, MemorySelection>([[channelId, header ? { kind: 'channel', header } : { kind: 'channel' }]]);
     for (const t of threads) {
       const id = key('thread', t.ref.id);
       if (hidden.has(id)) continue;
@@ -102,10 +105,16 @@ export function MemoryGraph({ channel, name, onSelect, onAccessLost, onOpenThrea
       }
     }
     return { nodes, links, lookup };
-  }, [channel, name, threads, expanded, hidden]);
+  }, [channel, name, threads, expanded, hidden, header]);
   const expandedIds = useMemo(() => new Set([...expanded.keys()].map(id => key('thread', id))), [expanded]);
 
   const select = (id: string | undefined) => { setSelected(id); onSelect(id ? lookup.get(id) : undefined); };
+  // A live refresh can change the topic while the channel is selected: send the new header.
+  const report = useRef(onSelect); report.current = onSelect;
+  const channelSelected = selected === key('channel', channel);
+  useEffect(() => {
+    if (channelSelected) report.current(header ? { kind: 'channel', header } : { kind: 'channel' });
+  }, [channelSelected, header]);
   const menu = (id: string) => {
     const item = lookup.get(id);
     if (!item || item.kind === 'channel') return [];

@@ -48,6 +48,20 @@ it('expands a thread into sessions, collapses it, and keeps expansion across liv
   await waitFor(() => expect(screen.queryByRole('button', { name: 'Codex, session, ended' })).toBeNull());
 });
 
+it('selecting the channel passes its header, and a live refresh sends the new one', async () => {
+  let topic = 'Checkout';
+  const header = () => ({ name: 'payments', topic, description: 'Refunds', top_topics: [] });
+  vi.stubGlobal('fetch', vi.fn(async (path: string) => path.includes('/memory/layers')
+    ? response({ channel_id: ch, channel: header(), nodes: [thread(1)], next_cursor: null }) : response({}, 404)));
+  const onSelect = vi.fn();
+  render(<MemoryGraph channel={ch} name="payments" onSelect={onSelect} onAccessLost={() => {}} />);
+  fireEvent.click(await screen.findByRole('button', { name: '#payments, channel' }));
+  await waitFor(() => expect(onSelect).toHaveBeenLastCalledWith({ kind: 'channel', header: header() }));
+  topic = 'Refunds first';
+  await act(async () => { await updates.get(`channel:${ch}`)!.read(); });
+  await waitFor(() => expect(onSelect).toHaveBeenLastCalledWith({ kind: 'channel', header: header() }));
+});
+
 it('reports lost access when the live subscription is revoked', async () => {
   stub([{ nodes: [], next_cursor: null }, { nodes: [], next_cursor: null }]);
   const lost = vi.fn();

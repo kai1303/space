@@ -33,6 +33,21 @@ it('shows an ended session as history', async () => {
   expect(screen.getByText('Step 3 failed')).toBeTruthy();
 });
 
+it('shows the channel topic and description as people typed them', () => {
+  render(<MemoryInspector channel={ch} selection={{ kind: 'channel', header: { name: 'payments', topic: 'Checkout reliability', description: 'Refunds and retries', top_topics: [] } }} />);
+  expect(screen.getByRole('heading', { name: '#payments' })).toBeTruthy();
+  expect(screen.getByLabelText('Topic').textContent).toBe('Checkout reliability');
+  expect(screen.getByLabelText('Description').textContent).toBe('Refunds and retries');
+  expect(screen.queryByLabelText('Most discussed')).toBeNull();
+});
+
+it('shows the most discussed thread topics when the channel has no topic', () => {
+  render(<MemoryInspector channel={ch} selection={{ kind: 'channel', header: { name: 'payments', topic: '', description: '', top_topics: ['refunds', 'retries'] } }} />);
+  expect(screen.queryByLabelText('Topic')).toBeNull();
+  expect(screen.queryByLabelText('Description')).toBeNull();
+  expect(screen.getByLabelText('Most discussed').textContent).toBe('refunds · retries');
+});
+
 it('shows the error when memory cannot load', async () => {
   vi.stubGlobal('fetch', vi.fn(async () => response({ error: 'session_private' }, 403)));
   render(<MemoryInspector channel={ch} selection={{ kind: 'thread', node }} />);

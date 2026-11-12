@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Button } from '@space/ui/primitives';
-import type { MemoryFact, SessionMemory, ThreadContextMessage, ThreadMemory } from '@space/contracts';
+import type { ChannelMemoryHeader, MemoryFact, SessionMemory, ThreadContextMessage, ThreadMemory } from '@space/contracts';
 import { memoryApi } from './memory-api.js';
 import type { MemorySelection } from './MemoryGraph.js';
 
@@ -18,8 +18,21 @@ const toDetail = (data: ThreadMemory | SessionMemory): Detail => 'context' in da
 export function MemoryInspector(props: Props) {
   const { selection } = props;
   if (!selection) return <aside className="memory-inspector" aria-label="Memory details"><p>Select a node to see its memory.</p></aside>;
-  if (selection.kind === 'channel') return <aside className="memory-inspector" aria-label="Memory details"><h3>Channel</h3><p>Double-click a thread to see its agent sessions.</p></aside>;
+  if (selection.kind === 'channel') return <ChannelInspector header={selection.header} />;
   return <NodeInspector key={`${selection.kind}:${selection.node.ref.id}`} {...props} selection={selection} />;
+}
+
+// Topic and description are what people typed. Most discussed topics come from threads and only when the topic is empty.
+function ChannelInspector({ header }: { header?: ChannelMemoryHeader }) {
+  const topic = header?.topic.trim(), description = header?.description.trim();
+  return <aside className="memory-inspector" aria-label="Memory details">
+    <h3>{header ? `#${header.name}` : 'Channel'}</h3>
+    {header && <small>channel</small>}
+    {topic && <section><h4>Topic</h4><p aria-label="Topic">{topic}</p></section>}
+    {description && <section><h4>Description</h4><p aria-label="Description">{description}</p></section>}
+    {header && header.top_topics.length > 0 && <section><h4>Most discussed</h4><p aria-label="Most discussed">{header.top_topics.join(' · ')}</p></section>}
+    <p className="memory-inspector-hint">Double-click a thread to see its agent sessions.</p>
+  </aside>;
 }
 
 function Messages({ label, messages }: { label: string; messages: ThreadContextMessage[] }) {

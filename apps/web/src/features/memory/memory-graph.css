@@ -8,6 +8,10 @@
 .memory-inspector { display: flex; flex-direction: column; gap: 10px; padding: 12px; border: 1px solid var(--sp-border); border-radius: var(--sp-radius-md); overflow: auto; min-width: 0; }
 .memory-inspector h3 { margin: 0; font-size: 15px; overflow-wrap: anywhere; }
 .memory-inspector small { color: var(--sp-text-secondary); }
+.memory-inspector section { display: flex; flex-direction: column; gap: 2px; }
+.memory-inspector h4 { margin: 0; font-size: 12px; font-weight: 600; color: var(--sp-text-secondary); }
+.memory-inspector section p { margin: 0; font-size: 13px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.memory-inspector-hint { margin: 0; font-size: 12px; color: var(--sp-text-secondary); }
 .memory-inspector pre { white-space: pre-wrap; word-break: break-word; margin: 6px 0 0; padding: 8px; max-height: 260px; overflow: auto; font-size: 12px; border-radius: var(--sp-radius-sm); background: var(--sp-surface-subtle); }
 .memory-inspector meter { width: 100%; }
 .memory-inspector form { display: flex; flex-direction: column; gap: 8px; }
