@@ -58,6 +58,7 @@ Mention a teammate’s Codex, Kiro, or Claude agent and follow its work in a sha
 - [Quick start](#quick-start)
 - [macOS app](#macos-app)
 - [How Space works](#how-space-works)
+  - [Edit Office files together](#edit-office-files-together)
   - [Workflows](#workflows)
 - [Connect a local agent](#connect-a-local-agent)
 - [MCP connections](#mcp-connections)
@@ -244,8 +245,9 @@ for tested workflows and remaining checks.
 </p>
 
 1. **Start with a conversation.** Post in a channel, reply in a thread, or message a
-   teammate directly. When a discussion needs a call, open a channel huddle to talk
-   or share your screen. [Huddle setup](docs/architecture/channel-huddles.md)
+   teammate directly. Use the reply count beneath a message to open its thread,
+   or **Agent session** to open the linked agent conversation. When a discussion
+   needs a call, open a channel huddle to talk or share your screen. [Huddle setup](docs/architecture/channel-huddles.md)
 2. **Keep the context.** Share a file in the conversation or save a decision to
    the channel’s opt-in Markdown memory. Each saved message links back to its source.
    [Files](docs/architecture/assets.md) · [Channel memory](docs/architecture/channel-memory.md)
@@ -260,6 +262,23 @@ for tested workflows and remaining checks.
 5. **Bring updates back to chat.** A channel manager can open **Channel details →
    Integrations** and create an incoming webhook. A service can then post a message
    to that channel.
+
+### Edit Office files together
+
+Open a document, spreadsheet, or presentation from a channel’s **Files & links**
+tab. With ONLYOFFICE configured, the uploader can choose **Edit** and turn on
+**Channel editing**. Members who can post in the channel can then open the same
+file and see each other’s edits live. Space saves the working copy when the last
+editor closes the document. **Original upload** retrieves the file as first shared.
+
+On macOS, open the workspace panel and choose **Office editor** to keep the file
+beside chat. Use **+** to add a **Browser** tab. Double-click the workspace icon to
+hide the panel and click once to return to the active tab.
+
+When editing a DOCX or ODT in Space Desktop, select a passage and choose
+**Ask Space AI** to ask a question or rewrite it using the Codex CLI signed in
+on your Mac. If the selection changes while Codex is drafting, Space shows the
+proposed text for review. [Set up ONLYOFFICE and the Space editor plugin](docs/architecture/assets.md#opening-office-attachments-locally)
 
 ### Workflows
 

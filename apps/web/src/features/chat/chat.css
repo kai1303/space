@@ -150,7 +150,6 @@
 @media(prefers-reduced-motion:reduce){.chat-thread .chat-timeline-footer{transition:none}.chat-thread .chat-virtual-items{animation:none}}
 
 .chat-session-link{max-width:100%;text-align:left;white-space:nowrap}.chat-session-link svg{flex-shrink:0}.chat-session-link span{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.sp-message-body>.sp-thread-link:has(+.chat-session-link),.sp-message-body>.sp-thread-link+.chat-session-link{min-height:28px;padding-block:2px}
 .sp-message-body>.sp-thread-link+.chat-session-link{margin-top:0}
 
 /* Reserve the small typing line above the input so the composer stays steady. */

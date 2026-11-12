@@ -3,6 +3,8 @@ import type { LocalProvider } from '@space/contracts';
 declare global {
   interface Window {
     spaceOffice?: {
+      ask?(goal: string, selection: string, key: string): Promise<{ message: string; replacement?: string }>;
+      cancel?(): void;
       openFile(id: string): Promise<boolean>;
       onClose(fn: (close: () => void) => void): () => void;
     };

@@ -411,8 +411,19 @@ Normal downloads return that copy. The original remains in object storage and is
 **Original upload**. There is no intermediate version history. Revoking channel editing retires
 the shared session key, so finish the current session before disabling sharing.
 
-The viewer turns off ONLYOFFICE chat (`permissions.chat`) and plugins
-(`customization.plugins`). Both would run outside Space's channel access checks.
+Space Desktop users editing DOCX or ODT can select text and choose **Ask Space AI**.
+This uses the signed-in Codex CLI on that Mac. One short-lived MCP server receives
+only the selection for that request. Space checks the user's editing session before
+drafting and again before returning the result. The Office plugin compares the live
+selection with the original before applying an edit. If it moved or changed, the
+panel shows the proposal for review. The cursor label is local to the user's tab.
+
+The Office Compose overlay mounts the Space plugin. When updating an existing
+installation, recreate the document server with that overlay after active editors
+have closed. A reverse proxy in front of the editor must also serve its
+`sdkjs-plugins/` assets and versioned `plugins.json` manifest. Regular sessions
+disable plugins. Agent-enabled sessions disable the pinned image's bundled plugins
+and marketplace and start the Space plugin. ONLYOFFICE chat is disabled.
 
 `pnpm --filter @space/tests test:office:e2e` opens every Office format from
 `tests/fixtures/office` in a real browser. It needs a running document server

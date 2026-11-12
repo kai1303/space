@@ -15,6 +15,9 @@ const server = createServer((req, res) => {
     if (!req.headers.cookie?.includes('signed-in=yes')) return res.writeHead(401).end();
     return res.setHeader('content-type', 'application/json').end(JSON.stringify({ id: actor }));
   }
+  if (req.url?.endsWith('/office-session?mode=edit')) {
+    return res.writeHead(403).end();
+  }
   if (req.url === '/chat') {
     return res.setHeader('content-type', 'text/html').end('<nav class="chat-rail" style="width:68px"></nav><aside class="chat-sidebar" style="width:300px"></aside><textarea></textarea>');
   }
@@ -98,6 +101,8 @@ app.whenReady().then(async () => {
   assert.equal(panel.getVisible(), true);
   assert.deepEqual(panel.children.map(view => view.webContents.id), tabIds);
   assert.equal(panel.children.find(view => view.webContents === file).getVisible(), true);
+  await assert.rejects(file.executeJavaScript("spaceOffice.ask('Rewrite', 'selected text', 'old.edit.0')"), /Editing access changed/);
+  await assert.rejects(library.executeJavaScript("spaceOffice.ask('Rewrite', 'selected text', 'old.edit.0')"), /Office task unavailable/);
   await file.executeJavaScript("spaceOffice.onClose(done => { window.confirmClose = done; }); true");
   await send('close', file.id);
   assert.ok(!file.isDestroyed());

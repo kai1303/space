@@ -24,10 +24,12 @@
     "@electron-forge/cli": "8.0.1",
     "@electron-forge/maker-zip": "8.0.1",
     "@fontsource/lato": "^5.3.0",
+    "@modelcontextprotocol/server": "2.4.0",
     "@space/ui": "workspace:*",
     "@xterm/xterm": "6.0.0",
     "electron": "45.2.2",
     "esbuild": "0.28.2",
-    "motion": "^14.9.0"
+    "motion": "^14.9.0",
+    "zod": "^4.2.0"
   }
 }

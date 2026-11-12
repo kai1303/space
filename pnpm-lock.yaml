@@ -152,6 +152,9 @@ importers:
       '@fontsource/lato':
         specifier: ^5.3.0
         version: 5.3.0
+      '@modelcontextprotocol/server':
+        specifier: 2.4.0
+        version: 2.4.0
       '@space/ui':
         specifier: workspace:*
         version: link:../../packages/ui
@@ -167,6 +170,9 @@ importers:
       motion:
         specifier: ^14.9.0
         version: 14.9.0(react-dom@19.3.1)(react@19.3.1)
+      zod:
+        specifier: ^4.2.0
+        version: 4.6.7
 
   apps/events:
     dependencies:
@@ -2854,7 +2860,6 @@ packages:
     engines: {node: '>=20'}
     dependencies:
       zod: 4.6.7
-    dev: false
 
   /@modelcontextprotocol/node@2.1.2(@modelcontextprotocol/server@2.4.0):
     resolution: {integrity: sha512-IIcIqBpr6NCQQs5DgJTgvbSOAw+3iaR/uquqg+e0nXCdudfjPg/80x0TseUnQx14AUAtE4fsJCEpJKPyb6WPVA==}
@@ -2916,7 +2921,6 @@ packages:
     dependencies:
       '@modelcontextprotocol/core': 2.4.0
       zod: 4.6.7
-    dev: false
 
   /@napi-rs/canvas-android-arm64@1.1.0:
     resolution: {integrity: sha512-mKrSmRyhWK4q699Q1xthbZIZi7JBvLtsRNnOZAeFaLPOFT1yo8y82aRC2nNZbXTGJXU7fVDONgGQPr0vo3kerw==}
@@ -10333,7 +10337,6 @@ packages:
 
   /zod@4.6.7:
     resolution: {integrity: sha512-g8W2D2kU6a8untc053fX1uVBKzM7yqAxW/3zwk83+6RyF2+SKOuV+c0wBDhUwzV1PaGapmZH+rmcUzPf+3CGwg==}
-    dev: false
 
   /zwitch@2.0.4:
     resolution: {integrity: sha512-bXE4cR/kVZhKZX/RjPEflHaKVhUVl85noU3v6b8apfQEc1x4A+zBxjZ4lN8LqGd6WZ3dl98pY4o717VFmoPp+A==}

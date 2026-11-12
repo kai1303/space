@@ -1,0 +1,15 @@
+{
+  "name": "Space AI",
+  "guid": "asc.{B29E4FC2-C178-4B2A-80A6-026D01A3FD98}",
+  "baseUrl": "",
+  "variations": [{
+    "description": "Edit the selection from Space",
+    "url": "index.html",
+    "EditorsSupport": ["word"],
+    "isViewer": false,
+    "isVisual": false,
+    "isSystem": true,
+    "initDataType": "none",
+    "buttons": []
+  }]
+}

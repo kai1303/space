@@ -1,7 +1,7 @@
-const { WebContentsView, View, systemPreferences, session, dialog } = require('electron');
+const { app, WebContentsView, View, systemPreferences, session, dialog } = require('electron');
 const { createHash } = require('node:crypto');
 const { join } = require('node:path');
-const { runBrowserTask } = require('./agent.cjs');
+const { runBrowserTask, runOfficeTask } = require('./agent.cjs');
 
 const { isAssetDownload } = require('../policy.cjs');
 const uuid = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i;
@@ -23,6 +23,7 @@ function createBrowser(win, base, workspace) {
   const owner = win.webContents;
   let full = false, splitRatio, navigationWidth = 0, theme = 'dark';
   let currentActor, profile, toolbar, active, task, visible = false, ready = false, barHeight = 64;
+  let officeTask;
   let generation = 0, opening = false, notice = '';
   let frameTimer, closingTab;
   const tabs = new Map();
@@ -103,6 +104,7 @@ function createBrowser(win, base, workspace) {
     publish();
   }
   function hide(withMotion = true) {
+    officeTask?.abort();
     if (!toolbar) return;
     const slide = withMotion && visible && ready;
     visible = false;
@@ -113,7 +115,7 @@ function createBrowser(win, base, workspace) {
   }
   function select(id, enter = false) {
     if (!tabs.has(id)) return;
-    if (id !== active) stop();
+    if (id !== active) { officeTask?.abort(); stop(); }
     active = id;
     for (const [key, tab] of tabs) tab.view.setVisible(visible && key === active && (!!tab.url || tab.popup));
     layout(enter); publish();
@@ -121,6 +123,7 @@ function createBrowser(win, base, workspace) {
   function remove(id) {
     const tab = tabs.get(id);
     if (!tab) return;
+    if (id === active) officeTask?.abort();
     tabs.delete(id);
     if (id === active) {
       active = undefined;
@@ -160,6 +163,33 @@ function createBrowser(win, base, workspace) {
       const trusted = event => event.senderFrame === guest.mainFrame && guest.getURL() === origin + officePath;
       guest.ipc.handle('office-open-file', (event, id) =>
         trusted(event) && uuid.test(id) && openOffice('file', id));
+      guest.ipc.handle('office-agent', async (event, goal, selection, key) => {
+        if (!trusted(event) || !visible || active !== id || officeTask || !officePath.startsWith('/office/file/')
+          || typeof goal !== 'string' || !goal.trim() || goal.length > 1000 || typeof key !== 'string' || key.length > 160
+          || typeof selection !== 'string' || !selection.trim() || selection.length > 16000) throw new Error('Office task unavailable.');
+        const controller = new AbortController();
+        officeTask = controller;
+        try {
+          const fileId = officePath.slice('/office/file/'.length);
+          const authorized = async () => {
+            const response = await owner.session.fetch(origin + '/v1/assets/' + fileId + '/office-session?mode=edit',
+              { credentials: 'include', cache: 'no-store', redirect: 'error', signal: AbortSignal.any([controller.signal, AbortSignal.timeout(6000)]) });
+            if (!response.ok) {
+              await response.body?.cancel();
+              throw new Error('Editing access changed.');
+            }
+            const { config } = await response.json();
+            if (config?.document?.key !== key || config.editorConfig?.mode !== 'edit' || config.editorConfig.user?.id !== currentActor
+              || !trusted(event) || active !== id || !visible || controller.signal.aborted) throw new Error('Editing access changed.');
+          };
+          await authorized();
+          const directory = app.isPackaged ? join(process.resourcesPath, 'runner') : join(__dirname, '../../dist/runner');
+          const result = await runOfficeTask(goal, selection, controller.signal, join(directory, 'office-mcp.mjs'));
+          await authorized();
+          return result;
+        } finally { if (officeTask === controller) officeTask = undefined; }
+      });
+      guest.ipc.on('office-agent-cancel', event => { if (trusted(event) && active === id) officeTask?.abort(); });
       guest.ipc.on('office-close-ready', (event, ready) => { if (trusted(event)) tab.closeReady = ready === true; });
       guest.ipc.on('office-closed', event => { if (trusted(event)) remove(id); });
     }

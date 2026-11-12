@@ -152,4 +152,67 @@ test('members preview all Office formats, co-edit a shared document and reopen t
   await page.getByRole('button',{name:'Open Runbook.docx',exact:true}).click();
   await expect(page.getByText('Viewing · Version 2')).toBeVisible();
   await expect(page.getByRole('region',{name:'Office document viewer'})).toHaveAttribute('aria-busy','false',{timeout:45000});
+  // Exercise the desktop document route with a deterministic draft. The actual
+  // editor, plugin, cursor label, permission check on session open and saves are real.
+  let finishDraft: ((result: { replacement: string; message: string }) => void) | undefined;
+  let selectedText = '';
+  await page.exposeFunction('officeTestDraft', (_goal: string, selection: string) => {
+    selectedText = selection;
+    return new Promise(resolve => { finishDraft = resolve; });
+  });
+  await page.addInitScript(`if (window === window.top) window.spaceOffice = {
+    ask: (goal, text) => window.officeTestDraft(goal, text),
+    openFile: async () => false,
+    onClose: handler => {
+      window.closeOfficeTestTab = () => handler(() => location.replace('about:blank'));
+      return () => { delete window.closeOfficeTestTab; };
+    }
+  };`);
+  await page.goto(web+'/office/file/'+assetId);
+  await page.getByRole('button',{name:'Edit', exact:true}).click();
+  await expect(page.getByRole('region',{name:'Office document editor'})).toHaveAttribute('aria-busy','false',{timeout:45000});
+  const editorFrame = page.frames().find(f=>f.url().includes('/documenteditor/'))!;
+  const overlay = editorFrame.locator('#id_viewer_overlay');
+  const selectLine = async () => {
+    await overlay.click({position:{x:260,y:160}});
+    await page.keyboard.press('Control+Home');
+    await page.keyboard.press('Shift+End');
+  };
+  await selectLine();
+  await page.getByRole('button',{name:'Ask Space AI'}).click();
+  await page.getByRole('textbox',{name:'Ask Space AI about the selection'}).fill('Rewrite this text.');
+  await page.getByRole('button',{name:'Send',exact:true}).click();
+  await expect.poll(()=>Boolean(finishDraft)).toBe(true);
+  assert.ok(selectedText.trim());
+  await overlay.click({position:{x:270,y:170}});
+  finishDraft!({replacement:'ConflictMustNotApply',message:'Draft ready.'});
+  await expect(page.getByRole('textbox',{name:'Proposed replacement'})).toHaveValue('ConflictMustNotApply');
+  const documentHtml = () => editorFrame.evaluate(() =>
+    (window as unknown as {Asc:{editor:{pluginMethod_GetFileHTML():string}}}).Asc.editor.pluginMethod_GetFileHTML());
+  assert.ok(!(await documentHtml()).includes('ConflictMustNotApply'));
+  finishDraft = undefined;
+  await selectLine();
+  await page.getByRole('button',{name:'Send',exact:true}).click();
+  await expect.poll(()=>Boolean(finishDraft)).toBe(true);
+  finishDraft!({replacement:'SpaceAgentApplied',message:'Draft ready.'});
+  const label = editorFrame.frameLocator('iframe[src*="/space-agent/index.html"]').getByText('Space AI',{exact:true});
+  await expect(label).toBeVisible();
+  await expect(page.getByText('Edited the selection.')).toBeVisible();
+  await expect(label).toBeHidden();
+  const editedText = await documentHtml();
+  assert.ok(editedText.includes('SpaceAgentApplied'));
+  assert.ok(!editedText.includes('ConflictMustNotApply'));
+  await expect(page.getByText('Changes are saved to Space when the last editor closes the document.')).toBeVisible({timeout:30000});
+  await page.evaluate('window.closeOfficeTestTab()');
+  await page.waitForURL('about:blank');
+  await expect.poll(async()=> (await (await context.request.get(assetUrl+'/office-session')).json()).revision,
+    {timeout:60000, intervals:[1000,2000]}).toBe(2);
+  await page.goto(web+'/office/file/'+assetId);
+  await expect(page.getByRole('region',{name:'Office document viewer'})).toHaveAttribute('aria-busy','false',{timeout:45000});
+  const savedFrame = page.frames().find(f=>f.url().includes('/documenteditor/'))!;
+  const saved = await savedFrame.evaluate(() =>
+    (window as unknown as {Asc:{editor:{pluginMethod_GetFileHTML():string}}}).Asc.editor.pluginMethod_GetFileHTML().replace(/<[^>]+>/g,''));
+  assert.ok(saved.includes('SpaceAgentApplied'));
+  assert.ok(!saved.includes(selectedText.trim()), 'the saved selection was replaced');
+
 });

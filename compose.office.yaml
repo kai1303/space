@@ -1,6 +1,8 @@
 services:
   onlyoffice:
     image: onlyoffice/documentserver:10.0.0.1
+    volumes:
+      - ./deploy/onlyoffice/space-agent:/var/www/onlyoffice/documentserver/sdkjs-plugins/space-agent:ro
     ports:
       - "127.0.0.1:58080:80"
     environment:

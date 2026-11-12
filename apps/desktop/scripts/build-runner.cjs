@@ -7,8 +7,8 @@ const destination = join(root, 'dist', 'runner');
 async function buildRunner() {
   await mkdir(destination, { recursive: true });
   await build({
-    entryPoints: [join(root, 'runner/runtime.mjs')], bundle: true, platform: 'node', format: 'esm',
-    target: 'node24', outfile: join(destination, 'runtime.mjs'),
+    entryPoints: ['runtime', 'office-mcp'].map(name => join(root, 'runner', name + '.mjs')), bundle: true, platform: 'node', format: 'esm',
+    target: 'node24', outdir: destination, outExtension: { '.js': '.mjs' },
     // Resolve workspace contracts from source so a clean checkout builds directly.
     alias: { '@space/contracts': join(root, '../..', 'packages/contracts/index.ts') },
     banner: { js: "import {createRequire as createNodeRequire} from 'node:module'; const require = createNodeRequire(import.meta.url);" },

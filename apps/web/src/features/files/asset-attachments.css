@@ -25,3 +25,7 @@
 .asset-viewer:has(.asset-office-preview)>.asset-viewer-toolbar>a,
 .asset-viewer--single:has(.asset-office-preview)>.asset-viewer-toolbar{display:none}
 .asset-office-actions button[aria-pressed=true]{color:var(--sp-accent)}
+
+.office-agent-form { display:flex; flex-wrap:wrap; align-items:center; gap:6px; max-width:100%; }
+.office-agent-form input { flex:1; min-width:12ch; }
+.office-agent-form output:not(:empty), .office-agent-form textarea { flex-basis:100%; white-space:pre-wrap; overflow-wrap:anywhere; }

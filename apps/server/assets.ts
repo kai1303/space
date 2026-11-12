@@ -66,6 +66,7 @@ export function registerAssetRoutes(app: FastifyInstance, assets: AssetStore, st
     const source = access.revision ? officeContentUrl(office, id, access.revision) : await backend.download(access.row.object_key, access.row.name, 'onlyoffice');
     const name = (await assets.pool.query<{display_name:string}>('SELECT display_name FROM users WHERE id=$1', [r.actorId])).rows[0]?.display_name;
     const session = await officeSession(office, id, access.row.name, preview.fileType, source, {
+      selectionAgent: r.headers['x-space-office-agent'] === 'selection',
       revision: access.revision, epoch: access.epoch, edit: editing, actor: r.actorId, name: name ?? 'Member', dark: r.headers['x-space-theme'] === 'dark',
     });
     reply.header('cache-control', 'private, no-store');
