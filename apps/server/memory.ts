@@ -7,7 +7,6 @@ import type { MemoryProvider } from '@space/core/memory';
 import { MemoryStore, type MemoryChannel } from '@space/postgres/memory';
 import { readThreadContext } from '@space/postgres/thread-context';
 import { readChannelMemory, readThreadMemory, readSessionMemoryForPerson } from '@space/postgres/layered-memory';
-import { sql } from 'drizzle-orm';
 import { MarkdownMemoryProvider } from './markdown-memory.js';
 
 export type MemoryOptions = { directory?: string; providers?: MemoryProvider[] };
