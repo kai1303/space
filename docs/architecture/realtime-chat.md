@@ -95,10 +95,7 @@ A root message creates a thread. Replies reference a thread in the same channel.
 Channel message pages contain only thread roots; replies and agent activity appear in the thread panel.
 Message payloads include `thread_root_id` and the thread's `reply_count`, so channel reply counts remain correct across pagination and duplicate replay.
 Retries reuse the original client message ID; conflicting content returns 409.
-The UI preserves a failed draft and its retry ID within the mounted composer.
-Unsent drafts survive in-app channel/workspace/thread navigation but are not persisted across reload.
-Acknowledged sends clear the matching draft even after navigation, while preserving newer edits.
-A send finishing in the background preserves focus in another input.
+The composer clears after its local IndexedDB transaction commits. Channel messages immediately use the normal message row and entrance animation. The signed-in workspace sends queued messages in the background, including after changing channels. Startup and connection recovery resume pending sends under their original IDs. The queue is scoped to the account and workspace, and the socket verifies the expected sender before posting. A matching acknowledgment, realtime event, or history record clears the outbox entry. Delivery errors expose Retry and Delete on the message. A storage error leaves the draft in the composer.
 
 ## Resource updates without browser polling
 
@@ -190,7 +187,7 @@ Channel and thread views independently load near the top or bottom. TanStack Vir
 measures variable-height rows and preserves the visible message on prepends. Each view
 retains at most 500 messages, evicts the far end when paging, and can fetch evicted
 messages again. Live messages follow the viewport only when it is at the bottom;
-otherwise the reader keeps their position. A successful own send returns its channel or thread view to the latest messages, including when an older-page request is still pending. The acknowledgment supplies the saved message without waiting for socket delivery. A historical window offers **Jump to latest**.
+otherwise the reader keeps their position. Sending a channel message scrolls to the latest messages at local acceptance. Its acknowledgment reconciles the same row. A thread reply returns the thread to the latest messages on successful delivery. The acknowledgment supplies the saved message without waiting for socket delivery. A historical window offers **Jump to latest**.
 Search covers the currently retained messages. Initial network failures expose a retry;
 revocation clears cached history and ignores in-flight responses.
 

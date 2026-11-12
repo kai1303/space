@@ -42,9 +42,11 @@ before(async () => {
       if (req.url === '/api/embed') { calls.embed++; res.end(JSON.stringify({ embeddings: input.input.map(() => Array.from({ length: 384 }, () => 0.3)) })); return; }
       if (req.url === '/api/chat') {
         calls.chat++;
-        const data = JSON.parse(input.messages[1].content) as { messages: { id: string }[] };
+        const data = JSON.parse(input.messages[1].content) as { messages: { id: string; text: string }[] };
+        const latest = data.messages.at(-1)!;
+        const fact = latest.text.startsWith('Refund') ? 'Refund the second charge.' : 'Charges are deduped on the idempotency key.';
         res.end(JSON.stringify({ message: { content: JSON.stringify({ topics: [{ name: 'checkout retries' }],
-          facts: [{ text: 'Charges are deduped on the idempotency key.', kind: 'decision', topic: 'checkout retries', message_ids: [data.messages.at(-1)!.id] }] }) } }));
+          facts: [{ text: fact, kind: 'decision', topic: 'checkout retries', message_ids: [latest.id] }] }) } }));
         return;
       }
       res.statusCode = 404; res.end('{}');
@@ -121,7 +123,7 @@ test('a message reaches the real worker through CDC and NATS, and the worker wri
     await pool!.query("UPDATE memory_extract_threads SET available_at = now() + interval '1 second', last_run_at = now() - interval '10 minutes' WHERE thread_id=$1", [root.thread_id]);
     await until(async () => calls.chat === 2, 30000);
     await until(async () => (await graph!.query('SELECT 1 FROM kb.m_fact_evidence e JOIN kb.m_facts f ON f.id=e.fact_id WHERE f.thread_id=$1 AND e.message_id=$2', [root.thread_id, more.id])).rowCount === 1, 15000);
-    assert.equal((await facts()).length, 1, 'a newer run replaces the thread facts');
+    assert.deepEqual((await facts()).map(row => row.text).sort(), ['Charges are deduped on the idempotency key.', 'Refund the second charge.']);
   } finally {
     await graph!.query('DELETE FROM kb.m_channels WHERE id=$1', [a.channel_id]);
   }

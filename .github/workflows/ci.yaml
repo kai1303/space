@@ -53,7 +53,7 @@ jobs:
         run: |
           docker exec "$POSTGRES_CONTAINER" psql -U postgres -d workplace_test -c "ALTER SYSTEM SET wal_level='logical'"
           docker exec "$POSTGRES_CONTAINER" psql -U postgres -d workplace_test -c "ALTER SYSTEM SET max_replication_slots=20"
-          # Four integration workers can drop their partitioned test schemas concurrently.
+          # Dropping a partitioned test schema touches its tables and indexes in one transaction.
           docker exec "$POSTGRES_CONTAINER" psql -U postgres -d workplace_test -c "ALTER SYSTEM SET max_locks_per_transaction=256"
           docker restart "$POSTGRES_CONTAINER"
           docker run -d --name space-typesense --tmpfs /data -p 58108:8108 typesense/typesense:30.2 --data-dir=/data --api-key=space_local_search

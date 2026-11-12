@@ -9,6 +9,9 @@ import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/cli
 import { bootstrap } from '@space/postgres/bootstrap';
 import { migrate } from '@space/postgres/migrate';
 import { PostgresStore } from '@space/postgres/store';
+import { readThreadContext, readThreadMessages } from '@space/postgres/thread-context';
+import { MemoryStore } from '@space/postgres/memory';
+import { addNote, listNoteTitles, removeNote, saveNoteByTitle, updateNote } from '@space/postgres/knowledge-notes';
 import { createApi } from '@space/server/api';
 import { readChannelMemory, readThreadMemory, readSessionMemory, useMemoryIndex } from '@space/postgres/layered-memory';
 
@@ -106,6 +109,75 @@ test('thread memory lists sessions; session memory shows the agent turns and che
   await assert.rejects(readSessionMemory(db(), a.channel_id, session, a.installation_id), (e: any) => e.code === 'session_ended');
 });
 
+test('shared memory uses only channel messages for summaries, paging, lookups and task delivery', async () => {
+  const a = await bootstrap(pool);
+  const other = { ...a, installation_id: randomUUID() };
+  await pool.query(`INSERT INTO agent_installations(id,workspace_id,owner_id,definition_id,connector_id)
+    SELECT $1,workspace_id,owner_id,definition_id,connector_id FROM agent_installations WHERE id=$2`, [other.installation_id, a.installation_id]);
+  const session = await addSession(other, a.thread_id);
+  const first = await sessionTurn(other, a.thread_id, session, 'Session entry');
+  const shared = await post(a.owner_token, a.channel_id, 'Shared update', a.thread_id);
+  await sessionTurn(other, a.thread_id, session, 'Session follow-up');
+  const deleted = await post(a.owner_token, a.channel_id, 'Removed', a.thread_id);
+  const retained = await post(a.owner_token, a.channel_id, 'Expired', a.thread_id);
+  const removal = await app.inject({ method: 'DELETE', url: `/v1/channels/${a.channel_id}/messages/${deleted.id}`,
+    headers: { authorization: `Bearer ${a.owner_token}` } });
+  assert.ok(removal.statusCode < 300, removal.body);
+  await pool.query("UPDATE messages SET retained_at=now(), text='Message removed by workspace retention.', document=NULL WHERE channel_id=$1 AND id=$2", [a.channel_id, retained.id]);
+  const memory = new MemoryStore(pool);
+  const context = await readThreadContext(db(), a.channel_id, a.thread_id);
+  assert.equal(context.root?.id, shared.id);
+  assert.equal(context.through_sequence, shared.sequence);
+  assert.deepEqual(context.messages.map(m => m.id), [shared.id]);
+  const page = await readThreadMessages(db(), a.channel_id, a.thread_id, '0', 1);
+  assert.deepEqual(page.messages.map(m => m.id), [shared.id]);
+  assert.equal(page.has_more, false);
+  assert.deepEqual((await memory.context(db(), a, '0', 1)).messages.map(m => m.id), [shared.id]);
+  assert.equal((await memory.message(db(), a, shared.id)).text, 'Shared update');
+  await assert.rejects(memory.message(db(), a, first.id), { status: 404 });
+
+  assert.equal((await readChannelMemory(db(), a.channel_id)).nodes[0]?.summary, 'Shared update');
+  useMemoryIndex({ related: async () => [first.id] });
+  try {
+    assert.deepEqual((await readChannelMemory(db(), a.channel_id, undefined, 1, 'entry')).nodes, []);
+  } finally { useMemoryIndex(undefined); }
+
+  await pool.query('UPDATE channels SET memory_enabled=true WHERE id=$1', [a.channel_id]);
+  const visible = await pool.query('SELECT id FROM memory_visible_messages($1,$2,$3,$4::uuid[])', [a.workspace_id, a.owner_id, a.channel_id, [first.id, shared.id]]);
+  assert.deepEqual(visible.rows.map(m => m.id), [shared.id]);
+
+  const store = new PostgresStore(pool);
+  const task = await store.createTask(a.owner_id, { workspace_id: a.workspace_id, thread_id: a.thread_id, installation_id: a.installation_id, goal: 'Read thread', skill: 'demo.echo' }, randomUUID());
+  await store.approveTask(a.owner_id, task.id);
+  const { rows: [outbox] } = await pool.query('SELECT id FROM outbox WHERE task_id=$1', [task.id]);
+  const delivery = await store.claimDelivery(undefined, outbox.id);
+  assert.ok(delivery);
+  const prepared = (await store.prepareDelivery(delivery))?.request.context;
+  assert.deepEqual(prepared?.messages.map(m => m.id), [shared.id]);
+  assert.deepEqual(prepared?.working_memory?.messages.map(m => m.id), [shared.id]);
+});
+
+test('channel knowledge requires live shared evidence on writes and when showing existing notes', async () => {
+  const a = await bootstrap(pool);
+  const shared = await post(a.owner_token, a.channel_id, 'Shared update', a.thread_id);
+  const session = await addSession(a, a.thread_id);
+  const turn = await sessionTurn(a, a.thread_id, session, 'Session entry');
+  const draft = { kind: 'fact' as const, title: 'A note', content: 'Summary', message_ids: [shared.id, turn.id] };
+  const producer = { id: a.installation_id, name: 'Agent' };
+  const scope = { workspaceId: a.workspace_id, channelId: a.channel_id };
+  await assert.rejects(addNote(db(), scope, randomUUID(), draft, producer), { code: 'foreign_evidence' });
+  await assert.rejects(saveNoteByTitle(db(), scope, draft, producer), { code: 'foreign_evidence' });
+  const id = randomUUID();
+  await pool.query('UPDATE channels SET knowledge_enabled=true WHERE id=$1', [a.channel_id]);
+  await pool.query(`INSERT INTO knowledge_notes(id,workspace_id,channel_id,kind,title,content,evidence,producer_id,producer_name)
+    VALUES($1,$2,$3,'fact','Imported note','Summary',$4::uuid[],'p','Agent')`, [id, a.workspace_id, a.channel_id, draft.message_ids]);
+  assert.deepEqual((await listNoteTitles(db(), a.channel_id)).notes, []);
+  assert.equal((await pool.query('SELECT id FROM knowledge_note_sources WHERE id=$1', [id])).rowCount, 0);
+  assert.equal((await pool.query('SELECT id FROM knowledge_visible_notes($1,$2,$3,$4::uuid[])', [a.workspace_id, a.owner_id, a.channel_id, [id]])).rowCount, 0);
+  await assert.rejects(updateNote(db(), a.channel_id, id, 1, { title: 'Edited' }, producer), { code: 'note_not_found' });
+  await assert.rejects(removeNote(db(), a.channel_id, id, 1, producer), { code: 'note_not_found' });
+});
+
 test('the Graph RAG store ranks by meaning but can only name messages of the scope that was asked for', async () => {
   const a = await bootstrap(pool), b = await bootstrap(pool);
   const root = await post(a.owner_token, a.channel_id, 'Start the incident review');
@@ -128,11 +200,13 @@ test('the Graph RAG store ranks by meaning but can only name messages of the sco
     assert.deepEqual(fallback.related, [], 'memory still reads when the store is down');
     assert.ok(fallback.context.root);
 
-    const fact = (id: string, ids: string[]) => ({ id, kind: 'decision' as const, text: `Fact ${id}`, topic: 'billing', message_ids: ids });
+    const fact = (id: string, ids: string[]) => ({ id, kind: 'decision' as const, text: `Fact ${id}`, topic: 'billing', message_ids: ids, evidence_revisions: Object.fromEntries(ids.map(id => [id, '1'])) });
     useMemoryIndex({ related: async () => [], threadKnowledge: async () => ({ topics: ['billing'], facts: [fact('ok', [early.id]), fact('mixed', [early.id, foreign.id]), fact('empty', [])] }) });
     const knowing = await readThreadMemory(db(), a.channel_id, root.thread_id);
     assert.deepEqual(knowing.topics, ['billing']);
     assert.deepEqual(knowing.facts.map(f => f.id), ['ok'], 'a fact with any evidence outside this thread is hidden');
+    await pool.query("UPDATE messages SET text='Corrected decision' WHERE channel_id=$1 AND id=$2", [a.channel_id, early.id]);
+    assert.deepEqual((await readThreadMemory(db(), a.channel_id, root.thread_id)).facts, [], 'an edit hides the prior fact before CDC runs');
   } finally { useMemoryIndex(undefined); }
 });
 

@@ -100,14 +100,33 @@ function WorkspaceView({ profile: initialProfile, attachments, address, onOpenSe
     if (!workspace) return;
     const outbox = getMessageOutbox(profile.id, workspace);
     const realtime = acquireRealtime();
-    const resume = () => outbox.resumeDeletes();
+    let active = true, syncing = false, wake = false, recover = false;
+    async function sync(reconnect: boolean) {
+      wake = true;
+      recover ||= reconnect;
+      if (syncing) return;
+      syncing = true;
+      try {
+        while (wake && active) {
+          wake = false;
+          const retryUnconfirmed = recover;
+          recover = false;
+          await outbox.resumeSends(realtime.socket, () => active, retryUnconfirmed);
+          if (active && retryUnconfirmed) outbox.resumeDeletes();
+        }
+      } catch (reason) {
+        if (active) setError(errorText(reason));
+      } finally { syncing = false; }
+    }
+    const stop = outbox.onQueued(() => { void sync(false); });
+    const resume = () => { void sync(true); };
     resume();
     realtime.on('connect', resume);
     realtime.on('focus', resume);
     window.addEventListener('online', resume);
-    return () => { window.removeEventListener('online', resume); realtime.release(); };
+    return () => { active = false; stop(); window.removeEventListener('online', resume); realtime.release(); };
   }, [profile.id, workspace]);
-  function forgetChannel(id: string) { pageViews.rooms.delete(id); forgetChannelDrafts(id); getMessageOutbox(profile.id, workspace).purgeChannel(id); }
+  function forgetChannel(id: string) { pageViews.rooms.delete(id); forgetChannelDrafts(id); void getMessageOutbox(profile.id, workspace).purgeChannel(id).catch(reason => setError(errorText(reason))); }
   const [loaded, setLoaded] = useState(false), [loadAttempt, setLoadAttempt] = useState(0);
   async function addWorkspace(name: string) {
     const created = await request<Workspace>('/workspaces', { name: name.trim() });

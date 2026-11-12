@@ -17,21 +17,21 @@ export function contextMessage(row: ThreadContextMessage & { author_id: string; 
 }
 export const messageColumns = sql`id, sequence::text, left(text,1000) AS text, length(text) AS text_length,
   coalesce(user_id,installation_id,webhook_id) AS author_id, author_type, attachments`;
+const sharedMessage = sql`agent_session_id IS NULL AND deleted_at IS NULL AND retained_at IS NULL`;
 export type MessageRow = Parameters<typeof contextMessage>[0];
-export async function readThreadContext(c: DbSession, channelId: string, threadId: string, through?: string, options: { includeSessions?: boolean } = {}): Promise<ThreadContext> {
+export async function readThreadContext(c: DbSession, channelId: string, threadId: string, through?: string): Promise<ThreadContext> {
   await assertContextThread(c, channelId, threadId);
-  const visible = options.includeSessions === false ? sql`AND agent_session_id IS NULL` : sql``;
-  const [latest] = await rows<{ sequence: string }>(c, sql`SELECT sequence::text FROM messages WHERE channel_id=${channelId} AND thread_id=${threadId} ${visible} ORDER BY messages.sequence DESC LIMIT 1`);
+  const [latest] = await rows<{ sequence: string }>(c, sql`SELECT sequence::text FROM messages WHERE channel_id=${channelId} AND thread_id=${threadId} AND ${sharedMessage} ORDER BY messages.sequence DESC LIMIT 1`);
   const watermark = through === undefined ? latest?.sequence ?? '0' : chatCursor(through);
-  const recent = await rows<MessageRow>(c, sql`SELECT ${messageColumns} FROM messages WHERE channel_id=${channelId} AND thread_id=${threadId} ${visible} AND sequence<=${watermark}::bigint ORDER BY messages.sequence DESC LIMIT 17`);
-  const [root] = await rows<MessageRow>(c, sql`SELECT ${messageColumns} FROM messages WHERE channel_id=${channelId} AND thread_id=${threadId} ${visible} AND sequence<=${watermark}::bigint ORDER BY messages.sequence LIMIT 1`);
+  const recent = await rows<MessageRow>(c, sql`SELECT ${messageColumns} FROM messages WHERE channel_id=${channelId} AND thread_id=${threadId} AND ${sharedMessage} AND sequence<=${watermark}::bigint ORDER BY messages.sequence DESC LIMIT 17`);
+  const [root] = await rows<MessageRow>(c, sql`SELECT ${messageColumns} FROM messages WHERE channel_id=${channelId} AND thread_id=${threadId} AND ${sharedMessage} AND sequence<=${watermark}::bigint ORDER BY messages.sequence LIMIT 1`);
   return { thread_id: threadId, through_sequence: watermark, root: root ? contextMessage(root) : null,
     messages: recent.slice(0,16).reverse().map(contextMessage), has_earlier_messages: recent.length > 16 };
 }
 export async function readThreadMessages(c: DbSession, channelId: string, threadId: string, after = '0', limit = 20) {
   await assertContextThread(c, channelId, threadId);
   const cursor = chatCursor(after);
-  const found = await rows<MessageRow>(c, sql`SELECT ${messageColumns} FROM messages WHERE channel_id=${channelId} AND thread_id=${threadId} AND sequence>${cursor}::bigint ORDER BY messages.sequence LIMIT ${limit+1}`);
+  const found = await rows<MessageRow>(c, sql`SELECT ${messageColumns} FROM messages WHERE channel_id=${channelId} AND thread_id=${threadId} AND ${sharedMessage} AND sequence>${cursor}::bigint ORDER BY messages.sequence LIMIT ${limit+1}`);
   const page = found.slice(0,limit);
   return { messages: page.map(contextMessage), cursor: page.at(-1)?.sequence ?? cursor, has_more: found.length > limit };
 }

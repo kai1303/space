@@ -351,7 +351,7 @@ export class PostgresStore implements DeliveryStore {
         if (memory) {
           const [definition] = (await c.execute<{ name: string }>(sql`SELECT d.name FROM agent_installations i JOIN agent_definitions d ON d.id=i.definition_id WHERE i.id=${installationId}`)).rows;
           if (memory.notes?.length) {
-            const [human] = (await c.execute<{ id: string }>(sql`SELECT id FROM messages WHERE channel_id=${thread.channel_id} AND thread_id=${task.thread_id} AND author_type='human' AND deleted_at IS NULL ORDER BY sequence DESC LIMIT 1`)).rows;
+            const [human] = (await c.execute<{ id: string }>(sql`SELECT id FROM messages WHERE channel_id=${thread.channel_id} AND thread_id=${task.thread_id} AND author_type='human' AND agent_session_id IS NULL AND deleted_at IS NULL AND retained_at IS NULL ORDER BY sequence DESC LIMIT 1`)).rows;
             const notes = await saveTurnNotes(c, { channelId: thread.channel_id, installationId, producer: { id: installationId, name: definition?.name ?? 'Agent' }, notes: memory.notes, fallbackMessageId: human?.id ?? null });
             for (const outcome of notes) traceTurn(c, task.id, 'note', outcome);
           }

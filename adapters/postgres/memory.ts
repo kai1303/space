@@ -1,6 +1,6 @@
 import type { Pool } from 'pg';
 import { randomBytes, randomUUID } from 'node:crypto';
-import { and, eq, gt, sql } from 'drizzle-orm';
+import { and, eq, gt, isNull, sql } from 'drizzle-orm';
 import { AppError, chatCursor, parseMemoryConnection, parseAgentMemoryAccess, uuid, type AgentMemoryPermission, type AgentMemoryAccess, type Task, type ChatMessage, type MemoryConnection, type MemoryScope } from '@space/contracts';
 import { database, type DbSession } from './database.js';
 import { hasChannelAccess } from './access.js';
@@ -172,17 +172,19 @@ export class MemoryStore {
   }
   async context(c: DbSession, channel: MemoryScope, after = '0', limit = 20) {
     const cursor = chatCursor(after);
-    const rows = await c.select({ sequence: s.channelEvents.sequence, payload: s.channelEvents.payload }).from(s.channelEvents)
-      .where(and(eq(s.channelEvents.channel_id, channel.channel_id), eq(s.channelEvents.type, 'message.created'), gt(s.channelEvents.sequence, BigInt(cursor))))
-      .orderBy(s.channelEvents.sequence).limit(limit + 1);
+    const rows = await c.select({ sequence: s.messages.sequence, id: s.messages.id, thread_id: s.messages.thread_id, text: s.messages.text,
+      attachments: s.messages.attachments, author: sql<ChatMessage['author']>`${s.channelEvents.payload}->'author'`,
+      created_at: sql<string>`${s.channelEvents.payload}->>'created_at'` }).from(s.messages)
+      .innerJoin(s.channelEvents, and(eq(s.channelEvents.channel_id, s.messages.channel_id), eq(s.channelEvents.sequence, s.messages.sequence)))
+      .where(and(eq(s.messages.workspace_id, channel.workspace_id), eq(s.messages.channel_id, channel.channel_id), isNull(s.messages.agent_session_id), isNull(s.messages.deleted_at),
+        sql`messages.retained_at IS NULL`, gt(s.messages.sequence, BigInt(cursor)), eq(s.channelEvents.type, 'message.created')))
+      .orderBy(s.messages.sequence).limit(limit + 1);
     const items = rows.slice(0, limit);
-    return { messages: items.map(row => {
-      const message = row.payload as ChatMessage;
-      return { id: message.id, thread_id: message.thread_id, text: message.text, author: message.author, created_at: message.created_at, attachments: message.attachments ?? [] };
-    }), cursor: items.at(-1)?.sequence.toString() ?? cursor, has_more: rows.length > limit };
+    return { messages: items.map(({ sequence: _cursor, ...message }) => message), cursor: items.at(-1)?.sequence.toString() ?? cursor, has_more: rows.length > limit };
   }
   async message(c: DbSession, channel: MemoryScope, messageId: string): Promise<ChatMessage> {
-    const [row] = await c.select().from(s.messages).where(and(eq(s.messages.id, uuid(messageId)), eq(s.messages.channel_id, channel.channel_id)));
+    const [row] = await c.select().from(s.messages).where(and(eq(s.messages.id, uuid(messageId)), eq(s.messages.channel_id, channel.channel_id),
+      isNull(s.messages.agent_session_id), isNull(s.messages.deleted_at), sql`messages.retained_at IS NULL`));
     if (!row) throw new AppError(404, 'not_found');
     let name: string;
     if (row.workflow_name) name = row.workflow_name;

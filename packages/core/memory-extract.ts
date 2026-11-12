@@ -16,14 +16,35 @@ const instructions = 'You read a workplace thread and record what it is about. T
   + 'stated only if the messages establish it, each citing 1 to 10 ids of the messages that support it. Prefer later corrections. '
   + 'Reuse an existing topic name when it fits. Do not repeat a known fact unless it changed. Never invent ids, names or facts.';
 
-// Keeps the oldest messages that fit the request budget, so the next run continues from the first one left out.
+function jsonStringPrefix(value: string, budget: number): string {
+  let end = 0;
+  for (const character of value) {
+    // JSON escaping contributes to the budget, and a code point may use two UTF-16 units.
+    budget -= Buffer.byteLength(JSON.stringify(character)) - 2;
+    if (budget < 0) break;
+    end += character.length;
+  }
+  return value.slice(0, end);
+}
+
+// Keep a contiguous prefix. Only the first message may be shortened, so later ones can be retried whole.
 export function fitMessages(messages: ExtractMessage[]): ExtractMessage[] {
   const kept: ExtractMessage[] = [];
-  let bytes = 0;
+  let bytes = 2; // array brackets
   for (const m of messages.slice(0, EXTRACT_LIMITS.messages)) {
-    const size = Buffer.byteLength(JSON.stringify(m));
-    if (bytes + size > EXTRACT_LIMITS.bytes) break;
-    kept.push(m); bytes += size;
+    const size = Buffer.byteLength(JSON.stringify(m)) + (kept.length ? 1 : 0);
+    if (bytes + size <= EXTRACT_LIMITS.bytes) {
+      kept.push(m);
+      bytes += size;
+      continue;
+    }
+    if (kept.length) break;
+    const available = EXTRACT_LIMITS.bytes - Buffer.byteLength(JSON.stringify([{ ...m, speaker: '', text: '' }]));
+    if (available < 0) throw new Error('memory_extract_message_id_too_large');
+    // Even an unusually long speaker label must leave room for message text.
+    const speaker = jsonStringPrefix(m.speaker, Math.floor(available / 2));
+    const textBudget = available - (Buffer.byteLength(JSON.stringify(speaker)) - 2);
+    return [{ ...m, speaker, text: jsonStringPrefix(m.text, textBudget) }];
   }
   return kept;
 }

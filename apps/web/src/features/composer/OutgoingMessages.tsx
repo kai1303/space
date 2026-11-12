@@ -28,7 +28,7 @@ type Props = {
 
 export function useOutgoingMessages({ outbox, profile, channel, thread, history }: Pick<Props, 'outbox' | 'profile' | 'channel' | 'thread' | 'history'>) {
   const entries = useSyncExternalStore(outbox.subscribe, outbox.getSnapshot);
-  useLayoutEffect(() => { outbox.reconcile(history); }, [outbox, history]);
+  useLayoutEffect(() => { void outbox.reconcile(history)?.catch(() => {}); }, [outbox, history, entries]);
   const committed = new Set(history.filter(message => message.author.kind === 'human' && message.author.id === profile.id).map(message => message.client_message_id));
   return entries.filter(entry => entry.channelId === channel && entry.threadId === thread && (!committed.has(entry.id) || entry.status === 'deleting' || entry.status === 'delete_failed'));
 }

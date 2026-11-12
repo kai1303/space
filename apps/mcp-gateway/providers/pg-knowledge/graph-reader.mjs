@@ -16,6 +16,8 @@ import { applyOps, publish, publishNeeded, rebuild, resyncChannel, savedPosition
 const schema = process.env.GRAPH_SOURCE_SCHEMA ?? 'public';
 if (!/^[a-z_][a-z0-9_]*$/.test(schema)) throw new Error('Invalid GRAPH_SOURCE_SCHEMA');
 const slot = ('space_graph_' + schema).slice(0, 63), publication = slot;
+// The legacy space_knowledge reader consumed this same WAL slot. Its LSN cannot certify space_memory.
+const checkpoint = 'space_memory:' + slot;
 const source = createPool(process.env.GRAPH_SOURCE_URL);
 const index = createPool(process.env.GRAPH_INDEX_URL);
 const lookup = sourceLookup(source);
@@ -39,36 +41,40 @@ async function prepare() {
     ${q('knowledge_notes')} (id, workspace_id, channel_id, kind, title, evidence, revision, removed_at),
     ${q('agent_sessions')} (id, workspace_id, origin_thread_id, title, state),
     ${q('knowledge_thread_channels')}`);
-  let { rows: [state] } = await source.query('SELECT wal_status FROM pg_replication_slots WHERE slot_name=$1', [slot]);
+  let { rows: [state] } = await source.query('SELECT wal_status, confirmed_flush_lsn::text AS lsn FROM pg_replication_slots WHERE slot_name=$1', [slot]);
   if (state?.wal_status === 'lost') {
     console.error('Replication slot was lost; rebuilding the graph');
     await source.query('SELECT pg_drop_replication_slot($1)', [slot]);
     state = undefined;
   }
   if (!state) await source.query("SELECT pg_create_logical_replication_slot($1,'pgoutput')", [slot]).catch(error => { if (error.code !== '42710') throw error; });
-  const position = await savedPosition(index, slot);
-  if (!state || !position) {
+  const position = await savedPosition(index, checkpoint);
+  if (!state || !position || lsnToVersion(state.lsn) > lsnToVersion(position)) {
     const { rows: [flush] } = await source.query('SELECT confirmed_flush_lsn::text AS lsn FROM pg_replication_slots WHERE slot_name=$1', [slot]);
-    await rebuild(index, source, lookup, slot, flush.lsn);
+    await rebuild(index, source, checkpoint, flush.lsn);
     console.log('Graph rebuilt from snapshot');
   }
-  confirmed = await savedPosition(index, slot);
+  confirmed = await savedPosition(index, checkpoint);
   saved = lsnToVersion(confirmed);
 }
 
 // Channels whose switches differ from the stored copy need their messages brought in line.
 async function channelsToResync(batch) {
   // A thread-search opt-in or opt-out changes the knowledge flag of every message in that channel.
-  const optIns = batch.filter(c => c.table === 'knowledge_thread_channels').map(c => ({ id: c.row.channel_id, version: lsnToVersion(c.lsn) }));
-  const channels = batch.filter(c => c.table === 'channels' && c.op !== 'delete' && c.row.kind === 'channel');
-  if (!channels.length) return optIns;
-  const { rows } = await index.query('SELECT id, memory_enabled, knowledge_enabled FROM kb.m_channels WHERE id=ANY($1::text[])', [channels.map(c => c.row.id)]);
+  const ids = batch.filter(c => c.table === 'channels').map(c => c.row.id);
+  const rows = ids.length ? (await index.query(
+    'SELECT id, memory_enabled, knowledge_enabled FROM kb.m_channels WHERE id=ANY($1::text[])', [ids])).rows : [];
   const known = new Map(rows.map(r => [r.id, r]));
-  return [...optIns, ...channels.filter(c => {
-    const k = known.get(c.row.id);
-    return k ? k.memory_enabled !== c.row.memory_enabled || k.knowledge_enabled !== c.row.knowledge_enabled
-             : c.row.memory_enabled || c.row.knowledge_enabled;
-  }).map(c => ({ id: c.row.id, version: lsnToVersion(c.lsn) }))];
+  const pending = new Map();
+  for (const { table, op, row, lsn } of batch) {
+    if (table === 'knowledge_thread_channels') pending.set(row.channel_id, lsnToVersion(lsn));
+    if (table !== 'channels' || op === 'delete' || row.kind !== 'channel') continue;
+    const previous = known.get(row.id);
+    if ((previous?.memory_enabled ?? false) !== row.memory_enabled ||
+        (previous?.knowledge_enabled ?? false) !== row.knowledge_enabled) pending.set(row.id, lsnToVersion(lsn));
+    known.set(row.id, row);
+  }
+  return pending;
 }
 
 async function flush(position) {
@@ -76,14 +82,22 @@ async function flush(position) {
   const resync = await channelsToResync(batch);
   await lookup.prefetch(batch);
   // A message that is neither in the source view nor in the store (a direct message, a switched-off channel) needs no write.
-  const absent = [];
-  for (const c of batch) if (c.table === 'messages' && !await lookup.message(c.row.workspace_id, c.row.id)) absent.push(c);
+  const absent = [], threads = new Set();
+  for (const change of batch) {
+    if (change.table !== 'messages') continue;
+    const message = await lookup.message(change.row.workspace_id, change.row.id);
+    if (message) threads.add(message.thread_id);
+    else absent.push(change);
+  }
   const known = absent.length ? new Set((await index.query('SELECT id FROM kb.m_messages WHERE id=ANY($1::text[])', [absent.map(c => c.row.id)])).rows.map(r => r.id)) : new Set();
   const skip = new Set(absent.filter(c => !known.has(c.row.id)));
   const ops = [];
   for (const change of batch) if (!skip.has(change)) ops.push(...await planChange(change, lsnToVersion(change.lsn), lookup));
-  await serial(() => applyOps(index, ops, position ? { slot, lsn: position } : undefined));
-  for (const channel of resync) await serial(() => resyncChannel(index, source, lookup, channel.id, channel.version));
+  // Leave the old flags and checkpoint visible until every page commits. If a page fails, WAL replay
+  // detects the same switch, including in a partial chunk, and repeats its guarded writes.
+  for (const [id, version] of resync) await serial(() => resyncChannel(index, source, lookup, id, version));
+  await serial(() => applyOps(index, ops, position ? { slot: checkpoint, lsn: position } : undefined));
+  if (threads.size || resync.size) await source.query('SELECT wake_memory_extract($1::uuid[], $2::uuid[])', [[...threads], [...resync.keys()]]);
   if (position) { saved = lsnToVersion(position); schedulePublish(); }
 }
 
@@ -91,7 +105,7 @@ async function flush(position) {
 function schedulePublish() {
   clearTimeout(publishTimer);
   publishTimer = setTimeout(() => {
-    publishing = serial(() => publish(index, slot)).catch(fail);
+    publishing = serial(() => publish(index, checkpoint)).catch(fail);
   }, PUBLISH_DELAY_MS);
 }
 
@@ -112,7 +126,9 @@ async function onMessage(replication, lsn, message) {
 function fail(error) { console.error('Memory graph reader stopped:', error.code ?? error.name, error.message); process.exit(1); }
 
 await prepare();
-if (await publishNeeded(index, slot)) await serial(() => publish(index, slot));
+// Recover a crash after a graph commit and before its cross-database wakeup.
+await source.query('SELECT wake_memory_extract(NULL::uuid[])');
+if (await publishNeeded(index, checkpoint)) await serial(() => publish(index, checkpoint));
 const replication = new LogicalReplicationService(
   { connectionString: process.env.GRAPH_REPLICATION_URL, application_name: 'space-graph-reader', keepAlive: true },
   { acknowledge: { auto: false, timeoutSeconds: 0 }, flowControl: { enabled: true } });
@@ -128,7 +144,7 @@ replication.on('data', async (lsn, message) => {
   try { await onMessage(replication, lsn, message); } catch (error) { fail(error); }
 });
 replication.on('error', fail);
-replication.subscribe(new PgoutputPlugin({ protoVersion: 1, publicationNames: [publication] }), slot).catch(fail);
+replication.subscribe(new PgoutputPlugin({ protoVersion: 1, publicationNames: [publication] }), slot, confirmed).catch(fail);
 console.log('Memory graph reader ready');
 for (const name of ['SIGTERM', 'SIGINT']) process.once(name, async () => {
   clearTimeout(publishTimer);

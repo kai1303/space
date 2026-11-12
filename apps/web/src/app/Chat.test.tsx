@@ -1,3 +1,4 @@
+import 'fake-indexeddb/auto';
 import { afterAll, afterEach, beforeAll, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { toast } from '@space/ui/primitives';
@@ -71,9 +72,9 @@ vi.mock('@tanstack/react-virtual', () => ({ useVirtualizer: (options: any) => {
   return {
   getTotalSize: () => options.count * 100 + 88,
   getVirtualItems: () => Array.from({ length: options.count }, (_, index) => ({ index, key: options.getItemKey(index), start: index * 100 + 44 })),
-  measureElement: () => {}, scrollToEnd: () => {}, scrollToIndex: () => {},
+  measureElement: () => {}, scrollToEnd: mocks.scrollToEnd, scrollToIndex: () => {},
 }; } }));
-const mocks = vi.hoisted(() => ({ sockets: [] as any[], sessionId: 'session-a', authPending: false, refetch: vi.fn(), upload: vi.fn(), sendFailures: 0, pendingSend: undefined as undefined | Promise<void>, timelineRenders: 0, channelPost: true, channelReply: true, permissionsError: false, badgeOverride: false, setBadge: undefined as undefined | ((count:number)=>void) }));
+const mocks = vi.hoisted(() => ({ sockets: [] as any[], sessionId: 'session-a', authPending: false, refetch: vi.fn(), upload: vi.fn(), sendFailures: 0, pendingSend: undefined as undefined | Promise<void>, timelineRenders: 0, scrollToEnd: vi.fn(), channelPost: true, channelReply: true, permissionsError: false, badgeOverride: false, setBadge: undefined as undefined | ((count:number)=>void) }));
 const latestChatSocket = () => mocks.sockets.at(-1);
 vi.mock('../shared/api/request.js', async original => {
   const actual = await original<typeof import('../shared/api/request.js')>();
@@ -736,13 +737,13 @@ it('keeps uploads with their channel and thread drafts across navigation, retrie
   await userEvent.click(screen.getByRole('button', { name: 'first', exact: true }));
   await screen.findByRole('textbox', { name: 'Message first' });
   await userEvent.click(await within(screen.getByLabelText('Messages in first')).findByRole('button', { name: 'Retry' }));
+  await waitFor(() => expect(latestChatSocket().requests.filter((r: any) => r.name === 'message.send' && !r.data.thread_id)).toHaveLength(2));
   const reportAttempts = latestChatSocket().requests.filter((r: any) => r.name === 'message.send' && !r.data.thread_id);
   expect(reportAttempts[0]).toBe(firstReportAttempt);
-  expect(reportAttempts).toHaveLength(2);
   expect(reportAttempts[1].data.client_message_id).toBe(reportAttempts[0].data.client_message_id);
   await waitFor(() => expect(latestChatSocket().requests.some((r: any) => r.name === 'message.send' && !r.data.thread_id && r.data.asset_ids[0] === 'report-asset')).toBe(true));
   expect(mocks.upload).toHaveBeenCalledTimes(3);
-  expect(screen.queryByText('report.txt')).toBeNull();
+  await waitFor(() => expect(screen.queryByText('report.txt')).toBeNull());
 }, 15_000);
 it('cancels removed files and clears attachment drafts on authorization loss and session changes', async () => {
   const jobs: { signal: AbortSignal; finish: (asset: any) => void }[] = [];
@@ -1384,6 +1385,19 @@ it.each([false,true])('clears a text-only acknowledged draft after leaving its c
   else await userEvent.click(screen.getByRole('button',{name:'first',exact:true}));
   expect((await screen.findByRole('textbox',{name:inThread?'Message thread':'Message first'})).textContent?.trim()).toBe('');
 });
+it('keeps the channel draft and skips delivery when IndexedDB cannot accept it', async () => {
+  sendReviewChannels();
+  render(<Chat />);
+  const editor = await screen.findByRole('textbox', { name: 'Message first' });
+  await userEvent.type(editor, 'Keep this draft');
+  const write = vi.spyOn(IDBObjectStore.prototype, 'put').mockImplementation(() => { throw new Error('quota'); });
+  try {
+    await userEvent.keyboard('{Enter}');
+    await screen.findByText('Could not send. Your draft is still here. Try again.');
+    expect(editor.textContent?.trim()).toBe('Keep this draft');
+    expect(latestChatSocket().requests.some((r: any) => r.name === 'message.send')).toBe(false);
+  } finally { write.mockRestore(); }
+});
 it.each(['ack', 'realtime'])('keeps an Enter-sent channel message in the same grouped timeline row through %s delivery', async delivery => {
   let acknowledge!: () => void;
   mocks.pendingSend = new Promise<void>(resolve => { acknowledge = resolve; });
@@ -1403,7 +1417,15 @@ it.each(['ack', 'realtime'])('keeps an Enter-sent channel message in the same gr
   const row = pending.closest('[data-index]');
   expect(row).toBeTruthy();
   expect(pending.classList.contains('sp-message--grouped')).toBe(true);
-  const clientId = socket.requests.find((request: any) => request.name === 'message.send').data.client_message_id;
+  expect(editor.textContent?.trim()).toBe('');
+  expect(pending.closest('.chat-outgoing')).toBeNull();
+  mocks.scrollToEnd.mockClear();
+  const request = await waitFor(() => {
+    const sent = socket.requests.find((request: any) => request.name === 'message.send');
+    expect(sent).toBeDefined();
+    return sent;
+  });
+  const clientId = request.data.client_message_id;
   if (delivery === 'realtime') {
     await act(async () => socket.receive('chat.events', { channel_id: 'first', cursor: '2', events: [
       { type: 'message.created', channel_id: 'first', thread_id: saved.thread_id, sequence: '2', occurred_at: saved.created_at, payload: { ...saved, client_message_id: clientId } },
@@ -1411,9 +1433,11 @@ it.each(['ack', 'realtime'])('keeps an Enter-sent channel message in the same gr
   }
   await act(async () => { acknowledge(); await mocks.pendingSend; });
   const confirmed = timeline.getByText(saved.text).closest('article')!;
+  expect(confirmed).toBe(pending);
+  expect(mocks.scrollToEnd).not.toHaveBeenCalled();
   expect(confirmed.closest('[data-index]')).toBe(row);
   expect(confirmed.classList.contains('sp-message--grouped')).toBe(true);
-  expect(confirmed.style.opacity).toBe('1');
+  await waitFor(() => expect(confirmed.style.opacity).toBe('1'));
 });
 
 it.each([false, true])('shows a submission immediately and lets the sender discard a failed row: thread=%s', async inThread => {
@@ -1434,7 +1458,7 @@ it.each([false, true])('shows a submission immediately and lets the sender disca
   await act(async () => { rejectAttempt(); await mocks.pendingSend; });
   await timeline.findByRole('button', { name: 'Retry' });
   await userEvent.click(timeline.getByRole('button', { name: 'Delete', exact: true }));
-  expect(timeline.queryByText('Message with a lost acknowledgement')).toBeNull();
+  await waitFor(() => expect(timeline.queryByText('Message with a lost acknowledgement')).toBeNull());
   expect(editor.textContent).toContain('My next message');
 });
 

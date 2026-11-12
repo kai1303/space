@@ -6,6 +6,8 @@ import { bootstrap } from '@space/postgres/bootstrap';
 import { migrate } from '@space/postgres/migrate';
 import { PostgresStore } from '@space/postgres/store';
 import { createApi } from '@space/server/api';
+import { graphMemoryIndex } from '@space/server/memory-index';
+import { readThreadMemory, useMemoryIndex } from '@space/postgres/layered-memory';
 import { runMemoryExtract } from '@space/postgres/memory-extract';
 
 if (!process.env.TEST_DATABASE_URL) throw new Error('TEST_DATABASE_URL is required');
@@ -81,6 +83,8 @@ test('a run writes topics and facts with evidence, replays change nothing, failu
     assert.equal(Number((await graph.query('SELECT count(*) FROM kb.m_fact_evidence WHERE message_id=$1', [fix.id])).rows[0].count), 0, 'evidence follows its message');
 
     const later = await post(a.owner_token, a.channel_id, 'Also refund the second charge', root.thread_id);
+    await graph.query(`INSERT INTO kb.m_messages(id,workspace_id,thread_id,sequence,revision,created_at,memory,knowledge,body,embedding,version)
+      VALUES($1,$2,$3,$4,1,now(),true,false,$5,$6,1)`, [later.id, a.workspace_id, root.thread_id, later.sequence, later.text, vector]);
     await due(root.thread_id);
     const broken = async () => { throw new Error('model down'); };
     const failed = await runMemoryExtract(pool, graph, broken, embed, root.thread_id);
@@ -109,8 +113,9 @@ test('a burst of events runs the model once: stale deadlines are dropped and one
   await pool.query('UPDATE memory_extract_config SET enabled=true');
   const root = await post(a.owner_token, a.channel_id, 'Retries charge customers twice');
   const deadlines: string[] = [];
+  const messages = [root];
   for (let i = 0; i < 4; i++) {
-    await post(a.owner_token, a.channel_id, `Reply ${i}`, root.thread_id);
+    messages.push(await post(a.owner_token, a.channel_id, `Reply ${i}`, root.thread_id));
     deadlines.push((await pool.query("SELECT payload->>'available_at' AS at FROM event_outbox WHERE kind='memory.extract.ready' AND payload->>'thread_id'=$1 ORDER BY created_at DESC, id DESC LIMIT 1", [root.thread_id])).rows[0].at);
   }
   await pool.query('UPDATE memory_extract_threads SET last_run_at = NULL WHERE thread_id=$1', [root.thread_id]);
@@ -118,8 +123,8 @@ test('a burst of events runs the model once: stale deadlines are dropped and one
   try {
     await graph.query('INSERT INTO kb.m_channels(id,workspace_id,name,is_private,memory_enabled,version) VALUES($1,$2,$3,false,true,1)', [a.channel_id, a.workspace_id, 'general']);
     await graph.query('INSERT INTO kb.m_threads(id,workspace_id,channel_id,version) VALUES($1,$2,$3,1)', [root.thread_id, a.workspace_id, a.channel_id]);
-    await graph.query(`INSERT INTO kb.m_messages(id,workspace_id,thread_id,sequence,revision,created_at,memory,knowledge,body,embedding,version)
-      VALUES($1,$2,$3,$4,1,now(),true,false,$5,$6,1)`, [root.id, a.workspace_id, root.thread_id, root.sequence, root.text, vector]);
+    for (const m of messages) await graph.query(`INSERT INTO kb.m_messages(id,workspace_id,thread_id,sequence,revision,created_at,memory,knowledge,body,embedding,version)
+      VALUES($1,$2,$3,$4,1,now(),true,false,$5,$6,1)`, [m.id, a.workspace_id, root.thread_id, m.sequence, m.text, vector]);
     let calls = 0;
     const model = async (input: { messages: { id: string }[] }) => { calls++; await new Promise(r => setTimeout(r, 200));
       return JSON.stringify({ topics: [{ name: 'retries' }], facts: [{ text: 'Retries double charge.', kind: 'fact', message_ids: [input.messages[0]!.id] }] }); };
@@ -135,6 +140,93 @@ test('a burst of events runs the model once: stale deadlines are dropped and one
     assert.equal(calls, 1, 'one model call');
     assert.equal((await pool.query('SELECT used FROM memory_extract_budget WHERE workspace_id=$1', [a.workspace_id])).rows[0].used, 1, 'one budget unit');
   } finally {
+    await graph.query('DELETE FROM kb.m_channels WHERE id=$1', [a.channel_id]);
+    await graph.end();
+  }
+});
+
+test('extraction waits for indexed revisions, preserves earlier decisions, and refreshes edits at the same sequence', { skip: !process.env.MEMORY_GRAPH_URL }, async () => {
+  const graph = new Pool({ connectionString: process.env.MEMORY_GRAPH_URL });
+  const a = await bootstrap(pool);
+  await pool.query('UPDATE channels SET memory_enabled=true WHERE id=$1', [a.channel_id]);
+  await pool.query('UPDATE memory_extract_config SET enabled=true');
+  const root = await post(a.owner_token, a.channel_id, 'Ship Friday');
+  const thread = root.thread_id;
+  const vector = Array<number>(384).fill(0.25);
+  const indexMessage = (m: typeof root, revision: number) => graph.query(
+    `INSERT INTO kb.m_messages(id,workspace_id,thread_id,sequence,revision,created_at,memory,knowledge,body,embedding,version)
+     VALUES ($1,$2,$3,$4,$5,now(),true,false,$6,$7,$5) ON CONFLICT(id) DO UPDATE SET revision=excluded.revision, body=excluded.body`,
+    [m.id, a.workspace_id, thread, m.sequence, revision, m.text, JSON.stringify(vector)]);
+  let calls = 0;
+  const model = async ({ messages }: { messages: { id: string; text: string }[] }) => {
+    calls++;
+    return { topics: [], facts: messages.filter(m => m.text.startsWith('Ship')).map(m => ({ text: m.text, message_ids: [m.id] })) };
+  };
+  const run = () => runMemoryExtract(pool, graph, model, async texts => texts.map(() => vector), thread);
+  const stored = async () => (await graph.query('SELECT text FROM kb.m_facts WHERE thread_id=$1 ORDER BY text', [thread])).rows.map(r => r.text);
+  try {
+    await due(thread);
+    await run();
+    assert.equal((await state(thread)).done_through, '0', 'missing graph thread must leave Space progress pending');
+    assert.equal(calls, 0, 'waiting for CDC costs no model call');
+    await graph.query('INSERT INTO kb.m_channels(id,workspace_id,name,is_private,memory_enabled,version) VALUES($1,$2,$3,false,true,1)', [a.channel_id, a.workspace_id, 'general']);
+    await graph.query('INSERT INTO kb.m_threads(id,workspace_id,channel_id,version) VALUES($1,$2,$3,1)', [thread, a.workspace_id, a.channel_id]);
+    await indexMessage(root, 1);
+    await pool.query('SELECT wake_memory_extract($1::uuid[])', [[thread]]);
+    assert.equal((await run()).status, 'done');
+    const followup = await post(a.owner_token, a.channel_id, 'Thanks', thread);
+    await indexMessage(followup, 1);
+    await due(thread);
+    assert.equal((await run()).status, 'done');
+    assert.deepEqual(await stored(), ['Ship Friday']);
+    useMemoryIndex(graphMemoryIndex(process.env.MEMORY_GRAPH_URL));
+    const visibleFacts = async () => (await readThreadMemory(new PostgresStore(pool).db, a.channel_id, thread)).facts.map(f => f.text);
+    assert.deepEqual(await visibleFacts(), ['Ship Friday']);
+    await pool.query("UPDATE messages SET text='Ship Monday' WHERE channel_id=$1 AND id=$2", [a.channel_id, root.id]);
+    assert.deepEqual(await visibleFacts(), [], 'Space hides an edited citation before the graph catches up');
+    await due(thread);
+    await run();
+    assert.equal(calls, 2, 'a stale indexed revision must wait for CDC');
+    await indexMessage({ ...root, text: 'Ship Monday' }, 2);
+    await pool.query('SELECT wake_memory_extract($1::uuid[])', [[thread]]);
+    assert.equal((await run()).status, 'done');
+    assert.deepEqual(await stored(), ['Ship Monday']);
+
+    // Replay after the graph committed but before Space saved its watermark.
+    await pool.query("UPDATE memory_extract_threads SET done_through=0,available_at=now() WHERE thread_id=$1", [thread]);
+    assert.equal((await run()).status, 'done');
+    assert.equal(calls, 3, 'a committed extraction is acknowledged without a second model call');
+
+    const long = await post(a.owner_token, a.channel_id, '界'.repeat(5000), thread);
+    const last = await post(a.owner_token, a.channel_id, 'Ship Tuesday too', thread);
+    await indexMessage(long, 1);
+    await indexMessage(last, 1);
+    await due(thread);
+    assert.equal((await run()).status, 'done');
+    assert.equal((await state(thread)).done_through, String(long.sequence));
+    await due(thread);
+    assert.equal((await run()).status, 'done');
+    assert.deepEqual(await stored(), ['Ship Monday', 'Ship Tuesday too']);
+
+    const changed = await post(a.owner_token, a.channel_id, 'Ship Wednesday', thread);
+    await indexMessage(changed, 1);
+    await due(thread);
+    let started!: () => void, release!: () => void;
+    const entered = new Promise<void>(resolve => { started = resolve; });
+    const resume = new Promise<void>(resolve => { release = resolve; });
+    const older = runMemoryExtract(pool, graph, async input => { started(); await resume; return model(input); },
+      async texts => texts.map(() => vector), thread);
+    await entered;
+    try {
+      await pool.query("UPDATE messages SET text='Ship Thursday' WHERE channel_id=$1 AND id=$2", [a.channel_id, changed.id]);
+      await indexMessage({ ...changed, text: 'Ship Thursday' }, 2);
+      await due(thread);
+      assert.equal((await run()).status, 'done');
+    } finally { release(); }
+    assert.equal((await older).status, 'superseded');
+    assert.deepEqual(await stored(), ['Ship Monday', 'Ship Thursday', 'Ship Tuesday too']);
+  } finally {
+    useMemoryIndex(undefined);
     await graph.query('DELETE FROM kb.m_channels WHERE id=$1', [a.channel_id]);
     await graph.end();
   }

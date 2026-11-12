@@ -44,7 +44,7 @@ export async function publishNeeded(index, slot) {
 }
 
 // Builds the pgGraph graph from the tables and records which position it reflects.
-// pgGraph refuses a build while a source write is open, so callers run this one-at-a-time with applyOps.
+// pgGraph refuses a build while a source write is open, so callers run this one-at-a-time with graph writes.
 export async function publish(index, slot) {
   const position = await savedPosition(index, slot);
   if (!position) return;
@@ -52,18 +52,33 @@ export async function publish(index, slot) {
   await index.query('UPDATE kb.graph_position SET published_lsn=$2::pg_lsn WHERE slot=$1 AND published_lsn<$2::pg_lsn', [slot, position]);
 }
 
-// Clears the graph and refills it from one Space snapshot in a single transaction, so readers keep
-// the old graph until the new one is complete. `position` is the slot's confirmed LSN taken after the
-// slot existed; everything the snapshot may have missed is later in the stream.
-export function rebuild(index, source, lookup, slot, position) {
+// Refresh in place so surviving messages retain their extracted facts, evidence and thread progress.
+// A single transaction hides the stale marks and resets the publish watermark only after the full snapshot.
+export function rebuild(index, source, slot, position) {
   return inTransaction(index, async client => {
-    await client.query("SELECT pgcontext.delete_points('kb_memory', ARRAY(SELECT id FROM kb.m_messages))");
-    await client.query("SELECT pgcontext.delete_points('kb_memory_facts', ARRAY(SELECT id FROM kb.m_facts))");
-    await client.query('DELETE FROM kb.m_channels');
-    await client.query('DELETE FROM kb.m_people');
-    await client.query('DELETE FROM kb.m_topics');
+    for (const table of ['m_channels', 'm_sessions', 'm_messages', 'm_knowledge']) {
+      await client.query(`UPDATE kb.${table} SET version=-1`);
+    }
+    await client.query('DELETE FROM kb.m_session_turns');
+    for await (const { changes, lookup } of snapshotPages(source)) {
+      await run(client, await planAll(changes, SNAPSHOT_VERSION, lookup));
+    }
+    // Remove absent messages before their parents, letting the usual delete path clean vectors and counts.
+    let cursor = '';
+    for (;;) {
+      const { rows } = await client.query('SELECT id FROM kb.m_messages WHERE version=-1 AND id>$1 ORDER BY id LIMIT 200', [cursor]);
+      for (const row of rows) await run(client, await planChange({ table: 'messages', op: 'delete', row }, SNAPSHOT_VERSION));
+      if (rows.length < 200) break;
+      cursor = rows.at(-1).id;
+    }
+    for (const table of ['m_knowledge', 'm_sessions', 'm_channels']) await client.query(`DELETE FROM kb.${table} WHERE version=-1`);
+    await client.query(`DELETE FROM kb.m_threads t WHERE NOT EXISTS (SELECT 1 FROM kb.m_messages m WHERE m.thread_id=t.id)
+      AND NOT EXISTS (SELECT 1 FROM kb.m_sessions s WHERE s.thread_id=t.id)
+      AND NOT EXISTS (SELECT 1 FROM kb.m_knowledge_evidence e WHERE e.thread_id=t.id)`);
+    await client.query('DELETE FROM kb.m_people p WHERE NOT EXISTS (SELECT 1 FROM kb.m_messages m WHERE m.author_id=p.id)');
+    await client.query(`DELETE FROM kb.m_topics t WHERE NOT EXISTS (SELECT 1 FROM kb.m_thread_topics l WHERE l.topic_id=t.id)
+      AND NOT EXISTS (SELECT 1 FROM kb.m_facts f WHERE f.topic_id=t.id)`);
     await client.query('DELETE FROM kb.graph_position WHERE slot=$1', [slot]);
-    for await (const page of snapshotPages(source)) await run(client, await planAll(page, SNAPSHOT_VERSION, lookup));
     await client.query('INSERT INTO kb.graph_position(slot,lsn) VALUES($1,$2::pg_lsn)', [slot, position]);
   });
 }

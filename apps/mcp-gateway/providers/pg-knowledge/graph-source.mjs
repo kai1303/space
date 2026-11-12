@@ -65,11 +65,12 @@ export async function* snapshotPages(source) {
   const client = await source.connect();
   try {
     await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
+    const lookup = sourceLookup(client);
     for (const [table, query] of snapshotQueries) {
       await client.query(`DECLARE graph_snapshot NO SCROLL CURSOR FOR ${query}`);
       for (;;) {
         const { rows } = await client.query('FETCH 500 FROM graph_snapshot');
-        if (rows.length) yield rows.map(row => ({ table, op: 'insert', row }));
+        if (rows.length) yield { changes: rows.map(row => ({ table, op: 'insert', row })), lookup };
         if (rows.length < 500) break;
       }
       await client.query('CLOSE graph_snapshot');

@@ -39,6 +39,29 @@ test('fitMessages keeps the oldest prefix inside the request budget', () => {
   const kept = fitMessages(big);
   assert.ok(kept.length < 64 && kept.length > 0);
   assert.equal(kept[0]!.id, 'm0');
-  assert.ok(Buffer.byteLength(JSON.stringify(kept)) <= EXTRACT_LIMITS.bytes + kept.length * 2);
+  assert.ok(Buffer.byteLength(JSON.stringify(kept)) <= EXTRACT_LIMITS.bytes);
   assert.equal(fitMessages(Array.from({ length: 70 }, (_, i) => ({ id: `m${i}`, speaker: 'a', text: 'hi' }))).length, 64);
+});
+
+test('an oversized message advances one position and leaves the next message intact', () => {
+  const oversized = { id: 'm1', speaker: 'Kai', text: '𠮷語"\\\n'.repeat(2500) };
+  const next = { id: 'm2', speaker: 'Kai', text: 'Follow up' };
+  const source = [oversized, next];
+  const batch = fitMessages(source);
+  assert.deepEqual(batch.map(m => m.id), [oversized.id]);
+  const first = batch[0]!;
+  assert.equal(first.speaker, oversized.speaker);
+  assert.ok(first.text.length > 0 && first.text.length < oversized.text.length);
+  assert.ok(oversized.text.startsWith(first.text));
+  assert.doesNotMatch(first.text, /[\uD800-\uDBFF]$/);
+  assert.ok(Buffer.byteLength(JSON.stringify(batch)) <= EXTRACT_LIMITS.bytes);
+  assert.deepEqual(fitMessages(source.slice(batch.length)), [next]);
+  assert.deepEqual(fitMessages([next, oversized]), [next]);
+});
+
+test('fitMessages counts the array delimiters and keeps a message that just fits', () => {
+  const m = { id: 'm1', speaker: 'Kai', text: '' };
+  const exact = { ...m, text: 'x'.repeat(EXTRACT_LIMITS.bytes - Buffer.byteLength(JSON.stringify([m]))) };
+  assert.deepEqual(fitMessages([exact]), [exact]);
+  assert.deepEqual(fitMessages([{ ...exact, text: exact.text + 'x' }]), [exact]);
 });

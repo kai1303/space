@@ -174,6 +174,23 @@ test('human messages and replies persist, reject spoofed identity and deduplicat
   assert.equal((await api(a.owner_token, 'GET', `/channels/${a.channel_id}/history`)).events.length, 2);
 });
 
+test('a queued socket send checks the expected account before writing and acknowledges retries', async () => {
+  const a = await bootstrap(pool);
+  const client = await socket(a.owner_token);
+  const input = {type: 'message.send', channel_id: a.channel_id, client_message_id: randomUUID(), text: 'Recovered from outbox'};
+  try {
+    client.send({...input, expected_actor: a.collaborator_id});
+    assert.equal((await client.wait('error')).error, 'actor_changed');
+    const stored = () => pool.query('SELECT id FROM messages WHERE client_message_id=$1', [input.client_message_id]);
+    assert.equal((await stored()).rowCount, 0);
+    client.send({...input, expected_actor: a.owner_id});
+    const saved = (await client.wait('message.ack')).message;
+    client.send({...input, expected_actor: a.owner_id});
+    assert.equal((await client.wait('message.ack')).message.id, saved.id);
+    assert.deepEqual((await stored()).rows, [{id: saved.id}]);
+  } finally { client.ws.disconnect(); }
+});
+
 test('formatted messages and replies retain their documents in acknowledgments, replay and stored history', async () => {
   const a = await bootstrap(pool);
   const client = await socket(a.owner_token);

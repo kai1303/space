@@ -12,10 +12,11 @@ import { contextMessage, messageColumns, readThreadContext, rows, type MessageRo
 // every text shown here is read from `messages` in the requested channel, thread or session, so a stale or
 // wrong id can never show anything outside the scope the caller already passed the access check for.
 export interface MemoryScope { channelId: string; threadId?: string; sessionId?: string }
+export type IndexedFact = MemoryFact & { evidence_revisions: Record<string, string> };
 export interface MemoryIndex {
   related(scope: MemoryScope, query: string, limit: number): Promise<string[]>;
   // Topics and facts the extraction step wrote for one thread. Facts are checked against Space before they are shown.
-  threadKnowledge?(scope: MemoryScope & { threadId: string }): Promise<{ topics: string[]; facts: MemoryFact[] }>;
+  threadKnowledge?(scope: MemoryScope & { threadId: string }): Promise<{ topics: string[]; facts: IndexedFact[] }>;
 }
 let index: MemoryIndex | undefined;
 export function useMemoryIndex(next: MemoryIndex | undefined) { index = next; }
@@ -55,12 +56,12 @@ export async function readChannelMemory(c: DbSession, channelId: string, after?:
     SELECT a.thread_id, ${sql.raw('root.title')} AS title, a.last_at::text AS last_at,
       (SELECT count(*)::int FROM agent_sessions s WHERE s.origin_thread_id = a.thread_id) AS sessions
     FROM active a JOIN LATERAL (
-      SELECT ${firstLine} AS title FROM messages WHERE channel_id = ${channelId} AND thread_id = a.thread_id AND ${live} ORDER BY sequence LIMIT 1) root ON true
+      SELECT ${firstLine} AS title FROM messages WHERE channel_id = ${channelId} AND thread_id = a.thread_id AND agent_session_id IS NULL AND ${live} ORDER BY sequence LIMIT 1) root ON true
     WHERE ${where} ORDER BY ${order} LIMIT ${count}`);
   if (asked !== undefined && index) {
     const hits = await ranked({ channelId }, asked, 50);
     if (hits.length) {
-      const owners = await rows<{ id: string; thread_id: string }>(c, sql`SELECT id, thread_id FROM messages WHERE channel_id = ${channelId} AND id = ANY(${sql.param(hits)}::uuid[]) AND ${live}`);
+      const owners = await rows<{ id: string; thread_id: string }>(c, sql`SELECT id, thread_id FROM messages WHERE channel_id = ${channelId} AND agent_session_id IS NULL AND id = ANY(${sql.param(hits)}::uuid[]) AND ${live}`);
       const threadOf = new Map(owners.map(o => [o.id, o.thread_id]));
       const order = new Map<string, number>();
       for (const id of hits) { const t = threadOf.get(id); if (t && !order.has(t)) order.set(t, order.size); }
@@ -100,7 +101,7 @@ async function relatedMessages(c: DbSession, scope: MemoryScope, query: string |
 
 export async function readThreadMemory(c: DbSession, channelId: string, threadId: string, query?: string): Promise<ThreadMemory> {
   const asked = checkedQuery(query);
-  const context = await readThreadContext(c, channelId, uuid(threadId), undefined, { includeSessions: false });
+  const context = await readThreadContext(c, channelId, uuid(threadId));
   const sessions = await sessionNodes(c, context.thread_id);
   const [last] = await rows<{ last_at: string }>(c, sql`SELECT max(created_at)::text AS last_at FROM messages WHERE channel_id = ${channelId} AND thread_id = ${context.thread_id} AND agent_session_id IS NULL AND ${live}`);
   const shown = new Set([context.root?.id, ...context.messages.map(m => m.id)].filter((id): id is string => Boolean(id)));
@@ -115,11 +116,15 @@ export async function readThreadMemory(c: DbSession, channelId: string, threadId
 // text never says more than its sources. Topics are shown only when at least one fact or the thread survives.
 async function threadKnowledge(c: DbSession, channelId: string, threadId: string): Promise<{ topics: string[]; facts: MemoryFact[] }> {
   if (!index?.threadKnowledge) return { topics: [], facts: [] };
-  let found: { topics: string[]; facts: MemoryFact[] };
+  let found: { topics: string[]; facts: IndexedFact[] };
   try { found = await index.threadKnowledge({ channelId, threadId }); } catch { return { topics: [], facts: [] }; }
   const cited = [...new Set(found.facts.flatMap(f => f.message_ids))].filter(id => /^[0-9a-f-]{36}$/.test(id)).slice(0, 128);
-  const alive = cited.length ? new Set((await rows<{ id: string }>(c, sql`SELECT id FROM messages WHERE channel_id = ${channelId} AND thread_id = ${threadId} AND agent_session_id IS NULL AND ${live} AND id = ANY(${sql.param(cited)}::uuid[])`)).map(r => r.id)) : new Set<string>();
-  const facts = found.facts.filter(f => f.message_ids.length && f.message_ids.every(id => alive.has(id))).slice(0, 8);
+  const revisions = new Map(cited.length ? (await rows<{ id: string; revision: string }>(c, sql`
+    SELECT id, search_revision::text AS revision FROM messages WHERE channel_id = ${channelId} AND thread_id = ${threadId}
+    AND agent_session_id IS NULL AND ${live} AND id = ANY(${sql.param(cited)}::uuid[])`)).map(row => [row.id, row.revision] as const) : []);
+  const facts = found.facts.filter(f => f.message_ids.length && f.message_ids.every(id =>
+    revisions.has(id) && revisions.get(id) === f.evidence_revisions[id])).slice(0, 8)
+    .map(({ evidence_revisions: _, ...fact }) => fact);
   return { topics: found.topics.slice(0, 5), facts };
 }
 

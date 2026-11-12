@@ -1,6 +1,7 @@
 import { MAX_MESSAGE_ASSETS, parseRichDocument, type AssetAttachment, type ChatMessage, type RichDocument } from '@space/contracts';
 import type { Socket } from 'socket.io-client';
 import { request } from '../../shared/api/request.js';
+import { transactOutbox } from './outbox-storage.js';
 import { messageContent, sendMessage } from './message-sender.js';
 
 type Draft = {
@@ -9,7 +10,7 @@ type Draft = {
 };
 export type OutboxEntry = Draft & {
   id: string; createdAt: string; attachments: AssetAttachment[];
-  status: 'sending' | 'failed' | 'deleting' | 'delete_failed'; error?: string; deleteAttempts?: number;
+  status: 'sending' | 'failed' | 'deleting' | 'delete_failed'; error?: string; deleteAttempts?: number; revision?: string; retryOnConnect?: boolean;
 };
 const maxEntries = 100;
 const maxStorageLength = 500_000;
@@ -61,76 +62,159 @@ function restore(prefix: string): OutboxEntry[] {
 }
 
 export class MessageOutbox {
-  private entries: OutboxEntry[];
+  private entries: OutboxEntry[] = [];
   private readonly listeners = new Set<() => void>();
+  private readonly queued = new Set<() => void>();
+  private readonly delivered = new Set<(message: ChatMessage, thread: boolean) => void>();
+  private updates?: BroadcastChannel;
   private deletionTail: Promise<void> = Promise.resolve();
   private readonly sending = new Set<string>();
-  constructor(private readonly viewerId: string, private readonly storageKey: string) {
-    this.entries = restore(storageKey);
-  }
+  private readonly deleting = new Set<string>();
+  private migration?: Promise<void>;
+  constructor(private readonly viewerId: string, private readonly storageKey: string) {}
   getSnapshot = (): readonly OutboxEntry[] => this.entries;
   subscribe = (listener: () => void) => {
     this.listeners.add(listener);
-    return () => { this.listeners.delete(listener); };
-  };
-
-  private publish(next: OutboxEntry[]) {
-    this.entries = next;
-    for (const listener of this.listeners) listener();
-  }
-
-  private setStatus(previous: OutboxEntry, next: OutboxEntry, requirePersistence = false) {
-    try { sessionStorage.setItem(this.storageKey + next.id, JSON.stringify(next)); }
-    catch {
-      if (requirePersistence) throw new Error('Could not save the deletion. Try again.');
-      // The previous intent and key remain recoverable if an error description exceeds quota.
+    if (this.listeners.size === 1) {
+      if (typeof BroadcastChannel !== 'undefined') {
+        try { this.updates = new BroadcastChannel(this.storageKey); } catch { /* Storage partition disallows tab broadcasts. */ }
+        if (this.updates) this.updates.onmessage = ({data}) => {
+          for (const saved of data?.delivered ?? []) {
+            const entry = this.entries.find(row => !cancelling(row) && this.matches(row, saved));
+            if (entry) this.notifyDelivery(saved, entry);
+          }
+          void this.refresh().catch(() => {});
+        };
+      }
+      void this.refresh().catch(() => {});
     }
-    this.publish(this.entries.map(row => row === previous ? next : row));
+    return () => {
+      this.listeners.delete(listener);
+      if (!this.listeners.size) { this.updates?.close(); this.updates = undefined; }
+    };
+  };
+  onQueued(listener: () => void) {
+    this.queued.add(listener);
+    return () => { this.queued.delete(listener); };
+  }
+  onDelivered(listener: (message: ChatMessage, thread: boolean) => void) {
+    this.delivered.add(listener);
+    return () => { this.delivered.delete(listener); };
   }
 
-  private remove(shouldRemove: (row: OutboxEntry) => boolean) {
-    const next = this.entries.filter(row => {
-      if (!shouldRemove(row)) return true;
-      // Deleting a single persisted key succeeds even if another send filled the remaining quota.
-      try { sessionStorage.removeItem(this.storageKey + row.id); } catch { /* Storage is unavailable. */ }
-      return false;
+  private notifyDelivery(saved: ChatMessage, entry: OutboxEntry) {
+    for (const listener of this.delivered) listener(saved, !!entry.threadId);
+  }
+
+  private async transaction(change?: (rows: OutboxEntry[]) => OutboxEntry[], delivered?: ChatMessage[]) {
+    const { rows, changed } = await transactOutbox(this.storageKey, change);
+    if (rows.length !== this.entries.length || rows.some((row, i) =>
+      row.id !== this.entries[i]?.id || row.revision !== this.entries[i]?.revision)) {
+      this.entries = rows;
+      for (const listener of this.listeners) listener();
+    }
+    if (changed && typeof BroadcastChannel !== 'undefined') {
+      // Other tabs may see the outbox removal before their socket receives the saved row.
+      try {
+        const channel = this.updates ?? new BroadcastChannel(this.storageKey);
+        try { channel.postMessage(delivered?.length ? { delivered } : null); }
+        finally { if (!this.updates) channel.close(); }
+      } catch { /* The IndexedDB commit succeeded. Other tabs also refresh on focus. */ }
+    }
+  }
+
+  private migrate() {
+    if (!this.migration) {
+      const legacy = restore(this.storageKey);
+      const imported = new Set<string>();
+      this.migration = (legacy.length ? this.transaction(rows => {
+        const combined = [...rows];
+        let length = JSON.stringify(rows).length;
+        for (const entry of legacy) {
+          if (!rows.some(row => row.id === entry.id)) {
+            const extra = JSON.stringify(entry).length + (combined.length ? 1 : 0);
+            if (combined.length >= maxEntries || length + extra > maxStorageLength) continue;
+            combined.push(entry);
+            length += extra;
+          }
+          imported.add(entry.id);
+        }
+        return combined.length === rows.length ? rows : combined;
+      }).then(() => {
+        for (const id of imported) sessionStorage.removeItem(this.storageKey + id);
+        // Retry the remaining legacy rows after the shared queue has room.
+        if (imported.size < legacy.length) this.migration = undefined;
+      }) : Promise.resolve()).catch(error => { this.migration = undefined; throw error; });
+    }
+    return this.migration;
+  }
+  async refresh() {
+    await this.migrate();
+    await this.transaction();
+  }
+  private async replace(previous: OutboxEntry, next: OutboxEntry) {
+    let replaced = false;
+    next.revision = crypto.randomUUID();
+    await this.transaction(rows => {
+      const index = rows.findIndex(row => row.id === previous.id && row.revision === previous.revision);
+      if (index < 0) return rows;
+      replaced = true;
+      const updated = [...rows]; updated[index] = next;
+      return updated;
     });
-    if (next.length !== this.entries.length) this.publish(next);
+    return replaced;
+  }
+  private async remove(predicate: (row: OutboxEntry) => boolean, delivered?: ChatMessage[]) {
+    await this.migrate();
+    await this.transaction(rows => {
+      const next = rows.filter(row => !predicate(row));
+      return next.length === rows.length ? rows : next;
+    }, delivered);
   }
 
-  enqueue(draft: Draft): OutboxEntry {
+  async enqueue(draft: Draft): Promise<OutboxEntry> {
     const entry: OutboxEntry = { ...copyContent(draft), id: crypto.randomUUID(), createdAt: new Date().toISOString(), status: 'sending' };
-    const next = [...this.entries, entry];
-    if (next.length > maxEntries || JSON.stringify(next).length > maxStorageLength) throw new Error('Your outgoing message queue is full.');
-    try { sessionStorage.setItem(this.storageKey + entry.id, JSON.stringify(entry)); }
-    catch { throw new Error('Could not save the outgoing message. Your draft is still here.'); }
-    this.publish(next);
+    await this.migrate();
+    await this.transaction(rows => {
+      const next = [...rows, entry];
+      if (next.length > maxEntries || JSON.stringify(next).length > maxStorageLength) throw new Error('Your outgoing message queue is full.');
+      return next;
+    });
+    for (const listener of this.queued) listener();
     return entry;
   }
 
-  async send(id: string, socket: Socket | undefined, broadcastConfirmed = false, onDelivered?: (message: ChatMessage) => void): Promise<ChatMessage | undefined> {
+  async send(id: string, socket: Socket | undefined, broadcastConfirmed = false): Promise<ChatMessage | undefined> {
     const entry = this.entries.find(row => row.id === id);
     if (!entry || cancelling(entry) || this.sending.has(id) || (entry.error === confirmationRequired && !broadcastConfirmed)) return;
     this.sending.add(id);
     const attempt: OutboxEntry = entry.status === 'sending' && !broadcastConfirmed ? entry :
-      { ...entry, status: 'sending', error: undefined, broadcastConfirmed: broadcastConfirmed || entry.broadcastConfirmed };
-    if (attempt !== entry) this.setStatus(entry, attempt);
+      { ...entry, status: 'sending', error: undefined, retryOnConnect: undefined, broadcastConfirmed: broadcastConfirmed || entry.broadcastConfirmed };
     try {
-      if (!socket) throw new Error('Reconnecting. Try again when connected.');
+      if (attempt !== entry && !await this.replace(entry, attempt)) return;
+      if (!socket?.connected) throw new Error('Reconnecting. Try again when connected.');
       const content = messageContent(attempt.text, attempt.document, attempt.attachments);
-      const saved = await sendMessage(socket, attempt.channelId, attempt.threadId, id, content, attempt.broadcastConfirmed);
-      if (!this.entries.includes(attempt)) return;
+      const saved = await sendMessage(socket, attempt.channelId, attempt.threadId, id, content, attempt.broadcastConfirmed, this.viewerId);
       if (!this.matches(attempt, saved)) throw new Error(unconfirmed);
-      // Hand off to history before notifying subscribers that the pending row is gone.
-      try { onDelivered?.(saved); }
-      finally { this.remove(row => row === attempt); }
+      if (!this.entries.some(row => row.id === id && !cancelling(row))) return;
+      this.notifyDelivery(saved, entry);
+      await this.remove(row => row.id === id && !cancelling(row), [saved]);
       return saved;
     } catch (reason) {
-      if (this.entries.includes(attempt)) {
-        const error = reason instanceof Error ? reason.message.slice(0, 240) : unconfirmed;
-        this.setStatus(attempt, { ...attempt, status: 'failed', error });
-      }
+      const error = reason instanceof Error ? reason.message.slice(0, 240) : unconfirmed;
+      await this.replace(attempt, { ...attempt, status: 'failed', error,
+        retryOnConnect: !socket?.connected || /timed out|connection changed|reconnecting/i.test(error) });
     } finally { this.sending.delete(id); }
+  }
+
+  async resumeSends(socket: Socket, active: () => boolean, retryUnconfirmed = true) {
+    await this.refresh();
+    for (const row of this.entries) {
+      if (!active() || !socket.connected) break;
+      if (!this.entries.some(current => current.id === row.id && current.revision === row.revision)) continue;
+      if (row.status === 'sending' || (retryUnconfirmed && row.status === 'failed' && row.retryOnConnect))
+        await this.send(row.id, socket);
+    }
   }
 
   private matches(entry: OutboxEntry, message: ChatMessage) {
@@ -139,31 +223,43 @@ export class MessageOutbox {
   }
 
   reconcile(messages: readonly ChatMessage[]) {
-    this.remove(row => !cancelling(row) && messages.some(message => this.matches(row, message)));
+    const matches = (row: OutboxEntry) => !cancelling(row) && messages.some(message => this.matches(row, message));
+    if (this.entries.some(matches)) {
+      const delivered = messages.filter(message => this.entries.some(row => !cancelling(row) && this.matches(row, message)));
+      return this.remove(matches, delivered);
+    }
   }
 
   async discard(id: string): Promise<ChatMessage | undefined> {
     const row = this.entries.find(entry => entry.id === id);
-    if (!row || (row.status !== 'failed' && row.status !== 'delete_failed')) return;
+    if (!row || row.status === 'sending' || this.deleting.has(id)) return;
     const attempt: OutboxEntry = {
       id, channelId: row.channelId, threadId: row.threadId, createdAt: row.createdAt,
       text: '', attachments: [], status: 'deleting', deleteAttempts: Math.min((row.deleteAttempts ?? 0) + 1, 3),
     };
-    this.setStatus(row, attempt, true);
+    this.deleting.add(id);
+    try {
+      if (!await this.replace(row, attempt)) return;
+      return await this.deleteEntry(attempt);
+    } finally { this.deleting.delete(id); }
+  }
+
+  private deleteEntry(attempt: OutboxEntry) {
+    const { id, channelId } = attempt;
     // A reconnect may release many cancellations. Give each request a deadline and send one at a time.
     const result = this.deletionTail.then(async () => {
-      if (!this.entries.includes(attempt)) return;
+      if (!this.entries.some(entry => entry.id === id && entry.revision === attempt.revision)) return;
       try {
-        const route = '/channels/' + encodeURIComponent(row.channelId) + '/outgoing/' + encodeURIComponent(id);
+        const route = '/channels/' + encodeURIComponent(channelId) + '/outgoing/' + encodeURIComponent(id);
         const response = await request<{ message: ChatMessage | null }>(route, undefined, undefined, 'DELETE', AbortSignal.timeout(8000), this.viewerId);
-        if (!this.entries.includes(attempt)) return;
+        if (!this.entries.some(entry => entry.id === id && entry.revision === attempt.revision)) return;
         if (response.message !== null && (!this.matches(attempt, response.message) || !('deleted_at' in response.message) || !response.message.deleted_at))
           throw new Error('Delete was not confirmed');
-        this.remove(entry => entry === attempt);
+        await this.remove(entry => entry.id === id && entry.revision === attempt.revision);
         return response.message ?? undefined;
       } catch (reason) {
-        if (this.entries.includes(attempt)) {
-          this.setStatus(attempt, { ...attempt, status: 'delete_failed', error: reason instanceof Error ? reason.message.slice(0, 240) : 'Delete was not confirmed' });
+        if (this.entries.some(entry => entry.id === id && entry.revision === attempt.revision)) {
+          await this.replace(attempt, { ...attempt, status: 'delete_failed', error: reason instanceof Error ? reason.message.slice(0, 240) : 'Delete was not confirmed' });
         }
       }
     });
@@ -173,7 +269,11 @@ export class MessageOutbox {
 
   resumeDeletes(channelId?: string, onDeleted?: (message: ChatMessage) => void) {
     for (const row of this.entries) {
-      if (row.status !== 'delete_failed' || (channelId && row.channelId !== channelId) || (row.deleteAttempts ?? 0) >= 3) continue;
+      if (!cancelling(row) || this.deleting.has(row.id) || (channelId && row.channelId !== channelId)) continue;
+      if ((row.deleteAttempts ?? 0) >= 3) {
+        if (row.status === 'deleting') void this.replace(row, { ...row, status: 'delete_failed' }).catch(() => {});
+        continue;
+      }
       void this.discard(row.id).then(message => { if (message) onDeleted?.(message); }).catch(() => {
         // A failed storage write leaves the cancellation marked for explicit retry.
       });
@@ -181,11 +281,11 @@ export class MessageOutbox {
   }
 
   purgeChannel(channelId: string) {
-    this.remove(row => row.channelId === channelId);
+    return this.remove(row => row.channelId === channelId);
   }
 }
 
-// Keep one writer per tab and scope while mounted components or outstanding commands reference it.
+// Share the in-memory snapshot within a tab. IndexedDB coordinates writes between tabs.
 const stores = new Map<string, WeakRef<MessageOutbox>>();
 export function getMessageOutbox(viewerId: string, workspaceId: string) {
   const key = 'space:message-outbox:v1:' + JSON.stringify([viewerId, workspaceId]) + ':';

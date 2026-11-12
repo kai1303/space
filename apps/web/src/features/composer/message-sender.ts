@@ -13,9 +13,9 @@ export function messageContent(text: string, document: RichDocument | undefined,
   };
 }
 
-export function sendMessage(socket: Socket, channel: string, thread: string | undefined, id: string, content: ReturnType<typeof messageContent>, broadcastConfirmed = false) {
+export function sendMessage(socket: Socket, channel: string, thread: string | undefined, id: string, content: ReturnType<typeof messageContent>, broadcastConfirmed = false, expectedActor?: string) {
   return command<ChatMessage>(socket, 'message.send', {
-    channel_id: channel, client_message_id: id, ...content,
+    channel_id: channel, client_message_id: id, ...content, ...(expectedActor && { expected_actor: expectedActor }),
     ...(thread ? { thread_id: thread } : {}), ...(broadcastConfirmed ? { broadcast_confirmed: true } : {}),
   });
 }

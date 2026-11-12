@@ -29,7 +29,7 @@ before(async () => {
 after(async () => {
   const step = (label: string) => { if (process.env.DEBUG_TEARDOWN) console.log('teardown:', label); };
   step('bridge'); await bridge?.close(); step('pool'); await pool.end();
-  step('drop'); await admin.query(`DROP DATABASE ${schema} WITH (FORCE)`); await admin.end(); step('nats');
+  step('drop'); await admin.query(`DROP DATABASE ${schema}`); await admin.end(); step('nats');
   const connection = await connect({ servers: natsUrl });
   try {
     const manager = await connection.jetstreamManager();

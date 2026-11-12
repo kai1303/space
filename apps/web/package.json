@@ -36,6 +36,7 @@
     "@testing-library/user-event": "^14.6.1",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
+    "fake-indexeddb": "6.2.4",
     "jsdom": "^26.1.0",
     "quill": "2.0.3",
     "storybook": "10.6.6",

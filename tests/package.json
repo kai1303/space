@@ -9,7 +9,7 @@
   "scripts": {
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "navigator:eval": "node --env-file-if-exists=../.env --import tsx evaluation/navigator-cli.ts",
-    "test": "tsx --test --test-concurrency=4 contracts/*.test.ts integration/*.test.ts",
+    "test": "tsx --test --test-concurrency=4 contracts/*.test.ts && tsx --test --test-concurrency=1 integration/*.test.ts",
     "test:contracts": "tsx --test contracts/*.test.ts",
     "test:foundation": "tsx --test contracts/*.test.ts integration/foundation.test.ts",
     "test:workspace": "tsx --test contracts/workspace.test.ts integration/workspace.test.ts integration/user-provisioning.test.ts integration/workspace-isolation.test.ts",

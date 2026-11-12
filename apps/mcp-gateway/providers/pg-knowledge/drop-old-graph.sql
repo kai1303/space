@@ -1,13 +1,19 @@
 -- Run once per knowledge database after the Graph RAG reader has built space_memory.
 -- Removes the old knowledge graph and the old message rows of the thread index. Markdown file passages stay.
 -- Everything dropped here is derived from Space and is rebuilt by the reader, so nothing is lost.
+\set ON_ERROR_STOP on
+\if :{?source_schema}
+\else
+\set source_schema public
+\endif
+BEGIN;
+SELECT set_config('space.memory_checkpoint', 'space_memory:' || left('space_graph_' || :'source_schema', 63), true);
 DO $$
 BEGIN
-  IF NOT EXISTS (SELECT 1 FROM kb.graph_position WHERE published_lsn > '0/0') THEN
+  IF NOT EXISTS (SELECT 1 FROM kb.graph_position WHERE slot = current_setting('space.memory_checkpoint') AND published_lsn > '0/0') THEN
     RAISE EXCEPTION 'space_memory has not been published yet; start graph-reader.mjs first';
   END IF;
 END $$;
-BEGIN;
 -- pgGraph needs the edges, then the tables, removed from a graph before it can be dropped.
 DO $$
 BEGIN

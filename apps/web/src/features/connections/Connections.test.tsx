@@ -1,9 +1,17 @@
+import { useRef } from 'react';
 import { afterEach, beforeAll, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { toast } from '@space/ui/primitives';
 import userEvent from '@testing-library/user-event';
 import { UserSettings } from '../profile/UserProfile.js';
 
+// Dialog motion has its own tests. Resolving its exit deterministically lets this suite
+// advance the subscription clock without stranding an animation on a discarded timer.
+vi.mock('motion/react', async importOriginal => {
+  const actual = await importOriginal<typeof import('motion/react')>();
+  const animate = () => Object.assign(Promise.resolve(), { stop() {} });
+  return { ...actual, useAnimate: () => [useRef(null), animate] };
+});
 vi.mock('../auth/AuthScreen.js', () => ({ SignOutButton: () => <button>Sign out</button> }));
 const updates = vi.hoisted(() => new Map<string, () => unknown>());
 const revocations = vi.hoisted(() => new Map<string, () => void>());
@@ -115,7 +123,6 @@ it('keeps edits after a failed save but never renders a secret echoed in an erro
 it('refreshes through actor events, never polls, and unsubscribes on close', async () => {
   const fetcher = setup(); await open();
   const before = fetcher.mock.calls.length;
-  // Advance application timers while Motion keeps its real frame clock for dialog cleanup.
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
   await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
   expect(fetcher.mock.calls.length).toBe(before);

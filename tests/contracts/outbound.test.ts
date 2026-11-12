@@ -7,6 +7,7 @@ test('outbound connections accept only explicit HTTPS bearer or anonymous config
   assert.equal(typeof parse, 'function', 'outbound configuration parser exists');
   assert.deepEqual(parse({ name: 'Work', url: 'https://mcp.example.com/mcp', auth_type: 'bearer', token: 'secret' }), {
     name: 'Work',
+    kind: 'mcp',
     url: 'https://mcp.example.com/mcp',
     auth_type: 'bearer',
     token: 'secret',

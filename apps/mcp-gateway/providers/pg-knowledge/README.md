@@ -56,21 +56,27 @@ One graph, `space_memory`, holds channels, threads, agent sessions, people, mess
 
 The Space database needs `wal_level=logical`, PostgreSQL 15 or newer (column-list publications), and `max_slot_wal_keep_size` set so a stopped reader cannot fill the disk. If the slot passes the cap, the reader drops it and rebuilds the graph from a snapshot on its next start.
 
-1. Apply `memory-graph.sql`, then `memory-extract.sql`, to the knowledge database after `schema.sql` (and `threads.sql`, `markdown.sql` for file search).
-2. Run one reader per Space schema:
+1. Stop the previous graph reader and extraction workers. Upgrade Space through migration 097. On the knowledge database, install `memory-graph.sql` once after `schema.sql`, then apply the current `memory-extract.sql` even on existing memory installations. Install `threads.sql` and `markdown.sql` for file search. Give the reader's Space role EXECUTE on `wake_memory_extract(uuid[],uuid[])` in the source schema.
+2. Restart the updated API and extraction workers. Start one reader for the dedicated provider database and Space schema. The new reader reuses the existing WAL slot and creates a separate `space_memory:` checkpoint after its first full snapshot.
 
 ```sh
 GRAPH_SOURCE_URL=... GRAPH_REPLICATION_URL=... GRAPH_INDEX_URL=... GRAPH_SOURCE_SCHEMA=public \
   node apps/mcp-gateway/providers/pg-knowledge/graph-reader.mjs
 ```
 
-3. After it reports `Graph rebuilt from snapshot` once, run `drop-old-graph.sql` on an existing installation. It removes the old `space_knowledge` graph and the old message rows of `kb.thread_messages`. Markdown file passages stay there.
+3. On an installation with the old thread index, wait for `Memory graph reader ready` after the snapshot, then run the following against the knowledge database. Use the reader’s `GRAPH_SOURCE_SCHEMA` value (default `public`). The script checks that this schema’s memory snapshot was published before removing the legacy graph and old message passages. It preserves Markdown passages.
 
-`GRAPH_SOURCE_URL` may create the publication and slot and must read `graph_source_messages`, `channels`, `agent_sessions`, `knowledge_notes` and `knowledge_thread_channels`. `GRAPH_REPLICATION_URL` needs the REPLICATION attribute. `GRAPH_INDEX_URL` writes `kb.m_*`. Restart the reader after any failure; it exits on error and the slot keeps unconfirmed changes. pgGraph refuses `build_graph` while a source write is open, so the reader runs graph writes and publishes one at a time.
+```sh
+psql -X -v source_schema=public -f drop-old-graph.sql
+```
+
+`GRAPH_SOURCE_URL` may create the publication and slot and must read `graph_source_messages`, `channels`, `agent_sessions`, `knowledge_notes` and `knowledge_thread_channels`. `GRAPH_REPLICATION_URL` needs the REPLICATION attribute. `GRAPH_INDEX_URL` reads and writes `kb.m_*` and `kb.graph_position`. Restart the reader after any failure; it exits on error and the slot keeps unconfirmed changes. pgGraph refuses `build_graph` while a source write is open, so the reader runs graph writes and publishes one at a time.
 
 Space servers rank memory by meaning when `MEMORY_GRAPH_URL` (a read role on the knowledge database) is set. Without it, memory still reads, newest first.
 
 Topics and facts come from the worker (`apps/worker`) when both `MEMORY_EXTRACT_MODEL` (a local Ollama chat model) and `MEMORY_GRAPH_WRITE_URL` are set. Each thread runs at most once every 5 minutes, 60 seconds after its last message, and at most `MEMORY_EXTRACT_HOURLY_CAP` (default 60) runs per workspace per hour. Thread text goes only to the local model.
+
+The worker waits for the graph to contain the exact message revisions in its batch. The reader wakes waiting threads after their messages are indexed. An edit invalidates facts citing the old revision immediately on Space reads. A follow-up preserves decisions whose evidence is still current. On upgrade, earlier extracted facts without recorded source revisions are discarded and eligible threads are queued for re-extraction under the usual model budget. Agent-authored Knowledge notes keep their revision history.
 
 `thread-worker.mjs` now keeps only Markdown files and knowledge notes.
 
