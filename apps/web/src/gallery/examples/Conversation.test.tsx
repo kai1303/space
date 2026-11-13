@@ -100,7 +100,7 @@ it("closes the origin thread when switching channels", async () => {
   expect(screen.queryByRole("button", { name: "Close thread" })).toBeNull();
 });
 
-it("retains selected File bytes and blocks sending while a controlled attachment uploads or fails", async () => {
+it("queues Send during a controlled upload and requires a new send after a failed upload is retried", async () => {
   const change = vi.fn(), retry = vi.fn(), send = vi.fn();
   const file = new File(["real bytes"], "report.txt", { type: "text/plain" });
   const view = render(<RichComposer channel="general" attachments={[]} onAttachmentsChange={change} onRetryAttachment={retry} onSend={send} />);
@@ -111,15 +111,17 @@ it("retains selected File bytes and blocks sending while a controlled attachment
   expect(selected.status).toBe('uploading');
   view.rerender(<RichComposer channel="general" attachments={[{ ...selected, progress: 42 }]} onAttachmentsChange={change} onRetryAttachment={retry} onSend={send} />);
   expect(screen.getByRole('progressbar', { name: 'Uploading report.txt' }).getAttribute('value')).toBe('42');
-  expect((screen.getByRole('button', { name: 'Send now' }) as HTMLButtonElement).disabled).toBe(true);
-  fireEvent.keyDown(screen.getByRole('textbox', { name: 'Message general' }), { key: 'Enter' });
+  await userEvent.click(screen.getByRole('button', { name: 'Send now' }));
+  expect(screen.getByText('Sending after upload…')).toBeTruthy();
   expect(send).not.toHaveBeenCalled();
   view.rerender(<RichComposer channel="general" attachments={[{ ...selected, status: 'error', error: 'Upload failed' }]} onAttachmentsChange={change} onRetryAttachment={retry} onSend={send} />);
   await userEvent.click(screen.getByRole('button', { name: 'Retry upload report.txt' }));
   expect(retry).toHaveBeenCalledWith(selected.id);
-  expect(screen.getByRole('alert').textContent).toContain('Upload failed');
-  view.rerender(<RichComposer channel="general" attachments={[{ id: 'asset', name: file.name, size: file.size, type: file.type, status: 'ready' }]} onAttachmentsChange={change} onRetryAttachment={retry} onSend={send} />);
+  expect(screen.getByText('Upload failed')).toBeTruthy();
+  view.rerender(<RichComposer channel="general" attachments={[{ ...selected, draftId: selected.id, id: 'asset', status: 'ready' }]} onAttachmentsChange={change} onRetryAttachment={retry} onSend={send} />);
+  expect(send).not.toHaveBeenCalled();
   await userEvent.click(screen.getByRole('button', { name: 'Send now' }));
+  expect(send).toHaveBeenCalledTimes(1);
   expect(send.mock.calls[0][2][0].id).toBe('asset');
   expect(change.mock.calls.at(-1)![0]).toEqual([]);
 });
