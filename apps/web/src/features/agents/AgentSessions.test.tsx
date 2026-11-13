@@ -14,7 +14,7 @@ vi.mock('../../shared/realtime/live-updates.js',()=>{
 });
 // jsdom has no layout; mount fixture rows while testing the shared timeline flow.
 vi.mock('@tanstack/react-virtual',()=>({useVirtualizer:(options:any)=>({getTotalSize:()=>options.count*100+88,getVirtualItems:()=>Array.from({length:options.count},(_,index)=>({index,key:options.getItemKey(index),start:index*100+44})),measureElement:()=>{},scrollToEnd:()=>{},scrollToIndex:()=>{},isAtEnd:()=>true})}));
-const session=(id:string,title:string)=>({id,title,workspace_id:'workspace',installation_id:'agent',origin_thread_id:'thread',managed:true,state:'active',agent_name:'Codex',owner_id:'user',created_by:'user',created_at:'2026-11-03T00:00:00Z',skill:'codex.run',turn_count:1});
+const session=(id:string,title:string)=>({id,title,workspace_id:'workspace',installation_id:'agent',origin_thread_id:'thread',managed:true,state:'active',agent_name:'Codex',supports_steering:true,owner_id:'user',created_by:'user',created_at:'2026-11-03T00:00:00Z',skill:'codex.run',turn_count:1});
 const turn=(text:string)=>({task:{id:text,goal:text,workspace_id:'workspace',thread_id:'thread',installation_id:'agent',requester_id:'user',session_id:'one',skill:'codex.run',status:'completed',result:`Result: ${text}`,revision:1},requester_name:'Kai',detail:`Result: ${text}`,response:{messages:[{id:'answer',text:`Result: ${text}`,status:'complete'}],tools:[],components:[],outputs:{files:[{path:'result.txt',content:text}],changes:[]}}});
 function setup(){
  let sessions=[session('one','Research'),session('two','Implementation')];
@@ -206,7 +206,7 @@ it('shows one waiting indicator for Kiro and adds the reply when it arrives',asy
  expect(screen.queryAllByText(/queued/i)).toHaveLength(0);
  expect(within(log).getAllByRole('article')).toHaveLength(1);
  expect(screen.getByText('Waiting for',{exact:false}).textContent).toContain('Waiting for Local Kiro');
- expect((screen.getByRole('button',{name:'Send now'}) as HTMLButtonElement).disabled).toBe(true);
+ expect((screen.getByRole('button',{name:'Queue'}) as HTMLButtonElement).disabled).toBe(true);
  expect(screen.queryByText(/You can draft your next message/)).toBeNull();
  current=thinking;await act(async()=>{await mocks.refresh?.();});
  await screen.findByText('is thinking…');
@@ -219,20 +219,47 @@ it('shows one waiting indicator for Kiro and adds the reply when it arrives',asy
  expect(within(log).getAllByRole('article')).toHaveLength(2);
  expect(screen.queryByText(/Waiting for Local Kiro/)).toBeNull();
 });
-it('allows drafting but blocks Enter and Send while a session turn is running, then enables the same draft',async()=>{
- const fetch=setup(),original=fetch.getMockImplementation()!;let running=true;
- fetch.mockImplementation(async(path,init)=>path==='/v1/agent-sessions/one'?{ok:true,json:async()=>({session:session('one','Research'),turns:[{...turn('Research prompt'),task:{...turn('Research prompt').task,status:running?'running':'completed'}}],next_cursor:null})}:original(path,init));
+it('queues Enter during a turn and targets the active execution when steering is selected',async()=>{
+ const fetch=setup(),original=fetch.getMockImplementation()!;
+ const queued={id:'q',text:'My next instruction',kind:'queue',actor_id:'user',state:'pending'};
+ let items:object[]=[],steering:object[]=[];
+ fetch.mockImplementation(async(path,init)=>{
+  if(path==='/v1/agent-sessions/one')return {ok:true,json:async()=>({session:session('one','Research'),inputs:items,turns:[{...turn('Research prompt'),steering,task:{...turn('Research prompt').task,status:'running',active_execution_id:'run'}}],next_cursor:null})};
+  if(path.endsWith('/queue')){items=[queued];return {ok:true,json:async()=>({id:'q',state:'pending'})};}
+  if(path.endsWith('/steer')){
+   items=[];steering=[{...queued,id:'s',actor_name:'Kai',kind:'steer',state:'sent',created_at:'2026-11-03T10:25:00Z'}];
+   return {ok:true,json:async()=>({id:'s',state:'sent'})};
+  }
+  return original(path,init);
+ });
  render(<AgentSessions thread="thread" channel="channel" viewerId="user" initialSessionId="one" onAccessLost={()=>{}}/>);
  const editor=await screen.findByRole('textbox',{name:'Message agent session'});
- await userEvent.type(editor,'My next instruction');await userEvent.keyboard('{Enter}');
+ await userEvent.type(editor,'My next instruction');
+ await userEvent.keyboard('{Control>}{Enter}{/Control}');
+ const list=await screen.findByRole('list',{name:'Queued messages'});
+ await userEvent.click(within(list).getByRole('button',{name:'Steer'}));
+ await waitFor(()=>expect(fetch.mock.calls.some(([path,init])=>path.endsWith('/steer') && JSON.parse(String(init?.body)).execution_id==='run')).toBe(true));
+ const log=screen.getByRole('log',{name:'Session conversation'});
+ const sent=await within(log).findByText('My next instruction');
+ expect(sent.closest('article')?.textContent).toContain('Kai');
+ expect(within(log).queryByText('Steering accepted')).toBeNull();
  expect(fetch.mock.calls.filter(([path])=>path.endsWith('/messages'))).toHaveLength(0);
- expect((screen.getByRole('button',{name:'Send now'}) as HTMLButtonElement).disabled).toBe(true);
- expect(editor.textContent).toContain('My next instruction');
- expect(screen.getByText('is working…')).toBeTruthy();
- running=false;await act(async()=>{await mocks.refresh?.();});
- await waitFor(()=>expect((screen.getByRole('button',{name:'Send now'}) as HTMLButtonElement).disabled).toBe(false));
- await userEvent.click(screen.getByRole('button',{name:'Send now'}));
- await waitFor(()=>expect(fetch.mock.calls.filter(([path])=>path.endsWith('/messages'))).toHaveLength(1));
+});
+it('keeps an unsent steering draft tied to its original turn when the turn finishes',async()=>{
+ const fetch=setup(),original=fetch.getMockImplementation()!;
+ let status='running';
+ fetch.mockImplementation(async(path,init)=>path==='/v1/agent-sessions/one'?{ok:true,json:async()=>({
+  session:session('one','Research'),turns:[{...turn('Research prompt'),task:{...turn('Research prompt').task,status,active_execution_id:'run'}}],next_cursor:null
+ })}:original(path,init));
+ render(<AgentSessions thread="thread" channel="channel" viewerId="user" initialSessionId="one" onAccessLost={()=>{}}/>);
+ const editor=await screen.findByRole('textbox',{name:'Message agent session'});
+ await userEvent.type(editor,'Wait for my review');
+ status='completed';await act(async()=>{await mocks.refresh?.();});
+ await userEvent.type(editor,'{Enter}');
+ expect(fetch.mock.calls.filter(([path])=>/\/(messages|steer|queue)$/.test(path))).toHaveLength(0);
+ await userEvent.click(screen.getByRole('button',{name:'Use draft as follow-up'}));
+ expect(editor.textContent).toContain('Wait for my review');
+ expect((screen.getByRole('button',{name:'Send now'}) as HTMLButtonElement).disabled).toBe(false);
 });
 it('keeps sending blocked after acknowledgment until the accepted turn is observed despite an earlier refresh',async()=>{
  const fetch=setup(),original=fetch.getMockImplementation()!;
@@ -253,7 +280,7 @@ it('keeps sending blocked after acknowledgment until the accepted turn is observ
  expect(fetch.mock.calls.filter(([path])=>path.endsWith('/messages'))).toHaveLength(1);
  expect(editor.textContent).toContain('The next draft');
  await act(async()=>{finishRead({ok:true,json:async()=>({session:session('one','Research'),turns:[turn('Research prompt'),{...turn('Accepted task'),task:accepted}],next_cursor:null})});});
- expect((screen.getByRole('button',{name:'Send now'}) as HTMLButtonElement).disabled).toBe(true);
+ expect((screen.getByRole('button',{name:'Queue'}) as HTMLButtonElement).disabled).toBe(false);
 });
 it('uses the DM header and timeline with a fixed composer and shared output tabs',async()=>{
  setup();const view=render(<AgentSessions thread="thread" channel="channel" viewerId="user" initialSessionId="one" channelName="hi" onBack={()=>{}} onClose={()=>{}} onAccessLost={()=>{}}/>);

@@ -1,3 +1,4 @@
+import type {AgentSessionStore} from '@space/postgres/agent-sessions';
 import type { FastifyInstance } from 'fastify';
 import type { EventBus, EventDelivery } from '@space/events';
 import { uuid } from '@space/contracts';
@@ -12,10 +13,21 @@ async function due(message: EventDelivery): Promise<boolean> {
   return true;
 }
 
-export function registerEventDeadlines(app: FastifyInstance, getEvents: () => Promise<EventBus>, tasks: PostgresStore, assets: AssetStore, storage?: AssetStorage, scheduled?: ScheduledMessageStore) {
+export function registerEventDeadlines(app: FastifyInstance, getEvents: () => Promise<EventBus>, tasks: PostgresStore, assets: AssetStore, storage?: AssetStorage, scheduled?: ScheduledMessageStore, sessions?:AgentSessionStore) {
   const stops: (() => Promise<void>)[] = [];
   app.addHook('onReady', async () => {
     const bus = await getEvents();
+    if(sessions) {
+      stops.push(await bus.subscribe('task.session_queue.*',{durable:'session-inputs',queue:'session-inputs',maxPending:16},async event=>{
+        await sessions.drainQueue(uuid(event.event.aggregate_id));
+        await event.ack();
+      }));
+      stops.push(await bus.subscribe('task.steer_deadline.*',{durable:'session-steer-deadlines',queue:'session-steer-deadlines',maxPending:16},async event=>{
+        if(!await due(event)) return;
+        await sessions.finishSteer(uuid(event.event.aggregate_id),'uncertain','Delivery could not be confirmed.');
+        await event.ack();
+      }));
+    }
     // Scheduled sends: the broker releases each event at send_at. deliver() is conditional on the schedule
     // version and the send is idempotent, so early, stale and repeated deliveries are safe.
     if (scheduled) stops.push(await bus.subscribe('scheduled.message_due.*', {durable:'scheduled-messages',queue:'scheduled-messages',maxPending:8}, async message => {
@@ -76,7 +88,7 @@ export function registerEventDeadlines(app: FastifyInstance, getEvents: () => Pr
       const row = (await tasks.pool.query<{remaining:number}>(`SELECT CASE WHEN deadline IS NULL THEN 0 ELSE
         greatest(0,extract(epoch FROM (greatest(deadline,processing_until)-now()))*1000)::float END AS remaining
         FROM assets CROSS JOIN LATERAL (SELECT least(
-          CASE WHEN message_id IS NULL AND task_id IS NULL THEN expires_at END,
+          CASE WHEN message_id IS NULL AND task_id IS NULL AND queue_input_id IS NULL THEN expires_at END,
           CASE WHEN status='ready' AND staging_deleted_at IS NULL THEN upload_expires_at END
         ) AS deadline) obligation WHERE id=$1`,[id])).rows[0];
       if (row?.remaining && Number.isFinite(row.remaining) && row.remaining>0) await message.retry(row.remaining);

@@ -126,11 +126,11 @@ export class AssetStore {
     await this.owned(this.db, actor, id);
     const result = await this.processing(id, async (_claimed, token) => {
       const row = await this.owned(this.db, actor, id);
-      if (!row.message_id && !row.task_id && row.expires_at <= new Date()) throw new AppError(410, 'upload_expired');
+      if (!row.message_id && !row.task_id && !row.queue_input_id && row.expires_at <= new Date()) throw new AppError(410, 'upload_expired');
       if (row.status === 'pending') {
         const preview = await finalize(row.staging_key, row.object_key, row.size, row.name);
         const current = await this.owned(this.db, actor, id);
-        if (!current.message_id && !current.task_id && current.expires_at <= new Date()) throw new AppError(410, 'upload_expired');
+        if (!current.message_id && !current.task_id && !current.queue_input_id && current.expires_at <= new Date()) throw new AppError(410, 'upload_expired');
         const saved = await this.db.update(assets).set({ status: 'ready', preview })
           .where(and(this.claim(id, token), eq(assets.status, 'pending'))).returning({ id: assets.id });
         if (!saved.length) throw new AppError(409, 'asset_processing_expired');
@@ -148,7 +148,7 @@ export class AssetStore {
   }
   private async assertAccess(c: DbSession, actor: string, row: Asset | undefined) {
     if (!row || row.status !== 'ready' || !await hasChannelAccess(c, actor, row.workspace_id, row.channel_id)) throw notFound();
-    if (!row.message_id && !row.task_id && (row.uploader_id !== actor || row.expires_at <= new Date())) throw notFound();
+    if (!row.message_id && !row.task_id && (row.uploader_id !== actor || (!row.queue_input_id && row.expires_at <= new Date()))) throw notFound();
   }
   private async readDetails(c: DbSession, actor: string, id: string): Promise<AssetDetails> {
     const [row] = await c.select().from(assets).where(eq(assets.id, id));
@@ -278,19 +278,19 @@ export class AssetStore {
     let cleaned = 0;
     for (let i = 0; i < (assetId ? 1 : limit); i++) {
       const [candidate] = await this.db.select({ id: assets.id }).from(assets).where(and(assetId ? eq(assets.id, uuid(assetId)) : undefined, this.available(), or(
-          and(isNull(assets.message_id), isNull(assets.task_id), lt(assets.expires_at, sql`now()`)),
+          and(isNull(assets.message_id), isNull(assets.task_id), isNull(assets.queue_input_id), lt(assets.expires_at, sql`now()`)),
           and(eq(assets.status, 'ready'), isNull(assets.staging_deleted_at), lt(assets.upload_expires_at, sql`now()`)),
         ))).orderBy(assets.expires_at).limit(1);
       if (!candidate) break;
       const found = await this.processing(candidate.id, async (row, token) => {
-        const expired = !row.message_id && !row.task_id && row.expires_at <= new Date();
+        const expired = !row.message_id && !row.task_id && !row.queue_input_id && row.expires_at <= new Date();
         if (!expired && (row.status !== 'ready' || row.staging_deleted_at || row.upload_expires_at > new Date())) return false;
         await remove(row.staging_key);
         if (expired) {
           await remove(row.object_key);
           await remove(`previews/${row.id}/display.webp`);
           await remove(`previews/${row.id}/thumbnail.webp`);
-          const deleted = await this.db.delete(assets).where(and(this.claim(row.id, token), isNull(assets.message_id), isNull(assets.task_id), lt(assets.expires_at, sql`now()`))).returning({ id: assets.id });
+          const deleted = await this.db.delete(assets).where(and(this.claim(row.id, token), isNull(assets.message_id), isNull(assets.task_id), isNull(assets.queue_input_id), lt(assets.expires_at, sql`now()`))).returning({ id: assets.id });
           if (!deleted.length) throw new AppError(409, 'asset_processing_expired');
         } else {
           const saved = await this.db.update(assets).set({ staging_deleted_at: new Date() }).where(this.claim(row.id, token)).returning({ id: assets.id });

@@ -1,3 +1,4 @@
+import { SessionTitle } from '../agents/streamed-words.js';
 import { SidebarRowMenu, type SidebarAction } from "./sidebar-row-menu.js";
 import { NavigationIcon } from "./navigation-icons.js";
 import { useEffect, useId, useState, type ReactNode } from "react";
@@ -227,6 +228,7 @@ export function WorkspaceSidebar({
                   if (c.onRename) actions.push({ label: "Rename…", select: c.onRename });
                   const item = <ChannelItem
                     name={c.name}
+                    nameContent={c.agentName || c.section==='sessions' ? <SessionTitle title={c.name}/> : undefined}
                     hasMenu={actions.length > 0}
                     selected={c.id === selectedId}
                     unread={c.unread}

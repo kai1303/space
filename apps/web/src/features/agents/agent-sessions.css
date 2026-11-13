@@ -39,3 +39,25 @@
 .agent-session-header-title > button { flex-shrink:0; }
 
 .agent-session-system-notice { display:flex; align-items:center; gap:7px; margin:6px 20px; padding:5px 10px; border-inline-start:2px solid var(--sp-border); color:var(--sp-text-secondary); font-size:13px; line-height:1.4; }
+.agent-turn-inputs { overflow:clip; margin:0 20px -1px; border:1px solid var(--sp-border); border-radius:10px 10px 0 0; background:var(--sp-surface-hover); color:var(--sp-text-secondary); }
+.agent-turn-inputs ol { max-height:26vh; overflow:auto; margin:0; padding:3px 5px; list-style:none; }
+.agent-turn-input,.agent-queue-paused { display:flex; align-items:center; gap:4px; min-height:31px; padding:0 4px; font-size:13px; }
+.agent-turn-inputs li { overflow:clip; }
+.agent-turn-inputs li + li .agent-turn-input { border-top:1px solid var(--sp-border); }
+.agent-turn-input button,.agent-turn-input .sp-menu>summary,.agent-queue-paused button { display:inline-flex; align-items:center; justify-content:center; gap:3px; min-height:24px; height:auto; border:0; border-radius:5px; padding:2px 4px; background:transparent; font:inherit; color:inherit; cursor:pointer; }
+.agent-turn-input button:hover,.agent-turn-input .sp-menu>summary:hover,.agent-queue-paused button:hover { background:var(--sp-surface);color:var(--sp-text); }
+.agent-turn-input .agent-queue-preview { display:block; flex:1; min-width:0; white-space:nowrap; text-overflow:ellipsis; overflow:hidden; text-align:left; }
+.agent-queue-preview:focus-visible,.agent-turn-input button:focus-visible { outline:2px solid var(--sp-info); }
+.agent-queue-grip { display:flex; align-items:center; }
+.agent-queue-grip[draggable=true] { cursor:grab; }
+.agent-queue-full { white-space:pre-wrap; overflow-wrap:anywhere; }
+.agent-queue-paused { padding:3px 12px; border-bottom:1px solid var(--sp-border); }
+.agent-queue-paused button { margin-left:auto; }
+.agent-turn-inputs + div .sp-rich-editor-shell { border-top-left-radius:0; border-top-right-radius:0; }
+.agent-turn-inputs + div .chat-compose { padding-top:0; }
+.sp-rich-send-group:has(.agent-followup-menu) { align-items:center; }
+.agent-followup-menu .sp-menu>summary { border:none; background:transparent; padding:2px; height:24px; min-width:18px; }
+@media(max-width:720px) { .agent-turn-inputs { margin-inline:12px; } }
+
+.chat-compose > .agent-turn-inputs { margin-inline:0; }
+.chat-compose > .agent-turn-inputs + .sp-rich-composer .sp-rich-editor-shell { border-top-left-radius:0; border-top-right-radius:0; }

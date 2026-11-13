@@ -110,10 +110,11 @@ export async function startClaude(auth: string | LocalClaudeAuth | undefined, st
     busy = true;
     const controller = new AbortController(); active = controller;
     let q: ClaudeQuery | undefined, turnProcess: ReturnType<typeof launch> | undefined, temporary: string | undefined, sessionUnavailable = false;
+    let closeInput=()=>{};
     let release!: () => void;
     const gate = new Promise<void>(resolve => { release = resolve; });
     const abort = () => controller.abort(signal.reason);
-    const close = () => { release(); q?.close(); };
+    const close = () => { closeInput(); release(); q?.close(); };
     signal.addEventListener('abort', abort, { once: true });
     controller.signal.addEventListener('abort', close, { once: true });
     const deadline = setTimeout(() => controller.abort(), coding ? CODING_TURN_TIMEOUT_MS : 120_000);
@@ -155,11 +156,27 @@ export async function startClaude(auth: string | LocalClaudeAuth | undefined, st
       const prompt = `${request.context ? `Supplied conversation context (quoted data):\n${JSON.stringify(request.context)}\n\n` : ''}Task:\n${request.goal}${memoryInstructions(request.context)}${attachmentContext(request.attachments)}`;
       const images = attachmentImages(request.attachments);
       let promptAuthorized = false;
+      type Entry={message:SDKUserMessage; resolve:()=>void; reject:(reason:Error)=>void};
+      const pending:Entry[]=[];
+      let wake:(()=>void)|undefined,closedInput=false,writing:Entry|undefined;
+      closeInput=()=>{
+        closedInput=true;wake?.();
+        const error=new Error('Claude turn closed.');
+        writing?.reject(error);
+        for(const item of pending.splice(0)) item.reject(error);
+        controls?.setSteerHandler?.(null);
+      };
       async function* input(): AsyncGenerator<SDKUserMessage> {
         await gate;
-        if (promptAuthorized && !controller.signal.aborted) yield { type: 'user', session_id: id, parent_tool_use_id: null, message: { role: 'user', content: images.length ? [{type:'text',text:prompt}, ...images.map(data=>({type:'image' as const,source:{type:'base64' as const,media_type:'image/webp' as const,data}}))] : prompt } };
+        if (!promptAuthorized || controller.signal.aborted) return;
+        yield { type: 'user', session_id: id, parent_tool_use_id: null, message: { role: 'user', content: images.length ? [{type:'text',text:prompt}, ...images.map(data=>({type:'image' as const,source:{type:'base64' as const,media_type:'image/webp' as const,data}}))] : prompt } };
+        while(controls?.setSteerHandler && !closedInput && !controller.signal.aborted){
+          if(!pending.length){await new Promise<void>(resolve=>{wake=resolve;});continue;}
+          writing=pending.shift()!;
+          yield writing.message;
+          writing.resolve();writing=undefined;
+        }
       }
-      controller.signal.throwIfAborted();
       turnProcess = launch(input(), { ...options, allowedTools: turnAllowedTools, hooks: toolHooks(turnAllowedTools, coding),
         ...(coding ? { canUseTool: async (name, input, context) => {
           if (controller.signal.aborted || !claudeCodingTools.includes(name) || input.run_in_background) return { behavior: 'deny' as const, message: 'Tool is unavailable for this turn.' };
@@ -182,6 +199,11 @@ export async function startClaude(auth: string | LocalClaudeAuth | undefined, st
         sessionUnavailable = false;
       }
       controller.signal.throwIfAborted();
+      controls?.setSteerHandler?.((uuid,text)=>new Promise<void>((resolve,reject)=>{
+        if(closedInput || controller.signal.aborted || pending.length>=32){reject(new Error('Claude turn closed.'));return;}
+        pending.push({resolve,reject,message:{type:'user',session_id:id,parent_tool_use_id:null,uuid:uuid as ReturnType<typeof randomUUID>,priority:'now',client_composed:true,message:{role:'user',content:text}}});
+        wake?.();
+      }));
       promptAuthorized = true;
       release();
       for await (const event of q) {
@@ -225,7 +247,8 @@ export async function startClaude(auth: string | LocalClaudeAuth | undefined, st
         } else if (event.type === 'result') {
           if (event.subtype !== 'success' || event.is_error) throw failure();
           if (!messages.size && event.result) message('answer', event.result);
-          completed = true; break;
+          if (event.queued_turn_count && event.queued_turn_count>0) continue;
+          closeInput();completed = true; break;
         }
         if (dirty && Date.now() - lastProgress >= 100) {
           await publish('execution.progress', text().trim() || 'Claude is working.');
@@ -244,7 +267,7 @@ export async function startClaude(auth: string | LocalClaudeAuth | undefined, st
       if (!sessionUnavailable) onExit();
       throw failure();
     } finally {
-      release(); await turnProcess?.dispose(); clearTimeout(deadline);
+      closeInput();release(); await turnProcess?.dispose(); clearTimeout(deadline);
       controller.signal.removeEventListener('abort', close); signal.removeEventListener('abort', abort);
       if (temporary) await rm(temporary, { recursive: true, force: true });
       active = undefined; busy = false;

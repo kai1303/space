@@ -3,14 +3,18 @@ import { parseRichDocument } from './rich-text.js';
 import type { AgentResponse, AgentSession, AgentSessionOutputs, Task } from './index.js';
 import { AppError, record, text, uuid } from './validation.js';
 export interface AgentSessionSummary extends AgentSession {
-  title: string; state: 'active' | 'ended'; managed: boolean; agent_name: string; owner_id: string;
+  queue_paused?: boolean; supports_steering?: boolean; title: string; state: 'active' | 'ended'; managed: boolean; agent_name: string; owner_id: string;
   created_by: string | null; created_at: string; skill: string; turn_count: number;
 }
 export interface WorkspaceAgentSession extends AgentSessionSummary { working: boolean; channel_id: string; channel_archived: boolean }
 export type AgentSessionReference = Pick<WorkspaceAgentSession, 'id' | 'agent_name' | 'origin_thread_id' | 'channel_id' | 'channel_archived'>;
 export interface StarredAgentSession { id: string; name: string; kind: 'agent_session'; working: boolean; can_rename: boolean; private: boolean; session: AgentSessionReference }
-export interface AgentSessionTurn { task: Task; created_at: string; requester_name: string; response?: AgentResponse; detail: string }
-export interface AgentSessionDetail { audience?: string; tool_approvals?: import('./local-tools.js').LocalToolApproval[]; context?: import('./sidekick.js').SidekickContext; outputs?: AgentSessionOutputs; session: AgentSessionSummary; turns: AgentSessionTurn[]; next_cursor: string | null; has_newer?: boolean }
+export interface AgentSessionTurn { steering?: SessionInput[]; task: Task; created_at: string; requester_name: string; response?: AgentResponse; detail: string }
+export interface SessionInput {
+  id:string; actor_id:string; actor_name?:string; created_at?:string; text:string; kind:'queue'|'steer'; state:'pending'|'blocked'|'sent'|'cancelled'|'sending'|'uncertain';
+  execution_id:string|null; detail:string|null; file_count?:number;
+}
+export interface AgentSessionDetail { inputs?:SessionInput[]; audience?: string; tool_approvals?: import('./local-tools.js').LocalToolApproval[]; context?: import('./sidekick.js').SidekickContext; outputs?: AgentSessionOutputs; session: AgentSessionSummary; turns: AgentSessionTurn[]; next_cursor: string | null; has_newer?: boolean }
 export function parseAgentSessionInput(value: unknown) {
   const v = record(value, ['client_session_id', 'installation_id', 'title', 'skill']);
   return { skill: v.skill === undefined ? undefined : text(v.skill, 80), client_session_id: uuid(v.client_session_id), installation_id: uuid(v.installation_id), title: text(v.title, 160) };

@@ -66,7 +66,7 @@ export function RichComposer({
   showUnavailableActions = true,
   showKeyboardHint = true,
   feedbackAtSendButton = false,
-  submitLabel,
+  submitLabel, submitIcon, submitAccessory, onAlternateSend,
   renderFilePicker,
   renderExtraActions,
   autoFocus = false,
@@ -101,6 +101,9 @@ export function RichComposer({
   showKeyboardHint?: boolean;
   feedbackAtSendButton?: boolean;
   submitLabel?: string;
+  submitIcon?: ReactNode;
+  submitAccessory?: ReactNode;
+  onAlternateSend?: (text:string, document:RichDocument, attachments:Attachment[])=>void | Promise<void>;
   renderFilePicker?: (insert: (files: File[]) => void, close: () => void, remaining: number, upload: () => void) => ReactNode;
   renderExtraActions?: (insertText: (value: string) => void, disabled: boolean) => ReactNode;
   autoFocus?: boolean;
@@ -255,13 +258,15 @@ export function RichComposer({
   const mentionsUI = useMentions(editor, ready, channel, findMentions, editorVersion);
   const mentionKeys = useRef(mentionsUI.key); mentionKeys.current = mentionsUI.key;
   const [broadcastWarning, setBroadcastWarning] = useState(false);
-  const sendRef = useRef<() => void>(() => {});
+  const sendRef = useRef<(alternate?:boolean) => void>(() => {});
+  const alternateEnabled=useRef(false);
+  alternateEnabled.current=!!onAlternateSend;
   // Touch long-press on Send opens the schedule menu; the click that ends the press must not also send.
   const holdTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   const heldSend = useRef(false);
   useEffect(() => () => clearTimeout(holdTimer.current), []);
   // A scheduled send passes `at`; it shares validation, clearing and error handling with Send now.
-  async function send(confirmed = false, at?: Date) {
+  async function send(confirmed = false, at?: Date, alternate=false) {
     const q = editor.current;
     if (!q || pending.current || blocked || filesRef.current.some(file => file.status === "error" || (at && file.status === "uploading"))) return;
     const raw = q.getText();
@@ -287,6 +292,8 @@ export function RichComposer({
     q.disable();
     try {
       const plainText = document.ops.map(op => op.insert).join("").trim();
+      const alternateSubmit=alternate ? onAlternateSend : undefined;
+      const normalSubmit=callbacks.current.onSend;
       const selected = filesRef.current;
       const batch = selected.some(file => file.status === "uploading")
         ? await new Promise<Attachment[]>((resolve, reject) => {
@@ -296,7 +303,7 @@ export function RichComposer({
       if (editor.current !== q) return;
       if (at && callbacks.current.onSchedule) await callbacks.current.onSchedule(plainText, document, batch, at);
       else if (confirmed) await callbacks.current.onSend(plainText, document, batch, { broadcast_confirmed: true });
-      else await callbacks.current.onSend(plainText, document, batch);
+      else await (alternateSubmit ?? normalSubmit)(plainText, document, batch);
       if (editor.current !== q) return;
       q.setText("");
       q.history.clear();
@@ -316,7 +323,7 @@ export function RichComposer({
       }
     }
   }
-  sendRef.current = () => void send();
+  sendRef.current = alternate => void send(false,undefined,alternate);
   useEffect(() => {
     let disposed = false;
     let cleanup = () => {};
@@ -395,6 +402,12 @@ export function RichComposer({
               q.insertText(0, replyText, "user");
               q.setSelection(replyText.length, 0, "silent");
             }
+            return;
+          }
+          if (alternateEnabled.current && event.key==='Enter' && (event.metaKey || event.ctrlKey) && !event.shiftKey && !event.altKey) {
+            event.preventDefault();
+            event.stopPropagation();
+            sendRef.current(true);
             return;
           }
           if (isDefaultComposerSendKey(event)) {
@@ -659,6 +672,7 @@ export function RichComposer({
             role={feedbackAtSendButton && sendDisabledReason ? "group" : undefined}
             aria-label={feedbackAtSendButton && sendDisabledReason ? "Send unavailable" : undefined}
             aria-describedby={feedbackAtSendButton && sendDisabledReason ? feedbackId : undefined}>
+          {submitAccessory}
           <IconButton
             label={submitLabel ?? "Send now"}
             size="sm"
@@ -676,7 +690,7 @@ export function RichComposer({
             onPointerLeave={() => clearTimeout(holdTimer.current)}
             onContextMenu={onSchedule ? event => event.preventDefault() : undefined}
           >
-            {submitLabel ?? <PaperPlaneRight size={19} weight="fill" />}
+            {submitIcon ?? submitLabel ?? <PaperPlaneRight size={19} weight="fill" />}
           </IconButton>
           {onSchedule && <ScheduleSend disabled={!ready || sending || blocked || filesPending || (!text.trim() && !files.length)} onSchedule={at => void send(false, at)} />}
           </div>

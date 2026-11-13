@@ -73,7 +73,12 @@ export function directTurns(app:FastifyInstance,io:Server,tasks:PostgresStore,in
       if(['agent_start_failed','agent_start_timeout','agent_capacity'].includes(result.rows[0]?.last_error))throw new AppError(409,'agent_start_failed');
     }
   };
-  return {dispatch,stop,accepted};
+  const steer=async(connection:string,input:{id:string;session_id:string;execution_id:string;text:string})=>{
+    const replies=await agents.to(`connection:${connection}`).timeout(8000).emitWithAck('agent.turn.steer',input);
+    if(replies.length===1 && replies[0]?.data===true) return;
+    throw new AppError(409,replies[0]?.error==='turn_not_running'?'turn_not_running':'steer_unconfirmed');
+  };
+  return {dispatch,stop,accepted,steer};
 }
 
 export function registerDirectTurns(socket:Socket,connections:AgentConnectionStore,tasks:PostgresStore,work:RealtimeWork) {

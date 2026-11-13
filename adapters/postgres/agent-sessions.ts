@@ -3,7 +3,7 @@ import { SidekickStore } from './sidekick.js';
 import { createHash } from 'node:crypto';
 import type { Pool } from 'pg';
 import { and, eq, sql } from 'drizzle-orm';
-import { AppError, parseAgentSessionInput, parseAgentSessionMessage, parseAgentResponse, record, text, uuid, type AgentSessionDetail, type AgentSessionSummary, type WorkspaceAgentSession, type AgentSessionTurn, type Task } from '@space/contracts';
+import { AppError, parseAgentSessionInput, parseAgentSessionMessage, parseAgentResponse, record, text, uuid, type AgentSessionDetail, type AgentSessionSummary, type WorkspaceAgentSession, type AgentSessionTurn, type SessionInput, type Task } from '@space/contracts';
 import { database, type DbSession } from './database.js';
 import { hasThreadAccess, requireWorkspaceAccess } from './access.js';
 import { sessionTransaction, SessionConflict } from './session-concurrency.js';
@@ -11,7 +11,8 @@ import {sessionToolApprovals} from './tool-approvals.js';
 import { PostgresStore } from './store.js';
 import * as s from './schema.js';
 const notFound = () => new AppError(404, 'not_found');
-const summaryColumns = sql`a.id,a.workspace_id,a.installation_id,a.origin_thread_id,a.title,a.state,a.managed,a.created_by,a.created_at::text,d.name AS agent_name,i.owner_id,
+const summaryColumns = sql`a.id,a.workspace_id,a.installation_id,a.origin_thread_id,a.title,a.state,a.queue_paused,a.managed,a.created_by,a.created_at::text,d.name AS agent_name,i.owner_id,
+  (a.managed AND i.connector_id IN ('codex.local','claude.local')) AS supports_steering,
   CASE WHEN a.managed THEN a.skill ELSE coalesce((SELECT skill FROM tasks WHERE session_id=a.id ORDER BY created_at,id LIMIT 1),a.skill) END AS skill,
   (SELECT count(*)::integer FROM tasks WHERE session_id=a.id) AS turn_count`;
 
@@ -119,7 +120,21 @@ export class AgentSessionStore {
       const audience = await c.execute(sql`SELECT ch.name,ch.kind,ch.direct_user_low,ch.direct_user_high FROM threads th JOIN channels ch ON ch.id=th.channel_id WHERE th.id=${session.origin_thread_id}`);
       const origin=audience.rows[0];
       const audienceLabel=origin?.kind==='direct' ? origin.direct_user_low===origin.direct_user_high ? 'Private session: only you' : 'Participants in the source direct conversation' : `Members of #${origin?.name ?? 'the source channel'}`;
-      return { audience:audienceLabel, tool_approvals:await sessionToolApprovals(c,id), ...(session.handoff_context ? {context:session.handoff_context} : {}), ...(session.managed ? { outputs: session.outputs } : {}), session: await this.summary(c, id), turns, next_cursor: (after || result.rows.length > 20) && turns.length ? turns[0]!.task.id : null, has_newer: after ? result.rows.length > 20 : !!before };
+      const executions = turns.flatMap(turn => turn.task.active_execution_id ? [sql`${turn.task.active_execution_id}::uuid`] : []);
+      const inputs = await c.execute<SessionInput & Record<string,unknown>>(sql`SELECT i.id,actor_id,u.display_name AS actor_name,to_json(i.created_at) #>> '{}' AS created_at,kind,state,execution_id,detail,jsonb_array_length(body->'asset_ids') AS file_count,body->>'text' AS text
+        FROM agent_session_inputs i JOIN users u ON u.id=i.actor_id WHERE session_id=${id} AND (
+          (kind='queue' AND state IN ('pending','blocked'))
+          ${executions.length ? sql`OR (kind='steer' AND execution_id IN (${sql.join(executions, sql`,`)}))` : sql``})
+        ORDER BY position`);
+      const steering = new Map<string,SessionInput[]>();
+      for (const input of inputs.rows) {
+        if (input.kind !== 'steer' || !input.execution_id) continue;
+        const receipts = steering.get(input.execution_id) ?? [];
+        receipts.push(input);
+        steering.set(input.execution_id, receipts);
+      }
+      for (const turn of turns) turn.steering = steering.get(turn.task.active_execution_id ?? '');
+      return { inputs:inputs.rows.filter(input => input.kind === 'queue'), audience:audienceLabel, tool_approvals:await sessionToolApprovals(c,id), ...(session.handoff_context ? {context:session.handoff_context} : {}), ...(session.managed ? { outputs: session.outputs } : {}), session: await this.summary(c, id), turns, next_cursor: (after || result.rows.length > 20) && turns.length ? turns[0]!.task.id : null, has_newer: after ? result.rows.length > 20 : !!before };
     }, { isolationLevel: 'repeatable read', accessMode: 'read only' });
   }
   async send(actor: string, id: string, raw: unknown, key: string): Promise<Task> {
@@ -129,7 +144,7 @@ export class AgentSessionStore {
     const plan = await this.prepareSend(c, actor, id, raw, key);
     return 'existing' in plan ? plan.existing : plan.commit();
   }
-  private async prepareSend(c: DbSession, actor: string, id: string, raw: unknown, key: string): Promise<TurnPlan> {
+  private async prepareSend(c: DbSession, actor: string, id: string, raw: unknown, key: string, queueInputId?: string): Promise<TurnPlan> {
     const input = parseAgentSessionMessage(raw); key = text(key, 128);
     const session = await this.visible(c, actor, id);
     if (!session.managed) throw new AppError(409, 'session_unmanaged');
@@ -143,17 +158,20 @@ export class AgentSessionStore {
       return { existing };
     }
     const busy = await c.execute(sql`SELECT 1 FROM tasks WHERE session_id=${id} AND status IN ('awaiting_approval','queued','running') LIMIT 1`);
+    if (!queueInputId && (await c.execute(sql`SELECT 1 FROM agent_session_inputs WHERE session_id=${id} AND kind='queue' AND state IN ('pending','blocked') LIMIT 1`)).rows.length) throw new AppError(409,'session_queue_pending');
     if (busy.rows.length) throw new AppError(409, 'session_busy');
-    const target = installation.owner_id === actor && this.tasks.admitLocalTurn ? await directTurnTarget(c, installation, session) : undefined;
+    const target = !queueInputId && installation.owner_id === actor && this.tasks.admitLocalTurn ? await directTurnTarget(c, installation, session) : undefined;
     const commit = async () => {
       const task = await this.tasks.createTaskIn(c, actor, taskInput, key, hash, session.id);
       if (input.asset_ids.length) {
         const ids = sql.join(input.asset_ids.map(id=>sql`${id}::uuid`), sql`,`);
         const attached = await c.execute<{id:string; name:string; size:number; type:string}>(sql`
-          UPDATE assets SET task_id=${task.id}
+          UPDATE assets SET task_id=${task.id},queue_input_id=NULL
           WHERE id IN (${ids}) AND channel_id=(SELECT channel_id FROM threads WHERE id=${session.origin_thread_id})
             AND workspace_id=${session.workspace_id} AND uploader_id=${actor} AND status='ready'
-            AND message_id IS NULL AND task_id IS NULL AND expires_at>clock_timestamp()
+            AND message_id IS NULL AND task_id IS NULL AND ${queueInputId
+              ? sql`queue_input_id=${queueInputId}`
+              : sql`queue_input_id IS NULL AND expires_at>clock_timestamp()`}
             AND NOT EXISTS (SELECT 1 FROM scheduled_messages WHERE status IN ('pending','sending') AND asset_ids && ARRAY[${ids}])
           RETURNING id,name,size,type`);
         if (attached.rows.length !== input.asset_ids.length) throw new AppError(409,'asset_unavailable');
@@ -164,13 +182,146 @@ export class AgentSessionStore {
         });
         await c.update(s.tasks).set({attachments:task.attachments}).where(eq(s.tasks.id,task.id));
       }
-      const result = installation.owner_id === actor ? await this.tasks.approveTaskIn(c, actor, task.id, session.id) : task;
+      const result = installation.owner_id === actor ? await this.tasks.approveTaskIn(c, actor, task.id, session.id,!!queueInputId) : task;
       const changed = await c.update(s.agentSessions).set({ revision: session.revision + 1 }).where(and(eq(s.agentSessions.id, id), eq(s.agentSessions.revision, session.revision), eq(s.agentSessions.state, 'active'))).returning({ id: s.agentSessions.id });
       if (!changed.length) throw new SessionConflict();
       return result;
     };
     return { target, commit };
   }
+  async addInput(actor:string,id:string,key:string,kind:'queue'|'steer',raw:unknown,execution?:string,sourceId?:string) {
+    key=uuid(key);
+    const body=parseAgentSessionMessage(raw);
+    if (kind==='steer' && (!body.text.trim() || body.asset_ids.length)) throw new AppError(400,'steer_requires_text');
+    const hash=createHash('sha256').update(JSON.stringify([kind,execution,body,...(sourceId ? [sourceId] : [])])).digest('hex');
+    return sessionTransaction(this.db,async c=>{
+      const session=await this.visible(c,actor,id);
+      if (!session.managed || session.state!=='active') throw new AppError(409,'session_unavailable');
+      const installation=await this.tasks.eligible(c,{...session,session_id:id,thread_id:session.origin_thread_id,requester_id:actor},true);
+      if(kind==='steer' && actor!==installation.owner_id) throw new AppError(403,'owner_required');
+      const prior=(await c.execute<{actor_id:string;session_id:string;request_hash:string;state:string}>(sql`SELECT actor_id,session_id,request_hash,state FROM agent_session_inputs WHERE id=${key}`)).rows[0];
+      if(prior){
+        if(prior.actor_id!==actor || prior.session_id!==id || prior.request_hash!==hash) throw new AppError(409,'idempotency_conflict');
+        return {state:prior.state,connection:null};
+      }
+      let connection:string|null=null;
+      if(kind==='steer'){
+        if(!['codex.local','claude.local'].includes(installation.connector_id)) throw new AppError(409,'steer_unsupported');
+        const run=(await c.execute<{connection_id:string}>(sql`SELECT a.connection_id FROM tasks t JOIN agent_connections a ON a.installation_id=t.installation_id
+          WHERE t.session_id=${id} AND t.status='running' AND t.active_execution_id=${execution} AND a.last_seen_at>now()-interval '45 seconds' AND a.auth_status='ready' AND a.connection_id IS NOT NULL AND a.revoked_at IS NULL`)).rows[0];
+        if(!run) throw new AppError(409,'turn_not_running');
+        connection=run.connection_id;
+      }
+      const count=await c.execute(sql`SELECT count(*)::int AS n FROM agent_session_inputs WHERE session_id=${id} AND kind=${kind} AND
+        (kind='queue' AND state IN ('pending','blocked') OR kind='steer' AND execution_id=${execution??null})`);
+      if(Number(count.rows[0]?.n)>=32) throw new AppError(409,'session_input_limit');
+      if (sourceId) {
+        const claimed = await c.execute(sql`UPDATE agent_session_inputs SET state='cancelled'
+          WHERE id=${sourceId} AND session_id=${id} AND kind='queue' AND state='pending'
+            AND body->>'text'=${body.text} AND jsonb_array_length(body->'asset_ids')=0 RETURNING id`);
+        if (!claimed.rows.length) throw new AppError(409,'queue_item_changed');
+      }
+      // Keep the wire payload canonical and omit absent optional fields on replay.
+      const payload={text:body.text,document:body.document,asset_ids:body.asset_ids,asset_descriptions:body.asset_descriptions};
+      const state=kind==='queue'?'pending':'sending';
+      await c.execute(sql`INSERT INTO agent_session_inputs(id,session_id,actor_id,kind,execution_id,body,request_hash,state,source_input_id)
+        VALUES(${key},${id},${actor},${kind},${execution??null},${JSON.stringify(payload)}::jsonb,${hash},${state},${sourceId??null})`);
+      if (body.asset_ids.length) {
+        const ids = sql.join(body.asset_ids.map(assetId => sql`${assetId}::uuid`), sql`,`);
+        const reserved = await c.execute(sql`UPDATE assets SET queue_input_id=${key}
+          WHERE id IN (${ids}) AND channel_id=(SELECT channel_id FROM threads WHERE id=${session.origin_thread_id})
+            AND workspace_id=${session.workspace_id} AND uploader_id=${actor} AND status='ready'
+            AND message_id IS NULL AND task_id IS NULL AND queue_input_id IS NULL AND expires_at>clock_timestamp()
+            AND NOT EXISTS (SELECT 1 FROM scheduled_messages WHERE status IN ('pending','sending') AND asset_ids && ARRAY[${ids}])
+          RETURNING id`);
+        if (reserved.rows.length !== body.asset_ids.length) throw new AppError(409,'asset_unavailable');
+      }
+      return {state,connection};
+    });
+  }
+
+  async finishSteer(id:string, state:'sent'|'blocked'|'uncertain',detail:string|null){
+    await sessionTransaction(this.db,async c=>{
+      const updated=await c.execute<{source_input_id:string|null}>(sql`UPDATE agent_session_inputs SET state=${state},detail=${detail}
+        WHERE id=${uuid(id)} AND kind='steer' AND state='sending' RETURNING source_input_id`);
+      const source=updated.rows[0]?.source_input_id;
+      if (source && state==='blocked') await c.execute(sql`UPDATE agent_session_inputs SET state='blocked',detail=${detail}
+        WHERE id=${source} AND state='cancelled' AND EXISTS (SELECT 1 FROM agent_sessions WHERE id=session_id AND state='active')`);
+    });
+  }
+
+  async changeQueued(actor:string,id:string,key:string,action:'cancel'|'retry'){
+    return sessionTransaction(this.db,async c=>{
+      const session=await this.visible(c,actor,id);
+      const [installation]=await c.select().from(s.agentInstallations).where(eq(s.agentInstallations.id,session.installation_id));
+      const result=await c.execute(sql`UPDATE agent_session_inputs SET state=${action==='retry'?'pending':'cancelled'},detail=NULL
+        WHERE id=${uuid(key)} AND session_id=${id} AND kind='queue' AND (actor_id=${actor} OR ${installation?.owner_id===actor})
+        AND state IN ('blocked',${action==='retry'?'blocked':'pending'}) RETURNING id`);
+      if(!result.rows.length) throw new AppError(409,'queue_item_unavailable');
+      if (action==='cancel') await c.execute(sql`UPDATE agent_sessions SET queue_paused=false WHERE id=${id} AND queue_paused
+        AND NOT EXISTS(SELECT 1 FROM agent_session_inputs WHERE session_id=${id} AND kind='queue' AND state IN ('pending','blocked'))`);
+    });
+  }
+
+  async reviseQueued(actor:string,id:string,key:string,raw:unknown) {
+    const input=record(raw,['text','previous_text','move_to']);
+    const moving=input.move_to!==undefined;
+    if (moving && (input.text!==undefined || input.previous_text!==undefined)) throw new AppError(400,'invalid_queue_change');
+    return sessionTransaction(this.db,async c=>{
+      const session=await this.visible(c,actor,id);
+      const installation=await this.tasks.eligible(c,{...session,session_id:id,thread_id:session.origin_thread_id,requester_id:actor},true);
+      const items=(await c.execute<{id:string;actor_id:string;position:string}>(sql`SELECT id,actor_id,position FROM agent_session_inputs
+        WHERE session_id=${id} AND kind='queue' AND state IN ('pending','blocked') ORDER BY position`)).rows;
+      const from=items.findIndex(item=>item.id===key);
+      if (from<0 || (items[from]!.actor_id!==actor && installation.owner_id!==actor)) throw new AppError(409,'queue_item_unavailable');
+      if (moving) {
+        const to=items.findIndex(item=>item.id===uuid(input.move_to));
+        if (to<0) throw new AppError(409,'queue_item_changed');
+        const order=[...items];
+        order.splice(to,0,...order.splice(from,1));
+        const moves=order.flatMap((item,index)=>item.id===items[index]!.id ? [] : [sql`(${item.id}::uuid,${items[index]!.position}::bigint)`]);
+        if (moves.length) await c.execute(sql`UPDATE agent_session_inputs i SET position=v.pos FROM (VALUES ${sql.join(moves,sql`,`)}) v(id,pos) WHERE i.id=v.id`);
+      } else {
+        const content=text(input.text,4000).trim();
+        if (!content || typeof input.previous_text!=='string') throw new AppError(400,'invalid_text');
+        const result=await c.execute(sql`UPDATE agent_session_inputs SET body=jsonb_set(body-'document','{text}',to_jsonb(${content}::text))
+          WHERE id=${key} AND body->>'text'=${input.previous_text} RETURNING id`);
+        if (!result.rows.length) throw new AppError(409,'queue_item_changed');
+      }
+    });
+  }
+
+  async resumeQueue(actor:string,id:string) {
+    return sessionTransaction(this.db,async c=>{
+      await this.manageable(c,actor,id);
+      const resumed=await c.execute(sql`UPDATE agent_sessions SET queue_paused=false,revision=revision+1 WHERE id=${id} AND queue_paused AND state='active' RETURNING id`);
+      if (resumed.rows.length) await c.execute(sql`INSERT INTO event_outbox(kind,aggregate_id,payload) VALUES ('task.session_queue',${id},'{}')`);
+    });
+  }
+
+  async drainQueue(id:string) {
+    const head=()=>sql`SELECT id,actor_id,body,state FROM agent_session_inputs WHERE session_id=${id} AND kind='queue' AND state IN ('blocked','pending') AND EXISTS(SELECT 1 FROM agent_sessions WHERE id=${id} AND NOT queue_paused) ORDER BY position LIMIT 1`;
+    let inputId:string|undefined;
+    try {
+      return await runTurn(this.db,async c=>{
+        const row=(await c.execute<{id:string;actor_id:string;body:unknown;state:string}>(head())).rows[0];
+        if(!row || row.state==='blocked' || (inputId && row.id!==inputId)) throw new AppError(409,'queue_idle');
+        inputId=row.id;
+        const plan=await this.prepareSend(c,row.actor_id,id,row.body,'session-queue/'+row.id,row.id);
+        return {commit:async()=>{
+          const task='existing' in plan ? plan.existing : await plan.commit();
+          await c.execute(sql`UPDATE agent_session_inputs SET state='sent',task_id=${task.id} WHERE id=${row.id}`);
+          return task;
+        }};
+      },this.tasks.admitLocalTurn);
+    } catch(error){
+      if(!(error instanceof AppError)) throw error;
+      if(['queue_idle','session_busy'].includes(error.code)) return;
+      if(!inputId || ['session_conflict','agent_capacity','agent_busy'].includes(error.code)) throw error;
+      await this.db.execute(sql`UPDATE agent_session_inputs SET state='blocked',detail=${error.code} WHERE id=${inputId} AND state='pending'`);
+    }
+  }
+
   private async manageable(c: DbSession, actor: string, id: string) {
     const session = await this.visible(c, actor, id);
     if (!session.managed) throw new AppError(409, 'session_unmanaged');
@@ -203,6 +354,9 @@ export class AgentSessionStore {
         const changed = await c.update(s.agentSessions).set({ revision: session.revision + 1, ...(operation === 'end' ? { state: 'ended' as const } : {}) }).where(and(eq(s.agentSessions.id, id), eq(s.agentSessions.revision, session.revision))).returning({ id: s.agentSessions.id });
         if (!changed.length) throw new SessionConflict();
       }
+      if (operation==='stop') await c.execute(sql`UPDATE agent_sessions SET queue_paused=true WHERE id=${id} AND EXISTS(
+        SELECT 1 FROM agent_session_inputs WHERE session_id=${id} AND kind='queue' AND state IN ('pending','blocked'))`);
+      else await c.execute(sql`UPDATE agent_session_inputs SET state='cancelled' WHERE session_id=${id} AND kind='queue' AND state IN ('pending','blocked')`);
       return this.summary(c, id);
   }
 }

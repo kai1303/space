@@ -1,5 +1,7 @@
+import { AgentDictation } from './AgentDictation.js';
+import { CodexEffortSlider } from './CodexEffortSlider.js';
 import { useRef, useState, type ComponentProps } from 'react';
-import { CaretDown, CaretRight, Check, Flag, Microphone, Pause, PencilSimple, Play, X } from '@phosphor-icons/react';
+import { CaretDown, CaretRight, Check, Flag, Pause, PencilSimple, Play, X } from '@phosphor-icons/react';
 import { ComposerSendError } from '@space/ui/composer';
 import { Button, Dialog, IconButton, Popover } from '@space/ui/primitives';
 import { ConversationComposer } from '../chat/ThreadConversation.js';
@@ -10,19 +12,22 @@ const examples = {
   'claude.run': ['Claude Sonnet', 'Claude Opus'],
 };
 
-type Props = ComponentProps<typeof ConversationComposer> & { skill: string };
+type Props = ComponentProps<typeof ConversationComposer> & {
+  skill: string;
+  previewConfig?: { model: string; effort: string };
+};
 
-export function AgentSessionComposer({ skill, ...props }: Props) {
+export function AgentSessionComposer({ skill, previewConfig, ...props }: Props) {
   const models = skill === 'codex.run' || skill === 'claude.run' ? examples[skill] : undefined;
-  const [model, setModel] = useState('Default');
-  const [effort, setEffort] = useState('Medium');
+  const [model, setModel] = useState(previewConfig?.model ?? 'Default');
+  const [effort, setEffort] = useState(previewConfig?.effort ?? 'Medium');
   const [picker, setPicker] = useState<'effort'|'model'>('effort');
   const [goal, setGoal] = useState('');
   const [paused, setPaused] = useState(false);
   const [composingGoal, setComposingGoal] = useState(false);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState('');
-  const [voice, setVoice] = useState<'dictation' | 'conversation'>('dictation');
+  const [dictating, setDictating] = useState(false);
   const region = useRef<HTMLDivElement>(null);
   const popover = { floating: true, align: 'start' as const, triggerClassName: 'agent-composer-trigger', panelClassName: 'agent-composer-popover' };
   const focusInput = () => region.current?.querySelector<HTMLElement>('[contenteditable="true"]')?.focus();
@@ -36,7 +41,7 @@ export function AgentSessionComposer({ skill, ...props }: Props) {
     setComposingGoal(false);
     setEditing(false);
   }
-  const send: Props['onSend'] = (text, document, attachments, options) => {
+  const withGoal = (submit:Props['onSend']):Props['onSend'] => (text, document, attachments, options) => {
     if (attachments.length && (composingGoal || (models && /^\/goal(?:\s|$)/.test(text)))) {
       throw new ComposerSendError('Send attachments in a message or remove them to set a goal.');
     }
@@ -52,9 +57,14 @@ export function AgentSessionComposer({ skill, ...props }: Props) {
       else startGoal();
       return;
     }
-    return props.onSend(text, document, attachments, options);
+    return submit(text, document, attachments, options);
   };
 
+  const pickerLabel = `Select model and effort, ${model}, ${effort}`;
+  const pickerTrigger = <span className="agent-effort-trigger" onPointerDown={skill === 'claude.run' ? ()=>setPicker('effort') : undefined}>
+    <span className="agent-trigger-model">{model}</span>
+    <span className="agent-trigger-effort">{effort}</span><CaretDown/>
+  </span>;
   return <div ref={region}>
     {goal && <div className="agent-session-goal" aria-label="Session goal preview">
       <Flag size={16}/><div><small>{paused ? 'Paused goal' : 'Pursuing goal'} · Preview</small><strong>{goal}</strong></div>
@@ -62,13 +72,17 @@ export function AgentSessionComposer({ skill, ...props }: Props) {
       <IconButton size="sm" label={paused ? 'Resume goal' : 'Pause goal'} onClick={()=>setPaused(!paused)}>{paused ? <Play/> : <Pause/>}</IconButton>
       <IconButton size="sm" label="Clear goal" onClick={()=>saveGoal('')}><X/></IconButton>
     </div>}
-    <ConversationComposer {...props} placeholder={composingGoal ? 'Describe your goal and how to tell when it’s done' : props.placeholder}
-      submitLabel={composingGoal ? 'Set goal' : props.submitLabel} onSend={send}
-      renderExtraActions={models && ((insert, disabled) => <div className="agent-composer-tools">
-    <Popover {...popover} label="Select model and effort" trigger={<span className="agent-effort-trigger" onPointerDown={()=>setPicker('effort')}>{model} · {effort} <CaretDown/></span>}>
+    <ConversationComposer {...props} sendDisabled={props.sendDisabled || dictating} placeholder={composingGoal ? 'Describe your goal and how to tell when it’s done' : props.placeholder}
+      submitLabel={composingGoal ? 'Set goal' : props.submitLabel} onSend={withGoal(props.onSend)} onAlternateSend={props.onAlternateSend && withGoal(props.onAlternateSend)}
+      submitIcon={composingGoal ? undefined : props.submitIcon} submitAccessory={composingGoal ? undefined : props.submitAccessory}
+      renderExtraActions={(insert, disabled) => <div className="agent-composer-tools">
+    {models && (skill === 'codex.run' ? <Popover {...popover} panelClassName="agent-composer-popover agent-model-popover" label={pickerLabel}
+      trigger={pickerTrigger}>
+      {()=> <CodexModelPicker models={models} model={model} effort={effort} selectModel={setModel} selectEffort={setEffort}/>}
+    </Popover> : (<Popover {...popover} label={pickerLabel} trigger={pickerTrigger}>
       {close => <><strong>{picker === 'model' ? 'Select model' : 'Select effort'}</strong>
         <div className="agent-picker-options">
-          {(picker === 'model' ? ['Default', ...models] : (skill === 'codex.run' ? ['Light','Medium','High','Extra High'] : ['Low','Medium','High'])).map(value=>
+          {(picker === 'model' ? ['Default', ...models] : ['Low','Medium','High']).map(value=>
             <button key={value} type="button" aria-pressed={value === (picker === 'model' ? model : effort)} onClick={()=>{
               if (picker === 'model') { setModel(value); setPicker('effort'); }
               else { setEffort(value); close(); }
@@ -77,17 +91,11 @@ export function AgentSessionComposer({ skill, ...props }: Props) {
         <button type="button" className="agent-picker-switch" onClick={()=>setPicker(picker === 'model' ? 'effort' : 'model')}>
           {picker === 'model' ? 'Select effort' : 'Select model'}<span>{picker === 'model' ? effort : model} <CaretRight size={12}/></span></button>
         <small>Preview options</small></>}
-    </Popover>
-    {!goal && <IconButton size="sm" label={composingGoal ? 'Cancel goal mode' : 'Set session goal'} aria-pressed={composingGoal}
+    </Popover>))}
+    {models && !goal && <IconButton size="sm" label={composingGoal ? 'Cancel goal mode' : 'Set session goal'} aria-pressed={composingGoal}
       onClick={()=>{if(composingGoal){setComposingGoal(false);focusInput();}else startGoal();}}><Flag weight={composingGoal ? 'fill' : 'regular'}/>{composingGoal ? 'Goal ×' : 'Goal'}</IconButton>}
-    <Popover {...popover} label="Voice preview" disabled={disabled} trigger={<Microphone/>}>
-      {close => <><strong>Voice preview</strong><small>Sample transcript · Microphone off</small>
-        <label>Mode<select aria-label="Voice mode" value={voice} onChange={e=>setVoice(e.target.value === 'conversation' ? 'conversation' : 'dictation')}><option value="dictation">Dictation</option><option value="conversation">Conversation</option></select></label>
-        <p>{voice==='dictation' ? 'Show upload progress beside the filename.' : 'You: How far did the upload get?'}{voice==='conversation' && <><br/>Agent: The sample upload is halfway done.</>}</p>
-        {voice==='dictation' ? <Button size="sm" onClick={()=>{close(false);insert('Show upload progress beside the filename.');}}>Insert sample into draft</Button> : <Button size="sm" onClick={()=>close()}>Done</Button>}
-      </>}
-    </Popover>
-  </div>)}/>
+    <AgentDictation insert={insert} disabled={disabled} onBusy={setDictating}/>
+  </div>}/>
     {editing && <Dialog open title="Edit goal" onClose={()=>setEditing(false)}>
       <form className="agent-goal-editor" onSubmit={event=>{event.preventDefault();if (draft.trim()) saveGoal(draft);}}>
         <label>Goal<textarea autoFocus value={draft} onChange={event=>setDraft(event.target.value)}/></label>
@@ -95,4 +103,28 @@ export function AgentSessionComposer({ skill, ...props }: Props) {
       </form>
     </Dialog>}
   </div>;
+}
+
+function CodexModelPicker({models, model, effort, selectModel, selectEffort}: {
+  models:string[]; model:string; effort:string; selectModel:(value:string)=>void; selectEffort:(value:string)=>void;
+}) {
+  const [listing,setListing]=useState(false);
+  const modelButton=useRef<HTMLButtonElement>(null);
+  const selectedOption=useRef<HTMLButtonElement>(null);
+  function toggleList(open:boolean) {
+    setListing(open);
+    requestAnimationFrame(()=>{(open ? selectedOption : modelButton).current?.focus();});
+  }
+  if (listing) return <><strong>Select model</strong><div className="agent-picker-options">
+    {['Default',...models].map(value=><button type="button" key={value} aria-pressed={model===value}
+      ref={model===value ? selectedOption : undefined} onClick={()=>{selectModel(value);toggleList(false);}}>
+      {value}{model===value && <Check size={15}/>}
+    </button>)}
+  </div></>;
+  return <>
+    <button ref={modelButton} type="button" className="agent-picker-switch agent-current-model" aria-label={`Select model, ${model}`}
+      onClick={()=>toggleList(true)}>{model}<CaretRight size={14}/></button>
+    <CodexEffortSlider value={effort} onChange={selectEffort}/>
+    <small>Preview options</small>
+  </>;
 }

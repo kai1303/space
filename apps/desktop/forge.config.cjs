@@ -16,7 +16,7 @@ module.exports = {
     ...(process.env.SPACE_NOTARY_PROFILE && { osxNotarize: { keychainProfile: process.env.SPACE_NOTARY_PROFILE } }),
     extendInfo: {
       NSCameraUsageDescription: 'Space uses your camera when you enable video in a direct message call.',
-      NSMicrophoneUsageDescription: 'Space uses your microphone for direct message calls.',
+      NSMicrophoneUsageDescription: 'Space uses your microphone for calls and dictation.',
     },
     // Package only the runtime, never tests, dependencies, or local tooling.
     ignore: [/^\/(?!src(?:\/|$)|assets(?:\/|$)|package\.json$|desktop\.config\.json$)/],

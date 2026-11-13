@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { WorkspaceSidebar } from "./sidebar.js";
 
@@ -152,4 +152,26 @@ it("opens a channel context menu with the pointer or keyboard without navigating
   expect(select).not.toHaveBeenCalled();
   await userEvent.click(row);
   expect(select).toHaveBeenCalledWith("builds");
+});
+
+it("streams only changed session titles and exposes the full name during the reveal", () => {
+  vi.useFakeTimers();
+  try {
+    const sidebar = (name: string) => <WorkspaceSidebar workspace="Team" selectedId="" width={385}
+      onWidthChange={()=>{}} onSelect={()=>{}} channels={[{id:'session:one',name,section:'sessions',agentName:'Codex'}]}/>;
+    const view = render(sidebar('Original title'));
+    expect(screen.getByRole('button',{name:'Original title'}).querySelector('.sp-agent-word')).toBeNull();
+    view.rerender(sidebar('Review the upload changes'));
+    const button = screen.getByRole('button',{name:'Review the upload changes'});
+    act(()=>vi.advanceTimersByTime(80));
+    const word = button.querySelector('.sp-agent-word');
+    expect(word).toBeTruthy();
+    view.rerender(sidebar('Review the upload changes'));
+    expect(button.querySelector('.sp-agent-word')).toBe(word);
+    view.rerender(sidebar('Revised [literal] title'));
+    act(()=>vi.advanceTimersByTime(500));
+    act(()=>vi.advanceTimersByTime(750));
+    expect(button.querySelector('.sp-channel-name')?.textContent).toBe('Revised [literal] title');
+    expect(button.querySelector('.sp-agent-word')).toBeNull();
+  } finally { vi.useRealTimers(); }
 });

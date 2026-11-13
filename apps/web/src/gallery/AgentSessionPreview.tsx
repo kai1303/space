@@ -1,3 +1,10 @@
+import type { SessionInput } from '@space/contracts';
+import { Button } from '@space/ui/primitives';
+import { ComposerSendError } from '@space/ui/composer';
+import { SessionQueue, FollowUpMenu, useFollowUpPreference } from '../features/agents/SessionQueue.js';
+import '../features/agents/agent-sessions.css';
+import { ArrowBendUpRight,ListBullets } from '@phosphor-icons/react';
+import type { Attachment } from '@space/ui/rich-text';
 import { useState } from 'react';
 import type { FilePickerSource } from '../features/files/AttachFileDialog.js';
 import { Message } from '@space/ui/conversation';
@@ -20,15 +27,46 @@ const previewSource: FilePickerSource = {
 };
 
 export function AgentSessionPreview() {
-  const [messages, setMessages] = useState<{text:string;files:string[]}[]>([]);
+  type PreviewInput = SessionInput & { files: string[] };
+  const [messages, setMessages] = useState<PreviewInput[]>([]);
+  const [queue, setQueue] = useState<PreviewInput[]>([]);
+  const [running, setRunning] = useState(false);
+  const [mode, setMode] = useFollowUpPreference();
+  const [paused,setPaused]=useState(false);
+  function finishTurn() {
+    const [next, ...rest] = queue;
+    if (next) setMessages(list => [...list, next]);
+    setQueue(rest);
+    setRunning(!!next);
+    setPaused(false);
+  }
+  function send(text:string,files:Attachment[],steer:boolean){
+    if (steer && files.length) throw new ComposerSendError('Queue the message to include files.');
+    const item: PreviewInput = { id:crypto.randomUUID(),actor_id:'preview',text,files:files.map(file=>file.name),file_count:files.length,
+      state:steer?'sent':'pending',kind:steer?'steer':'queue',execution_id:null,detail:null };
+    if ((running||paused) && !steer) setQueue(list=>[...list,item]);
+    else {setMessages(list=>[...list,item]);setRunning(true);}
+  }
   return <main className="agent-composer-example">
-    <ConversationHeader title="Local Codex" status="Composer preview"/>
+    <ConversationHeader title="Local Codex" status={running ? 'Running preview turn' : 'Composer preview'} actions={running && <><Button size="sm" onClick={()=>{setRunning(false);setPaused(queue.length>0);}}>Stop</Button><Button size="sm" onClick={finishTurn}>Finish preview turn</Button></>}/>
     <div className="agent-composer-example-history">
       <Message author="Kai" initials="K" tone="blue" time="10:24"><p>Can we show progress while a file uploads?</p></Message>
       <Message author="Local Codex" initials="LC" tone="green" time="10:25" agent><p>We can show the percentage beside the filename in the message composer.</p></Message>
-      {messages.map(({text,files},index)=><Message key={index} author="Kai" initials="K" tone="blue" time="Now"><p>{text}</p>{files.map((file,i)=><div key={i}>{file}</div>)}</Message>)}
+      {messages.map(item=><Message key={item.id} author="Kai" initials="K" tone="blue" time="Now"><p>{item.text}</p>{item.files.map((file,i)=><div key={i}>{file}</div>)}</Message>)}
     </div>
-    <AgentSessionComposer filePickerSource={previewSource} skill="codex.run" channel="agent session" placeholder="Message Local Codex" maxLength={4000}
-      showUnavailableActions={false} attachmentsEnabled mentions={['Kai']} onSend={(text,_document,files)=>setMessages(list=>[...list,{text,files:files.map(file=>file.name)}])}/>
+    <SessionQueue items={queue} canManage={()=>true} canSteer={running} paused={paused} onResume={finishTurn} mode={mode} onModeChange={setMode}
+      onAction={(item,action,value)=>{
+        const index=queue.findIndex(row=>row.id===item.id),entry=queue[index];
+        if(!entry)return false;
+        if(action==='edit')setQueue(queue.map(row=>row===entry?{...row,text:value!}:row));
+        else if(action==='move'){const next=[...queue],to=next.findIndex(row=>row.id===value);next.splice(to,0,...next.splice(index,1));setQueue(next);}
+        else {if(action==='steer')setMessages(list=>[...list,{...entry,kind:'steer',state:'sent'}]);setQueue(queue.filter(row=>row!==entry));if(queue.length===1)setPaused(false);}
+        return true;
+      }}/>
+    <AgentSessionComposer submitLabel={running ? mode==='steer'?'Steer':'Queue' : paused?'Queue':undefined}
+      submitIcon={running||paused ? running&&mode==='steer'?<ArrowBendUpRight size={18}/>:<ListBullets size={18}/> : undefined}
+      submitAccessory={running && <span className="agent-followup-menu"><FollowUpMenu mode={mode} change={setMode}/></span>}
+      onAlternateSend={running?(text,_doc,files)=>send(text,files,mode!=='steer'):undefined} previewConfig={{model:'GPT-6 Astra',effort:'High'}} filePickerSource={previewSource} skill="codex.run" channel="agent session" placeholder="Message Local Codex" maxLength={4000}
+      showUnavailableActions={false} attachmentsEnabled mentions={['Kai']} onSend={(text,_document,files)=>send(text,files,running && mode==='steer')}/>
   </main>;
 }

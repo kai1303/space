@@ -64,8 +64,8 @@ function createSpaceWindow(configuredUrl, { show = true, pair } = {}) {
       || navigationAction(contents.getURL(), url) !== 'internal') { callback(false); return; }
     if (types.length && types.every(type => approvedMedia.has(type))) { callback(true); return; }
     void dialog.showMessageBox(win, {
-      type: 'question', message: 'Allow camera and microphone access for calls?',
-      detail: `${new URL(url).origin} is requesting ${types.join(' and ') || 'media'} access. You control your camera and microphone from the call panel.`,
+      type: 'question', message: 'Allow Space to use the requested media devices?',
+      detail: `${new URL(url).origin} is requesting ${types.join(' and ') || 'media'} access. You control recording from the call panel or the dictation button.`,
       buttons: ['Allow', 'Not now'], defaultId: 1, cancelId: 1,
     }).then(({ response }) => {
       const allowed = response === 0 && !win.isDestroyed() && navigationAction(contents.getURL(), url) === 'internal';

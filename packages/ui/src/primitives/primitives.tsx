@@ -526,6 +526,7 @@ export function Skeleton({
 }
 export function ChannelItem({
   name,
+  nameContent,
   selected = false,
   hasMenu = false,
   unread = 0,
@@ -534,6 +535,7 @@ export function ChannelItem({
   onClick,
 }: {
   name: string;
+  nameContent?: ReactNode;
   selected?: boolean;
   hasMenu?: boolean;
   unread?: number;
@@ -550,7 +552,7 @@ export function ChannelItem({
       onClick={onClick}
     >
       {icon}
-      <span className="sp-channel-name" title={name}>{name}</span>
+      <span className="sp-channel-name" title={name}>{nameContent ?? name}</span>
       {badgeCount > 0 && (
         <span className="sp-unread" aria-label={`${badgeCount} unread`}>
           {badgeCount}

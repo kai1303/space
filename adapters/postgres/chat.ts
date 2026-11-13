@@ -230,7 +230,7 @@ export class ChatStore {
       if (files.length) {
         const attached = await c.update(s.assets).set({ message_id: id }).where(and(
           inArray(s.assets.id, files.map(file => file.id)), eq(s.assets.channel_id, channelId), eq(s.assets.uploader_id, actor),
-          eq(s.assets.status, 'ready'), isNull(s.assets.message_id), isNull(s.assets.task_id), gt(s.assets.expires_at, sql`clock_timestamp()`),
+          eq(s.assets.status, 'ready'), isNull(s.assets.message_id), isNull(s.assets.task_id), isNull(s.assets.queue_input_id), gt(s.assets.expires_at, sql`clock_timestamp()`),
         )).returning({ id: s.assets.id });
         if (attached.length !== files.length) throw new AppError(409, 'asset_unavailable');
       }

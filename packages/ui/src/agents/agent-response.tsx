@@ -1,6 +1,6 @@
-import { createContext, isValidElement, memo, useContext, useState, type ReactNode } from 'react';
-import { motion } from 'motion/react';
-import { fadeStreamedWords, useStreamingText, wordFadeMs, words } from './streaming-text.js';
+import { createContext, isValidElement, useContext, useState, type ReactNode } from 'react';
+import { StreamedWords } from './streamed-words.js';
+import { fadeStreamedWords, useStreamingText } from './streaming-text.js';
 import Markdown, { type Components, type ExtraProps } from 'react-markdown';
 import type { ElementContent } from 'hast';
 import remarkGfm from 'remark-gfm';
@@ -10,21 +10,6 @@ import { CodeBlock } from '../rich-text/code-block.js';
 import { FileToolDetails } from './FileToolDetails.js';
 import { ToolExecution } from './work-items.js';
 import { safeLink } from '../rich-text/rich-text.js';
-
-// Keep the settled prefix in one text node and only mount Motion spans near the leading edge.
-const StreamedWords = memo(function StreamedWords({ text, from }: { text: string; from: number }) {
-  if (!words || from >= text.length) return text;
-  const boundary = words.segment(text).containing(from);
-  const start = boundary && boundary.index < from ? boundary.index + boundary.segment.length : from;
-  const parts: ReactNode[] = [text.slice(0, start)];
-  for (const { segment, index } of words.segment(text.slice(start))) {
-    parts.push(segment.trim() ? (
-      <motion.span key={start + index} className="sp-agent-word" initial={{ opacity: 0 }} animate={{ opacity: 1 }}
-        transition={{ duration: wordFadeMs / 1000, ease: [0.37, 0.55, 0.86, 0.88] }}>{segment}</motion.span>
-    ) : segment);
-  }
-  return <>{parts}</>;
-});
 
 export const AgentProfileLinkContext = createContext<{
   workspace: string;

@@ -85,6 +85,21 @@ export function registerAgentConnections(app: FastifyInstance, io: Server, store
         if (code === 'unauthorized') socket.disconnect(true);
       } finally { working = false; }
     });
+    let titleWrites=0;
+    socket.on('agent.session.title',async (raw:unknown,ack:unknown)=>{
+      if (typeof ack!=='function') return;
+      if (titleWrites>=4) { ack({error:'busy'}); return; }
+      titleWrites++;
+      try {
+        const input=record(raw,['task_id','execution_id','title']);
+        await work.run(socket.id,async ()=>{
+          await store.authenticateConnection(socket.data.token,identity.connection_id);
+          await tasks.syncCodexTitle(identity.id,identity.connection_id,uuid(input.task_id),uuid(input.execution_id),text(input.title,160));
+        });
+        ack({data:true});
+      } catch(error) { ack({error:error instanceof AppError?error.code:'internal_error'}); }
+      finally {titleWrites--;}
+    });
     socket.on('disconnect', () => { stopCheck(); work.cancel(socket.id); void work.run(`disconnect:${socket.id}`, () => store.disconnect(identity.id, identity.connection_id)).catch(() => {}); });
   });
   app.addHook('preClose', async () => { stopWakes(); agents.local.disconnectSockets(true); });

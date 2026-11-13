@@ -50,6 +50,20 @@ test('direct sessions reject offline/busy/capacity, start independently without 
  await send(a.id,undefined,409);await send(c.id,undefined,409);
  const retry=await send(a.id,key);assert.equal(retry.id,ta.id);assert.equal(launches,2);
  const saved=await api(s.owner_token,`/agent-sessions/${a.id}`);assert.equal(saved.turns[0].task.id,ta.id);
+ const instructions:unknown[]=[];
+ socket.on('agent.turn.steer',(input,ack)=>{instructions.push(input);ack({data:true});});
+ const steerPath=`/agent-sessions/${a.id}/steer`,steerKey=randomUUID();
+ const instruction={execution_id:ta.active_execution_id,text:'Check the smaller file first'};
+ await api(s.collaborator_token,steerPath,instruction,undefined,403);
+ await api(s.owner_token,steerPath,{...instruction,execution_id:tb.active_execution_id},undefined,409);
+ const queuedSource=await api(s.owner_token,`/agent-sessions/${a.id}/queue`,{text:instruction.text});
+ Object.assign(instruction,{source_input_id:queuedSource.id});
+ const receipt=await api(s.owner_token,steerPath,instruction,steerKey);
+ assert.deepEqual(receipt,{id:steerKey,state:'sent'});
+ assert.deepEqual(await api(s.owner_token,steerPath,instruction,steerKey),receipt);
+ assert.deepEqual(instructions,[{text:instruction.text,execution_id:instruction.execution_id,id:steerKey,session_id:a.id}]);
+ assert.deepEqual((await api(s.owner_token,`/agent-sessions/${a.id}`)).inputs,[]);
+ assert.equal((await api(s.owner_token,`/agent-sessions/${a.id}`)).turns[0].steering[0].text,instruction.text);
  // A stale or foreign execution cannot use another session's event channel.
  assert.equal((await command('agent.turn.event',{task_id:ta.id,event:{id:randomUUID(),schema_version:'1.0',execution_id:tb.active_execution_id,sequence:2,type:'execution.completed',occurred_at:new Date().toISOString(),payload:{text:'Wrong'}}})).error,'stale_execution');
  const beforeUpdates=updates;
@@ -57,6 +71,22 @@ test('direct sessions reject offline/busy/capacity, start independently without 
  assert.equal((await command('agent.turn.event',{task_id:request.task_id,event:{id:randomUUID(),schema_version:'1.0',execution_id:request.execution_id,sequence:2,type:'execution.completed',occurred_at:new Date().toISOString(),payload:{text:'Done'}}})).data,true);
  assert.equal((await command('agent.turn.finish',{task_id:request.task_id})).data,true);running.delete(b.id);
  assert.equal((await api(s.owner_token,`/agent-sessions/${b.id}`)).turns[0].task.status,'completed');
+ // The native app can assign a name after the execution has finished.
+ const renameFromCodex=(name:string)=>command('agent.session.title',{task_id:tb.id,execution_id:tb.active_execution_id,title:name});
+ const sessionPath=`/agent-sessions/${b.id}`;
+ assert.deepEqual(await renameFromCodex('Upload investigation'),{data:true});
+ assert.equal((await api(s.owner_token,sessionPath)).session.title,'Upload investigation');
+ const rename=await app.inject({method:'PATCH',url:'/v1'+sessionPath,headers:{authorization:`Bearer ${s.owner_token}`},payload:{title:'My upload notes',previous_title:'Upload investigation'}});
+ assert.equal(rename.statusCode,200);
+ await renameFromCodex('Upload investigation');
+ assert.equal((await api(s.owner_token,sessionPath)).session.title,'My upload notes');
+ assert.deepEqual(await renameFromCodex('Completed upload review'),{data:true});
+ assert.equal((await api(s.owner_token,sessionPath)).session.title,'Completed upload review');
+ const retried=await api(s.owner_token,`/threads/${s.thread_id}/agent-sessions`,{client_session_id:b.id,installation_id,title:'Direct test'},undefined,201);
+ assert.equal(retried.title,'Completed upload review');
+ assert.equal((await command('agent.session.title',{task_id:tb.id,execution_id:ta.active_execution_id,title:'Wrong thread'})).error,'not_found');
+ assert.equal((await renameFromCodex('   ')).error,'invalid_text');
+ assert.equal((await api(s.owner_token,`/agent-sessions/${a.id}`)).session.title,'Direct test');
  const updateDeadline=Date.now()+3000;while(updates<=beforeUpdates && Date.now()<updateDeadline)await new Promise(r=>setTimeout(r,10));assert.ok(updates>beforeUpdates,'direct progress must notify an authorized viewer without CDC');
  rejectStart=true;const rejectedKey=randomUUID();await send(c.id,rejectedKey,409);
  const rejected=await api(s.owner_token,`/agent-sessions/${c.id}`);assert.equal(rejected.turns[0].task.status,'failed');
@@ -65,6 +95,26 @@ test('direct sessions reject offline/busy/capacity, start independently without 
 
  await api(s.owner_token,`/agent-sessions/${a.id}/stop`,{});
  assert.equal((await api(s.owner_token,`/agent-sessions/${a.id}`)).turns[0].task.status,'failed');running.delete(a.id);
+ // A terminal event wakes the durable queue via WAL and JetStream. No manual drain or second send.
+ const followupPath=`/agent-sessions/${c.id}/queue`;
+ await api(s.owner_token,followupPath,{text:'Run after this turn'});
+ const offered=new Promise<void>((resolve,reject)=>{
+   const timer=setTimeout(()=>reject(new Error('queued turn was not offered')),8000);
+   socket.once('agent.tasks.available',()=>{clearTimeout(timer);resolve();});
+ });
+ const active=running.get(c.id);
+ assert.deepEqual(await startEvents.get(active.task_id),{data:true});
+ assert.equal((await command('agent.turn.event',{task_id:active.task_id,event:{id:randomUUID(),schema_version:'1.0',execution_id:active.execution_id,sequence:2,type:'execution.completed',occurred_at:new Date().toISOString(),payload:{text:'Done'}}})).data,true);
+ assert.equal((await command('agent.turn.finish',{task_id:active.task_id})).data,true);
+ running.delete(c.id);
+ await offered;
+ const queuedRequest=(await command('agent.task.claim',{})).data;
+ assert.equal(queuedRequest.session_id,c.id);
+ assert.equal(queuedRequest.goal,'Run after this turn');
+ for(const [index,type] of ['execution.started','execution.completed'].entries()){
+   assert.equal((await command('agent.task.event',{event:{id:randomUUID(),schema_version:'1.0',execution_id:queuedRequest.execution_id,sequence:index+1,type,occurred_at:new Date().toISOString(),payload:{text:'Done'}}})).data,true);
+ }
+ assert.equal((await command('agent.task.finish',{})).data,true);
  loseStartAck=true;const d=await session();const accepted=await send(d.id);
  assert.equal(accepted.status,'running');assert.equal((await api(s.owner_token,`/agent-sessions/${d.id}`)).turns[0].task.status,'running','a durable first event resolves an uncertain handoff without rerunning or failing it');
 

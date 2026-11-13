@@ -17,7 +17,7 @@ const invocation = {
 const connection = { origin: 'http://localhost:3000', credential: 'private-credential', installation_id: '11111111-1111-4111-8111-111111111111', workspace_id: '22222222-2222-4222-8222-222222222222' };
 const identity = { issuer: 'https://auth.openai.com', subject: 'subject', client_id: 'client' };
 
-async function fixture() {
+async function fixture({names=false}={}) {
   const directory = await mkdtemp(join(tmpdir(), 'space-session-test-'));
   const log = join(directory, 'rpc.jsonl');
   const launches = [];
@@ -41,7 +41,7 @@ async function fixture() {
         } else if (message.method === 'thread/resume') {
           if (message.params.sandbox !== 'read-only' || message.params.approvalPolicy !== 'never') process.exit(42);
           if (!fs.existsSync(path.join(process.env.CODEX_HOME, message.params.threadId))) process.exit(43);
-          send({ id: message.id, result: { thread: { id: message.params.threadId } } });
+          send({ id: message.id, result: { thread: { id: message.params.threadId, ...(${names}?{name:'Name saved while offline'}:{}) } } });
         } else if (message.method === 'turn/start') {
           const turnId = crypto.randomUUID(), threadId = message.params.threadId;
           if (fs.existsSync(path.join(process.env.CODEX_HOME, threadId))) {
@@ -50,7 +50,13 @@ async function fixture() {
           }
           send({ id: message.id, result: { turn: { id: turnId } } });
           send({ method: 'item/agentMessage/delta', params: { threadId, turnId, itemId: 'answer', delta: 'Retained answer' } });
+          if (${names}) {
+            send({method:'thread/name/updated',params:{threadId:'another-thread',threadName:'Wrong'}});
+            send({method:'thread/name/updated',params:{threadId,threadName:'  ' }});
+            send({method:'thread/name/updated',params:{threadId,threadName:'  Upload progress  ' }});
+          }
           send({ method: 'turn/completed', params: { threadId, turn: { id: turnId, status: 'completed' } } });
+          if (${names}) setTimeout(()=>send({method:'thread/name/updated',params:{threadId,threadName:'Renamed between turns'}}),50);
         } else if (message.method === 'turn/interrupt') send({ id: message.id, result: {} });
       }});
     `], options);
@@ -230,4 +236,22 @@ test('older mappings without readiness are treated as possibly used and never fr
     await f.invoke(runtime, true);
     assert.equal((await f.requests()).filter(c => c.method === 'thread/start').length, 1);
   } finally { runtime.stop(); await f.close(); }
+});
+
+test('Codex syncs scoped thread names during a turn, after completion and on resume', {timeout:5000},async()=>{
+  const f=await fixture({names:true});let runtime=await f.start();
+  try {
+    const names=[];
+    async function run(resume) {
+      const idle=Promise.withResolvers();
+      await runtime.invoke({...invocation,persistent_session:{resume}},async()=>{},new AbortController().signal,{
+        onSessionTitle(title){names.push(title);if(title==='Renamed between turns')idle.resolve();}
+      });
+      await idle.promise;
+    }
+    await run(false);
+    runtime.stop();runtime=await f.start();
+    await run(true);
+    assert.deepEqual(names,['Upload progress','Renamed between turns','Name saved while offline','Upload progress','Renamed between turns']);
+  } finally {runtime.stop();await f.close();}
 });

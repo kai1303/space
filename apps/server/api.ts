@@ -179,7 +179,8 @@ export function createApi(store: PostgresStore, options: { workflowChat?: Workfl
   if (options.storage) store.attachmentImage = agentImageReader(options.storage);
   registerAssetRoutes(app, assets, options.storage, options.office, invalidate);
   const immediate = directTurns(app,io,store,invalidate);
-  registerAgentSessionRoutes(app,new AgentSessionStore(store.pool,store),immediate.accepted,immediate.stop);
+  const sessions=new AgentSessionStore(store.pool,store);
+  registerAgentSessionRoutes(app,sessions,immediate.accepted,immediate.stop,immediate.steer);
   app.get('/readyz', async (_request, reply) => {
     try {
       const realtime = await health();
@@ -191,7 +192,7 @@ export function createApi(store: PostgresStore, options: { workflowChat?: Workfl
   registerAgentConnections(app, io, connections, store, onOutbox, getEvents, work);
   registerToolApprovals(app,io,new ToolApprovalStore(store.pool),connections,work,onOutbox,invalidate);
   registerSearch(app, new SearchStore(store.pool), getEvents, options.search);
-  registerEventDeadlines(app, getEvents, store, assets, options.storage, scheduled);
+  registerEventDeadlines(app, getEvents, store, assets, options.storage, scheduled, sessions);
   registerWorkspaceRetention(app,getEvents,new WorkspaceRetentionStore(store.pool),options.storage);
   if(options.invitationEmail) registerInvitationEmailDelivery(app,getEvents,invitations,options.invitationEmail.mailer);
   return app;

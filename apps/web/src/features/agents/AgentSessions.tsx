@@ -1,3 +1,5 @@
+import { SessionTitle } from '@space/ui/agents';
+import { SessionQueue, SteeringReceipt, FollowUpMenu, useFollowUpPreference, type QueueAction } from './SessionQueue.js';
 import type { Attachment } from '@space/ui/rich-text';
 import type { UploadDrafts } from '../composer/useAttachmentUploads.js';
 import { messageContent } from '../composer/message-sender.js';
@@ -15,9 +17,9 @@ import {ConversationSkeleton} from '../chat/ConversationSkeleton.js';
 import {useStarredChannels} from '../channels/useStarredChannels.js';
 import {useAgentSessionHistory} from './useAgentSessionHistory.js';
 import {useCallback,useEffect,useId,useMemo,useRef,useState,type FormEvent} from 'react';
-import type {ChannelAgent,AgentSessionDetail,AgentSessionSummary,AgentSessionOutputs,NavigatorCandidate,RichDocument,Task,ChatEvent,ChatMessage,MentionReference} from '@space/contracts';
+import type {ChannelAgent,AgentSessionDetail,AgentSessionSummary,AgentSessionOutputs,NavigatorCandidate,RichDocument,Task,ChatEvent,ChatMessage,MentionReference,SessionInput} from '@space/contracts';
 import { Select, Button, Tabs, Avatar, Dialog, Menu, IconButton } from '@space/ui/primitives';
-import {Plus,Robot,Info,Stop,Paperclip,ChatCircle,Browser,GitDiff,DotsThree,Star,PencilSimple} from '@phosphor-icons/react';
+import {ArrowBendUpRight,ListBullets,Plus,Robot,Info,Stop,Paperclip,ChatCircle,Browser,GitDiff,DotsThree,Star,PencilSimple} from '@phosphor-icons/react';
 import { request } from '../../shared/api/request.js';
 import { type MessageAttempt } from '../composer/message-sender.js';
 import {subscribeUpdates} from '../../shared/realtime/live-updates.js';
@@ -26,6 +28,7 @@ import {useMentionSearch,MentionDetails} from '../mentions/Mentions.js';
 import {AgentActivityIndicator} from './AgentActivityIndicator.js';
 import './agent-sessions.css';
 
+type DeliveryMode='messages'|'queue'|'steer';
 const denied=(error:unknown)=>error instanceof Error&&['unauthorized','forbidden','not_found'].includes(error.message);
 const errorText=(error:unknown)=>error instanceof Error?error.message.replaceAll('_',' '):'Unable to update the session';
 const busy=(task?:Task)=>!!task&&['awaiting_approval','queued','running'].includes(task.status);
@@ -89,20 +92,24 @@ export function AgentSessions({uploads,drafts:externalDrafts,onDraftChange:exter
   }catch(reason){if(denied(reason))revoke();else setError(errorText(reason));}
   finally{if(alive.current)setSaving(false);}
  }
- async function send(id:string,text:string,document:RichDocument,files:Attachment[]){
+ async function send(id:string,text:string,document:RichDocument,files:Attachment[],mode:DeliveryMode,execution?:string){
   const payload=messageContent(text,document,files);
-  const body=JSON.stringify(payload);
+  const body=JSON.stringify([mode,mode==='steer'?execution:null,payload]);
   let state=externalAttempt?.(draftKey(id))??attempts.current.get(id);
   if(!state){state={};attempts.current.set(id,state);}
   if(state.current?.content!==body)state.current={content:body,id:crypto.randomUUID()};
   const attempt=state.current;
-  let accepted:Task;
-  try { accepted=await request<Task>(`/agent-sessions/${id}/messages`,payload,attempt.id); }
+  if(mode==='steer' && files.length) throw new ComposerSendError('Steering accepts text. Queue the message to include files.');
+  let accepted:{id:string;state?:string};
+  try { accepted=await request<{id:string;state?:string}>(`/agent-sessions/${id}/${mode}`,mode==='steer'?{text,execution_id:execution}:payload,attempt.id);
+    if(mode==='steer' && accepted.state==='blocked') {state.current=undefined;throw new ComposerSendError('The turn is no longer accepting instructions. Your draft is saved.');}
+  }
   catch(reason) { if(denied(reason))revoke(); if(reason instanceof Error && ['agent_busy','session_busy','agent_capacity','agent_unavailable','agent_start_failed'].includes(reason.message)){
     if(state.current===attempt)state.current=undefined;
     const messages:Record<string,string>={session_busy:'This session is already running. Your draft is saved.',agent_busy:'This session is already running. Your draft is saved.',agent_capacity:'The connector is at capacity. Send again when a session finishes.',agent_unavailable:'Your local connector is unavailable. Reconnect it and send again.',agent_start_failed:'Codex could not start this turn. Your draft is saved.'};
     throw new ComposerSendError(messages[reason.message]);
-   } throw reason; }
+   } if(reason instanceof ComposerSendError) throw reason;
+   throw new ComposerSendError(errorText(reason)); }
   if(state.current===attempt)state.current=undefined;
   if(!revokedRef.current&&JSON.stringify(getDraft(id))===JSON.stringify(document))saveDraft(id,{ops:[]});
   if(!revokedRef.current)onAccepted?.(draftKey(id),document,files);
@@ -116,15 +123,15 @@ export function AgentSessions({uploads,drafts:externalDrafts,onDraftChange:exter
   {!picker&&!current&&<ConversationHeader title="Agent session" channel={channelName} icon={<Robot size={20}/>} onBack={onBack} onClose={onClose}/>}
   {error&&<p role="alert" className="agent-sessions-error">{error} <Button size="sm" disabled={loading} onClick={()=>{setError('');setLoading(true);setLoadAttempt(value=>value+1);}}>{picker?'Retry loading sessions':'Retry loading messages'}</Button></p>}
   {loading&&(picker?<p role="status" className="agent-sessions-empty">Loading sessions…</p>:!current&&<div className="chat-timeline-shell"><div className="chat-timeline chat-timeline--virtual" aria-busy="true"><p className="sp-sr-only" role="status" aria-label="Loading messages">Loading messages…</p><ConversationSkeleton/></div></div>)}
-  {picker&&<nav aria-label="Sessions in this thread" className="agent-sessions-list">{sessions.map(session=><button key={session.id} type="button" aria-label={session.title} onClick={()=>onOpenSession?.(session.id)}><span>{session.title}</span><small>{session.agent_name} · {session.state==='ended'?'Ended':`${session.turn_count} ${session.turn_count===1?'turn':'turns'}`}</small></button>)}</nav>}
+  {picker&&<nav aria-label="Sessions in this thread" className="agent-sessions-list">{sessions.map(session=><button key={session.id} type="button" aria-label={session.title} onClick={()=>onOpenSession?.(session.id)}><span><SessionTitle title={session.title}/></span><small>{session.agent_name} · {session.state==='ended'?'Ended':`${session.turn_count} ${session.turn_count===1?'turn':'turns'}`}</small></button>)}</nav>}
   {picker&&creating&&<form className="agent-session-create" onSubmit={create}><h3>New agent session</h3><label>Session name<input required maxLength={120} value={title} onChange={event=>setTitle(event.target.value)} placeholder="What are we working on?"/></label><label>Agent<Select aria-label="Agent" value={agent} onChange={event=>setAgent(event.target.value)}>{catalog.map(item=><option key={`${item.installation_id}|${item.skill}`} value={`${item.installation_id}|${item.skill}`}>{item.name} · {item.skill}</option>)}</Select></label>{!catalog.length&&<p>No session-capable agent is available in this conversation.</p>}{local.filter(item=>item.persistent_sessions&&!item.inherits_owner_access).flatMap(item=>item.skills.filter(skill=>!item.granted_skills.includes(skill)).map(skill=><Button key={`${item.id}|${skill}`} size="sm" disabled={saving} onClick={()=>void enable(item.id,skill)}>Enable {item.name}{item.skills.length>1?` · ${skill}`:''} in this channel</Button>))}<div><Button type="submit" disabled={saving||!title.trim()||!agent}>Start session</Button><Button variant="ghost" onClick={()=>setCreating(false)}>Cancel</Button></div></form>}
-  {!picker&&current&&detail?.session.id===current.id&&<SessionConversation key={current.id} initial={detail} session={current} channel={channel} channelName={channelName} onBack={onBack} onClose={onClose} viewerId={viewerId} revision={revision} draft={getDraft(current.id)} acknowledged={externalAcknowledged?.[draftKey(current.id)]??acknowledged[current.id]} onDraftChange={document=>saveDraft(current.id,document)} uploads={uploads} onSend={(text,document,files)=>send(current.id,text,document,files)} onAccessLost={revoke} archived={archived}/>}
+  {!picker&&current&&detail?.session.id===current.id&&<SessionConversation key={current.id} initial={detail} session={current} channel={channel} channelName={channelName} onBack={onBack} onClose={onClose} viewerId={viewerId} revision={revision} draft={getDraft(current.id)} acknowledged={externalAcknowledged?.[draftKey(current.id)]??acknowledged[current.id]} onDraftChange={document=>saveDraft(current.id,document)} uploads={uploads} onSend={(text,document,files,mode,execution)=>send(current.id,text,document,files,mode,execution)} onAccessLost={revoke} archived={archived}/>}
   {picker&&!loading&&!creating&&!sessions.length&&<p className="agent-sessions-empty">No agent sessions yet.</p>}
   {!picker&&!loading&&!current&&!error&&<p role="alert" className="agent-sessions-empty">This session is unavailable.</p>}
  </div>;
 }
 function SessionConversation({uploads,initial,session,channel,channelName,onBack,onClose,viewerId,revision,draft,acknowledged,onDraftChange,onSend,onAccessLost,archived}: {
- uploads?:UploadDrafts;initial:AgentSessionDetail;session:AgentSessionSummary;channel:string;channelName?:string;onBack?:()=>void;onClose?:()=>void;viewerId:string;revision:number;draft?:RichDocument;acknowledged?:RichDocument;onDraftChange:(document:RichDocument)=>void;onSend:(text:string,document:RichDocument,files:Attachment[])=>Promise<Task>;onAccessLost:()=>void;archived:boolean;
+ uploads?:UploadDrafts;initial:AgentSessionDetail;session:AgentSessionSummary;channel:string;channelName?:string;onBack?:()=>void;onClose?:()=>void;viewerId:string;revision:number;draft?:RichDocument;acknowledged?:RichDocument;onDraftChange:(document:RichDocument)=>void;onSend:(text:string,document:RichDocument,files:Attachment[],mode:DeliveryMode,execution?:string)=>Promise<{id:string}>;onAccessLost:()=>void;archived:boolean;
 }) {
  const starred=useStarredChannels(session.workspace_id,session.id,viewerId,'starred-sessions');
  const searchMentions=useMentionSearch(channel);
@@ -144,9 +151,16 @@ function SessionConversation({uploads,initial,session,channel,channelName,onBack
  const lastRevision=useRef(revision);
  useEffect(()=>{if(lastRevision.current!==revision){lastRevision.current=revision;void refresh();}},[revision]);
  const turns=data.turns,latestTurn=history.latest.turns.at(-1),latest=latestTurn?.task,activeSession=history.latest.session;
- const sendDisabled=busy(latest)||Boolean(submittedTask&&!history.latest.turns.some(turn=>turn.task.id===submittedTask));
+ const [preference,setPreference]=useFollowUpPreference();
+ const [draftExecution,setDraftExecution]=useState<string>();
+ const inputs=history.latest.inputs??[];
+ const queue=inputs.filter(input=>input.kind==='queue');
+ const canSteer=latest?.status==='running' && !!latest.active_execution_id && viewerId===activeSession.owner_id && activeSession.supports_steering === true;
+ const staleSteer = !!draftExecution && (!canSteer || draftExecution !== latest?.active_execution_id);
+ const mode:DeliveryMode=canSteer ? preference : busy(latest)||queue.length ? 'queue' : 'messages';
+ const sendDisabled=staleSteer || Boolean(submittedTask&&!history.latest.turns.some(turn=>turn.task.id===submittedTask));
  const outputs=useMemo(()=>{if(history.latest.outputs)return history.latest.outputs;const files=new Map<string,AgentSessionOutputs['files'][number]>(),changes=new Map<string,AgentSessionOutputs['changes'][number]>();let preview:AgentSessionOutputs['preview'];for(const turn of turns){const output=turn.response?.outputs;if(output?.preview)preview=output.preview;for(const file of output?.files??[])files.set(file.path,file);for(const change of output?.changes??[])changes.set(change.path,change);}return{preview,files:[...files.values()],changes:[...changes.values()]};},[turns,history.latest.outputs]);
- async function action(path:string){setPending(true);setError('');try{await request(path,{});if(alive.current){await refresh();}}catch(reason){if(denied(reason)){lost.current();}else if(alive.current)setError(errorText(reason));}finally{if(alive.current)setPending(false);}}
+ async function action(path:string,body:object={},method:'POST'|'PATCH'='POST',key?:string){setPending(true);setError('');try{await request(path,body,key,method);if(alive.current){await refresh();}return true;}catch(reason){if(denied(reason)){lost.current();}else if(alive.current)setError(errorText(reason));return false;}finally{if(alive.current)setPending(false);}}
  const [renaming,setRenaming]=useState(false);
  const manage=viewerId===activeSession.owner_id||viewerId===activeSession.created_by;
  const rows=turns.flatMap((turn,index)=>{
@@ -171,10 +185,36 @@ function SessionConversation({uploads,initial,session,channel,channelName,onBack
  const events:ChatEvent[]=rows.map(row=>({type:'message.created',channel_id:channel,thread_id:session.origin_thread_id,sequence:row.message.sequence,occurred_at:row.message.created_at,payload:row.message as ChatMessage}));
 
  const uploadKey=`session:${channel}:${session.id}`;
- const footer=activeSession.state==='ended'?<p className="agent-session-notice">This session has ended. Its conversation and outputs are saved.</p>:!session.managed?<p className="agent-session-notice">Start a new session to continue this earlier run.</p>:!archived?<AgentSessionComposer workspace={session.workspace_id} skill={session.skill} typingIndicator={<AgentActivityIndicator name={session.agent_name} turn={latestTurn}/>} channel="agent session" placeholder={`Message ${session.agent_name}`} findMentions={findReferences} sendDisabled={sendDisabled} maxLength={4000} showUnavailableActions={false} attachmentsEnabled={!!uploads?.enabled} attachments={uploads?.drafts[uploadKey]??[]} onAttachmentsChange={files=>uploads?.change(uploadKey,channel,files)} onRetryAttachment={id=>uploads?.retry(uploadKey,channel,id)} defaultValue={draft} acknowledgedDocument={acknowledged} onDraftChange={onDraftChange} onSend={async(text,document,files)=>{pinned.current=true;const task=await onSend(text,document,files);setSubmittedTask(task.id);}}/>:null;
+ async function queueAction(item:SessionInput,operation:QueueAction,value?:string){
+   const base=`/agent-sessions/${session.id}`,path=`${base}/queue/${item.id}`;
+   if(operation==='move') return action(path,{move_to:value},'PATCH');
+   if(operation==='edit') return action(path,{text:value,previous_text:item.text},'PATCH');
+   if(operation==='steer') return action(base+'/steer',{text:item.text,execution_id:latest?.active_execution_id,source_input_id:item.id},'POST',crypto.randomUUID());
+   return action(path+'/'+operation);
+ }
+ async function submit(text:string,document:RichDocument,files:Attachment[],delivery:DeliveryMode) {
+   pinned.current=true;
+   const result=await onSend(text,document,files,delivery,latest?.active_execution_id??undefined);
+   setDraftExecution(undefined);
+   if(delivery==='messages')setSubmittedTask(result.id);else await refresh();
+ }
+ const footer=activeSession.state==='ended'?<p className="agent-session-notice">This session has ended. Its conversation and outputs are saved.</p>:!session.managed?<p className="agent-session-notice">Start a new session to continue this earlier run.</p>:!archived?<>
+  {staleSteer && <div className="agent-session-system-notice" role="status">The turn you were steering has ended. <Button size="sm" onClick={()=>setDraftExecution(undefined)}>Use draft as follow-up</Button></div>}
+  <AgentSessionComposer typingIndicator={<>
+    <AgentActivityIndicator name={session.agent_name} turn={latestTurn}/><SessionQueue items={queue} canManage={item => viewerId === item.actor_id || viewerId === activeSession.owner_id}
+    pending={pending} onAction={queueAction} canSteer={canSteer} paused={activeSession.queue_paused}
+    onResume={manage?()=>void action(`/agent-sessions/${session.id}/queue/resume`):undefined} mode={preference} onModeChange={canSteer?setPreference:undefined}/>
+    </>} submitLabel={mode==='messages'?undefined:mode==='queue'?'Queue':'Steer'}
+    submitIcon={mode==='messages'?undefined:mode==='queue'?<ListBullets size={18}/>:<ArrowBendUpRight size={18}/>}
+    submitAccessory={canSteer && <span className="agent-followup-menu" title="Follow-up behavior"><FollowUpMenu mode={preference} change={setPreference}/></span>}
+    onAlternateSend={canSteer?(text,doc,files)=>submit(text,doc,files,mode==='steer'?'queue':'steer'):undefined} workspace={session.workspace_id} skill={session.skill} channel="agent session" placeholder={`Message ${session.agent_name}`} findMentions={findReferences} sendDisabled={sendDisabled} maxLength={4000} showUnavailableActions={false} attachmentsEnabled={!!uploads?.enabled} attachments={uploads?.drafts[uploadKey]??[]} onAttachmentsChange={files=>uploads?.change(uploadKey,channel,files)} onRetryAttachment={id=>uploads?.retry(uploadKey,channel,id)} defaultValue={draft} acknowledgedDocument={acknowledged} onDraftChange={doc=>{
+      if (!doc.ops.some(op=>op.insert.trim())) setDraftExecution(undefined);
+      else if (mode==='steer' && !draftExecution) setDraftExecution(latest?.active_execution_id??undefined);
+      onDraftChange(doc);
+    }} onSend={(text,doc,files)=>submit(text,doc,files,mode)}/></>:null;
  return <div className="agent-session" aria-label={`Agent session ${session.title}`}>
   <ConversationHeader title="Agent session" topic={session.managed&&<div className="agent-session-header-title">
-    <span title={session.title}>{session.title}</span>
+    <span title={session.title}><SessionTitle title={session.title}/></span>
     {manage&&<IconButton label="Rename session" onClick={()=>setRenaming(true)}><PencilSimple size={15}/></IconButton>}
   </div>} backLabel={data?.context?"Back to my sidekick":undefined} heading={<ConversationHeading title={session.agent_name} label={`Conversation details for ${session.agent_name}`} onClick={()=>profiles ? profiles.open({kind:'agent',id:session.installation_id}) : setDetailsOpen(true)} leading={session.managed&&<IconButton label={starred.active?'Unstar conversation':'Star conversation'} aria-pressed={starred.active} aria-disabled={starred.busy||undefined} onClick={()=>void starred.toggle(session.id,{id:session.id,name:session.title,kind:'agent_session',private:false,working:latest?.status==='running',can_rename:manage,session:{id:session.id,agent_name:session.agent_name,origin_thread_id:session.origin_thread_id,channel_id:channel,channel_archived:archived}}).catch(reason=>setError(errorText(reason)))}><Star size={19} weight={starred.active?'fill':'regular'}/></IconButton>} icon={<Avatar name={session.agent_name} initials={session.agent_name.slice(0,2).toUpperCase()} tone="green"/>}/>} channel={channelName} icon={<Robot size={20}/>} onBack={onBack} onClose={onClose} actions={<>{manage&&busy(latest)&&<Button size="sm" disabled={pending} onClick={()=>void action(`/agent-sessions/${session.id}/stop`)}><Stop size={14}/>Stop</Button>}<Menu label="More conversation actions" floating trigger={<DotsThree size={22} weight="bold"/>} items={[{label:"Conversation details",onSelect:()=>setDetailsOpen(true)},...(profiles?[{label:"View full profile",onSelect:()=>profiles.open({kind:'agent',id:session.installation_id})}]:[]),{label:"Browse files",onSelect:()=>setTab("files")},...(onClose?[{label:"Close agent session",separatorBefore:true,onSelect:onClose}]:[])]}/></>}/>
   <Tabs className="agent-session-tabs" label="Session views" value={tab} onChange={setTab} items={[
@@ -188,6 +228,18 @@ function SessionConversation({uploads,initial,session,channel,channelName,onBack
   <ToolApprovals audience={history.latest.audience} items={history.latest.tool_approvals??[]} canDecide={viewerId===activeSession.owner_id} onResolved={refresh}/><div className="agent-session-body"><div className="agent-session-conversation" role="tabpanel" aria-label="Messages" id={`${viewsId}-messages`} hidden={tab!=='messages'}><MessageTimeline header={!data.next_cursor&&<><ConversationIntroduction title={session.agent_name} icon={<Avatar name={session.agent_name} initials={session.agent_name.slice(0,2).toUpperCase()} size="lg" tone="green"/>}>This is the beginning of your conversation with {session.agent_name}.</ConversationIntroduction>{data.context&&<><SidekickContextSection context={data.context}/><div className="sidekick-conversation-divider" role="separator" aria-label="Agent conversation"><span>Conversation with {session.agent_name}</span></div></>}</>} label="Session conversation" role="log" items={events} page={{has_older:!!data.next_cursor,has_newer:data.has_newer}} loading={loading} latestVersion={latestVersion} load={load} pinned={pinned} hidden={tab!=='messages'} render={(_event,index)=>{
    const row=rows[index]!,turn=row.turn;
    return <div id={`chat-message-${row.message.id}`} tabIndex={-1} className="chat-message-anchor"><ConversationDateDivider date={row.message.created_at} previous={rows[index-1]?.message.created_at}/>{row.showMessage&&<ConversationMessage message={row.message as ChatMessage} previous={rows[index-1]?.message} viewerId={viewerId} arrival={arrivals.has(row.message.id)} onMentionClick={setSelectedMention} showAgentActivity={false} streaming={!row.request&&busy(turn.task)} actions={{copyMessage:()=>navigator.clipboard.writeText(row.message.text)}} body={!row.request&&turn.task.status==='awaiting_approval'?<div className="agent-session-approval"><p>Waiting for {session.agent_name}’s owner to approve this request.</p>{viewerId===session.owner_id&&<><Button size="sm" disabled={pending} onClick={()=>void action(`/tasks/${turn.task.id}/approve`)}>Approve request</Button><Button size="sm" variant="ghost" disabled={pending} onClick={()=>void action(`/tasks/${turn.task.id}/reject`)}>Decline</Button></>}</div>:undefined}/>}
+    {row.request && turn.steering?.map((item,index) => {
+      if (item.state !== 'sent') return <SteeringReceipt key={item.id} item={item}/>;
+      const message:ChatMessage = {
+        id:item.id, channel_id:channel, thread_id:session.origin_thread_id, task_id:turn.task.id,
+        client_message_id:null, sequence:row.message.sequence, text:item.text, created_at:item.created_at ?? row.message.created_at,
+        author:{kind:'human',id:item.actor_id,name:item.actor_name ?? (item.actor_id===viewerId?'You':'Member')},
+      };
+      const previous=turn.steering?.[index-1];
+      return <ConversationMessage key={item.id} message={message} viewerId={viewerId}
+        previous={previous?.state==='sent'?{created_at:previous.created_at??row.message.created_at,author:{kind:'human',id:previous.actor_id,name:previous.actor_name??'Member'}}:index===0?row.message:undefined}
+        actions={{copyMessage:()=>navigator.clipboard.writeText(item.text)}}/>;
+    })}
     {row.notice&&<div role="status" className="agent-session-system-notice"><Info size={16} aria-hidden="true"/><span><strong>Space</strong> · {row.notice}</span></div>}
    </div>;
   }}/>{footer}

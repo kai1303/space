@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { io } from 'socket.io-client';
-import { parseInvocation, parseAgentEvent, parseLocalProvider, localProviders, type LocalProvider, type AgentEvent } from '@space/contracts';
-import { AgentSessionStopped, type InvokeAgent } from './agent-runtime.js';
+import { parseInvocation, parseAgentEvent, parseLocalProvider, localProviders, type LocalProvider, type AgentEvent, type InvocationRequest, uuid, text, record } from '@space/contracts';
+import { AgentSessionStopped, type InvokeAgent, type SteerHandler } from './agent-runtime.js';
 import {CODING_TURN_TIMEOUT_MS} from '@space/contracts';
 import {toolApprovalClient} from './tool-approvals.js';
 import { ConnectorStore, platformOrigin, type Connection } from './storage.js';
@@ -75,6 +75,55 @@ export function connectPlatform(connection: Connection, status: () => AuthStatus
     return operation;
   };
   const approvals=toolApprovalClient(socket,taskRpc);
+  const steering=new Map<string,{session:string;handler:SteerHandler;receipts:Map<string,Promise<void>>}>();
+  type TitleUpdate={task_id:string;execution_id:string;title:string};
+  const pendingTitles=new Map<string,TitleUpdate>();
+  let flushingTitles=false, titleFailures=0;
+  async function flushTitles(){
+    if (flushingTitles || closed || halted || !socket.connected || !readyToClaim) return;
+    flushingTitles=true;
+    try {
+      while (pendingTitles.size && socket.connected && !closed && !halted) {
+        const [session,update]=pendingTitles.entries().next().value!;
+        const reply=await socket.timeout(3000).emitWithAck('agent.session.title',update);
+        if (reply?.data!==true && (!reply?.error || ['internal_error','busy','realtime_overloaded','agent_not_ready'].includes(reply.error))) {
+          titleFailures++;
+          break;
+        }
+        titleFailures=0;
+        if (pendingTitles.get(session)===update) pendingTitles.delete(session);
+      }
+    } catch { titleFailures++; }
+    finally {flushingTitles=false;}
+  }
+  function controls(request:InvocationRequest,signal:AbortSignal){
+    const approvalControls = approvals.controls(request);
+    if (!request.persistent_session) return approvalControls;
+    return {...approvalControls,...(provider==='codex' ? {onSessionTitle(title:string){
+      if (closed || halted || signal.aborted) return;
+      if (!pendingTitles.has(request.session_id) && pendingTitles.size>=32) pendingTitles.delete(pendingTitles.keys().next().value!);
+      titleFailures=0;
+      pendingTitles.set(request.session_id,{task_id:request.task_id,execution_id:request.execution_id,title});
+      void flushTitles();
+    }} : {}),setSteerHandler(handler:SteerHandler|null){
+      if(!handler || signal.aborted) steering.delete(request.execution_id);
+      else steering.set(request.execution_id,{session:request.session_id,handler,receipts:new Map()});
+    }};
+  }
+  socket.on('agent.turn.steer',async(raw:unknown,ack:unknown)=>{
+    if(typeof ack!=='function') return;
+    try {
+      const body=record(raw,['session_id','execution_id','id','text']);
+      const item=steering.get(uuid(body.execution_id)), id=uuid(body.id), message=text(body.text,4000);
+      if(!item || item.session!==uuid(body.session_id) || !socket.connected || halted || closed){ack({error:'turn_not_running'});return;}
+      let receipt=item.receipts.get(id);
+      if(!receipt){
+        if(item.receipts.size>=32){ack({error:'turn_not_running'});return;}
+        receipt=item.handler(id,message);item.receipts.set(id,receipt);
+      }
+      await receipt;ack({data:true});
+    } catch {ack({error:'steer_unconfirmed'});}
+  });
   const accepted = async (name: string, payload: unknown = {}, shouldSend = () => true) => {
     if (await taskRpc(name, payload, shouldSend) !== true) throw new Error('Space rejected the task operation.');
   };
@@ -118,7 +167,7 @@ export function connectPlatform(connection: Connection, status: () => AuthStatus
         catch (error) { if (error instanceof AgentSessionStopped) controller.abort(error); throw error; }
         lastSequence = event.sequence;
         terminal = event.type === 'execution.completed' || event.type === 'execution.failed';
-      }, controller.signal, approvals.controls(request));
+      }, controller.signal, controls(request,controller.signal));
       controller.signal.throwIfAborted();
       if (!terminal) throw new Error('Agent did not send a terminal event.');
       clearInterval(renewal);
@@ -176,11 +225,12 @@ export function connectPlatform(connection: Connection, status: () => AuthStatus
           if(event.execution_id!==request.execution_id || event.sequence!==sequence+1 || terminal)throw new Error('Invalid turn event.');
           if(['execution.completed','execution.failed'].includes(event.type)){terminal=true;}
           try{await rpc('event',{event});}catch(error){if(error instanceof AgentSessionStopped)controller.abort(error);throw error;}sequence=event.sequence;
-        },controller.signal,approvals.controls(request));
+        },controller.signal,controls(request,controller.signal));
         await rpc('finish');
       }catch(error){controller.abort(error);if(!(error instanceof AgentSessionStopped) && !(controller.signal.reason instanceof AgentSessionStopped))await rpc('fail').catch(()=>{});}
       finally{
-        clearTimeout(deadline);direct.delete(request.session_id);
+        clearTimeout(deadline);direct.delete(request.session_id);steering.delete(request.execution_id);
+        if(claimPending && !closed && !halted) queueMicrotask(()=>void claim());
         completed.add(request.execution_id);if(completed.size>10000)completed.delete(completed.values().next().value!);
       }
     })();
@@ -211,13 +261,15 @@ export function connectPlatform(connection: Connection, status: () => AuthStatus
       logChange(halted ? 'Work interrupted. Restart the connector to accept new work.' : `Space confirmed provider status: ${authStatus}.`);
       if (authStatus === 'ready' && status() === 'ready' && !halted) {
         readyToClaim = true;
+        if (pendingTitles.size && titleFailures<3) void flushTitles();
         if (!wasReady || claimPending) void claim();
       }
     });
   };
   const heartbeat = setInterval(publish, 10_000);
-  socket.on('connect', () => { generation++; readyToClaim = false; reconnectDelay = 1_000; logChange('Connected to Space.'); publish(); });
+  socket.on('connect', () => { titleFailures=0; generation++; readyToClaim = false; reconnectDelay = 1_000; logChange('Connected to Space.'); publish(); });
   socket.on('disconnect', reason => {
+    steering.clear();
     generation++; readyToClaim = false;
     for(const item of direct.values())item.controller.abort();
     if (active || claiming || direct.size) { halted = true; active?.abort(); }

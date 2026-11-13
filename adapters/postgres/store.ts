@@ -135,11 +135,11 @@ export class PostgresStore implements DeliveryStore {
   async approveTask(actor: string, id: string): Promise<Task> {
     return runTurn(this.db, c => this.prepareApproval(c, actor, id), this.admitLocalTurn);
   }
-  async approveTaskIn(c: DbSession, actor: string, id: string, reuseSession?: string): Promise<Task> {
-    const plan = await this.prepareApproval(c, actor, id, reuseSession);
+  async approveTaskIn(c: DbSession, actor: string, id: string, reuseSession?: string, queuedFollowup=false): Promise<Task> {
+    const plan = await this.prepareApproval(c, actor, id, reuseSession, queuedFollowup);
     return 'existing' in plan ? plan.existing : plan.commit();
   }
-  private async prepareApproval(c: DbSession, actor: string, id: string, reuseSession?: string): Promise<TurnPlan> {
+  private async prepareApproval(c: DbSession, actor: string, id: string, reuseSession?: string, queuedFollowup=false): Promise<TurnPlan> {
     const task = await this.visibleTask(c, actor, id);
     const installation = await this.eligible(c, task);
     assertApprover(actor, task, installation);
@@ -148,7 +148,7 @@ export class PostgresStore implements DeliveryStore {
     const managed = task.session_id ? (await c.select().from(s.agentSessions).where(eq(s.agentSessions.id, task.session_id)))[0] : undefined;
     if (managed?.managed && managed.state === 'ended') throw new AppError(409, 'session_ended');
     reuseSession ??= managed?.managed ? managed.id : undefined;
-    const target = await directTurnTarget(c, installation, managed, task.revision);
+    const target = queuedFollowup ? undefined : await directTurnTarget(c, installation, managed, task.revision);
     const commit = async () => {
       const direct = !!target;
       const sessionId = reuseSession ?? randomUUID(), executionId = randomUUID();
@@ -242,6 +242,24 @@ export class PostgresStore implements DeliveryStore {
       .where(and(eq(s.agentConnections.installation_id, installationId), eq(s.agentConnections.connection_id, connectionId), eq(s.agentConnections.auth_status, 'ready'), sql`${s.agentConnections.revoked_at} IS NULL`, sql`${s.agentConnections.last_seen_at}>now()-interval '45 seconds'`));
     const rows = await query;
     if (!rows.length) throw new AppError(401, 'unauthorized');
+  }
+  async syncCodexTitle(installationId:string,connectionId:string,taskId:string,executionId:string,title:string) {
+    const name=text(title,160).trim();
+    await this.taskTransaction(taskId,async c=>{
+      await this.localConnection(c,installationId,connectionId);
+      const task=await this.task(c,taskId);
+      if (task.installation_id!==installationId || task.active_execution_id!==executionId || !task.session_id) throw notFound();
+      const installation=await this.eligible(c,task);
+      if (installation.connector_id!=='codex.local' || task.skill!=='codex.run') throw new AppError(409,'invalid_title_source');
+      // A loaded thread can be renamed after its last turn has finished.
+      await c.execute(sql`UPDATE agent_sessions SET creation_title=coalesce(creation_title,title),
+          title=CASE WHEN codex_title IS NULL AND creation_title IS NOT NULL AND title<>creation_title THEN title ELSE ${name} END,
+          codex_title=${name},revision=revision+1
+        WHERE id=${task.session_id} AND installation_id=${installationId} AND managed AND state='active'
+          AND codex_title IS DISTINCT FROM ${name}
+          AND ${taskId}::uuid=(SELECT id FROM tasks WHERE session_id=${task.session_id} AND active_execution_id IS NOT NULL
+            ORDER BY created_at DESC,id DESC LIMIT 1)`);
+    });
   }
   async prepareDelivery(delivery: Delivery, connectionId?: string): Promise<PreparedDelivery | null> {
     const images: {index:number;id:string;animated:boolean}[] = [];

@@ -28,6 +28,7 @@ async function codexFixture(t, behavior='normal') {
         const scope={threadId:'thread',turnId:'turn'};
         if(m.method==='initialize')send({id:m.id,result:{userAgent:'fixture'}});
         else if(m.method==='thread/start')send({id:m.id,result:{thread:{id:'thread'}}});
+        else if(m.method==='turn/steer')send({id:m.id,result:{turnId:'turn'}});
         else if(m.method==='turn/start'){
           turn=m;send({id:m.id,result:{turn:{id:'turn'}}});
           send({method:'item/started',params:{...scope,item:{id:'shell',type:'commandExecution',command:'git status',cwd:m.params.cwd,status:'inProgress'}}});
@@ -256,4 +257,47 @@ test('attachments are passed as quoted text and native image inputs to each prov
     assert.equal(blocks[1].type,'image');
     assert.ok(JSON.stringify(blocks[1]).includes(webp));
   }
+});
+
+test('Codex routes steering to the exact running native turn', {timeout:5000}, async t=>{
+  const f=await codexFixture(t,'wait'), controller=new AbortController();
+  const {promise:ready,resolve:register}=Promise.withResolvers();
+  const invocation=f.runtime.invoke(request('codex'),async()=>{},controller.signal,{
+    requestApproval:async()=> 'allow', setSteerHandler:handler=>{if(handler) register(handler);}
+  });
+  const steer=await ready;
+  await steer(randomUUID(),'Review the smaller file first');
+  const call=(await f.calls()).find(message=>message.method==='turn/steer');
+  assert.deepEqual(call.params,{threadId:'thread',expectedTurnId:'turn',input:[{type:'text',text:'Review the smaller file first'}]});
+  controller.abort(new AgentSessionStopped());await assert.rejects(invocation,AgentSessionStopped);
+});
+
+test('Claude writes priority steering to the same SDK input stream before acknowledging', {timeout:5000}, async t=>{
+  const store=await storage(t,'claude');
+  const {promise:ready,resolve:register}=Promise.withResolvers();
+  const {promise:finish,resolve:complete}=Promise.withResolvers();
+  const {promise:received,resolve:record}=Promise.withResolvers();
+  const runtime=await startClaude('test-key',store,()=>{},({prompt,options})=>{
+    const iterator=(async function*(){
+      const input=prompt[Symbol.asyncIterator]();
+      await input.next();
+      const instruction=await input.next();
+      record(instruction.value);
+      const closed=input.next();
+      await finish;
+      yield {type:'result',subtype:'success',is_error:false,session_id:options.sessionId,result:'Done'};
+      await closed;
+    })();
+    return Object.assign(iterator,{initializationResult:async()=>({}),setMcpServers:async()=>({errors:{}}),mcpServerStatus:async()=>[],close(){}});
+  });
+  t.after(()=>runtime.stop());
+  const invocation=runtime.invoke(request('claude'),async()=>{},new AbortController().signal,{
+    requestApproval:async()=> 'allow',setSteerHandler:handler=>{if(handler)register(handler);}
+  });
+  const steer=await ready, id=randomUUID();
+  await steer(id,'Check the smaller file first');
+  const message=await received;
+  assert.equal(message.uuid,id);assert.equal(message.priority,'now');assert.equal(message.client_composed,true);
+  assert.equal(message.message.content,'Check the smaller file first');
+  complete();await invocation;
 });
