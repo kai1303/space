@@ -731,7 +731,7 @@ it('keeps uploads with their channel and thread drafts across navigation, retrie
   expect(await screen.findByRole('button', { name: 'Open preview of download.html' })).toBeTruthy();
   expect(await screen.findByText('<script>alert(1)</script>')).toBeTruthy();
   expect(view.container.querySelector('script')).toBeNull();
-  await waitFor(() => expect((screen.getByRole('button', { name: 'Attach files' }) as HTMLButtonElement).disabled).toBe(false));
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Attach files' }).getAttribute('aria-disabled')).not.toBe('true'));
   const report = new File(['data'], 'report.txt', { type: 'text/plain' });
   fireEvent.change(view.container.querySelector('#chat-messages input[type="file"]')!, { target: { files: [report] } });
   expect(mocks.upload.mock.calls[0].slice(0, 2)).toEqual(['first', report]);

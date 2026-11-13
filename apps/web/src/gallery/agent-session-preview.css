@@ -1,0 +1,3 @@
+.agent-composer-example { display:flex; flex-direction:column; width:min(100%,720px); height:min(100dvh,520px); margin:auto; border:1px solid var(--sp-border); background:var(--sp-surface); color:var(--sp-text); font-family:var(--sp-font-sans); }
+.agent-composer-example-history { flex:1; min-height:0; overflow:auto; padding:16px; }
+.agent-composer-example-history p { margin:0; white-space:pre-wrap; overflow-wrap:anywhere; }

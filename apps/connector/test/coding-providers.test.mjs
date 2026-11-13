@@ -85,10 +85,11 @@ test('Codex Stop cancels a pending approval and interrupts only its current turn
 });
 
 async function claudeFixture(t, behavior='normal') {
-  const store=await storage(t,'claude'),calls=[];
+  const store=await storage(t,'claude'),calls=[],prompts=[];
   const runtime=await startClaude('test-key',store,()=>{},({prompt,options})=>{
     calls.push(options);
-    const iterator=(async function*(){for await(const _ of prompt){
+    const iterator=(async function*(){for await(const message of prompt){
+      prompts.push(message.message.content);
       const id=options.sessionId, hook=options.hooks.PreToolUse[0].hooks[0];
       assert.equal((await hook({hook_event_name:'PreToolUse',tool_name:'Bash',tool_input:{command:'git status'}})).hookSpecificOutput.permissionDecision,'ask');
       assert.equal((await hook({hook_event_name:'PreToolUse',tool_name:'Read',tool_input:{file_path:'README.md'}})).hookSpecificOutput.permissionDecision,'ask');
@@ -114,7 +115,7 @@ async function claudeFixture(t, behavior='normal') {
     }})();
     return Object.assign(iterator,{initializationResult:async()=>({}),setMcpServers:async()=>({errors:{}}),mcpServerStatus:async()=>[],close(){}});
   });
-  t.after(()=>runtime.stop());return {runtime,store,calls};
+  t.after(()=>runtime.stop());return {runtime,store,calls,prompts};
 }
 test('Claude native tools always ask, reject unknown/background tools, use project cwd and preserve isolated auth',async t=>{
   const f=await claudeFixture(t), approvals=[],events=[];
@@ -236,4 +237,23 @@ for(const behavior of ['unknown-result','unknown-tool','overflow'])test(`Claude 
   const f=await claudeFixture(t,behavior),events=[];
   await assert.rejects(f.runtime.invoke(request('claude'),async e=>events.push(e),new AbortController().signal,{requestApproval:async()=> 'allow'}));
   assert.equal(events.at(-1).type,'execution.failed');assert.equal(f.runtime.alive(),false);
+});
+
+test('attachments are passed as quoted text and native image inputs to each provider', async t => {
+  const webp='UklGRg==';
+  const attachments=[
+    {id:randomUUID(),name:'build.log',size:5,type:'text/plain',content:{kind:'text',text:'hello',truncated:false}},
+    {id:randomUUID(),name:'screen.png',size:8,type:'image/png',content:{kind:'image',webp}},
+  ];
+  for (const [provider,fixture] of [['codex',codexFixture],['claude',claudeFixture],['kiro',kiroFixture]]) {
+    const f=await fixture(t);
+    await f.runtime.invoke({...request(provider),attachments},async()=>{},new AbortController().signal,{requestApproval:async()=> 'allow'});
+    const blocks=provider==='claude' ? f.prompts.at(-1) : provider==='kiro'
+      ? (await f.calls()).find(call=>call.method==='session/prompt').params.prompt
+      : (await f.calls()).find(call=>call.method==='turn/start').params.input;
+    assert.match(blocks[0].text,/build.log/);
+    assert.match(blocks[0].text,/hello/);
+    assert.equal(blocks[1].type,'image');
+    assert.ok(JSON.stringify(blocks[1]).includes(webp));
+  }
 });

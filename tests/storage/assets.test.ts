@@ -7,7 +7,7 @@ import { bootstrap } from '@space/postgres/bootstrap';
 import { migrate } from '@space/postgres/migrate';
 import { PostgresStore } from '@space/postgres/store';
 import { createApi } from '@space/server/api';
-import { createAssetStorageFromEnv } from '@space/server/storage';
+import { agentImageReader, createAssetStorageFromEnv } from '@space/server/storage';
 
 if (!process.env.TEST_DATABASE_URL) throw new Error('TEST_DATABASE_URL is required');
 const storage = createAssetStorageFromEnv();
@@ -91,6 +91,11 @@ test('real API serves safe private previews for images, PDF, source and media wi
       assert.ok(uploaded.ok, await uploaded.text());
       const completed = await app.inject({ method: 'POST', url: `/v1/assets/${asset.id}/complete`, headers, payload: {} });
       assert.equal(completed.statusCode, 200, completed.body);
+      if (kind === 'image') {
+        const image: Buffer = Buffer.from(await agentImageReader(storage)(asset.id,false),'base64');
+        assert.equal(image.toString('ascii',8,12),'WEBP');
+        assert.ok(image.length <= 150000);
+      }
       const info = await app.inject({ method: 'GET', url: `/v1/assets/${asset.id}/preview`, headers });
       assert.equal(info.statusCode, 200, info.body);
       assert.equal(info.json().kind, kind, `${name}: ${info.body}`);

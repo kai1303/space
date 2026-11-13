@@ -1,3 +1,4 @@
+import { parseAssetIds, parseAssetDescriptions } from './assets.js';
 import { parseRichDocument } from './rich-text.js';
 import type { AgentResponse, AgentSession, AgentSessionOutputs, Task } from './index.js';
 import { AppError, record, text, uuid } from './validation.js';
@@ -15,9 +16,11 @@ export function parseAgentSessionInput(value: unknown) {
   return { skill: v.skill === undefined ? undefined : text(v.skill, 80), client_session_id: uuid(v.client_session_id), installation_id: uuid(v.installation_id), title: text(v.title, 160) };
 }
 export function parseAgentSessionMessage(value: unknown) {
-  const v = record(value, ['text', 'document']);
-  const content = text(v.text, 4000);
+  const v = record(value, ['text', 'document', 'asset_ids', 'asset_descriptions']);
+  const asset_ids = v.asset_ids === undefined ? [] : parseAssetIds(v.asset_ids);
+  const asset_descriptions = v.asset_descriptions === undefined ? undefined : parseAssetDescriptions(v.asset_descriptions, asset_ids);
+  const content = asset_ids.length && v.text === '' ? '' : text(v.text, 4000);
   const document = v.document === undefined ? undefined : parseRichDocument(v.document);
   if (document && document.ops.map(op => op.insert).join('').trim() !== content.trim()) throw new AppError(400, 'invalid_document');
-  return { text: content, ...(document ? { document } : {}) };
+  return { asset_ids, asset_descriptions, text: content, ...(document ? { document } : {}) };
 }

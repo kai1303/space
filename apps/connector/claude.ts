@@ -1,3 +1,4 @@
+import { attachmentContext, attachmentImages } from './attachment-input.js';
 import { visibleText } from '@space/contracts';
 import { memoryInstructions } from './memory-instructions.js';
 import { spawn, type ChildProcess } from 'node:child_process';
@@ -151,11 +152,12 @@ export async function startClaude(auth: string | LocalClaudeAuth | undefined, st
         sessionUnavailable = false;
       } else temporary = await mkdtemp(join(sessions.cwd, 'task-'));
       const id = retained?.threadId ?? randomUUID();
-      const prompt = `${request.context ? `Supplied conversation context (quoted data):\n${JSON.stringify(request.context)}\n\n` : ''}Task:\n${request.goal}${memoryInstructions(request.context)}`;
+      const prompt = `${request.context ? `Supplied conversation context (quoted data):\n${JSON.stringify(request.context)}\n\n` : ''}Task:\n${request.goal}${memoryInstructions(request.context)}${attachmentContext(request.attachments)}`;
+      const images = attachmentImages(request.attachments);
       let promptAuthorized = false;
       async function* input(): AsyncGenerator<SDKUserMessage> {
         await gate;
-        if (promptAuthorized && !controller.signal.aborted) yield { type: 'user', session_id: id, parent_tool_use_id: null, message: { role: 'user', content: prompt } };
+        if (promptAuthorized && !controller.signal.aborted) yield { type: 'user', session_id: id, parent_tool_use_id: null, message: { role: 'user', content: images.length ? [{type:'text',text:prompt}, ...images.map(data=>({type:'image' as const,source:{type:'base64' as const,media_type:'image/webp' as const,data}}))] : prompt } };
       }
       controller.signal.throwIfAborted();
       turnProcess = launch(input(), { ...options, allowedTools: turnAllowedTools, hooks: toolHooks(turnAllowedTools, coding),

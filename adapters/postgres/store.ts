@@ -40,6 +40,7 @@ async function navigatorPresent(c: DbSession) { return Boolean((await c.execute<
 export class PostgresStore implements DeliveryStore {
   readonly db;
   admitLocalTurn?: AdmitLocalTurn;
+  attachmentImage?: (id:string, animated:boolean) => Promise<string>;
   outboundAccess?: (execution:string,installation:string) => Promise<import('@space/contracts').OutboundAccess|undefined>;
   memoryReader?: (task: Pick<Task, 'installation_id' | 'requester_id' | 'thread_id'>) => Promise<import('@space/contracts').AgentMemoryContext | undefined>;
   constructor(readonly pool: Pool) { this.db = database(pool); }
@@ -243,6 +244,7 @@ export class PostgresStore implements DeliveryStore {
     if (!rows.length) throw new AppError(401, 'unauthorized');
   }
   async prepareDelivery(delivery: Delivery, connectionId?: string): Promise<PreparedDelivery | null> {
+    const images: {index:number;id:string;animated:boolean}[] = [];
     const prepared: PreparedDelivery | null = await this.taskTransaction(delivery.task_id, async c => {
       const task = await this.task(c, delivery.task_id);
       if (task.status === 'completed' || task.status === 'failed') return null;
@@ -279,12 +281,33 @@ export class PostgresStore implements DeliveryStore {
       const [session] = await c.select().from(s.agentSessions).where(eq(s.agentSessions.id, task.session_id!));
       if (session?.handoff_context) context.handoff = session.handoff_context;
       const priorReady = session?.managed && (await c.execute(sql`SELECT 1 FROM tasks previous JOIN task_events e ON e.correlation_id=previous.id AND e.payload->>'session_ready'='true' WHERE previous.session_id=${task.session_id} AND previous.id<>${task.id} LIMIT 1`)).rows.length > 0;
-      return { installation, request: { ...(session?.managed ? { persistent_session: { resume: Boolean(priorReady) } } : {}), schema_version: '1.0', task_id: task.id, session_id: task.session_id!, execution_id: delivery.execution_id, idempotency_key: delivery.execution_id, goal: task.goal, skill: task.skill, context } };
+      // Load only this turn's explicitly attached files. Session history stays bounded.
+      images.length=0;
+      const attached: NonNullable<InvocationRequest['attachments']> = [];
+      if (task.attachments?.length) {
+        const rows = await c.select({id:s.assets.id,preview:s.assets.preview}).from(s.assets).where(eq(s.assets.task_id, task.id));
+        for (const file of task.attachments) {
+          const row = rows.find(item=>item.id===file.id);
+          if (!row) throw new AppError(409,'asset_unavailable');
+          const preview = row.preview;
+          attached.push({...file,content:preview?.kind==='text'
+            ? {kind:'text',text:preview.text.slice(0,16000),truncated:preview.truncated || preview.text.length>16000}
+            : {kind:'file'}});
+          if (preview?.kind==='image') images.push({index:attached.length-1,id:file.id,animated:preview.mime==='image/gif'});
+        }
+      }
+      return { installation, request: { ...(attached.length ? {attachments:attached} : {}), ...(session?.managed ? { persistent_session: { resume: Boolean(priorReady) } } : {}), schema_version: '1.0', task_id: task.id, session_id: task.session_id!, execution_id: delivery.execution_id, idempotency_key: delivery.execution_id, goal: task.goal, skill: task.skill, context } };
     });
     if (prepared && this.outboundAccess) prepared.request.outbound = await this.outboundAccess(prepared.request.execution_id,prepared.installation.id);
-    if (!prepared || !this.memoryReader || prepared.request.context?.handoff) return prepared;
+    if (!prepared) return null;
+    for (const image of images) {
+      if (!this.attachmentImage) throw new AppError(503,'uploads_unavailable');
+      prepared.request.attachments![image.index]!.content = {kind:'image', webp:await this.attachmentImage(image.id,image.animated)};
+    }
+    const readMemory = this.memoryReader && !prepared.request.context?.handoff;
+    if (!readMemory && !images.length) return prepared;
     const task = await this.task(this.db, delivery.task_id);
-    const memory = await this.memoryReader(task);
+    const memory = readMemory ? await this.memoryReader!(task) : undefined;
     // Provider I/O does not hold a database connection. Revalidate the delivery afterwards.
     await this.taskTransaction(delivery.task_id, async c => {
       const current = await this.task(c, delivery.task_id);

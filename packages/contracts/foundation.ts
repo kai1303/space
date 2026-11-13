@@ -1,3 +1,4 @@
+import { parseAgentInputFiles } from './assets.js';
 import { parseSidekickContext } from './sidekick.js';
 import { AppError, record, text, uuid } from './validation.js';
 import { parseAgentMemoryContext } from './memory.js';
@@ -44,7 +45,7 @@ export function parseExecution(value: unknown): Execution {
   return { id: uuid(v.id), task_id: uuid(v.task_id), workspace_id: uuid(v.workspace_id), installation_id: uuid(v.installation_id), session_id: uuid(v.session_id), status: v.status as Execution['status'], last_sequence: v.last_sequence as number };
 }
 export function parseInvocation(value: unknown): InvocationRequest {
-  const v = record(value, ['schema_version', 'task_id', 'execution_id', 'session_id', 'idempotency_key', 'goal', 'skill', 'context', 'persistent_session', 'outbound']);
+  const v = record(value, ['schema_version', 'task_id', 'execution_id', 'session_id', 'idempotency_key', 'goal', 'skill', 'context', 'persistent_session', 'outbound', 'attachments']);
   if (v.schema_version !== '1.0') throw new AppError(400, 'unsupported_schema_version');
   const execution_id = uuid(v.execution_id);
   if (uuid(v.idempotency_key) !== execution_id) throw new AppError(400, 'invalid_idempotency_key');
@@ -83,5 +84,5 @@ export function parseInvocation(value: unknown): InvocationRequest {
     if (!Array.isArray(access.tools) || access.tools.length > 4000 || access.tools.some(name => typeof name !== 'string' || !/^[-a-zA-Z0-9_.]{1,128}$/.test(name)) || new Set(access.tools).size !== access.tools.length) throw new AppError(400, 'invalid_outbound_tools');
     outbound = { url: url.href, token, tools: access.tools };
   }
-  return { ...(outbound ? { outbound } : {}), ...(persistent_session ? { persistent_session } : {}), ...(context?{context}:{}), schema_version: '1.0', task_id: uuid(v.task_id), execution_id, session_id: uuid(v.session_id), idempotency_key: execution_id, goal: text(v.goal), skill: text(v.skill, 80) };
+  return { ...(v.attachments === undefined ? {} : {attachments:parseAgentInputFiles(v.attachments)}), ...(outbound ? { outbound } : {}), ...(persistent_session ? { persistent_session } : {}), ...(context?{context}:{}), schema_version: '1.0', task_id: uuid(v.task_id), execution_id, session_id: uuid(v.session_id), idempotency_key: execution_id, goal: text(v.goal), skill: text(v.skill, 80) };
 }

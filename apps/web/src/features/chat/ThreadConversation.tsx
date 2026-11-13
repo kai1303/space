@@ -1,5 +1,6 @@
 import { useMemberProfile } from '../profile/MemberProfile.js';
-import type {ComponentProps,ReactNode} from 'react';
+import { AttachFileDialog, workspaceFileSource, type FilePickerSource } from '../files/AttachFileDialog.js';
+import {useMemo,type ComponentProps,type ReactNode} from 'react';
 import type {ChatMessage,ManagedChannelTab,MentionReference} from '@space/contracts';
 import { IconButton, Tabs } from '@space/ui/primitives';
 import { Message } from '@space/ui/conversation';
@@ -36,8 +37,9 @@ export function ConversationNavigation({children, order, view, onChange, onReord
 export function ConversationIntroduction({title,icon,children}:{title:string;icon:ReactNode;children:ReactNode}) {
  return <div className="chat-channel-welcome dm-conversation-intro"><div className="chat-empty-icon">{icon}</div><h2>{title}</h2><p>{children}</p></div>;
 }
-export function ConversationComposer({typingIndicator,onBlurCapture,...props}:ComponentProps<typeof RichComposer>&{typingIndicator?:ReactNode;onBlurCapture?:ComponentProps<'div'>['onBlurCapture']}) {
- return <div className="chat-compose" onBlurCapture={onBlurCapture}>{typingIndicator}<RichComposer showKeyboardHint={false} feedbackAtSendButton {...props}/></div>;
+export function ConversationComposer({typingIndicator,onBlurCapture,workspace,filePickerSource,...props}:ComponentProps<typeof RichComposer>&{workspace?:string;filePickerSource?:FilePickerSource;typingIndicator?:ReactNode;onBlurCapture?:ComponentProps<'div'>['onBlurCapture']}) {
+ const source=useMemo(()=>filePickerSource ?? (workspace ? workspaceFileSource(workspace) : undefined),[workspace,filePickerSource]);
+ return <div className="chat-compose" onBlurCapture={onBlurCapture}>{typingIndicator}<RichComposer renderFilePicker={source && ((onInsert,onClose,remaining,onUpload)=><AttachFileDialog source={source} onUpload={onUpload} remaining={remaining} onInsert={onInsert} onClose={onClose}/>)} showKeyboardHint={false} feedbackAtSendButton {...props}/></div>;
 }
 type MessageIdentity = Pick<ChatMessage,'author'|'created_at'>;
 export function continuesMessageGroup(message:MessageIdentity,previous?:MessageIdentity) {

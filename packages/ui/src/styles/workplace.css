@@ -694,3 +694,12 @@
 .sp-dialog[open]:has(> .sp-draft-media) { width:calc(100vw - 32px); height:calc(100dvh - 32px); max-width:none; max-height:none; padding:0; display:flex; flex-direction:column; }
 .sp-draft-media { display:flex; flex:1; flex-direction:column; min-height:0; }
 .sp-draft-send-pending { display:block; padding:4px 12px; font-size:12px; color:var(--sp-text-secondary); }
+
+.sp-attach-menu { display:inline-flex; }
+.sp-attach-menu .sp-attach-trigger { border-radius:50%; background:var(--sp-surface-hover); }
+.sp-attach-options { min-width:220px; }
+.sp-attach-options button { display:flex; align-items:center; gap:9px; }
+.sp-attach-options button + button { border-top:1px solid var(--sp-border); }
+.sp-rich-editor-shell[data-file-drop] { outline:2px dashed var(--sp-text-secondary); outline-offset:-2px; }
+.sp-menu-content.sp-attach-options { width:min(360px,calc(100vw - 16px)); }
+.sp-menu-content.sp-attach-options button { min-height:28px; padding:4px 10px; }

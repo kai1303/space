@@ -2,7 +2,7 @@ import { AttachmentDrafts } from "./attachment-drafts.js";
 import { registerMention } from "./mention-blot.js";
 import { useMentions, type FindMentions } from "./use-mentions.js";
 import { documentMentions } from "@space/contracts";
-import { useEffect, useRef, useState, useId } from "react";
+import { useEffect, useRef, useState, useId, type ReactNode } from "react";
 import { EmojiPicker } from "../emoji/emoji-picker.js";
 import { emojiCompletion, emojiDocument, emojiNative, emojiPreferences } from "../emoji/emoji.js";
 import type Quill from "quill";
@@ -11,6 +11,8 @@ import { isDefaultComposerSendKey } from "./composer-keyboard.js";
 import { ScheduleSend, openScheduleMenu } from "./schedule-send.js";
 import { MAX_ASSET_BYTES, MAX_MESSAGE_ASSETS, MAX_MESSAGE_DOCUMENT_BYTES } from "@space/contracts";
 import {
+  UploadSimple,
+  File as FileIcon,
   PaperPlaneRight,
   Plus,
   At,
@@ -65,6 +67,8 @@ export function RichComposer({
   showKeyboardHint = true,
   feedbackAtSendButton = false,
   submitLabel,
+  renderFilePicker,
+  renderExtraActions,
   autoFocus = false,
 }: {
   channel: string;
@@ -97,6 +101,8 @@ export function RichComposer({
   showKeyboardHint?: boolean;
   feedbackAtSendButton?: boolean;
   submitLabel?: string;
+  renderFilePicker?: (insert: (files: File[]) => void, close: () => void, remaining: number, upload: () => void) => ReactNode;
+  renderExtraActions?: (insertText: (value: string) => void, disabled: boolean) => ReactNode;
   autoFocus?: boolean;
 }) {
   const mount = useRef<HTMLDivElement>(null);
@@ -131,6 +137,31 @@ export function RichComposer({
   function setFiles(next: Attachment[]) {
     if (attachments === undefined) setLocalFiles(next);
     callbacks.current.onAttachmentsChange?.(next);
+  }
+  const [picking, setPicking] = useState(false);
+  const [draggingFiles, setDraggingFiles] = useState(false);
+  function addFiles(incoming: File[]) {
+    if (!incoming.length || plainText || !attachmentsEnabled || !ready || sending) return;
+    if (incoming.some(file => file.size < 1 || file.size > MAX_ASSET_BYTES)) {
+      setError("Each file must be between 1 byte and 25 MB.");
+      return;
+    }
+    if (incoming.length + files.length > MAX_MESSAGE_ASSETS) {
+      setError("Attach up to five files per message.");
+      return;
+    }
+    setError("");
+    setFiles([
+      ...files,
+      ...incoming.map((file) => ({
+        id: crypto.randomUUID(),
+        name: file.name,
+        size: file.size,
+        type: file.type,
+        file,
+        ...(attachments !== undefined ? { status: "uploading" as const, progress: 0 } : {}),
+      })),
+    ]);
   }
   const filesPending = files.some(file => file.status === "uploading" || file.status === "error");
   const filesRef = useRef(files);
@@ -489,7 +520,23 @@ export function RichComposer({
       {completion && <div className="sp-emoji-suggestions" id={suggestionsId} role="listbox" aria-label="Emoji suggestions">
         {completion.items.map((item, index) => <button id={`${suggestionsId}-${index}`} type="button" role="option" aria-selected={index === emojiIndex} key={item.id} onMouseDown={event => event.preventDefault()} onClick={() => completeEmoji(index)}><span>{emojiNative(item.id, emojiPreferences().skin)}</span><span>:{item.id}:</span></button>)}
       </div>}
-      <div className="sp-rich-editor-shell">
+      {picking && attachmentsEnabled && renderFilePicker?.(incoming=>{addFiles(incoming);setPicking(false);editor.current?.focus();},()=>{setPicking(false);editor.current?.focus();},MAX_MESSAGE_ASSETS-files.length,()=>{setPicking(false);fileInput.current?.click();})}
+      <div className="sp-rich-editor-shell" data-file-drop={draggingFiles || undefined}
+        onDragOverCapture={event=>{
+          if (!event.dataTransfer.types.includes('Files')) return;
+          event.preventDefault(); event.stopPropagation();
+          const allowed=attachmentsEnabled && !plainText && ready && !sending;
+          event.dataTransfer.dropEffect=allowed ? 'copy' : 'none'; setDraggingFiles(allowed);
+        }}
+        onDragLeave={event=>{if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDraggingFiles(false);}}
+        onDropCapture={event=>{
+          if (!event.dataTransfer.types.includes('Files')) return;
+          event.preventDefault();event.stopPropagation();setDraggingFiles(false);addFiles(Array.from(event.dataTransfer.files));
+        }}
+        onPasteCapture={event=>{
+          if (!event.clipboardData.files.length) return;
+          event.preventDefault();event.stopPropagation();addFiles(Array.from(event.clipboardData.files));
+        }}>
         <Reveal open={!plainText && showFormats}>
           <div
             className="sp-rich-toolbar"
@@ -543,39 +590,20 @@ export function RichComposer({
             onChange={(event) => {
               const incoming = [...(event.target.files ?? [])];
               event.target.value = "";
-              if (!attachmentsEnabled || sending) return;
-              if (incoming.some(file => file.size < 1 || file.size > MAX_ASSET_BYTES)) {
-                setError("Each file must be between 1 byte and 25 MB.");
-                return;
-              }
-              if (incoming.length + files.length > MAX_MESSAGE_ASSETS) {
-                setError("Attach up to five files per message.");
-                return;
-              }
-              setError("");
-              setFiles([
-                ...files,
-                ...incoming.map((file) => ({
-                  id: crypto.randomUUID(),
-                  name: file.name,
-                  size: file.size,
-                  type: file.type,
-                  file,
-                  ...(attachments !== undefined ? { status: "uploading" as const, progress: 0 } : {}),
-                })),
-              ]);
+              addFiles(incoming);
             }}
           />
-          {!plainText && (attachmentsEnabled || showUnavailableActions) && <IconButton
-            label={attachmentsEnabled ? "Attach files" : "File uploads unavailable"}
-            size="sm"
-            className="sp-attach-trigger"
-            disabled={!ready || sending || !attachmentsEnabled}
-            data-send-disabled={sending && ready && attachmentsEnabled || undefined}
-            onClick={() => fileInput.current?.click()}
-          >
-            <Plus size={20} />
-          </IconButton>}
+          {!plainText && attachmentsEnabled && <span className="sp-attach-menu" title="Attach · Double-click to upload"
+            onDoubleClick={event => { if (ready && !sending && (event.target as Element).closest('summary')) fileInput.current?.click(); }}>
+            <Popover label="Attach files" panelLabel="Attach" className="sp-composer-picker" triggerClassName="sp-attach-trigger"
+              floating align="start" role="menu" panelClassName="sp-menu-content sp-attach-options" disabled={!ready || sending} trigger={<Plus size={20}/>}>
+              {close => <>
+                {renderFilePicker && <button type="button" role="menuitem" onClick={()=>{close(false);setPicking(true);}}><FileIcon size={17}/>File</button>}
+                <button type="button" role="menuitem" onClick={()=>{close();fileInput.current?.click();}}><UploadSimple size={17}/>Upload from your computer</button>
+              </>}
+            </Popover>
+          </span>}
+          {!plainText && !attachmentsEnabled && showUnavailableActions && <IconButton label="File uploads unavailable" className="sp-attach-trigger" size="sm" disabled><Plus size={20}/></IconButton>}
           {!plainText && <IconButton
             label="Show formatting"
             size="sm"
@@ -625,6 +653,7 @@ export function RichComposer({
           <IconButton label="Run shortcut unavailable in this preview" className="sp-unavailable-action" size="sm" disabled>
             <Lightning size={18} />
           </IconButton></>}
+          {renderExtraActions?.(insert, !ready || sending)}
           <div className="sp-rich-send-group"
             tabIndex={feedbackAtSendButton && sendDisabledReason ? 0 : undefined}
             role={feedbackAtSendButton && sendDisabledReason ? "group" : undefined}

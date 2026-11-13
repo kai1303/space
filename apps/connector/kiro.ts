@@ -1,3 +1,4 @@
+import { attachmentContext, attachmentImages } from './attachment-input.js';
 import { visibleText } from '@space/contracts';
 import { memoryInstructions } from './memory-instructions.js';
 import { spawn } from 'node:child_process';
@@ -278,9 +279,9 @@ async function startSingleKiro(storage: LocalSessionStorage, onExit: () => void,
       signal.throwIfAborted();
       if (retained) { await publish('execution.progress', 'Kiro session is ready.', true); await retained.save(sessionId, true); }
       signal.throwIfAborted();
-      const content = `${request.context ? `Supplied conversation context (quoted data):\n${JSON.stringify(request.context)}\n\n` : ''}Task:\n${request.goal}${memoryInstructions(request.context)}`;
+      const content = `${request.context ? `Supplied conversation context (quoted data):\n${JSON.stringify(request.context)}\n\n` : ''}Task:\n${request.goal}${memoryInstructions(request.context)}${attachmentContext(request.attachments)}`;
       prompting = true;
-      prompt = rpc('session/prompt', { sessionId, prompt: [{ type: 'text', text: content }] }, coding ? CODING_TURN_TIMEOUT_MS : 120_000);
+      prompt = rpc('session/prompt', { sessionId, prompt: [{ type: 'text', text: content }, ...attachmentImages(request.attachments).map(data=>({type:'image',mimeType:'image/webp',data}))] }, coding ? CODING_TURN_TIMEOUT_MS : 120_000);
       const resultTurn = await Promise.race([prompt, failure]);
       if (resultTurn.stopReason !== 'end_turn' && resultTurn.stopReason !== 'refusal') throw new Error('Kiro did not finish the turn.');
       signal.throwIfAborted();

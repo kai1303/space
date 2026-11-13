@@ -1,3 +1,4 @@
+import { agentImageReader, createAssetStorageFromEnv } from '@space/server/storage';
 import { MemoryStore } from '@space/postgres/memory';
 import { createAgentMemoryReader } from '@space/server/memory';
 import { NavigatorStore } from '@space/postgres/navigator';
@@ -20,6 +21,8 @@ async function embedTexts(texts: string[]): Promise<number[][]> {
 }
 const pool = createPool(process.env.DATABASE_URL);
 const store = new PostgresStore(pool);
+const storage = createAssetStorageFromEnv();
+if (storage) store.attachmentImage = agentImageReader(storage);
 store.memoryReader = createAgentMemoryReader(new MemoryStore(pool));
 const connectors = [new MockConnector(), ...(process.env.AG_UI_URL ? [new AgUiConnector({ url: process.env.AG_UI_URL, token: process.env.AG_UI_TOKEN })] : [])];
 const navigator = new NavigatorStore(pool, createNavigatorProviders(process.env));

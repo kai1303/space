@@ -8,6 +8,8 @@ const Chat = lazy(() => import('./Chat.js').then(module => ({ default: module.Ch
 const Gallery = lazy(() => import('../gallery/DesignSystemGallery.js').then(module => ({ default: module.DesignSystemGallery })));
 const Preview = lazy(() => import('../gallery/WorkspacePreview.js').then(module => ({ default: module.WorkspacePreview })));
 
+const AgentPreview = lazy(() => import('../gallery/AgentSessionPreview.js').then(module => ({ default: module.AgentSessionPreview })));
+
 export function App() {
   const { pathname, hash, search } = window.location;
   const file = /^\/file\/([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})$/i.exec(pathname);
@@ -22,6 +24,6 @@ export function App() {
   const landing = pathname === '/' && !chatLink && landingAnchor;
   const chat = pathname === '/chat' || pathname.startsWith('/c/') || pathname.startsWith('/s/') || pathname.startsWith('/w/') || (pathname === '/' && chatLink);
   return <Suspense fallback={pathname.startsWith('/c/') ? <ConversationLinkLoading /> : <p role="status" className="sp-sr-only">Loading Space…</p>}>
-    {landing ? <LaunchPage /> : chat ? <Chat /> : pathname === '/workspace' ? <Preview /> : <Gallery />}
+    {pathname === '/preview/agent-session' ? <AgentPreview /> : landing ? <LaunchPage /> : chat ? <Chat /> : pathname === '/workspace' ? <Preview /> : <Gallery />}
   </Suspense>;
 }

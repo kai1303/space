@@ -577,3 +577,30 @@ test('workspace session navigation is paginated, includes private handoffs only 
   await pool.query('DELETE FROM channel_members WHERE channel_id=$1 AND user_id=$2', [a.channel_id,a.collaborator_id]);
   assert.deepEqual((await api(a.collaborator_token, 'GET', path)).items, []);
 });
+
+test('session uploads bind once to their authorized turn, survive expiry, and reach the runner', async () => {
+  const a = await fixture(), foreign = await fixture();
+  const one = await session(a), other = await session(a);
+  const { AssetStore } = await import('@space/postgres/assets');
+  const assets = new AssetStore(pool);
+  const file = await assets.create(a.owner_id, a.channel_id, {name:'trace.txt',size:5,type:'text/plain'});
+  const path = `/agent-sessions/${one.id}/messages`;
+  const body = {text:'',asset_ids:[file.id],asset_descriptions:{[file.id]:'Console log'}};
+  await api(a.owner_token,'POST',path,body,409);
+  await assets.complete(a.owner_id,file.id,async()=>({kind:'text',text:'hello',language:'plaintext',truncated:false}));
+  await api(a.collaborator_token,'POST',path,body,409);
+  const key = randomUUID();
+  const task = await api(a.owner_token,'POST',path,body,201,key);
+  assert.equal((await api(a.owner_token,'POST',path,body,201,key)).id,task.id);
+  await api(a.owner_token,'POST',path,{...body,text:'Different'},409,key);
+  await api(a.owner_token,'POST',`/agent-sessions/${other.id}/messages`,body,409);
+  await pool.query("UPDATE assets SET expires_at=now()-interval '1 hour' WHERE id=$1",[file.id]);
+  assert.equal((await assets.download(a.collaborator_id,file.id)).task_id,task.id);
+  await assert.rejects(assets.download(foreign.owner_id,file.id), /not_found/);
+  assert.equal((await assets.list(a.owner_id,a.channel_id)).items.length,0);
+  const detail = await api(a.owner_token,'GET',`/agent-sessions/${one.id}`);
+  assert.equal(detail.turns[0].task.attachments[0].description,'Console log');
+  const delivery = (await store.claimDelivery(a.installation_id))!;
+  const prepared = (await store.prepareDelivery(delivery))!;
+  assert.deepEqual(prepared.request.attachments?.[0]?.content,{kind:'text',text:'hello',truncated:false});
+});

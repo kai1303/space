@@ -75,3 +75,24 @@ export function parseAssetDescriptions(input: unknown, ids: string[]): Record<st
   }
   return Object.keys(descriptions).length ? descriptions : undefined;
 }
+
+/** A bounded rendering of each uploaded file for the current agent turn. */
+export type AgentInputFile = AssetAttachment & {
+  content: { kind: 'text'; text: string; truncated: boolean } | { kind: 'image'; webp: string } | { kind: 'file' };
+};
+
+export function parseAgentInputFiles(value: unknown): AgentInputFile[] {
+  if (!Array.isArray(value) || value.length > MAX_MESSAGE_ASSETS) throw new AppError(400, 'invalid_assets');
+  return value.map(entry => {
+    const v = record(entry, ['id','name','size','type','description','content']);
+    const id = uuid(v.id);
+    const file = { id, ...parseAssetInput({ name:v.name, size:v.size, type:v.type }), ...(v.description ? {description:text(v.description, MAX_ASSET_DESCRIPTION_LENGTH)} : {}) };
+    const c = record(v.content, ['kind','text','truncated','webp']);
+    if (c.kind === 'file') return {...file, content:{kind:'file'}};
+    if (c.kind === 'text' && typeof c.text === 'string' && c.text.length <= 16000 && typeof c.truncated === 'boolean')
+      return {...file, content:{kind:'text',text:c.text,truncated:c.truncated}};
+    if (c.kind === 'image' && typeof c.webp === 'string' && c.webp.length <= 200000 && /^[A-Za-z0-9+/]+={0,2}$/.test(c.webp))
+      return {...file, content:{kind:'image',webp:c.webp}};
+    throw new AppError(400, 'invalid_asset_content');
+  });
+}

@@ -76,7 +76,7 @@ export function registerEventDeadlines(app: FastifyInstance, getEvents: () => Pr
       const row = (await tasks.pool.query<{remaining:number}>(`SELECT CASE WHEN deadline IS NULL THEN 0 ELSE
         greatest(0,extract(epoch FROM (greatest(deadline,processing_until)-now()))*1000)::float END AS remaining
         FROM assets CROSS JOIN LATERAL (SELECT least(
-          CASE WHEN message_id IS NULL THEN expires_at END,
+          CASE WHEN message_id IS NULL AND task_id IS NULL THEN expires_at END,
           CASE WHEN status='ready' AND staging_deleted_at IS NULL THEN upload_expires_at END
         ) AS deadline) obligation WHERE id=$1`,[id])).rows[0];
       if (row?.remaining && Number.isFinite(row.remaining) && row.remaining>0) await message.retry(row.remaining);

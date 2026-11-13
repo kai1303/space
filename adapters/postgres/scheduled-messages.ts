@@ -67,7 +67,7 @@ export class ScheduledMessageStore {
         if (held.rows.length) throw new AppError(409, 'asset_unavailable');
         const extended = await c.execute(sql`UPDATE assets SET expires_at=greatest(expires_at, ${request.send_at}::timestamptz + ${sql.raw(ASSET_GRACE)})
           WHERE id = ANY(${uuids(assets)}) AND channel_id=${channel.id} AND uploader_id=${actor}
-            AND status='ready' AND message_id IS NULL AND expires_at > clock_timestamp() RETURNING id`);
+            AND status='ready' AND message_id IS NULL AND task_id IS NULL AND expires_at > clock_timestamp() RETURNING id`);
         if (extended.rows.length !== assets.length) throw new AppError(409, 'asset_unavailable');
       }
       await c.execute(sql`INSERT INTO scheduled_messages(id,workspace_id,channel_id,thread_id,user_id,request_hash,text,document,asset_ids,asset_descriptions,send_at)

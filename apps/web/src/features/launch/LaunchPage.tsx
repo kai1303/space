@@ -35,13 +35,10 @@ const questions = [
   ['Where do our decisions live?', 'When channel memory is enabled, you can save a message to the channel’s Markdown notes with a link back to its thread.'],
   ['Can I host my own workspace?', 'Yes. Space is MIT licensed. The setup guide covers the database, file storage, API, web client and optional agent connector.'],
 ];
-function Brand({ animate = false }: { animate?: boolean }) {
+function Brand() {
   const { feedback } = useLaunchMotion();
   return <motion.a {...feedback} className="launch-brand" href="/" aria-label="Space home">
-    <picture>
-      {animate && <source media="(prefers-reduced-motion: no-preference)" srcSet="/brand/space-logo-orbit.webp" />}
-      <img src="/launch/wordmark.webp" width="123" height="32" alt="Space" />
-    </picture>
+    <img src="/launch/wordmark.webp" width="123" height="32" alt="Space" />
   </motion.a>;
 }
 function Navigation() {
@@ -59,7 +56,7 @@ function Navigation() {
   return <header className={'launch-nav' + (open ? ' menu-open' : '')} onKeyDown={event => {
     if (event.key === 'Escape' && open) { setOpen(false); menuButton.current?.focus(); }
   }} onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget)) setOpen(false); }}>
-    <div className="nav-inner"><Brand animate/>
+    <div className="nav-inner"><Brand/>
       <nav className="launch-desktop-navigation" aria-label="Primary">{links}</nav>
       <div className="nav-actions"><motion.a {...feedback} className="launch-nav-open" href="/chat">Open Space <ArrowUpRight/></motion.a>
         <motion.button {...feedback} ref={menuButton} className="launch-menu" onClick={() => setOpen(!open)} aria-expanded={open} aria-controls="launch-navigation" aria-label={open ? 'Close menu' : 'Open menu'}>
@@ -107,12 +104,19 @@ export function LaunchPage() {
   const { feedback, reduced } = useLaunchMotion();
   return <MotionConfig reducedMotion={reduced ? 'always' : 'never'}><div ref={root} className="launch"><a href="#launch-main" className="launch-skip">Skip to content</a><Navigation/>
     <main id="launch-main">
-      <section className="launch-hero"><div className="launch-sky" aria-hidden="true"><div className="launch-orbits"/></div>
-        <div className="launch-intro"><h1>A shared space for<br/><em>people and agents.</em></h1>
-          <p>Bring your team, its files, and AI agents into the same conversation. Open source and yours to host.</p>
-          <div className="launch-actions"><motion.a {...feedback} className="launch-btn primary" href="/chat">Open Space <ArrowRight/></motion.a><motion.a {...feedback} className="launch-btn secondary" href="#workspace">Watch the demo</motion.a></div></div>
-        <WorkspaceDemo/>
+      <section className="launch-hero">
+        <div className="launch-orbit-field" aria-hidden="true"><i/><i/><i/></div>
+        <div className="launch-intro">
+          <h1>A shared space for people and agents.</h1>
+          <p>Bring your team and its agents into the same channel. Ask about a decision and follow the answer back to the conversation.</p>
+          <div className="launch-actions">
+            <motion.a {...feedback} className="launch-btn primary" href="/chat">Open Space <ArrowRight/></motion.a>
+            <motion.a {...feedback} className="launch-btn secondary" href="#setup">Self-host Space <ArrowUpRight/></motion.a>
+          </div>
+          <a className="launch-demo-link" href="#workspace">Explore the workspace <span aria-hidden="true">↓</span></a>
+        </div>
       </section>
+      <WorkspaceDemo/>
       <LaunchAgents/><LaunchConnections/><LaunchWorkflows/><Toolkit/><Setup/>
       <section className="launch-faq launch-width" id="faq"><div><span className="launch-overline">FAQ</span><h2>A few answers.</h2><motion.a {...feedback} className="launch-textlink" href={repo+'/issues'}>Ask on GitHub <ArrowUpRight/></motion.a></div>
         <FAQ/></section>

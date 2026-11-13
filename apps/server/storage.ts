@@ -206,3 +206,16 @@ export function createAssetStorageFromEnv(env: NodeJS.ProcessEnv = process.env):
   } catch { throw new Error('asset_storage_configuration'); }
   return new SeaweedStorage({ endpoint, publicEndpoint, officeEndpoint, bucket, accessKey, secretKey, origins });
 }
+
+
+// Keep model images readable while bounding each delivery to 150 KB per image.
+export function agentImageReader(storage: AssetStorage) {
+  return async (id: string, animated: boolean) => {
+    const bytes = await storage.read(`previews/${id}/${animated ? 'thumbnail' : 'display'}.webp`, maxSize);
+    if (bytes.length <= 150000) return Buffer.from(bytes).toString('base64');
+    const {default: sharp} = await import('sharp');
+    const image = await sharp(bytes).resize({width:800,height:800,fit:'inside',withoutEnlargement:true}).webp({quality:65}).toBuffer();
+    if (image.length <= 150000) return image.toString('base64');
+    return (await sharp(bytes).resize({width:360,height:360,fit:'inside',withoutEnlargement:true}).webp({quality:50}).toBuffer()).toString('base64');
+  };
+}

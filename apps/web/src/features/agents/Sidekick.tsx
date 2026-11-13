@@ -10,7 +10,7 @@ import { ConversationHeader } from '../chat/ThreadConversation.js';
 import { AgentSessions } from './AgentSessions.js';
 import './sidekick.css';
 
-type DraftProps = Pick<ComponentProps<typeof AgentSessions>, 'drafts'|'onDraftChange'|'attempt'|'acknowledged'|'onAccepted'>;
+type DraftProps = Pick<ComponentProps<typeof AgentSessions>, 'uploads'|'drafts'|'onDraftChange'|'attempt'|'acknowledged'|'onAccepted'>;
 type Page = { items: SidekickSession[]; next_cursor: string | null };
 export function Sidekick({ workspace, viewerId, source, onClose, ...draftProps }: DraftProps & { workspace: string; viewerId: string; source?: SidekickSource; onClose: () => void }) {
   const [agents,setAgents]=useState<SidekickAgent[]>([]),[choice,setChoice]=useState('');

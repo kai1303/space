@@ -1,3 +1,6 @@
+import type { Attachment } from '@space/ui/rich-text';
+import type { UploadDrafts } from '../composer/useAttachmentUploads.js';
+import { messageContent } from '../composer/message-sender.js';
 import { RenameSessionDialog } from './RenameSessionDialog.js';
 import { useMemberProfile } from '../profile/MemberProfile.js';
 import {ToolApprovals} from './ToolApprovals.js';
@@ -5,7 +8,8 @@ import { ConversationHeading, ConversationDateDivider, useMessageArrivals } from
 import { ComposerSendError } from '@space/ui/composer';
 import { SidekickContextSection } from './SidekickContextSection.js';
 import {useDestinationPresence} from '../../shared/ui/useDestinationPresence.js';
-import {ConversationHeader,ConversationComposer,ConversationMessage,ConversationIntroduction} from '../chat/ThreadConversation.js';
+import { AgentSessionComposer } from './AgentSessionComposer.js';
+import {ConversationHeader,ConversationMessage,ConversationIntroduction} from '../chat/ThreadConversation.js';
 import {MessageTimeline} from '../chat/MessageTimeline.js';
 import {ConversationSkeleton} from '../chat/ConversationSkeleton.js';
 import {useStarredChannels} from '../channels/useStarredChannels.js';
@@ -26,8 +30,8 @@ const denied=(error:unknown)=>error instanceof Error&&['unauthorized','forbidden
 const errorText=(error:unknown)=>error instanceof Error?error.message.replaceAll('_',' '):'Unable to update the session';
 const busy=(task?:Task)=>!!task&&['awaiting_approval','queued','running'].includes(task.status);
 
-export function AgentSessions({drafts:externalDrafts,onDraftChange:externalDraftChange,attempt:externalAttempt,acknowledged:externalAcknowledged,onAccepted,thread,channel,viewerId,onAccessLost,initialSessionId,onOpenSession,archived=false,channelName,onBack,onClose}: {
- acknowledged?:Record<string,RichDocument>;onAccepted?:(key:string,document:RichDocument)=>void;
+export function AgentSessions({uploads,drafts:externalDrafts,onDraftChange:externalDraftChange,attempt:externalAttempt,acknowledged:externalAcknowledged,onAccepted,thread,channel,viewerId,onAccessLost,initialSessionId,onOpenSession,archived=false,channelName,onBack,onClose}: {
+ uploads?:UploadDrafts;acknowledged?:Record<string,RichDocument>;onAccepted?:(key:string,document:RichDocument,files:Attachment[])=>void;
  drafts?:Record<string,RichDocument>;onDraftChange?:(key:string,document:RichDocument)=>void;attempt?:(key:string)=>MessageAttempt;
  thread:string;channel:string;viewerId:string;onAccessLost:()=>void;initialSessionId?:string;onOpenSession?:(id:string)=>void;archived?:boolean;channelName?:string;onBack?:()=>void;onClose?:()=>void;
 }) {
@@ -85,14 +89,15 @@ export function AgentSessions({drafts:externalDrafts,onDraftChange:externalDraft
   }catch(reason){if(denied(reason))revoke();else setError(errorText(reason));}
   finally{if(alive.current)setSaving(false);}
  }
- async function send(id:string,text:string,document:RichDocument){
-  const body=JSON.stringify({text,document});
+ async function send(id:string,text:string,document:RichDocument,files:Attachment[]){
+  const payload=messageContent(text,document,files);
+  const body=JSON.stringify(payload);
   let state=externalAttempt?.(draftKey(id))??attempts.current.get(id);
   if(!state){state={};attempts.current.set(id,state);}
   if(state.current?.content!==body)state.current={content:body,id:crypto.randomUUID()};
   const attempt=state.current;
   let accepted:Task;
-  try { accepted=await request<Task>(`/agent-sessions/${id}/messages`,{text,document},attempt.id); }
+  try { accepted=await request<Task>(`/agent-sessions/${id}/messages`,payload,attempt.id); }
   catch(reason) { if(denied(reason))revoke(); if(reason instanceof Error && ['agent_busy','session_busy','agent_capacity','agent_unavailable','agent_start_failed'].includes(reason.message)){
     if(state.current===attempt)state.current=undefined;
     const messages:Record<string,string>={session_busy:'This session is already running. Your draft is saved.',agent_busy:'This session is already running. Your draft is saved.',agent_capacity:'The connector is at capacity. Send again when a session finishes.',agent_unavailable:'Your local connector is unavailable. Reconnect it and send again.',agent_start_failed:'Codex could not start this turn. Your draft is saved.'};
@@ -100,7 +105,7 @@ export function AgentSessions({drafts:externalDrafts,onDraftChange:externalDraft
    } throw reason; }
   if(state.current===attempt)state.current=undefined;
   if(!revokedRef.current&&JSON.stringify(getDraft(id))===JSON.stringify(document))saveDraft(id,{ops:[]});
-  if(!revokedRef.current)onAccepted?.(draftKey(id),document);
+  if(!revokedRef.current)onAccepted?.(draftKey(id),document,files);
   if(!alive.current)return accepted;
   setAcknowledged(previous=>({...previous,[id]:document}));refresh();return accepted;
  }
@@ -113,13 +118,13 @@ export function AgentSessions({drafts:externalDrafts,onDraftChange:externalDraft
   {loading&&(picker?<p role="status" className="agent-sessions-empty">Loading sessions…</p>:!current&&<div className="chat-timeline-shell"><div className="chat-timeline chat-timeline--virtual" aria-busy="true"><p className="sp-sr-only" role="status" aria-label="Loading messages">Loading messages…</p><ConversationSkeleton/></div></div>)}
   {picker&&<nav aria-label="Sessions in this thread" className="agent-sessions-list">{sessions.map(session=><button key={session.id} type="button" aria-label={session.title} onClick={()=>onOpenSession?.(session.id)}><span>{session.title}</span><small>{session.agent_name} · {session.state==='ended'?'Ended':`${session.turn_count} ${session.turn_count===1?'turn':'turns'}`}</small></button>)}</nav>}
   {picker&&creating&&<form className="agent-session-create" onSubmit={create}><h3>New agent session</h3><label>Session name<input required maxLength={120} value={title} onChange={event=>setTitle(event.target.value)} placeholder="What are we working on?"/></label><label>Agent<Select aria-label="Agent" value={agent} onChange={event=>setAgent(event.target.value)}>{catalog.map(item=><option key={`${item.installation_id}|${item.skill}`} value={`${item.installation_id}|${item.skill}`}>{item.name} · {item.skill}</option>)}</Select></label>{!catalog.length&&<p>No session-capable agent is available in this conversation.</p>}{local.filter(item=>item.persistent_sessions&&!item.inherits_owner_access).flatMap(item=>item.skills.filter(skill=>!item.granted_skills.includes(skill)).map(skill=><Button key={`${item.id}|${skill}`} size="sm" disabled={saving} onClick={()=>void enable(item.id,skill)}>Enable {item.name}{item.skills.length>1?` · ${skill}`:''} in this channel</Button>))}<div><Button type="submit" disabled={saving||!title.trim()||!agent}>Start session</Button><Button variant="ghost" onClick={()=>setCreating(false)}>Cancel</Button></div></form>}
-  {!picker&&current&&detail?.session.id===current.id&&<SessionConversation key={current.id} initial={detail} session={current} channel={channel} channelName={channelName} onBack={onBack} onClose={onClose} viewerId={viewerId} revision={revision} draft={getDraft(current.id)} acknowledged={externalAcknowledged?.[draftKey(current.id)]??acknowledged[current.id]} onDraftChange={document=>saveDraft(current.id,document)} onSend={(text,document)=>send(current.id,text,document)} onAccessLost={revoke} archived={archived}/>}
+  {!picker&&current&&detail?.session.id===current.id&&<SessionConversation key={current.id} initial={detail} session={current} channel={channel} channelName={channelName} onBack={onBack} onClose={onClose} viewerId={viewerId} revision={revision} draft={getDraft(current.id)} acknowledged={externalAcknowledged?.[draftKey(current.id)]??acknowledged[current.id]} onDraftChange={document=>saveDraft(current.id,document)} uploads={uploads} onSend={(text,document,files)=>send(current.id,text,document,files)} onAccessLost={revoke} archived={archived}/>}
   {picker&&!loading&&!creating&&!sessions.length&&<p className="agent-sessions-empty">No agent sessions yet.</p>}
   {!picker&&!loading&&!current&&!error&&<p role="alert" className="agent-sessions-empty">This session is unavailable.</p>}
  </div>;
 }
-function SessionConversation({initial,session,channel,channelName,onBack,onClose,viewerId,revision,draft,acknowledged,onDraftChange,onSend,onAccessLost,archived}: {
- initial:AgentSessionDetail;session:AgentSessionSummary;channel:string;channelName?:string;onBack?:()=>void;onClose?:()=>void;viewerId:string;revision:number;draft?:RichDocument;acknowledged?:RichDocument;onDraftChange:(document:RichDocument)=>void;onSend:(text:string,document:RichDocument)=>Promise<Task>;onAccessLost:()=>void;archived:boolean;
+function SessionConversation({uploads,initial,session,channel,channelName,onBack,onClose,viewerId,revision,draft,acknowledged,onDraftChange,onSend,onAccessLost,archived}: {
+ uploads?:UploadDrafts;initial:AgentSessionDetail;session:AgentSessionSummary;channel:string;channelName?:string;onBack?:()=>void;onClose?:()=>void;viewerId:string;revision:number;draft?:RichDocument;acknowledged?:RichDocument;onDraftChange:(document:RichDocument)=>void;onSend:(text:string,document:RichDocument,files:Attachment[])=>Promise<Task>;onAccessLost:()=>void;archived:boolean;
 }) {
  const starred=useStarredChannels(session.workspace_id,session.id,viewerId,'starred-sessions');
  const searchMentions=useMentionSearch(channel);
@@ -146,7 +151,7 @@ function SessionConversation({initial,session,channel,channelName,onBack,onClose
  const manage=viewerId===activeSession.owner_id||viewerId===activeSession.created_by;
  const rows=turns.flatMap((turn,index)=>{
   const base={channel_id:channel,thread_id:session.origin_thread_id,task_id:turn.task.id,client_message_id:null,created_at:turn.created_at??session.created_at};
-  const requestRow={turn,request:true,showMessage:true,notice:null,message:{...base,id:`${turn.task.id}:request`,sequence:String(index*2+1),text:turn.task.goal,document:turn.task.request_document,author:{kind:'human' as const,id:turn.task.requester_id,name:turn.requester_name}}};
+  const requestRow={turn,request:true,showMessage:true,notice:null,message:{...base,id:`${turn.task.id}:request`,sequence:String(index*2+1),text:turn.task.goal,attachments:turn.task.attachments,document:turn.task.request_document,author:{kind:'human' as const,id:turn.task.requester_id,name:turn.requester_name}}};
   const {task,response}=turn;
   const hasContent=response?.messages.some(message=>message.text.trim())||response?.tools.length||response?.components.length;
   const notice=task.status==='rejected'?'Request declined':task.status==='failed'
@@ -165,7 +170,8 @@ function SessionConversation({initial,session,channel,channelName,onBack,onClose
  const arrivals=useMessageArrivals(rows.map(row=>row.message),!loading&&tab==='messages'?session.id:null);
  const events:ChatEvent[]=rows.map(row=>({type:'message.created',channel_id:channel,thread_id:session.origin_thread_id,sequence:row.message.sequence,occurred_at:row.message.created_at,payload:row.message as ChatMessage}));
 
- const footer=activeSession.state==='ended'?<p className="agent-session-notice">This session has ended. Its conversation and outputs are saved.</p>:!session.managed?<p className="agent-session-notice">Start a new session to continue this earlier run.</p>:!archived?<ConversationComposer typingIndicator={<AgentActivityIndicator name={session.agent_name} turn={latestTurn}/>} channel="agent session" placeholder={`Message ${session.agent_name}`} findMentions={findReferences} sendDisabled={sendDisabled} maxLength={4000} showUnavailableActions={false} attachmentsEnabled={false} defaultValue={draft} acknowledgedDocument={acknowledged} onDraftChange={onDraftChange} onSend={async(text,document)=>{pinned.current=true;const task=await onSend(text,document);setSubmittedTask(task.id);}}/>:null;
+ const uploadKey=`session:${channel}:${session.id}`;
+ const footer=activeSession.state==='ended'?<p className="agent-session-notice">This session has ended. Its conversation and outputs are saved.</p>:!session.managed?<p className="agent-session-notice">Start a new session to continue this earlier run.</p>:!archived?<AgentSessionComposer workspace={session.workspace_id} skill={session.skill} typingIndicator={<AgentActivityIndicator name={session.agent_name} turn={latestTurn}/>} channel="agent session" placeholder={`Message ${session.agent_name}`} findMentions={findReferences} sendDisabled={sendDisabled} maxLength={4000} showUnavailableActions={false} attachmentsEnabled={!!uploads?.enabled} attachments={uploads?.drafts[uploadKey]??[]} onAttachmentsChange={files=>uploads?.change(uploadKey,channel,files)} onRetryAttachment={id=>uploads?.retry(uploadKey,channel,id)} defaultValue={draft} acknowledgedDocument={acknowledged} onDraftChange={onDraftChange} onSend={async(text,document,files)=>{pinned.current=true;const task=await onSend(text,document,files);setSubmittedTask(task.id);}}/>:null;
  return <div className="agent-session" aria-label={`Agent session ${session.title}`}>
   <ConversationHeader title="Agent session" topic={session.managed&&<div className="agent-session-header-title">
     <span title={session.title}>{session.title}</span>

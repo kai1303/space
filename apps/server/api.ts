@@ -44,6 +44,7 @@ import { registerRealtime, type RealtimeOptions } from './realtime.js';
 import { registerWorkspaceRoutes } from './workspace.js';
 import { AssetStore } from '@space/postgres/assets';
 import { OFFICE_CALLBACK, OFFICE_CONTENT, type OfficeSettings } from './office.js';
+import { agentImageReader } from './storage.js';
 import { registerAssetRoutes } from './assets.js';
 import type { AssetStorage } from './storage.js';
 import { MemoryStore } from '@space/postgres/memory';
@@ -175,6 +176,7 @@ export function createApi(store: PostgresStore, options: { workflowChat?: Workfl
   const connections = new AgentConnectionStore(store.pool, { connectors: options.pairedConnectors });
   registerAgentConnectionRoutes(app, connections);
   const { io, onOutbox, getEvents, work, health, invalidate } = registerRealtime(app, authenticate, chat, { ...options.realtime, receiptMetrics, ...(options.auth ? { allowedOrigins: [...options.auth.origins], strictOrigins: true } : {}) });
+  if (options.storage) store.attachmentImage = agentImageReader(options.storage);
   registerAssetRoutes(app, assets, options.storage, options.office, invalidate);
   const immediate = directTurns(app,io,store,invalidate);
   registerAgentSessionRoutes(app,new AgentSessionStore(store.pool,store),immediate.accepted,immediate.stop);

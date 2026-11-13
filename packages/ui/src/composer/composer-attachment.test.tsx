@@ -36,3 +36,31 @@ it('submits an uploading draft once with the finalized file ID and retains a fai
   await waitFor(() => expect(send).toHaveBeenCalledTimes(1));
   expect(send.mock.calls[0]?.[2]).toEqual([ready]);
 });
+
+it('routes file drop and paste through draft validation', async () => {
+  const send=vi.fn();
+  render(<RichComposer channel="qa" onSend={send}/>);
+  const editor=await screen.findByRole('textbox',{name:'Message qa'});
+  const file=(name:string)=>new File(['hello'],name,{type:'text/plain'});
+  fireEvent.drop(editor,{dataTransfer:{types:['Files'],files:[file('first.txt')]}});
+  fireEvent.paste(editor,{clipboardData:{files:[file('second.txt')]}});
+  expect(await screen.findByRole('button',{name:'Remove second.txt'})).toBeTruthy();
+  fireEvent.drop(editor,{dataTransfer:{types:['Files'],files:[new File([],'empty.txt')]}});
+  expect((await screen.findByRole('alert')).textContent).toContain('Each file');
+  fireEvent.click(screen.getByRole('button',{name:'Send now'}));
+  await waitFor(()=>expect(send).toHaveBeenCalledOnce());
+  expect(send.mock.calls[0]![2].map((f:{name:string})=>f.name)).toEqual(['first.txt','second.txt']);
+});
+
+it('opens the Attach menu on one click and the file chooser from Upload or a double click', async () => {
+  const {container}=render(<RichComposer channel="qa" onSend={vi.fn()}/>);
+  await screen.findByRole('textbox',{name:'Message qa'});
+  const chooser=vi.spyOn(container.querySelector<HTMLInputElement>('input[type=file]')!,'click').mockImplementation(()=>{});
+  const plus=screen.getByRole('button',{name:'Attach files'});
+  fireEvent.click(plus);
+  expect(chooser).not.toHaveBeenCalled();
+  fireEvent.click(await screen.findByRole('menuitem',{name:'Upload from your computer'}));
+  expect(chooser).toHaveBeenCalledTimes(1);
+  fireEvent.doubleClick(plus);
+  expect(chooser).toHaveBeenCalledTimes(2);
+});

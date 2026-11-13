@@ -134,9 +134,9 @@ export class AgentSessionStore {
     const session = await this.visible(c, actor, id);
     if (!session.managed) throw new AppError(409, 'session_unmanaged');
     if (session.state === 'ended') throw new AppError(409, 'session_ended');
-    const taskInput = { workspace_id: session.workspace_id, thread_id: session.origin_thread_id, installation_id: session.installation_id, goal: input.text, skill: session.skill, ...(input.document ? { request_document: input.document } : {}) };
+    const taskInput = { workspace_id: session.workspace_id, thread_id: session.origin_thread_id, installation_id: session.installation_id, goal: input.text || 'Review the attached files.', skill: session.skill, ...(input.document ? { request_document: input.document } : {}) };
     const installation = await this.tasks.eligible(c, { ...taskInput, requester_id: actor, session_id: session.id }, true);
-    const hash = createHash('sha256').update(JSON.stringify({ ...taskInput, agent_session_id: id })).digest('hex');
+    const hash = createHash('sha256').update(JSON.stringify({ ...taskInput, ...(input.asset_ids.length ? { text:input.text, asset_ids:input.asset_ids, asset_descriptions:input.asset_descriptions } : {}), agent_session_id: id })).digest('hex');
     const [existing] = await c.select().from(s.tasks).where(and(eq(s.tasks.workspace_id, session.workspace_id), eq(s.tasks.requester_id, actor), eq(s.tasks.idempotency_key, key)));
     if (existing) {
       if (existing.request_hash !== hash) throw new AppError(409, 'idempotency_conflict');
@@ -147,6 +147,23 @@ export class AgentSessionStore {
     const target = installation.owner_id === actor && this.tasks.admitLocalTurn ? await directTurnTarget(c, installation, session) : undefined;
     const commit = async () => {
       const task = await this.tasks.createTaskIn(c, actor, taskInput, key, hash, session.id);
+      if (input.asset_ids.length) {
+        const ids = sql.join(input.asset_ids.map(id=>sql`${id}::uuid`), sql`,`);
+        const attached = await c.execute<{id:string; name:string; size:number; type:string}>(sql`
+          UPDATE assets SET task_id=${task.id}
+          WHERE id IN (${ids}) AND channel_id=(SELECT channel_id FROM threads WHERE id=${session.origin_thread_id})
+            AND workspace_id=${session.workspace_id} AND uploader_id=${actor} AND status='ready'
+            AND message_id IS NULL AND task_id IS NULL AND expires_at>clock_timestamp()
+            AND NOT EXISTS (SELECT 1 FROM scheduled_messages WHERE status IN ('pending','sending') AND asset_ids && ARRAY[${ids}])
+          RETURNING id,name,size,type`);
+        if (attached.rows.length !== input.asset_ids.length) throw new AppError(409,'asset_unavailable');
+        task.attachments = input.asset_ids.map(id => {
+          const file = attached.rows.find(row=>row.id===id)!;
+          const description = input.asset_descriptions?.[id];
+          return description ? {...file,description} : file;
+        });
+        await c.update(s.tasks).set({attachments:task.attachments}).where(eq(s.tasks.id,task.id));
+      }
       const result = installation.owner_id === actor ? await this.tasks.approveTaskIn(c, actor, task.id, session.id) : task;
       const changed = await c.update(s.agentSessions).set({ revision: session.revision + 1 }).where(and(eq(s.agentSessions.id, id), eq(s.agentSessions.revision, session.revision), eq(s.agentSessions.state, 'active'))).returning({ id: s.agentSessions.id });
       if (!changed.length) throw new SessionConflict();

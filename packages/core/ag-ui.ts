@@ -45,7 +45,7 @@ export class AgUiConnector implements AgentConnector {
       delete response.step;
     };
     try {
-      await agent.runAgent({ runId: request.execution_id, forwardedProps: { taskId: request.task_id, skill: request.skill, ...(request.context ? { context: request.context } : {}) } }, {
+      await agent.runAgent({ runId: request.execution_id, forwardedProps: { ...(request.attachments ? {attachments:request.attachments} : {}), taskId: request.task_id, skill: request.skill, ...(request.context ? { context: request.context } : {}) } }, {
         onEvent: async ({ event: raw }) => {
           if (failure || signal.aborted) return { stopPropagation: true };
           try {

@@ -1,3 +1,4 @@
+import { attachmentContext, attachmentImages } from './attachment-input.js';
 import { visibleText } from '@space/contracts';
 import { memoryInstructions } from './memory-instructions.js';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
@@ -291,8 +292,8 @@ async function startSingleCodex(accessToken: string, onExit: () => void, launch:
         signal.throwIfAborted();
       }
       const contextLabel = request.persistent_session?.resume ? 'Refreshed conversation context' : 'Supplied conversation context';
-      const prompt = `${request.context ? `${contextLabel} (quoted data):\n${JSON.stringify(request.context)}\n\n` : ''}Task:\n${request.goal}${memoryInstructions(request.context)}`;
-      const turn = await rpc('turn/start', { threadId, input: [{ type: 'text', text: prompt }], cwd: taskDirectory, approvalPolicy: coding ? 'on-request' : 'never', sandboxPolicy: coding ? { type: 'workspaceWrite', writableRoots: [project!], networkAccess: false, excludeTmpdirEnvVar: true, excludeSlashTmp: true } : { type: 'readOnly' } });
+      const prompt = `${request.context ? `${contextLabel} (quoted data):\n${JSON.stringify(request.context)}\n\n` : ''}Task:\n${request.goal}${memoryInstructions(request.context)}${attachmentContext(request.attachments)}`;
+      const turn = await rpc('turn/start', { threadId, input: [{ type: 'text', text: prompt }, ...attachmentImages(request.attachments).map(data=>({type:'image',url:'data:image/webp;base64,'+data}))], cwd: taskDirectory, approvalPolicy: coding ? 'on-request' : 'never', sandboxPolicy: coding ? { type: 'workspaceWrite', writableRoots: [project!], networkAccess: false, excludeTmpdirEnvVar: true, excludeSlashTmp: true } : { type: 'readOnly' } });
       if (typeof turn.turn?.id !== 'string' || !turn.turn.id) throw new Error('Invalid Codex turn.');
       turnId = turn.turn.id;
       for (const message of early) notify(message);
