@@ -480,7 +480,7 @@ These are the connections implemented in this checkout and their current boundar
 | **Agent context** | Memory MCP | Revocable, channel-scoped keys for reading and updating enabled channel memory. Separate from the local project file server. |
 | **Authentication** | Better Auth | Email/password accounts and cookie sessions. Human social login and MFA are planned separately. |
 | **File storage** | SeaweedFS through its S3-compatible API | Private uploads, access-checked downloads, and previews. |
-| **Shared memory** | Markdown files | Built-in provider with imports, source links, search, and export. Custom providers have an adapter interface; third-party adapters do not ship yet. |
+| **Shared memory** | PostgreSQL-backed Markdown | Built-in provider with imports, source links, search, and export. Custom providers have an adapter interface; third-party adapters do not ship yet. |
 | **Task demo** | Mock connector | Experimental approval, progress, and result flow through the local worker. |
 | **Agent responses** | AG-UI HTTP backend | Optional task execution with streaming Markdown, tool activity, result cards, and tables. Requires a configured backend and channel grant. [Setup](docs/architecture/ag-ui.md). |
 
@@ -654,8 +654,7 @@ Realtime notifications are scoped to their affected subscriptions, with bounded
 connection/read admission and PostgreSQL cursor replay. The [architecture principles](docs/architecture/principles.md#realtime-admission-and-fanout)
 document limits and recovery behavior.
 
-Back up PostgreSQL, SeaweedFS data, and channel memory together. Database backups
-alone do not contain uploaded bytes or Markdown memory. See the
+Back up PostgreSQL and SeaweedFS together. PostgreSQL contains the built-in channel memory documents. SeaweedFS contains uploaded bytes. See the
 [storage guide](docs/architecture/assets.md#self-hosting-and-persistence) and
 [memory storage guide](docs/architecture/channel-memory.md#storage-and-operation).
 

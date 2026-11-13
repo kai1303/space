@@ -3,8 +3,7 @@
 Open **Memory** beside Messages in a channel. Memory is off until the channel
 creator or a workspace owner/admin enables it. Ordinary channel members can then
 edit shared notes, import `.md`, `.markdown` or `.txt` files, save selected messages,
-search memory, remove sources, and export Markdown. No message is copied simply
-because it was posted. No model API key or external memory database is required.
+search memory, remove sources, and export Markdown. Members choose which messages to save in the document. The built-in document provider runs with Space PostgreSQL.
 
 Choose **More actions → Save to channel memory** on a message, then save it in the
 memory dialog. The server reads its author, timestamp and text from the original
@@ -14,54 +13,25 @@ dialog, even when the original is outside the currently loaded chat history.
 
 Imports accept UTF-8 text up to 100,000 bytes and retain the filename, import time
 and importing user ID. Chat attachments are referenced by filename when saving a
-message; attachment bytes are not silently imported. Binary/PDF/Word extraction,
-server-side automatic fact extraction, contradiction detection, inferred summaries,
-remain outside this slice. Authorized agent task dispatch can now include bounded channel-memory excerpts. Agents and Navigator can
-now read context and save their own extracted knowledge through the
-[memory MCP tools](memory-mcp.md).
+message. Agents with a channel memory grant can receive an excerpt of this document.
+The separate extraction worker builds topics and facts from messages for the channel and thread memory views. [Working memory](thread-working-memory.md#layered-memory-graph-rag)
 
 ## Storage and operation
 
-Apply migration 011 using `pnpm migrate` and restart the API. PostgreSQL stores only
-`channels.memory_enabled` and `channels.memory_provider`. Canonical memory is UTF-8:
+The built-in `markdown` provider stores one document per channel in Space PostgreSQL. The provider ID, Markdown source blocks and SHA-256 content revisions survive the migration. Back up `channel_memory_documents` with the rest of the Space database. Custom providers own their storage.
 
-```text
-<MEMORY_DIRECTORY>/<workspace UUID>/<channel UUID>/memory.md
-```
+For an upgrade from filesystem storage:
 
-The default directory is `.space-memory` at the application root, independent of
-the launch working directory. Set `MEMORY_DIRECTORY` to an absolute private path to
-override it. The default directory is ignored by Git and Docker builds. Compose
-mounts the dedicated `memory_data` volume at `/app/.space-memory` and runs the API
-as the node user. Back up this volume along with PostgreSQL: database backups alone
-do not contain memory. This change supplies the Compose configuration; it does not
-recreate existing containers automatically.
+1. Stop older API processes that can write `memory.md`. Keep a backup of the database and the legacy memory directory.
+2. Run `pnpm migrate` on a machine with the legacy files. Set `MEMORY_DIRECTORY` to the old directory if you customized it. The default is `.space-memory` at the application root. Compose mounts the old `memory_data` volume read-only in its migration service.
+3. Check the reported import count and restart the API and workers on the new version. The importer includes disabled channels and channels currently using a custom provider. If a file fails validation, correct the error and rerun the migration. An existing database row wins on retry, including an empty row left by a clear.
+4. After verifying the database backup and import, retire the legacy volume according to your retention policy. The importer leaves the original files intact.
 
-Reads of empty/disabled channels do not create files. New scoped directories use
-0700 and files use 0600. UUID-only paths, scoped symlink checks, no-follow file opens,
-size limits, temporary files, fsync and atomic rename protect the filesystem boundary.
-The operator must control the configured root and its parent directories; do not
-allow untrusted local processes to replace directories while the API is running.
+The importer reads one document at a time and rejects symlinks, invalid UTF-8 and oversized documents. API replicas and workers read the same database. Custom API hosts that pass `memory.directory` import that legacy path at startup. After cutover the option can be omitted.
 
-Content is limited to 200,000 characters and 512 KiB. The SHA-256 of the exact content
-is its revision. Stale writes return `409 memory_conflict`; the UI keeps the draft
-and can load the latest version for comparison. Save/merge before importing or
-removing sources. Closing a dirty editor asks before discarding its changes.
+Content is limited to 200,000 UTF-16 units and 512 KiB. An edit supplies the SHA-256 revision of the original content. The provider checks it and conditionally replaces the same content in PostgreSQL. A stale replacement returns `409 memory_conflict`. The UI keeps the draft and can load the latest version for comparison. Source imports and removals reapply to current content on a bounded number of concurrent conflicts.
 
-Memory operations check current membership before accessing a provider and recheck
-membership and settings before returning. Provider I/O holds no database connection,
-transaction or row lock. An authorized write already in flight can complete after
-disablement or revocation; subsequent operations are blocked and an in-flight result
-is withheld if access or settings changed.
-
-The Markdown provider serializes mutations using a per-document filesystem lock
-(`proper-lockfile`), with a heartbeat and recovery after 30 seconds of inactivity.
-Revision checks happen inside that boundary; reads use atomic file snapshots and
-need no write lock. Every replica must use the same database and shared memory volume
-with atomic directory creation/rename; independent local disks are unsupported.
-Stop application writes before editing canonical files externally; direct filesystem
-writers do not participate in the provider's coordination. Short database-only MCP
-key creation uses serializable transactions and bounded retries for its quota check; no provider is called in that transaction.
+Memory operations check membership before accessing a provider and recheck membership and settings before returning. An authorized write already in flight can complete after disablement or revocation. A subsequent operation uses the current settings.
 
 Disabling blocks retrieval and writes without touching stored memory. The separate
 **Delete stored memory…** control requires manager permission and confirmation; it
@@ -105,7 +75,6 @@ export function apiWithMemory(
 ) {
   return createApi(store, {
     memory: {
-      directory: '/private/space-memory',
       providers: [provider],
     },
   });
@@ -151,9 +120,9 @@ by a member return 403. Responses retain the API's `Cache-Control: no-store` pol
 
 ## Verification
 
-Filesystem tests use temporary directories. API acceptance tests use a random schema
-in the local test database; they cover opt-in, role checks, offboarding, cross-channel
-source denial, stale edits, retained files, concurrent/idempotent ingestion, source
+Migration tests use temporary legacy directories. API acceptance tests use a random schema
+in the local test database and cover opt-in, role checks, offboarding, cross-channel
+source denial, stale edits, cross-replica reads, concurrent/idempotent ingestion, source
 removal, explicit deletion and a replaceable provider. React tests cover opt-in,
 message saving, imports, conflict recovery, dirty-close protection, navigation and
 denied-access clearing.
@@ -211,9 +180,9 @@ Channel managers can choose **No memory access**, **Read memory**, or **Read and
 
 `GET /v1/channels/:channelId/memory/agents` lists up to 100 eligible installations and current permissions. `POST /v1/channels/:channelId/memory/agents/:installationId` accepts `{ access: 'none' | 'read' | 'contribute' }`. Changes are manager-only and audited. Migration 038 adds the grants and installation-bound MCP connections without granting existing agents access.
 
-Task preparation supplies at most 6,000 UTF-16 code units of the selected provider's document as `context.channel_memory`, with channel/provider/revision identifiers and a truncation flag. Unicode surrogate pairs are preserved. This is quoted reference data, not privileged instructions. Both the API's paired-agent path and the remote worker use the same reader factory. Provider I/O occurs outside database transactions; membership, permissions, settings, and delivery eligibility are rechecked afterward. Each reader allows at most eight outstanding provider reads and waits at most five seconds per call. A timed-out read retains its concurrency slot until it settles, so a provider that never settles cannot create an unbounded backlog. Custom providers must implement their own I/O cancellation/timeouts.
+Task preparation supplies at most 6,000 UTF-16 code units of the selected provider's document as `context.channel_notes`, with channel/provider/revision identifiers and a truncation flag. Unicode surrogate pairs are preserved. This is quoted reference data, not privileged instructions. Both the API's paired-agent path and the remote worker use the same reader factory. Provider I/O occurs outside database transactions; membership, permissions, settings, and delivery eligibility are rechecked afterward. Each reader allows at most eight outstanding provider reads and waits at most five seconds per call. A timed-out read retains its concurrency slot until it settles, so a provider that never settles cannot create an unbounded backlog. Custom providers must implement their own I/O cancellation/timeouts.
 
-An unavailable or failing provider fails authorized dispatch rather than silently substituting another provider. Disabled or ungranted memory performs no provider read. Compose mounts the memory volume read-only in the remote worker. Custom deployment adapters must be registered consistently in API and worker processes with `createAgentMemoryReader(new MemoryStore(pool), providers)`.
+An unavailable or failing provider fails authorized dispatch rather than silently substituting another provider. Disabled or ungranted memory performs no provider read. The remote worker reads the canonical Markdown document from the Space database. Custom deployment adapters must be registered consistently in API and worker processes with `createAgentMemoryReader(new MemoryStore(pool), providers)`.
 
 MCP key creation optionally accepts `installation_id`. Bound keys may request read or contribute access, capped by the live installation permission. Contribute exposes read/search/context and evidence-backed `memory_remember`; it never exposes whole-document `memory_write` or `memory_forget`. Full-write keys remain available for explicitly configured external integrations and cannot be bound to an installation. The UI distinguishes these paths. Built-in runners receive supplied excerpts; granting contribute access does not change their tool restrictions or automatically attach an MCP client. Contribution uses an explicitly configured MCP client.
 

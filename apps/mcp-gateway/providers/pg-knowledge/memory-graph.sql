@@ -8,7 +8,7 @@ CREATE TABLE kb.m_channels (
   id text PRIMARY KEY, workspace_id uuid NOT NULL, name text NOT NULL, is_private boolean NOT NULL,
   memory_enabled boolean NOT NULL DEFAULT false, knowledge_enabled boolean NOT NULL DEFAULT false,
   -- Copied from Space. NULL means not copied yet; the reader fills it on start.
-  topic text, description text, version bigint NOT NULL
+  topic text, description text, archived boolean, version bigint NOT NULL
 );
 CREATE TABLE kb.m_threads (
   id text PRIMARY KEY, workspace_id uuid NOT NULL,

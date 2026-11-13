@@ -31,6 +31,19 @@ export async function syncNotes(source, index, workspace, ids, embed) {
   finally { client.release(); }
 }
 
+// Include notes whose source view just hid them. syncNotes decides their current visibility.
+export async function syncCitedNotes(source, index, workspace, channel, messages, embed) {
+  let after = null;
+  for (;;) {
+    const { rows } = await source.query(`SELECT id::text AS id FROM knowledge_note_citations
+      WHERE workspace_id=$1 AND channel_id=$2 AND evidence && $3::uuid[]
+        AND ($4::uuid IS NULL OR id>$4) ORDER BY id LIMIT $5`, [workspace, channel, messages, after, pageSize]);
+    if (rows.length) await syncNotes(source, index, workspace, rows.map(row => row.id), embed);
+    if (rows.length < pageSize) return;
+    after = rows.at(-1).id;
+  }
+}
+
 // Bounded pages in both directions: drop index rows that left the source, then add missing or older rows.
 export async function reconcileNotes(source, index, workspace, embed) {
   let after = '';

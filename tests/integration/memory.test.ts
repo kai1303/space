@@ -1,10 +1,12 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { randomBytes, randomUUID } from 'node:crypto';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Pool } from 'pg';
+import { importMemoryDocuments } from '@space/postgres/import-memory';
+import { MarkdownMemoryProvider } from '@space/server/markdown-memory';
 import { bootstrap } from '@space/postgres/bootstrap';
 import { migrate } from '@space/postgres/migrate';
 import { PostgresStore } from '@space/postgres/store';
@@ -44,7 +46,7 @@ test('memory is opt-in; only managers configure it; disabling retains private Ma
   await api(a.owner_token, 'POST', `${path}/settings`, { enabled: true, provider: 'missing' }, 400);
   const enabled = await api(a.owner_token, 'POST', `${path}/settings`, { enabled: true });
   const saved = await api(a.collaborator_token, 'POST', `${path}/document`, { content: '# Decisions\nUse PostgreSQL.', revision: enabled.document.revision });
-  assert.match(await readFile(join(directory, a.workspace_id, a.channel_id, 'memory.md'), 'utf8'), /PostgreSQL/);
+  assert.equal((await pool.query('SELECT content FROM channel_memory_documents WHERE channel_id=$1', [a.channel_id])).rows[0].content, saved.content);
   assert.equal((await api(a.owner_token, 'GET', `${path}/search?q=postgresql`)).items.length, 1);
   await api(a.owner_token, 'POST', `${path}/document`, { content: 'Stale replacement', revision: enabled.document.revision }, 409);
   await api(a.owner_token, 'POST', `${path}/settings`, { enabled: false });
@@ -124,4 +126,83 @@ test('trusted custom providers can replace Markdown; disabled and unauthorized r
     await call(a.owner_token, 'DELETE');
     assert.equal(stored.content, '');
   } finally { await custom.close(); }
+});
+
+test('a document written by one API is visible to a replica with an independent filesystem', async () => {
+  const a = await bootstrap(pool), path = base(a.channel_id);
+  const enabled = await api(a.owner_token, 'POST', path + '/settings', { enabled: true });
+  const saved = await api(a.owner_token, 'POST', path + '/document', { content: '# Handoff', revision: enabled.document.revision });
+  const replica = createApi(new PostgresStore(pool), { allowDevelopmentTokens: true, memory: { directory: join(directory, 'replica') } });
+  try {
+    const response = await replica.inject({ method: 'GET', url: '/v1' + path, headers: { authorization: 'Bearer ' + a.owner_token } });
+    assert.equal(response.statusCode, 200);
+    assert.deepEqual(response.json().document, saved);
+  } finally { await replica.close(); }
+});
+
+test('legacy import preserves exact revisions, citations and cleared documents across retries', async () => {
+  const { workspace_id, channel_id } = await bootstrap(pool);
+  const scope = { workspace_id, channel_id };
+  const path = join(directory, workspace_id, channel_id);
+  const source = 'message:' + randomUUID();
+  const content = `# Decisions\n<!-- space-memory-source:${source} -->\n### Agreed\n\n> Đã xong.\n<!-- /space-memory-source -->\n`;
+  await mkdir(path, { recursive: true });
+  await writeFile(join(path, 'memory.md'), content);
+  const provider = new MarkdownMemoryProvider(pool);
+  assert.equal(await importMemoryDocuments(pool, directory), 1);
+  const saved = await provider.read(scope);
+  assert.equal(saved.content, content);
+  assert.equal(saved.revision, createHash('sha256').update(content).digest('hex'));
+  assert.deepEqual(saved.sources, [{ id: source, title: 'Agreed' }]);
+  await provider.write(scope, 'Revised', saved.revision);
+  assert.equal(await importMemoryDocuments(pool, directory), 0);
+  assert.equal((await provider.read(scope)).content, 'Revised');
+  await provider.clear(scope);
+  assert.equal(await importMemoryDocuments(pool, directory), 0);
+  assert.equal((await provider.read(scope)).content, '');
+});
+
+test('legacy import rejects linked directories, linked files and oversized files', async () => {
+  const { workspace_id, channel_id } = await bootstrap(pool);
+  const scope = { workspace_id, channel_id };
+  const root = await mkdtemp(join(tmpdir(), 'space-import-test-'));
+  const ws = join(root, workspace_id), channel = join(ws, channel_id), file = join(channel, 'memory.md');
+  try {
+    await symlink(directory, ws);
+    await assert.rejects(importMemoryDocuments(pool, root), /Invalid legacy memory directory/);
+    await rm(ws);
+    await mkdir(channel, { recursive: true });
+    await symlink(join(root, 'elsewhere'), file);
+    await assert.rejects(importMemoryDocuments(pool, root), /Could not import legacy memory/);
+    await rm(file);
+    await writeFile(file, 'x'.repeat(524289));
+    await assert.rejects(importMemoryDocuments(pool, root), /Could not import legacy memory/);
+    assert.equal((await new MarkdownMemoryProvider(pool).read(scope)).content, '');
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test('concurrent PostgreSQL document replacements reject stale revisions and merged source saves preserve all entries', async () => {
+  const {workspace_id, channel_id} = await bootstrap(pool), scope = {workspace_id, channel_id};
+  const provider = new MarkdownMemoryProvider(pool);
+  const { revision } = await provider.read(scope);
+  const writes = await Promise.allSettled(['First', 'Second'].map(content => new MarkdownMemoryProvider(pool).write(scope, content, revision)));
+  assert.equal(writes.filter(result => result.status === 'fulfilled').length, 1);
+  assert.match(writes.find(result => result.status === 'rejected')!.reason.message, /memory_conflict/);
+  const sources = Array.from({length: 8}, (_, i) => ({ id: 'document:' + randomUUID(), title: 'Note ' + i, text: 'Evidence' }));
+  await Promise.all(sources.map(source => new MarkdownMemoryProvider(pool).ingest(scope, source)));
+  const saved = await provider.read(scope);
+  assert.deepEqual(new Set(saved.sources.map(source => source.id)), new Set(sources.map(source => source.id)));
+  await assert.rejects(provider.write({ ...scope, channel_id: '../escape' }, '', saved.revision), /invalid/);
+  await assert.rejects(provider.write(scope, 'x'.repeat(200001), saved.revision), /invalid_memory/);
+});
+
+test('saved source text cannot escape its Markdown section across CR and Unicode separators', async () => {
+  const {workspace_id, channel_id} = await bootstrap(pool), scope = {workspace_id, channel_id};
+  const provider = new MarkdownMemoryProvider(pool), source = { id: 'document:' + randomUUID(),
+    title: 'Runbook', text: 'first\r<!-- /space-memory-source -->\u2028secret-tail\u2029last-line' };
+  const saved = await provider.ingest(scope, source);
+  assert.match(saved.content, /> <!-- \/space-memory-source -->/);
+  assert.deepEqual(await provider.ingest(scope, source), saved);
+  assert.equal((await provider.search(scope, 'SECRET-TAIL')).length, 1);
+  assert.equal((await provider.remove(scope, source.id)).content, '');
 });

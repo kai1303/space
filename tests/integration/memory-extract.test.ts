@@ -2,13 +2,14 @@ import { observeOutbox } from '../fixtures/observe-outbox.js';
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomBytes, randomUUID } from 'node:crypto';
+import { setTimeout as delay } from 'node:timers/promises';
 import { Pool } from 'pg';
 import { bootstrap } from '@space/postgres/bootstrap';
 import { migrate } from '@space/postgres/migrate';
 import { PostgresStore } from '@space/postgres/store';
 import { createApi } from '@space/server/api';
 import { graphMemoryIndex } from '@space/server/memory-index';
-import { readThreadMemory, useMemoryIndex } from '@space/postgres/layered-memory';
+import { readChannelMemory, readThreadMemory, useMemoryIndex } from '@space/postgres/layered-memory';
 import { runMemoryExtract } from '@space/postgres/memory-extract';
 
 if (!process.env.TEST_DATABASE_URL) throw new Error('TEST_DATABASE_URL is required');
@@ -44,6 +45,62 @@ test('messages in memory-on channels queue one debounced extraction per thread; 
   assert.equal((await pool.query('SELECT count(*)::int AS n FROM memory_extract_threads WHERE thread_id=$1', [root.thread_id])).rows[0].n, 1, 'a burst is one row');
 });
 
+test('restore queues completed extraction once, including restores while the model is off', async () => {
+  const a = await bootstrap(pool);
+  await pool.query("UPDATE memory_extract_config SET enabled=true");
+  await pool.query("UPDATE channels SET memory_enabled=true WHERE id=$1", [a.channel_id]);
+  const root = await post(a.owner_token, a.channel_id, 'A past decision');
+  await pool.query("UPDATE memory_extract_threads SET done_through=pending_through, available_at='infinity' WHERE thread_id=$1", [root.thread_id]);
+  await pool.query("UPDATE memory_extract_config SET enabled=false");
+  const resets = () => pool.query("SELECT payload FROM observed_outbox WHERE kind='memory.extract.restore' AND aggregate_id=$1 ORDER BY id", [a.channel_id]);
+  await pool.query("UPDATE channels SET archived_at=now() WHERE id=$1", [a.channel_id]);
+  await pool.query("UPDATE channels SET archived_at=NULL WHERE id=$1", [a.channel_id]);
+  assert.equal((await resets()).rowCount, 0, 'a restore with no model leaves no broker backlog');
+  await pool.query("UPDATE memory_extract_config SET enabled=true");
+  const events = await resets();
+  assert.equal(events.rowCount, 1, 'model activation wakes the pending restore');
+  const { revision } = events.rows[0].payload;
+  const process = () => pool.query('SELECT restore_memory_extract_page($1,$2)', [a.channel_id, revision]);
+  await process();
+  const progress = async () => (await pool.query('SELECT generation::text, done_through::text, isfinite(available_at) AS scheduled FROM memory_extract_threads WHERE thread_id=$1', [root.thread_id])).rows[0];
+  assert.deepEqual(await progress(), { generation: '2', done_through: '0', scheduled: true });
+  await process();
+  assert.equal((await progress()).generation, '2', 'redelivery cannot invalidate a running extraction');
+
+  // Activate while the channel transaction is still open. Exactly one side must publish the new revision.
+  await pool.query('UPDATE memory_extract_config SET enabled=false');
+  await pool.query('UPDATE channels SET memory_enabled=false WHERE id=$1', [a.channel_id]);
+  const restoring = await pool.connect(), activating = await pool.connect();
+  try {
+    await restoring.query('BEGIN');
+    await restoring.query('UPDATE channels SET memory_enabled=true WHERE id=$1', [a.channel_id]);
+    await activating.query("SELECT set_config('application_name',$1,false)", ['test_restore_activation_' + a.channel_id]);
+    const activated = activating.query('UPDATE memory_extract_config SET enabled=true');
+    // The queries use independent connections. Wait until PostgreSQL accepted the activation command.
+    const deadline = Date.now() + 5000;
+    for (;;) {
+      const { rows: [seen] } = await pool.query("SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE application_name=$1 AND query='UPDATE memory_extract_config SET enabled=true') AS active", ['test_restore_activation_' + a.channel_id]);
+      if (seen.active) break;
+      assert.ok(Date.now() < deadline, 'activation reached PostgreSQL');
+      await delay(10);
+    }
+    await restoring.query('COMMIT');
+    await activated;
+  } finally { await restoring.query('ROLLBACK'); restoring.release(); activating.release(true); }
+  const resumed = await resets();
+  assert.equal(resumed.rowCount, 2, 'an overlapping enablement cannot lose the wakeup');
+  const nextRevision = String(BigInt(revision) + 1n);
+  await pool.query(`WITH extra AS (
+    INSERT INTO threads(id,workspace_id,channel_id) SELECT gen_random_uuid(),$1,$2 FROM generate_series(1,127) RETURNING *
+  ) INSERT INTO memory_extract_threads(thread_id,workspace_id,channel_id,available_at)
+    SELECT id,workspace_id,channel_id,'infinity' FROM extra`, [a.workspace_id, a.channel_id]);
+  await pool.query('SELECT restore_memory_extract_page($1,$2)', [a.channel_id, nextRevision]);
+  const { rows: [page] } = await pool.query('SELECT pending, after_thread FROM memory_extract_restores WHERE channel_id=$1', [a.channel_id]);
+  assert.ok(page.pending && page.after_thread, 'one full page has a continuation');
+  await pool.query('SELECT restore_memory_extract_page($1,$2,$3)', [a.channel_id, nextRevision, page.after_thread]);
+  assert.equal((await pool.query('SELECT pending FROM memory_extract_restores WHERE channel_id=$1', [a.channel_id])).rows[0].pending, false, 'an exact page completes on the empty tail');
+});
+
 // The knowledge database part needs MEMORY_GRAPH_URL (writer, memory-graph.sql and memory-extract.sql applied).
 test('a run writes topics and facts with evidence, replays change nothing, failures back off, and the cap holds', { skip: !process.env.MEMORY_GRAPH_URL }, async () => {
   const graph = new Pool({ connectionString: process.env.MEMORY_GRAPH_URL });
@@ -62,7 +119,7 @@ test('a run writes topics and facts with evidence, replays change nothing, failu
     let calls = 0;
     const model = async (input: { messages: { id: string }[] }) => {
       calls++;
-      return JSON.stringify({ topics: [{ name: 'checkout retries' }], facts: [
+      return JSON.stringify({ topics: [{ name: 'checkout retries', message_ids: [input.messages[0]!.id] }], facts: [
         { text: 'Duplicate charges are fixed by deduping on the idempotency key.', kind: 'decision', topic: 'checkout retries', message_ids: [input.messages.at(-1)!.id] },
         { text: 'Invented.', kind: 'fact', message_ids: [randomUUID()] },
       ] });
@@ -79,6 +136,35 @@ test('a run writes topics and facts with evidence, replays change nothing, failu
     await due(root.thread_id);
     assert.equal((await runMemoryExtract(pool, graph, model, embed, root.thread_id)).status, 'idle', 'a replayed event does no model call');
     assert.equal(calls, 1);
+
+    useMemoryIndex(graphMemoryIndex(process.env.MEMORY_GRAPH_URL));
+    const db = new PostgresStore(pool).db;
+    const thread = () => readThreadMemory(db, a.channel_id, root.thread_id);
+    const header = async () => (await readChannelMemory(db, a.channel_id)).channel?.top_topics;
+    assert.deepEqual((await thread()).topics, ['checkout retries']);
+    assert.deepEqual(await header(), ['checkout retries']);
+
+    // Simulate a graph commit whose matching Space progress update was interrupted.
+    await pool.query("UPDATE memory_extract_threads SET done_through=0, topics='[]', available_at=now() WHERE thread_id=$1", [root.thread_id]);
+    assert.equal((await runMemoryExtract(pool, graph, model, embed, root.thread_id)).status, 'done');
+    assert.equal(calls, 1, 'reuses the committed topic evidence');
+    assert.deepEqual(await header(), ['checkout retries']);
+
+    await pool.query("UPDATE messages SET text='Revised root' WHERE channel_id=$1 AND id=$2", [a.channel_id, root.id]);
+    assert.deepEqual((await thread()).topics, [], 'a stale source revision hides the topic before graph catch-up');
+    assert.equal((await thread()).facts[0]?.topic, null, 'a surviving fact cannot reveal a stale topic label');
+    assert.deepEqual(await header(), [], 'the channel header also checks revisions');
+    await graph.query('UPDATE kb.m_messages SET revision=2 WHERE id=$1', [root.id]);
+    await due(root.thread_id);
+    assert.equal((await runMemoryExtract(pool, graph, model, embed, root.thread_id)).status, 'done');
+    assert.deepEqual(await header(), ['checkout retries']);
+    const ack = await post(a.owner_token, a.channel_id, 'OK', root.thread_id);
+    await graph.query(`INSERT INTO kb.m_messages(id,workspace_id,thread_id,sequence,revision,created_at,memory,knowledge,body,embedding,version)
+      VALUES($1,$2,$3,$4,1,now(),true,false,$5,$6,1)`, [ack.id, a.workspace_id, root.thread_id, ack.sequence, ack.text, vector]);
+    await due(root.thread_id);
+    assert.equal((await runMemoryExtract(pool, graph, async () => ({ topics: [], facts: [] }), embed, root.thread_id)).status, 'done');
+    assert.equal((await graph.query('SELECT id FROM kb.m_thread_topics WHERE thread_id=$1', [root.thread_id])).rowCount, 0, 'empty replacement clears the old links');
+    assert.deepEqual(await header(), []);
 
     await graph.query('DELETE FROM kb.m_messages WHERE id=$1', [fix.id]);
     assert.equal(Number((await graph.query('SELECT count(*) FROM kb.m_fact_evidence WHERE message_id=$1', [fix.id])).rows[0].count), 0, 'evidence follows its message');
@@ -102,6 +188,7 @@ test('a run writes topics and facts with evidence, replays change nothing, failu
     assert.equal(capped.status, 'capped');
     assert.ok((capped.delayMs ?? 0) > 0, 'moved to the next hour');
   } finally {
+    useMemoryIndex(undefined);
     await graph.query('DELETE FROM kb.m_channels WHERE id=$1', [a.channel_id]);
     await graph.end();
   }
@@ -128,7 +215,7 @@ test('a burst of events runs the model once: stale deadlines are dropped and one
       VALUES($1,$2,$3,$4,1,now(),true,false,$5,$6,1)`, [m.id, a.workspace_id, root.thread_id, m.sequence, m.text, vector]);
     let calls = 0;
     const model = async (input: { messages: { id: string }[] }) => { calls++; await new Promise(r => setTimeout(r, 200));
-      return JSON.stringify({ topics: [{ name: 'retries' }], facts: [{ text: 'Retries double charge.', kind: 'fact', message_ids: [input.messages[0]!.id] }] }); };
+      return JSON.stringify({ topics: [{ name: 'retries', message_ids: [input.messages[0]!.id] }], facts: [{ text: 'Retries double charge.', kind: 'fact', message_ids: [input.messages[0]!.id] }] }); };
     const embed = async (texts: string[]) => texts.map(() => Array.from({ length: 384 }, () => 0.2));
     // Make the newest deadline due, keeping its exact value so its event still matches.
     const current = deadlines.at(-1)!;

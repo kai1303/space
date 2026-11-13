@@ -7,7 +7,7 @@
 \set source_schema public
 \endif
 BEGIN;
-SELECT set_config('space.memory_checkpoint', 'space_memory:' || left('space_graph_' || :'source_schema', 63), true);
+SELECT set_config('space.memory_checkpoint', 'space_memory_v2:' || left('space_graph_' || :'source_schema', 63), true);
 DO $$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM kb.graph_position WHERE slot = current_setting('space.memory_checkpoint') AND published_lsn > '0/0') THEN

@@ -50,13 +50,42 @@ try {
   await saveNoteByTitle(db, scope, { kind: 'decision', title: 'Duplicate charge fix', content: 'Dedupe charges on the cedar idempotency key.', message_ids: [root.id] }, codex);
   await until(async () => (await indexed())[0]?.revision === 2);
   assert.match((await hits())[0].evidence, /cedar/);
+  // Cross the worker's 32-note page boundary with several notes citing the same source.
+  const titles = Array.from({ length: 32 }, (_, i) => 'Decision ' + i);
+  for (const title of titles) {
+    await saveNoteByTitle(db, scope, { kind: 'fact', title, content: 'Use cedar keys.', message_ids: [root.id] }, codex);
+  }
+  await until(async () => (await indexed()).length === 33);
+  // No thread/file opt-in: changing a citation alone removes all affected index entries.
+  const events = await source.connect();
+  try {
+    await events.query('LISTEN space_kb_' + seed.workspace_id.replaceAll('-', ''));
+    const observed = [];
+    events.on('notification', event => observed.push(event.payload));
+    await chat.deleteMessage(seed.owner_id, seed.channel_id, root.id);
+    await until(() => observed.length);
+    assert.ok(!observed.includes('reconcile'), 'deleting a citation must not rebuild the workspace');
+    assert.ok(observed.includes('evidence/' + seed.channel_id + '/' + root.id), 'only affected notes need resync');
+  } finally { await events.query('UNLISTEN *'); events.release(); }
+  assert.deepEqual(await hits(), [], 'source revocation hides the note immediately');
+  await until(async () => !(await indexed()).length);
+  const removedPoint = await index.query(`SELECT source_key FROM pgcontext.query('kb_notes',$1::pgcontext.vector,$2,'text',100)
+    WHERE source_key=$3`, [JSON.stringify(vector), 'juniper duplicate charges', hit.ref.recordId.slice('note/'.length)]);
+  assert.equal(removedPoint.rowCount, 0, 'the note vector was removed too');
+  const next = await chat.send(seed.owner_id, seed.channel_id, { client_message_id: randomUUID(), text: 'Use cedar keys.' });
+  await saveNoteByTitle(db, scope, { kind: 'decision', title: 'New decision', content: 'Use cedar keys.', message_ids: [next.id] }, codex);
+  await until(async () => (await indexed()).length === 1);
+  const final = await chat.send(seed.owner_id, seed.channel_id, { client_message_id: randomUUID(), text: 'Verify retention cleanup' });
+  await saveNoteByTitle(db, scope, { kind: 'fact', title: 'Retention case', content: 'Retention case', message_ids: [final.id] }, codex);
+  await until(async () => (await indexed()).length === 2);
   await stop();
+  await source.query("UPDATE messages SET retained_at=now(), text='Message removed by workspace retention.', document=NULL WHERE channel_id=$1 AND id=$2", [seed.channel_id, final.id]);
   const note = (await listNoteTitles(db, seed.channel_id)).notes[0];
   await removeNote(db, seed.channel_id, note.id, note.revision, codex);
   assert.deepEqual(await hits(), [], 'removed notes are hidden even while the worker is offline');
   start();
   await until(async () => !(await indexed()).length);
-  console.log('PASS: backfill, live update, citation, unknown requester, removal while offline, restart recovery.');
+  console.log('PASS: backfill, live update, citation, targeted citation removal on a partitioned message, offline retention and removal, restart recovery.');
 } finally {
   await stop(); await source.end(); await index.end(); await reader.end();
   await admin.query('DROP SCHEMA IF EXISTS ' + schema + ' CASCADE'); await admin.end();

@@ -103,7 +103,7 @@ test('dispatch rechecks permission after provider I/O and never reads disabled/u
   const { createAgentMemoryReader } = await import('@space/server/memory');
   const { MarkdownMemoryProvider } = await import('@space/server/markdown-memory');
   const a = await fixture();
-  const provider = new MarkdownMemoryProvider(directory);
+  const provider = new MarkdownMemoryProvider(pool);
   const original = provider.read.bind(provider);
   let entered!: () => void, release!: () => void, calls = 0;
   const started = new Promise<void>(resolve => { entered = resolve; });
@@ -130,7 +130,7 @@ test('dispatch bounds outstanding provider reads and fails closed when a provide
   const a = await fixture(); await grant(a, 'read');
   const task = { installation_id: a.installation_id, requester_id: a.owner_id, thread_id: a.thread_id };
   await assert.rejects(createAgentMemoryReader(new MemoryStore(pool), new Map())(task), /memory_provider_unavailable/);
-  const provider = new MarkdownMemoryProvider(directory);
+  const provider = new MarkdownMemoryProvider(pool);
   const original = provider.read.bind(provider);
   let calls = 0, entered!: () => void, release!: () => void;
   const started = new Promise<void>(resolve => { entered = resolve; });
@@ -150,7 +150,7 @@ test('revoking contribution during evidence retrieval prevents a subsequent prov
   const a = await fixture(); await grant(a, 'contribute');
   const source = (await api(a.owner_token, 'GET', a.path)).document.sources[0].id;
   const key = await api(a.owner_token, 'POST', `${a.path}/connections`, { name: 'Race agent', installation_id: a.installation_id, access: 'contribute' }, 201);
-  const base = new MarkdownMemoryProvider(directory);
+  const base = new MarkdownMemoryProvider(pool);
   let entered!: () => void, release!: () => void, writes = 0;
   const started = new Promise<void>(resolve => { entered = resolve; });
   const wait = new Promise<void>(resolve => { release = resolve; });

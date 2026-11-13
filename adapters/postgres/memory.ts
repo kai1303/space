@@ -25,7 +25,7 @@ export async function agentMemoryAccess(c: DbSession, channel: MemoryScope, inst
 }
 export class MemoryStore {
   readonly db;
-  constructor(pool: Pool) { this.db = database(pool); }
+  constructor(readonly pool: Pool) { this.db = database(pool); }
   async channel<T>(actor: string, channelId: string, work: (channel: MemoryChannel, c: DbSession) => Promise<T>): Promise<T> {
     const channel = await this.authorize(this.db, actor, channelId);
     const result = await work(channel, this.db);

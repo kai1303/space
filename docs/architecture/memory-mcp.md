@@ -1,11 +1,7 @@
 # Memory MCP for agents and Navigator
 
 The endpoint **`/mcp/memory`** exposes channel memory over MCP Streamable HTTP.
-Agents and Navigator do extraction with their own model, then call memory tools to
-save the result. The server validates scope, permissions, evidence and revisions;
-it does not call an LLM, automatically watch conversations, or schedule Navigator.
-Markdown remains the default memory provider. Every tool uses the same provider
-instance and channel settings as the human Memory panel.
+The `memory_*` tools read and edit the channel’s saved document, which the built-in Markdown provider stores in Space PostgreSQL. The channel, thread and session tools read conversation history. An optional graph ranks related messages, and a worker extracts topics and facts with message citations. The `knowledge_*` tools manage revisioned notes under the separate Knowledge switch. The server checks the connection’s scope and permissions on each call.
 
 ## Connect
 
@@ -54,8 +50,6 @@ MCP keys, and creating a key does not automatically install it in an agent's con
 | `channel_memory` | Read | Recent threads (7 days) by the first line of their root; `after`, `limit` 1–50; optional `query` ranks by meaning. The first page adds the channel's name, topic, description and, when the topic is empty, `top_topics` |
 | `thread_memory` | Read | Root, recent messages, messages related to `query`, topics, facts and the session list |
 | `session_memory` | Read | Own session only (installation-bound key); others return `session_private`. Recent turns and turns related to `query` |
-
-Memory is built from messages in the Graph RAG store, so agents no longer write it. See [Graph RAG memory](../../apps/mcp-gateway/providers/pg-knowledge/README.md#graph-rag-memory-and-knowledge).
 | `knowledge_list` | Read | Newest 20 live notes in this channel (id, kind, title, revision) |
 | `knowledge_add` | Contribute/Write | Save a note with a caller UUID and 1–20 channel message IDs; a used title returns `title_taken` |
 | `knowledge_update` | Write | Revision-checked change to a note; stale revisions return `note_conflict` |

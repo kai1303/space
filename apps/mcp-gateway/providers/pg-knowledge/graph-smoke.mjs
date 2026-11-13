@@ -18,7 +18,7 @@ import { embed } from './graph-source.mjs';
 
 const schema = 'graph_test_' + randomUUID().replaceAll('-', '');
 const slot = ('space_graph_' + schema).slice(0, 63);
-const checkpoint = 'space_memory:' + slot;
+const checkpoint = 'space_memory_v2:' + slot;
 const admin = createPool(process.env.TEST_DATABASE_URL), index = createPool(process.env.THREAD_INDEX_URL), reader = createPool(process.env.KNOWLEDGE_DATABASE_URL);
 const url = new URL(process.env.TEST_DATABASE_URL);
 url.searchParams.set('options', '-c search_path=' + schema);
@@ -54,10 +54,21 @@ try {
   const save = (title, id) => saveNoteByTitle(db, scope, { kind: 'fact', title, content: title + ' body.', message_ids: [id] }, codex);
   await save('A', rootA.id); await save('B', rootA.id); await save('C', rootB.id);
 
+  const archived = await chat.createChannel(seed.owner_id, seed.workspace_id, { name: 'archived-project', private: false });
+  const oldPost = await chat.send(seed.owner_id, archived.id, { client_message_id: randomUUID(), text: 'Archived evidence' });
+  await source.query('UPDATE channels SET memory_enabled=true, archived_at=now() WHERE id=$1', [archived.id]);
+  await index.query(`INSERT INTO kb.m_channels(id,workspace_id,name,is_private,memory_enabled,version)
+    VALUES ($1,$2,'archived-project',false,true,1)`, [archived.id, seed.workspace_id]);
+  await index.query('INSERT INTO kb.m_threads(id,workspace_id,channel_id,version) VALUES($1,$2,$3,1)', [oldPost.thread_id,seed.workspace_id,archived.id]);
+  await index.query(`INSERT INTO kb.m_messages(id,workspace_id,thread_id,sequence,revision,created_at,memory,knowledge,body,embedding,version)
+    VALUES($1,$2,$3,1,1,now(),true,false,'Archived evidence',$4,1)`, [oldPost.id,seed.workspace_id,oldPost.thread_id,JSON.stringify(Array(384).fill(0.25))]);
   // Simulate an upgraded installation: the old graph previously published all source WAL.
   await admin.query(`CREATE PUBLICATION "${slot}" FOR TABLE "${schema}".channels`);
   const { rows: [legacy] } = await admin.query("SELECT lsn::text FROM pg_create_logical_replication_slot($1,'pgoutput')", [slot]);
   await index.query('INSERT INTO kb.graph_position(slot,lsn,published_lsn) VALUES($1,$2,$2)', [slot, legacy.lsn]);
+  // The preceding memory reader recorded a current checkpoint but retained an archived row.
+  const previous = 'space_memory:' + slot;
+  await index.query('INSERT INTO kb.graph_position(slot,lsn,published_lsn) VALUES($1,$2,$2)', [previous, legacy.lsn]);
   const cleanupUrl = new URL(process.env.THREAD_INDEX_URL);
   const env = { ...process.env };
   if (cleanupUrl.password) env.PGPASSWORD = decodeURIComponent(cleanupUrl.password);
@@ -77,12 +88,20 @@ try {
   start();
   await until(() => awake(rootA.thread_id));
   await until(async () => (await count('m_messages')) === 3 && (await count('m_knowledge')) === 3);
+  assert.equal(await count('m_messages', `id='${oldPost.id}'`), 0, 'upgrade removes stale archived messages');
   assert.equal(await count('m_messages', 'embedding IS NOT NULL'), 3, 'every message has a vector');
   assert.deepEqual(await thread(rootA.thread_id), { reply_count: 1, root_message_id: rootA.id }, 'thread counts and root');
   assert.equal(await count('m_knowledge_evidence', `message_id='${rootA.id}'`), 2, 'knowledge evidence is message level');
   assert.ok(await count('m_people') >= 1);
   const top = await ranked('why are customers charged twice on retry');
   assert.ok([rootA.id, replyA.id].includes(top[0]), 'meaning search finds the right thread first: ' + top.join());
+
+  await source.query('UPDATE channels SET archived_at=now() WHERE id=$1', [seed.channel_id]);
+  await until(async () => (await count('m_messages')) === 0);
+  assert.ok(!(await ranked('checkout retries')).includes(rootA.id), 'archive removes the vector point');
+  await source.query('UPDATE channels SET archived_at=NULL WHERE id=$1', [seed.channel_id]);
+  await until(async () => (await count('m_messages')) === 3);
+  assert.ok((await ranked('checkout retries')).includes(rootA.id), 'restore indexes existing messages');
 
   const ids = Object.fromEntries((await listNoteTitles(db, seed.channel_id)).notes.map(n => [n.title, n.id]));
   const ctx = requesterId => ({ workspaceId: seed.workspace_id, requesterId, connectionId: randomUUID(), audience: { channelId: seed.channel_id } });
@@ -191,7 +210,7 @@ try {
   await index.query("SELECT pgcontext.delete_points('kb_memory', ARRAY(SELECT id FROM kb.m_messages))").catch(() => {});
   await index.query('DELETE FROM kb.m_channels').catch(() => {});
   await index.query('DELETE FROM kb.m_people').catch(() => {});
-  await index.query('DELETE FROM kb.graph_position WHERE slot=ANY($1::text[])', [[slot, checkpoint]]).catch(() => {});
+  await index.query('DELETE FROM kb.graph_position WHERE slot=ANY($1::text[])', [[slot, 'space_memory:' + slot, checkpoint]]).catch(() => {});
   await admin.query('DROP SCHEMA IF EXISTS ' + schema + ' CASCADE');
   await Promise.all([admin.end(), index.end(), reader.end(), source.end()]);
 }

@@ -257,7 +257,18 @@ export class PostgresStore implements DeliveryStore {
       const context: NonNullable<InvocationRequest['context']> = { thread_id: task.thread_id, working_memory, messages: working_memory.messages.filter(m => m.text.trim()).map(m => ({ id: m.id, text: m.text, author_type: m.author.kind })) };
       context.channel_memory = await readChannelMemory(c, thread.channel_id, undefined, undefined, undefined, { countTopics: false });
       const notes = await readKnowledgeContext(c, thread.channel_id, task);
-      if (notes) context.knowledge_notes = notes;
+      if (notes) {
+        context.knowledge_notes = notes;
+        const human = working_memory.messages.findLast(message => message.author.kind === 'human')
+          ?? (working_memory.root?.author.kind === 'human' ? working_memory.root : undefined);
+        // A retried execution can receive a different context. Only use an unambiguous fallback.
+        await c.execute(sql`INSERT INTO execution_note_evidence (execution_id, message_id, revision)
+          VALUES (${delivery.execution_id}, ${human?.id ?? null}, (SELECT search_revision FROM messages
+            WHERE channel_id=${thread.channel_id} AND id=${human?.id ?? null}))
+          ON CONFLICT (execution_id) DO UPDATE SET message_id=NULL, revision=NULL
+          WHERE (execution_note_evidence.message_id, execution_note_evidence.revision)
+            IS DISTINCT FROM (excluded.message_id, excluded.revision)`);
+      }
       if (task.session_id) {
         const own = await readSessionMemory(c, thread.channel_id, task.session_id, task.installation_id).catch(error => {
           if (error instanceof AppError && (error.code === 'session_ended' || error.code === 'session_private')) return undefined;
@@ -351,8 +362,12 @@ export class PostgresStore implements DeliveryStore {
         if (memory) {
           const [definition] = (await c.execute<{ name: string }>(sql`SELECT d.name FROM agent_installations i JOIN agent_definitions d ON d.id=i.definition_id WHERE i.id=${installationId}`)).rows;
           if (memory.notes?.length) {
-            const [human] = (await c.execute<{ id: string }>(sql`SELECT id FROM messages WHERE channel_id=${thread.channel_id} AND thread_id=${task.thread_id} AND author_type='human' AND agent_session_id IS NULL AND deleted_at IS NULL AND retained_at IS NULL ORDER BY sequence DESC LIMIT 1`)).rows;
-            const notes = await saveTurnNotes(c, { channelId: thread.channel_id, installationId, producer: { id: installationId, name: definition?.name ?? 'Agent' }, notes: memory.notes, fallbackMessageId: human?.id ?? null });
+            const [fallback] = memory.notes.some(note => !note.message_ids.length)
+              ? (await c.execute<{ message_id: string }>(sql`SELECT e.message_id FROM execution_note_evidence e
+                  JOIN messages m ON m.channel_id=${thread.channel_id} AND m.id=e.message_id AND m.search_revision=e.revision
+                  WHERE e.execution_id=${event.execution_id}`)).rows
+              : [];
+            const notes = await saveTurnNotes(c, { channelId: thread.channel_id, installationId, producer: { id: installationId, name: definition?.name ?? 'Agent' }, notes: memory.notes, fallbackMessageId: fallback?.message_id ?? null });
             for (const outcome of notes) traceTurn(c, task.id, 'note', outcome);
           }
         }

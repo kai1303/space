@@ -92,10 +92,10 @@ test('direct-message channels never enter the graph', async () => {
 });
 
 test('a channel row carries both switches, its topic and its description', async () => {
-  const row = { id: 'c1', workspace_id: ws, name: 'general', private: false, kind: 'channel', memory_enabled: true, knowledge_enabled: false, topic: 'Launch', description: 'Plans for the launch' };
+  const row = { id: 'c1', workspace_id: ws, name: 'general', private: false, kind: 'channel', memory_enabled: true, knowledge_enabled: false, archived_at: '2026-11-13', topic: 'Launch', description: 'Plans for the launch' };
   const [op] = await planChange({ table: 'channels', op: 'update', row }, 6n, lookup);
   assert.match(op.text, /WHERE kb\.m_channels\.version<EXCLUDED\.version/);
-  assert.deepEqual(op.values, ['c1', ws, 'general', false, true, false, 'Launch', 'Plans for the launch', '6']);
+  assert.deepEqual(op.values, ['c1', ws, 'general', false, true, false, 'Launch', 'Plans for the launch', true, '6']);
 });
 
 test('a channel change without topic or description keeps the stored text', async () => {

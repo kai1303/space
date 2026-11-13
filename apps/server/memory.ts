@@ -1,6 +1,5 @@
 import { messagePath } from '@space/contracts';
 import type { FastifyInstance } from 'fastify';
-import { fileURLToPath } from 'node:url';
 import { AppError, parseAgentMemoryContext, MAX_AGENT_MEMORY_CHARS, MAX_MEMORY_IMPORT_BYTES, memorySourceId, parseKnowledgeSettings, parseMemorySettings, parseMemorySource, parseMemoryWrite, record, text, uuid, type ChannelMemory } from '@space/contracts';
 import type { AgentMemoryContext, Task } from '@space/contracts';
 import type { MemoryProvider } from '@space/core/memory';
@@ -9,10 +8,14 @@ import { readThreadContext } from '@space/postgres/thread-context';
 import { readChannelMemory, readThreadMemory, readSessionMemoryForPerson } from '@space/postgres/layered-memory';
 import { MarkdownMemoryProvider } from './markdown-memory.js';
 
-export type MemoryOptions = { directory?: string; providers?: MemoryProvider[] };
-export function createMemoryProviders(options: MemoryOptions = {}) {
+export type MemoryOptions = {
+  /** Import this deployment's legacy Markdown directory during API startup. */
+  directory?: string;
+  providers?: MemoryProvider[];
+};
+export function createMemoryProviders(store: MemoryStore, options: MemoryOptions = {}) {
   const providers = new Map<string, MemoryProvider>();
-  for (const provider of [new MarkdownMemoryProvider(options.directory ?? process.env.MEMORY_DIRECTORY ?? fileURLToPath(new URL('../../../.space-memory/', import.meta.url))), ...(options.providers ?? [])]) {
+  for (const provider of [new MarkdownMemoryProvider(store.pool), ...(options.providers ?? [])]) {
     if (!/^[a-z][a-z0-9-]{0,63}$/.test(provider.id) || providers.has(provider.id)) throw new Error('Invalid or duplicate memory provider');
     providers.set(provider.id, provider);
   }
@@ -25,7 +28,7 @@ export function memoryProviderFor(providers: Map<string, MemoryProvider>, channe
   return provider;
 }
 // Read external providers outside database transactions, then recheck the live permission.
-export function createAgentMemoryReader(store: MemoryStore, providers = createMemoryProviders()) {
+export function createAgentMemoryReader(store: MemoryStore, providers = createMemoryProviders(store)) {
   let activeReads = 0;
   return (task: Pick<Task, 'installation_id' | 'requester_id' | 'thread_id'>): Promise<AgentMemoryContext | undefined> => store.agentContext(task, async channel => {
     const provider = memoryProviderFor(providers, channel);
@@ -44,7 +47,7 @@ export function createAgentMemoryReader(store: MemoryStore, providers = createMe
   });
 }
 export type SessionLocator = { location(actor: string, id: string): Promise<{ channel_id: string }> };
-export function registerMemoryRoutes(app: FastifyInstance, store: MemoryStore, providers = createMemoryProviders(), sessions?: SessionLocator) {
+export function registerMemoryRoutes(app: FastifyInstance, store: MemoryStore, providers = createMemoryProviders(store), sessions?: SessionLocator) {
   const providerFor = (channel: MemoryChannel, requireEnabled = true) => {
     return memoryProviderFor(providers, channel, requireEnabled);
   };

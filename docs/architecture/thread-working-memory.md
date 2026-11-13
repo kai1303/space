@@ -2,8 +2,8 @@
 
 A thread is an agent’s short-term working context. Its original messages remain the
 source of truth. Reading a thread does not enable durable channel memory or copy
-anything into it. Channel knowledge still requires opt-in and defaults to Markdown
-files through the existing replaceable provider.
+anything into it. Saved channel documents require opt-in. The default provider stores
+Markdown in Space PostgreSQL.
 
 The shared PostgreSQL context reader supplies the original request, the latest 16
 messages, attachment metadata and an optional Markdown memory. Message excerpts
@@ -55,7 +55,7 @@ Agents read context first and inspect relevant sources. They no longer write mem
 
 Short-term memory has three layers: channel → thread → session. Every node returns `ref`, `parent`, `summary`, `updated_at` and `children`, so agents can walk down and back up. The design is in [the Graph RAG memory spec](../superpowers/specs/2026-11-11-graph-rag-memory-design.md).
 
-All three layers come from messages. A change-data-capture reader copies messages, with a local embedding each, into the `space_memory` graph in the knowledge database. Readers in Space ask that graph which messages matter for a `query`, then read the text from Space in the asked scope only. Without the graph (`MEMORY_GRAPH_URL` unset) memory still reads, newest first. A worker with a local model also writes topics and facts per thread; a fact is shown only if all its evidence messages are live in that thread.
+All three layers come from messages. A change-data-capture reader copies messages, with a local embedding each, into the `space_memory` graph in the knowledge database. Readers in Space ask that graph which messages matter for a `query`, then read the text from Space in the asked scope only. Without the graph (`MEMORY_GRAPH_URL` unset) memory still reads, newest first. A worker with a local model also writes topics and facts per thread; Space checks each topic and fact against the cited message revisions in that thread. The channel’s topic counts use only topics whose complete evidence is still current and shared.
 
 | Tool | Key | Returns |
 | --- | --- | --- |

@@ -141,7 +141,8 @@
       ],
       "cache": false,
       "passThroughEnv": [
-        "DATABASE_URL"
+        "DATABASE_URL",
+        "MEMORY_DIRECTORY"
       ]
     },
     "bootstrap": {

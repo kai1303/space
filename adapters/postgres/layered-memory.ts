@@ -1,7 +1,7 @@
 import { sql } from 'drizzle-orm';
 import {
   AppError, uuid, encodeChannelCursor, parseChannelCursor,
-  CHANNEL_MEMORY_DAYS, CHANNEL_PAGE_DEFAULT, CHANNEL_PAGE_MAX, CHANNEL_TOP_TOPICS, SUMMARY_LIMIT, TOPIC_NAME_MAX,
+  CHANNEL_MEMORY_DAYS, CHANNEL_PAGE_DEFAULT, CHANNEL_PAGE_MAX, CHANNEL_TOP_TOPICS, SUMMARY_LIMIT,
   type ChannelMemoryHeader, type ChannelMemoryPage, type MemoryFact, type MemoryNode, type SessionMemory, type ThreadMemory, type ThreadContextMessage,
 } from '@space/contracts';
 import type { DbSession } from './database.js';
@@ -15,10 +15,8 @@ export interface MemoryScope { channelId: string; threadId?: string; sessionId?:
 export type IndexedFact = MemoryFact & { evidence_revisions: Record<string, string> };
 export interface MemoryIndex {
   related(scope: MemoryScope, query: string, limit: number): Promise<string[]>;
-  // Topics and facts the extraction step wrote for one thread. Facts are checked against Space before they are shown.
-  threadKnowledge?(scope: MemoryScope & { threadId: string }): Promise<{ topics: string[]; facts: IndexedFact[] }>;
-  // Topic names discussed by the most threads of one channel active in the last `days`, most threads first.
-  channelTopics?(scope: { channelId: string }, days: number, limit: number): Promise<string[]>;
+  // Facts from the graph are checked against current source revisions in Space.
+  threadFacts?(scope: MemoryScope & { threadId: string }): Promise<IndexedFact[]>;
 }
 let index: MemoryIndex | undefined;
 export function useMemoryIndex(next: MemoryIndex | undefined) { index = next; }
@@ -44,20 +42,24 @@ function threadNode(row: ThreadRow, channelId: string): MemoryNode {
   return { ref: { kind: 'thread', id: row.thread_id }, parent: { kind: 'channel', id: channelId }, summary: row.title, updated_at: row.last_at, children: { kind: 'session', count: row.sessions } };
 }
 
-// What the channel is for. Name, topic and description come from Space. Counted topics stand in for an
-// empty topic; they are derived text, so a store failure only leaves them out.
+// Count live thread topics only for channels without a typed topic.
 async function channelHeader(c: DbSession, channelId: string, countTopics: boolean): Promise<ChannelMemoryHeader> {
   const [row] = await rows<{ name: string; topic: string; description: string }>(c, sql`SELECT name, topic, description FROM channels WHERE id = ${channelId}`);
   if (!row) throw new AppError(404, 'channel_not_found');
   let top: string[] = [];
-  if (countTopics && !row.topic.trim() && index?.channelTopics) {
-    try { top = await index.channelTopics({ channelId }, CHANNEL_MEMORY_DAYS, CHANNEL_TOP_TOPICS); } catch { top = []; }
-    top = [...new Set(top.filter(t => typeof t === 'string' && t.trim() && t.length <= TOPIC_NAME_MAX && !t.includes('\0')))].slice(0, CHANNEL_TOP_TOPICS);
+  if (countTopics && !row.topic.trim()) {
+    const topics = await rows<{ name: string }>(c, sql`
+      SELECT l.name FROM live_memory_topics l WHERE l.channel_id=${channelId} AND EXISTS (
+        SELECT 1 FROM messages m WHERE m.channel_id=l.channel_id AND m.thread_id=l.thread_id
+        AND m.agent_session_id IS NULL AND m.deleted_at IS NULL AND m.retained_at IS NULL
+        AND m.created_at > now() - make_interval(days => ${CHANNEL_MEMORY_DAYS}))
+      GROUP BY l.name ORDER BY count(DISTINCT l.thread_id) DESC, l.name LIMIT ${CHANNEL_TOP_TOPICS}`);
+    top = topics.map(t => t.name);
   }
   return { name: row.name, topic: row.topic, description: row.description, top_topics: top };
 }
 
-// Task preparation passes countTopics: false so it never waits on the Graph RAG store.
+// Task preparation skips the channel-wide topic count.
 export async function readChannelMemory(c: DbSession, channelId: string, after?: string, limit = CHANNEL_PAGE_DEFAULT, query?: string,
   { countTopics = true }: { countTopics?: boolean } = {}): Promise<ChannelMemoryPage> {
   if (!Number.isInteger(limit) || limit < 1 || limit > CHANNEL_PAGE_MAX) throw new AppError(400, 'invalid_memory_limit');
@@ -132,20 +134,21 @@ export async function readThreadMemory(c: DbSession, channelId: string, threadId
   };
 }
 
-// A fact is shown only if every one of its evidence messages is a live message of this thread, so derived
-// text never says more than its sources. Topics are shown only when at least one fact or the thread survives.
+// Topic names and the channel ranking share the same live evidence view.
 async function threadKnowledge(c: DbSession, channelId: string, threadId: string): Promise<{ topics: string[]; facts: MemoryFact[] }> {
-  if (!index?.threadKnowledge) return { topics: [], facts: [] };
-  let found: { topics: string[]; facts: IndexedFact[] };
-  try { found = await index.threadKnowledge({ channelId, threadId }); } catch { return { topics: [], facts: [] }; }
-  const cited = [...new Set(found.facts.flatMap(f => f.message_ids))].filter(id => /^[0-9a-f-]{36}$/.test(id)).slice(0, 128);
+  const topics = (await rows<{ name: string }>(c, sql`
+    SELECT name FROM live_memory_topics WHERE channel_id=${channelId} AND thread_id=${threadId} ORDER BY name LIMIT 5`)).map(t => t.name);
+  if (!index?.threadFacts) return { topics, facts: [] };
+  let found: IndexedFact[];
+  try { found = await index.threadFacts({ channelId, threadId }); } catch { return { topics, facts: [] }; }
+  const cited = [...new Set(found.flatMap(f => f.message_ids))].filter(id => /^[0-9a-f-]{36}$/.test(id)).slice(0, 128);
   const revisions = new Map(cited.length ? (await rows<{ id: string; revision: string }>(c, sql`
-    SELECT id, search_revision::text AS revision FROM messages WHERE channel_id = ${channelId} AND thread_id = ${threadId}
-    AND agent_session_id IS NULL AND ${live} AND id = ANY(${sql.param(cited)}::uuid[])`)).map(row => [row.id, row.revision] as const) : []);
-  const facts = found.facts.filter(f => f.message_ids.length && f.message_ids.every(id =>
+    SELECT id, search_revision::text AS revision FROM memory_source_messages WHERE channel_id = ${channelId} AND thread_id = ${threadId}
+    AND agent_session_id IS NULL AND id = ANY(${sql.param(cited)}::uuid[])`)).map(row => [row.id, row.revision] as const) : []);
+  const facts = found.filter(f => f.message_ids.length && f.message_ids.every(id =>
     revisions.has(id) && revisions.get(id) === f.evidence_revisions[id])).slice(0, 8)
-    .map(({ evidence_revisions: _, ...fact }) => fact);
-  return { topics: found.topics.slice(0, 5), facts };
+    .map(({ evidence_revisions: _, ...fact }) => ({ ...fact, topic: fact.topic && topics.includes(fact.topic) ? fact.topic : null }));
+  return { topics, facts };
 }
 
 async function sessionRow(c: DbSession, channelId: string, sessionId: string) {

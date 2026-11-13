@@ -6,7 +6,7 @@ const ids = new Set(['m1', 'm2']);
 
 test('facts need evidence from this run; a bad item is dropped alone', () => {
   const out = parseExtraction({
-    topics: [{ name: 'checkout retries' }, { name: 'Checkout  Retries' }, { name: 'x'.repeat(61) }, 'refunds'],
+    topics: [{ name: 'checkout retries', message_ids: ['m1'] }, { name: 'Checkout  Retries', message_ids: ['m2'] }, { name: 'x'.repeat(61), message_ids: ['m1'] }, 'refunds', { name: 'secret', message_ids: ['elsewhere'] }],
     facts: [
       { text: 'Charges are deduped on the idempotency key.', kind: 'decision', topic: 'checkout retries', message_ids: ['m1'] },
       { text: 'Made up.', kind: 'fact', topic: null, message_ids: ['elsewhere'] },
@@ -17,7 +17,7 @@ test('facts need evidence from this run; a bad item is dropped alone', () => {
       { text: 'Unknown topic keeps the fact.', kind: 'answer', topic: 'nowhere', message_ids: ['m2', 'm2'] },
     ],
   }, ids);
-  assert.deepEqual(out.topics, ['checkout retries', 'refunds'], 'same name once, too long dropped');
+  assert.deepEqual(out.topics, [{ name: 'checkout retries', message_ids: ['m1'] }], 'topic names need valid citations from this batch');
   assert.deepEqual(out.facts, [
     { text: 'Charges are deduped on the idempotency key.', kind: 'decision', topic: 'checkout retries', message_ids: ['m1'] },
     { text: 'Missing kind becomes a fact.', kind: 'fact', topic: null, message_ids: ['m1'] },
@@ -26,7 +26,7 @@ test('facts need evidence from this run; a bad item is dropped alone', () => {
 });
 
 test('model output is bounded and garbage yields nothing', () => {
-  const many = parseExtraction({ topics: Array.from({ length: 9 }, (_, i) => `t${i}`), facts: Array.from({ length: 9 }, (_, i) => ({ text: `f${i}`, kind: 'fact', message_ids: ['m1'] })) }, ids);
+  const many = parseExtraction({ topics: Array.from({ length: 9 }, (_, i) => ({ name: `t${i}`, message_ids: ['m1'] })), facts: Array.from({ length: 9 }, (_, i) => ({ text: `f${i}`, kind: 'fact', message_ids: ['m1'] })) }, ids);
   assert.equal(many.topics.length, EXTRACT_LIMITS.topics);
   assert.equal(many.facts.length, EXTRACT_LIMITS.facts);
   assert.deepEqual(parseExtraction('not json', ids), { topics: [], facts: [] });

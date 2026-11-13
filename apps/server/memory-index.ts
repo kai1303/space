@@ -37,29 +37,14 @@ export function graphMemoryIndex(url = process.env.MEMORY_GRAPH_URL): MemoryInde
         [vector, query, CANDIDATES, scope.channelId, scope.threadId ?? null, scope.sessionId ?? null, limit]);
       return rows.map(row => row.id);
     },
-    async threadKnowledge(scope) {
-      const { rows: topics } = await pool.query<{ name: string }>(`
-        SELECT t.name FROM kb.m_thread_topics l JOIN kb.m_topics t ON t.id = l.topic_id
-        JOIN kb.m_threads th ON th.id = l.thread_id AND th.channel_id = $2
-        WHERE l.thread_id = $1 ORDER BY l.extract_version DESC,t.name LIMIT 5`, [scope.threadId, scope.channelId]);
+    async threadFacts(scope) {
       const { rows: facts } = await pool.query<IndexedFact>(`
         SELECT f.id, f.kind, f.text, t.name AS topic, f.evidence_revisions,
           ARRAY(SELECT jsonb_object_keys(f.evidence_revisions)) AS message_ids
         FROM kb.m_facts f JOIN kb.m_threads th ON th.id = f.thread_id AND th.channel_id = $2
         LEFT JOIN kb.m_topics t ON t.id = f.topic_id
         WHERE f.thread_id = $1 AND f.evidence_revisions IS NOT NULL ORDER BY f.extract_version DESC,f.id LIMIT 8`, [scope.threadId, scope.channelId]);
-      return { topics: topics.map(t => t.name), facts };
-    },
-    // Counted at read time from thread topics; uses the (channel_id, last_activity_at) index. A thread with no
-    // indexed messages left has no last_activity_at, so its topics drop out.
-    async channelTopics(scope, days, limit) {
-      const { rows } = await pool.query<{ name: string }>(`
-        SELECT t.name FROM kb.m_threads th
-        JOIN kb.m_thread_topics l ON l.thread_id = th.id
-        JOIN kb.m_topics t ON t.id = l.topic_id
-        WHERE th.channel_id = $1 AND th.last_activity_at > now() - make_interval(days => $2)
-        GROUP BY t.id, t.name ORDER BY count(DISTINCT th.id) DESC, t.name LIMIT $3`, [scope.channelId, days, limit]);
-      return rows.map(row => row.name);
+      return facts;
     },
   };
 }

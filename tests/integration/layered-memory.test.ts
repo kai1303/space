@@ -93,31 +93,32 @@ test('channel memory: titles come from the root message, 7-day window, newest fi
 
 test('channel memory header: what people typed, and counted thread topics only when the topic is empty', async () => {
   const a = await bootstrap(pool);
-  await post(a.owner_token, a.channel_id, 'Kickoff');
-  await pool.query("UPDATE channels SET topic='', description='Plans for the launch' WHERE id=$1", [a.channel_id]);
+  await pool.query("UPDATE channels SET memory_enabled=true, topic='', description='Plans for the launch' WHERE id=$1", [a.channel_id]);
   const name = (await pool.query('SELECT name FROM channels WHERE id=$1', [a.channel_id])).rows[0].name as string;
-  assert.deepEqual((await readChannelMemory(db(), a.channel_id)).channel, { name, topic: '', description: 'Plans for the launch', top_topics: [] }, 'no store, no counted topics');
+  const first = await post(a.owner_token, a.channel_id, 'Deploy and billing');
+  const second = await post(a.owner_token, a.channel_id, 'Another deploy');
+  const topic = (name: string, id: string) => ({ name, evidence: { [id]: '1' } });
+  for (const [message, labels] of [[first, ['deploy', 'billing']], [second, ['deploy']]] as const) {
+    await pool.query(`INSERT INTO memory_extract_threads(thread_id,workspace_id,channel_id,available_at,topics)
+      VALUES($1,$2,$3,'infinity',$4) ON CONFLICT(thread_id) DO UPDATE SET topics=excluded.topics`,
+      [message.thread_id, a.workspace_id, a.channel_id, JSON.stringify(labels.map(label => topic(label, message.id)))]);
+  }
+  const readHeader = async () => (await readChannelMemory(db(), a.channel_id)).channel;
+  const page = await readChannelMemory(db(), a.channel_id);
+  assert.deepEqual(page.channel, { name, topic: '', description: 'Plans for the launch', top_topics: ['deploy', 'billing'] });
+  assert.deepEqual(parseChannelMemoryPage(page), page);
+  await pool.query("UPDATE channels SET topic='Launch week' WHERE id=$1", [a.channel_id]);
+  assert.deepEqual((await readHeader())?.top_topics, [], 'a typed topic wins');
+  await pool.query("UPDATE channels SET topic='' WHERE id=$1", [a.channel_id]);
+  assert.deepEqual((await readChannelMemory(db(), a.channel_id, undefined, undefined, undefined, { countTopics: false })).channel?.top_topics, [], 'task preparation skips aggregation');
+  const removal = await app.inject({ method: 'DELETE', url: `/v1/channels/${a.channel_id}/messages/${first.id}`, headers: { authorization: `Bearer ${a.owner_token}` } });
+  assert.equal(removal.statusCode, 200, removal.body);
+  assert.deepEqual((await readHeader())?.top_topics, ['deploy'], 'deleting one source immediately removes only its contributions');
+  assert.deepEqual((await readThreadMemory(db(), a.channel_id, first.thread_id)).topics, []);
+  assert.deepEqual((await pool.query('SELECT topics FROM memory_extract_threads WHERE thread_id=$1', [first.thread_id])).rows[0].topics, [], 'deleted evidence removes the local copy of its labels');
+  await pool.query("UPDATE messages SET retained_at=now(), text='Message removed by workspace retention.', document=NULL WHERE channel_id=$1 AND id=$2", [a.channel_id, second.id]);
+  assert.deepEqual((await readHeader())?.top_topics, [], 'retained messages cannot contribute topics');
 
-  const asked: unknown[] = [];
-  useMemoryIndex({ related: async () => [], channelTopics: async (scope, days, limit) => { asked.push({ scope, days, limit }); return ['deploy', 'billing']; } });
-  try {
-    const page = await readChannelMemory(db(), a.channel_id);
-    assert.deepEqual(page.channel, { name, topic: '', description: 'Plans for the launch', top_topics: ['deploy', 'billing'] });
-    assert.deepEqual(asked, [{ scope: { channelId: a.channel_id }, days: 7, limit: 5 }]);
-    assert.deepEqual(parseChannelMemoryPage(page), page, 'the header passes the task-context contract');
-
-    await pool.query("UPDATE channels SET topic='Launch week' WHERE id=$1", [a.channel_id]);
-    const typed = await readChannelMemory(db(), a.channel_id);
-    assert.equal(typed.channel?.topic, 'Launch week');
-    assert.deepEqual(typed.channel?.top_topics, [], 'a typed topic wins');
-    assert.equal(asked.length, 1, 'and nothing is counted');
-
-    await pool.query("UPDATE channels SET topic='' WHERE id=$1", [a.channel_id]);
-    assert.deepEqual((await readChannelMemory(db(), a.channel_id, undefined, undefined, undefined, { countTopics: false })).channel?.top_topics, [], 'task preparation skips the store');
-    assert.equal(asked.length, 1, 'and never calls it');
-    useMemoryIndex({ related: async () => [], channelTopics: async () => { throw new Error('store down'); } });
-    assert.deepEqual((await readChannelMemory(db(), a.channel_id)).channel?.top_topics, [], 'a store failure still reads');
-  } finally { useMemoryIndex(undefined); }
 });
 
 test('thread memory lists sessions; session memory shows the agent turns and checks the installation', async () => {
@@ -212,6 +213,7 @@ test('channel knowledge requires live shared evidence on writes and when showing
 
 test('the Graph RAG store ranks by meaning but can only name messages of the scope that was asked for', async () => {
   const a = await bootstrap(pool), b = await bootstrap(pool);
+  await pool.query('UPDATE channels SET memory_enabled=true WHERE id=$1', [a.channel_id]);
   const root = await post(a.owner_token, a.channel_id, 'Start the incident review');
   const early = await post(a.owner_token, a.channel_id, 'Duplicate charges came from retries', root.thread_id);
   for (let i = 0; i < 20; i++) await post(a.owner_token, a.channel_id, `Chatter ${i}`, root.thread_id);
@@ -233,10 +235,13 @@ test('the Graph RAG store ranks by meaning but can only name messages of the sco
     assert.ok(fallback.context.root);
 
     const fact = (id: string, ids: string[]) => ({ id, kind: 'decision' as const, text: `Fact ${id}`, topic: 'billing', message_ids: ids, evidence_revisions: Object.fromEntries(ids.map(id => [id, '1'])) });
-    useMemoryIndex({ related: async () => [], threadKnowledge: async () => ({ topics: ['billing'], facts: [fact('ok', [early.id]), fact('mixed', [early.id, foreign.id]), fact('empty', [])] }) });
+    useMemoryIndex({ related: async () => [], threadFacts: async () => [fact('ok', [early.id]), fact('mixed', [early.id, foreign.id]), fact('empty', [])] });
     const knowing = await readThreadMemory(db(), a.channel_id, root.thread_id);
-    assert.deepEqual(knowing.topics, ['billing']);
+    assert.deepEqual(knowing.topics, []);
     assert.deepEqual(knowing.facts.map(f => f.id), ['ok'], 'a fact with any evidence outside this thread is hidden');
+    await pool.query('UPDATE channels SET archived_at=now() WHERE id=$1', [a.channel_id]);
+    assert.deepEqual((await readThreadMemory(db(), a.channel_id, root.thread_id)).facts, [], 'archive hides facts before graph cleanup');
+    await pool.query('UPDATE channels SET archived_at=NULL WHERE id=$1', [a.channel_id]);
     await pool.query("UPDATE messages SET text='Corrected decision' WHERE channel_id=$1 AND id=$2", [a.channel_id, early.id]);
     assert.deepEqual((await readThreadMemory(db(), a.channel_id, root.thread_id)).facts, [], 'an edit hides the prior fact before CDC runs');
   } finally { useMemoryIndex(undefined); }

@@ -47,6 +47,7 @@ import { OFFICE_CALLBACK, OFFICE_CONTENT, type OfficeSettings } from './office.j
 import { registerAssetRoutes } from './assets.js';
 import type { AssetStorage } from './storage.js';
 import { MemoryStore } from '@space/postgres/memory';
+import { importMemoryDocuments } from '@space/postgres/import-memory';
 import { createAgentMemoryReader, createMemoryProviders, registerMemoryRoutes, type MemoryOptions } from './memory.js';
 import { MEMORY_MCP_PATH, registerMemoryMcp } from './memory-mcp.js';
 
@@ -164,7 +165,9 @@ export function createApi(store: PostgresStore, options: { workflowChat?: Workfl
   registerScheduledMessageRoutes(app, scheduled);
   registerWorkflowChat(app, chat, options.workflowChat);
   registerNavigatorRoutes(app, new NavigatorStore(store.pool));
-  const memory = new MemoryStore(store.pool), memoryProviders = createMemoryProviders(options.memory);
+  const memory = new MemoryStore(store.pool), memoryProviders = createMemoryProviders(memory, options.memory);
+  const legacyDirectory = options.memory?.directory;
+  if (legacyDirectory) app.addHook('onReady', async () => { await importMemoryDocuments(store.pool, legacyDirectory, true); });
   store.memoryReader = createAgentMemoryReader(memory, memoryProviders);
   registerMemoryRoutes(app, memory, memoryProviders, new AgentSessionStore(store.pool, store));
   registerMemoryMcp(app, memory, memoryProviders, options.auth?.origins, process.env.MEMORY_MCP_ALLOWED_HOSTS?.split(',').map(host => host.trim()).filter(Boolean));

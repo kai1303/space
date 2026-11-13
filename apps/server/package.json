@@ -11,7 +11,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "start": "node dist/main.js",
     "dev": "node dist/main.js",
-    "test": "pnpm build && node --test agent-connectors.test.mjs storage.test.mjs previews.test.mjs pdf-thumbnail.test.mjs memory.test.mjs invitation-email.test.mjs calling-config.test.mjs huddle-media.test.mjs request-metrics.test.mjs live-receipts.test.mjs",
+    "test": "pnpm build && node --test agent-connectors.test.mjs storage.test.mjs previews.test.mjs pdf-thumbnail.test.mjs invitation-email.test.mjs calling-config.test.mjs huddle-media.test.mjs request-metrics.test.mjs live-receipts.test.mjs",
     "test:storage": "pnpm build && node --test storage.integration.test.mjs",
     "search:backfill": "node dist/search-backfill.js"
   },
@@ -81,7 +81,6 @@
     "jose": "6.2.15",
     "livekit-server-sdk": "2.19.2",
     "nodemailer": "^10.3.1",
-    "proper-lockfile": "4.1.2",
     "sharp": "^0.35.5",
     "socket.io": "^4.8.4",
     "zod": "^4.2.0"
@@ -89,7 +88,6 @@
   "devDependencies": {
     "@types/node": "22",
     "@types/nodemailer": "^8.0.2",
-    "@types/proper-lockfile": "4.1.4",
     "typescript": "^7.0.2"
   }
 }

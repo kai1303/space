@@ -45,7 +45,7 @@ before(async () => {
         const data = JSON.parse(input.messages[1].content) as { messages: { id: string; text: string }[] };
         const latest = data.messages.at(-1)!;
         const fact = latest.text.startsWith('Refund') ? 'Refund the second charge.' : 'Charges are deduped on the idempotency key.';
-        res.end(JSON.stringify({ message: { content: JSON.stringify({ topics: [{ name: 'checkout retries' }],
+        res.end(JSON.stringify({ message: { content: JSON.stringify({ topics: [{ name: 'checkout retries', message_ids: [latest.id] }],
           facts: [{ text: fact, kind: 'decision', topic: 'checkout retries', message_ids: [latest.id] }] }) } }));
         return;
       }
@@ -124,6 +124,17 @@ test('a message reaches the real worker through CDC and NATS, and the worker wri
     await until(async () => calls.chat === 2, 30000);
     await until(async () => (await graph!.query('SELECT 1 FROM kb.m_fact_evidence e JOIN kb.m_facts f ON f.id=e.fact_id WHERE f.thread_id=$1 AND e.message_id=$2', [root.thread_id, more.id])).rowCount === 1, 15000);
     assert.deepEqual((await facts()).map(row => row.text).sort(), ['Charges are deduped on the idempotency key.', 'Refund the second charge.']);
+
+    // Graph resync removes these derived rows on archive. A restore must run extraction again even
+    // if nobody posts a new message, including when both transitions reach the broker together.
+    await pool!.query('UPDATE channels SET archived_at=now() WHERE id=$1', [a.channel_id]);
+    await graph!.query('DELETE FROM kb.m_facts WHERE thread_id=$1', [root.thread_id]);
+    await graph!.query('DELETE FROM kb.m_thread_topics WHERE thread_id=$1', [root.thread_id]);
+    await pool!.query('UPDATE channels SET archived_at=NULL WHERE id=$1', [a.channel_id]);
+    await until(async () => (await pool!.query('SELECT done_through=0 AND isfinite(available_at) AS ready FROM memory_extract_threads WHERE thread_id=$1', [root.thread_id])).rows[0].ready);
+    await pool!.query("UPDATE memory_extract_threads SET available_at=now()+interval '1 second' WHERE thread_id=$1", [root.thread_id]);
+    await until(async () => (await facts()).length === 1);
+    assert.deepEqual((await facts())[0], { text: 'Refund the second charge.', name: 'checkout retries' });
   } finally {
     await graph!.query('DELETE FROM kb.m_channels WHERE id=$1', [a.channel_id]);
   }

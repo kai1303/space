@@ -19,14 +19,15 @@ async function indexed(client: Pool | PoolClient, thread: string, source: Source
 async function saveExtraction(client: PoolClient, workspace: string, thread: string, through: string,
   extraction: Extraction, revisions: Map<string, string>, vectors: number[][]) {
   const topicIds = new Map<string, string>();
-  for (const name of extraction.topics) {
+  for (const { name, message_ids } of extraction.topics) {
     const key = topicKey(name), id = hash(workspace, key);
     topicIds.set(key, id);
     await client.query('INSERT INTO kb.m_topics(id,workspace_id,name) VALUES ($1,$2,$3) ON CONFLICT (id) DO NOTHING', [id, workspace, name]);
-    await client.query(`INSERT INTO kb.m_thread_topics(id,workspace_id,thread_id,topic_id,extract_version) VALUES ($1,$2,$3,$4,$5)
-      ON CONFLICT (id) DO UPDATE SET extract_version=excluded.extract_version`, [hash(thread, id), workspace, thread, id, through]);
+    await client.query(`INSERT INTO kb.m_thread_topics(id,workspace_id,thread_id,topic_id,extract_version,evidence_revisions) VALUES ($1,$2,$3,$4,$5,$6)
+      ON CONFLICT (id) DO UPDATE SET extract_version=excluded.extract_version, evidence_revisions=excluded.evidence_revisions`,
+      [hash(thread, id), workspace, thread, id, through, Object.fromEntries(message_ids.map(id => [id, revisions.get(id)!]))]);
   }
-  if (topicIds.size) await client.query('DELETE FROM kb.m_thread_topics WHERE thread_id=$1 AND NOT (topic_id=ANY($2::text[]))',
+  await client.query('DELETE FROM kb.m_thread_topics WHERE thread_id=$1 AND NOT (topic_id=ANY($2::text[]))',
     [thread, [...topicIds.values()]]);
   // An earlier run can commit while the CDC transaction editing its source is in flight.
   // Its claims are already hidden on reads. Remove them when processing the revised batch.
@@ -73,11 +74,11 @@ export async function runMemoryExtract(space: Pool, graph: Pool, extract: Extrac
   if (!claim) return { status: 'superseded' };
   const owner = [threadId, claim.deadline, state.generation, state.done_through];
   const owns = 'thread_id=$1 AND available_at=$2::timestamptz AND generation=$3 AND done_through=$4';
-  const finish = async (through: string) => {
+  const finish = async (through: string, snapshot?: { name: string; evidence: Record<string, string> }[]) => {
     const result = await space.query(`UPDATE memory_extract_threads SET done_through=$5, attempts=0,
-      last_run_at=now(), waiting_for_index=false,
+      topics=coalesce($6::jsonb, topics), last_run_at=now(), waiting_for_index=false,
       available_at=CASE WHEN pending_through>$5 THEN now()+interval '5 minutes' ELSE 'infinity' END
-      WHERE ${owns}`, [...owner, through]);
+      WHERE ${owns}`, [...owner, through, snapshot === undefined ? null : JSON.stringify(snapshot)]);
     return Boolean(result.rowCount);
   };
   const { rows: source } = await space.query<Source>(
@@ -97,9 +98,20 @@ export async function runMemoryExtract(space: Pool, graph: Pool, extract: Extrac
   if (!(await space.query(`UPDATE memory_extract_threads SET waiting_for_index=false WHERE ${owns}`, owner)).rowCount) return { status: 'superseded' };
 
   // A crash can occur after the graph commit but before Space records its progress.
-  const committed = async (reader: Pool | PoolClient) => Boolean((await reader.query(`SELECT 1 FROM kb.m_threads
-    WHERE id=$1 AND extract_generation=$2 AND extract_version >= $3`, [threadId, state.generation, through])).rowCount);
-  if (await committed(graph)) return { status: await finish(through) ? 'done' : 'superseded' };
+  // Read the winning snapshot together with its watermark. A superseded worker
+  // must never publish another generation's topics into Space.
+  const finishCommitted = async (): Promise<ExtractOutcome | undefined> => {
+    const { rows: [row] } = await graph.query<{ through: string; topics: { name: string; evidence: Record<string, string> }[] }>(`
+      SELECT th.extract_version::text AS through, coalesce((SELECT jsonb_agg(jsonb_build_object('name', t.name, 'evidence', l.evidence_revisions) ORDER BY t.name)
+        FROM kb.m_thread_topics l JOIN kb.m_topics t ON t.id=l.topic_id
+        WHERE l.thread_id=th.id AND l.evidence_revisions IS NOT NULL), '[]'::jsonb) AS topics
+      FROM kb.m_threads th WHERE th.id=$1 AND th.extract_generation=$2 AND th.extract_version >= $3`,
+      [threadId, state.generation, through]);
+    if (!row) return undefined;
+    return { status: await finish(row.through, row.topics) ? 'done' : 'superseded' };
+  };
+  const previous = await finishCommitted();
+  if (previous) return previous;
 
   const budget = await space.query(
     `INSERT INTO memory_extract_budget(workspace_id,hour,used) SELECT $1,date_trunc('hour',now()),1 WHERE $2::int>0
@@ -112,17 +124,17 @@ export async function runMemoryExtract(space: Pool, graph: Pool, extract: Extrac
     return next ? { status: 'capped', delayMs: next.wait_ms } : { status: 'superseded' };
   }
   const revisions = new Map(batch.map(m => [m.id, m.revision]));
-  const { rows: known } = await graph.query<{ name: string | null; text: string | null }>(
-    `(SELECT t.name,NULL AS text FROM kb.m_thread_topics l JOIN kb.m_topics t ON t.id=l.topic_id
-       WHERE l.thread_id=$1 ORDER BY l.extract_version DESC,l.id LIMIT 5)
-     UNION ALL (SELECT NULL,f.text FROM kb.m_facts f WHERE f.thread_id=$1 AND f.evidence_revisions IS NOT NULL
-       AND NOT EXISTS (SELECT 1 FROM jsonb_each_text(f.evidence_revisions) e
-         WHERE $2::jsonb ? e.key AND ($2::jsonb ->> e.key) <> e.value)
-       ORDER BY f.extract_version DESC,f.id LIMIT 8)`, [threadId, Object.fromEntries(revisions)]);
+  const { rows: knownTopics } = await space.query<{ name: string }>(
+    'SELECT name FROM live_memory_topics WHERE thread_id=$1 AND channel_id=$2 ORDER BY name LIMIT 5', [threadId, state.channel_id]);
+  const { rows: knownFacts } = await graph.query<{ text: string }>(`
+    SELECT f.text FROM kb.m_facts f WHERE f.thread_id=$1 AND f.evidence_revisions IS NOT NULL
+      AND NOT EXISTS (SELECT 1 FROM jsonb_each_text(f.evidence_revisions) e
+        WHERE $2::jsonb ? e.key AND ($2::jsonb ->> e.key) <> e.value)
+    ORDER BY f.extract_version DESC,f.id LIMIT 8`, [threadId, Object.fromEntries(revisions)]);
   let extraction: Extraction;
   let vectors: number[][];
   try {
-    const raw = await extract({ messages, topics: known.flatMap(k => k.name ? [k.name] : []), facts: known.flatMap(k => k.text ? [k.text] : []) }, AbortSignal.timeout(30_000));
+    const raw = await extract({ messages, topics: knownTopics.map(t => t.name), facts: knownFacts.map(f => f.text) }, AbortSignal.timeout(30_000));
     extraction = parseExtraction(raw, new Set(messages.map(m => m.id)));
     vectors = extraction.facts.length ? await embed(extraction.facts.map(f => f.text)) : [];
   } catch {
@@ -147,8 +159,7 @@ export async function runMemoryExtract(space: Pool, graph: Pool, extract: Extrac
       await saveExtraction(client, won.rows[0].workspace_id, threadId, through, extraction, revisions, vectors);
     }
     await client.query('COMMIT');
-    if (!won.rowCount && !await committed(client)) return { status: 'superseded' };
   } catch (error) { await client.query('ROLLBACK'); throw error; }
   finally { client.release(); }
-  return { status: await finish(through) ? 'done' : 'superseded' };
+  return await finishCommitted() ?? { status: 'superseded' };
 }

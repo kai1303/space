@@ -2,7 +2,7 @@
 // subscribes first and reconciles the source and index again.
 import { createPool } from '@space/postgres/database';
 import { syncFiles } from './markdown-files.mjs';
-import { reconcileNotes, syncNotes } from './notes-sync.mjs';
+import { reconcileNotes, syncCitedNotes, syncNotes } from './notes-sync.mjs';
 import { uuid } from '@space/contracts';
 const workspace = uuid(process.env.KNOWLEDGE_WORKSPACE_ID);
 const source = createPool(process.env.THREAD_SOURCE_URL);
@@ -10,6 +10,7 @@ const index = createPool(process.env.THREAD_INDEX_URL);
 const listener = await source.connect();
 const pending = new Map();
 const pendingNotes = new Set();
+const evidence = new Map();
 // Installations without notes.sql keep working exactly as before.
 const notesIndex = (await index.query("SELECT to_regclass('kb.notes') IS NOT NULL AS ok")).rows[0].ok;
 const noteId = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -60,18 +61,20 @@ async function drain() {
   if (draining || closed) return;
   draining = true;
   try {
-    while (rescan || pending.size || pendingNotes.size) {
-      if (rescan) { rescan=false; pending.clear(); pendingNotes.clear(); await reconcile(); }
+    while (rescan || pending.size || pendingNotes.size || evidence.size) {
+      if (rescan) { rescan=false; pending.clear(); pendingNotes.clear(); evidence.clear(); await reconcile(); }
       else if (pendingNotes.size) {
         const ids = [...pendingNotes].slice(0, pageSize);
         for (const id of ids) pendingNotes.delete(id);
         await syncNotes(source, index, workspace, ids, embed);
       }
       else {
-        const channel = pending.values().next().value;
+        const changes = evidence.size ? evidence : pending;
+        const channel = changes.values().next().value;
         const ids = [];
-        for (const [id,c] of pending) if (c===channel) { pending.delete(id); ids.push(id); if (ids.length===pageSize) break; }
-        await sync(channel,ids);
+        for (const [id,c] of changes) if (c===channel) { changes.delete(id); ids.push(id); if (ids.length===pageSize) break; }
+        if (changes === evidence) await syncCitedNotes(source, index, workspace, channel, ids, embed);
+        else await sync(channel,ids);
       }
     }
     // Also flush graph changes committed just before a prior worker stopped.
@@ -87,13 +90,18 @@ async function drain() {
       finally { publisher.release(); }
     }
   } finally { draining=false; }
-  if (rescan || pending.size || pendingNotes.size) await drain();
+  if (rescan || pending.size || pendingNotes.size || evidence.size) await drain();
 }
 function fail(e) { console.error('Thread ingestion stopped:',e.code ?? e.name); process.exit(1); }
 listener.on('error',fail);
 listener.on('end',()=>{ if (!closed) fail(Error('Source disconnected')); });
 listener.on('notification',({payload})=>{
-  if (payload==='reconcile' || pending.size+pendingNotes.size>=2048) rescan=true;
+  if (payload==='reconcile' || pending.size+pendingNotes.size+evidence.size>=2048) rescan=true;
+  else if (payload?.startsWith('evidence/')) {
+    const [, channel, id] = payload.split('/');
+    if (!notesIndex || !noteId.test(channel ?? '') || !noteId.test(id ?? '')) return;
+    evidence.set(id, channel);
+  }
   else if (payload?.startsWith('note/')) {
     const id = payload.split('/')[2];
     if (!notesIndex || !noteId.test(id ?? '')) return;

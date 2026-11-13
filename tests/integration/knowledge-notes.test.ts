@@ -195,29 +195,55 @@ test('turn notes need the switch and a contribute grant, and evidence from this 
   assert.deepEqual(await saveTurnNotes(db(), input([plain, { ...plain, title: 'Other', message_ids: [foreign.id] }])), ['saved', 'foreign_evidence']);
   assert.deepEqual(await saveTurnNotes(db(), input([plain])), ['unchanged']);
   const [row] = (await pool.query('SELECT evidence FROM knowledge_notes WHERE channel_id=$1', [a.channel_id])).rows;
-  assert.deepEqual(row.evidence, [root.id], 'empty evidence falls back to the latest human message');
+  assert.deepEqual(row.evidence, [root.id], 'empty evidence uses the supplied invocation fallback');
 });
 
 function agentEvent(executionId: string, sequence: number, type: AgentEvent['type'], payload: AgentEvent['payload']): AgentEvent {
   return { id: randomUUID(), schema_version: '1.0', execution_id: executionId, sequence, type, occurred_at: new Date().toISOString(), payload };
 }
 
-test('a completed turn saves block notes in the same transaction as memories', async () => {
+test('a completion without a prepared citation skips the note', async () => {
   const a = await bootstrap(pool);
   const path = `/channels/${a.channel_id}/memory`;
   await api(a.owner_token, 'POST', `${path}/knowledge`, { enabled: true });
   await api(a.owner_token, 'POST', `${path}/agents/${a.installation_id}`, { access: 'contribute' });
-  await post(a.owner_token, a.channel_id, 'Retries cause duplicate charges', a.thread_id);
   const task = await store.createTask(a.owner_id, { workspace_id: a.workspace_id, thread_id: a.thread_id, installation_id: a.installation_id, goal: 'Fix', skill: 'demo.echo' }, randomUUID());
   const approved = await store.approveTask(a.owner_id, task.id);
+  await post(a.owner_token, a.channel_id, 'New message outside the invocation', a.thread_id);
   await store.acceptEvent(a.installation_id, agentEvent(approved.active_execution_id!, 1, 'execution.started', { text: 'Working' }));
   await store.acceptEvent(a.installation_id, agentEvent(approved.active_execution_id!, 2, 'execution.completed', { text: 'Done', response: {
     messages: [], tools: [], components: [],
-    memory: { notes: [{ kind: 'decision', title: 'Duplicate charge fix', content: 'Dedupe on idempotency_key.', message_ids: [] }] },
+    memory: { notes: [{ kind: 'decision', title: 'Uncited', content: 'Ship.', message_ids: [] }] },
   } as any }));
-  const notes = (await pool.query('SELECT title, producer_id FROM knowledge_notes WHERE channel_id=$1', [a.channel_id])).rows;
-  assert.deepEqual(notes, [{ title: 'Duplicate charge fix', producer_id: a.installation_id }]);
+  assert.equal((await pool.query('SELECT id FROM knowledge_notes WHERE channel_id=$1', [a.channel_id])).rowCount, 0);
 });
+
+for (const change of ['late reply', 'edit', 'retry'] as const) {
+  test(`prepared invocation determines turn-end citation (${change})`, async () => {
+    const a = await bootstrap(pool);
+    const path = `/channels/${a.channel_id}/memory`;
+    await api(a.owner_token, 'POST', `${path}/knowledge`, { enabled: true });
+    await api(a.owner_token, 'POST', `${path}/agents/${a.installation_id}`, { access: 'contribute' });
+    const evidence = await post(a.owner_token, a.channel_id, 'Retries cause duplicate charges', a.thread_id);
+    const task = await store.createTask(a.owner_id, { workspace_id: a.workspace_id, thread_id: a.thread_id, installation_id: a.installation_id, goal: 'Fix', skill: 'demo.echo' }, randomUUID());
+    const approved = await store.approveTask(a.owner_id, task.id);
+    const { rows: [outbox] } = await pool.query('SELECT id FROM outbox WHERE task_id=$1', [task.id]);
+    const delivery = await store.claimDelivery(undefined, outbox.id);
+    assert.ok(delivery);
+    const invocation = await store.prepareDelivery(delivery);
+    assert.equal(invocation?.request.context?.working_memory?.messages.at(-1)?.id, evidence.id);
+    if (change === 'edit') await pool.query('UPDATE messages SET text=$3 WHERE channel_id=$1 AND id=$2', [a.channel_id, evidence.id, 'That report was incorrect.']);
+    await post(a.owner_token, a.channel_id, 'Hold off until next week.', a.thread_id);
+    if (change === 'retry') await store.prepareDelivery(delivery);
+    await store.acceptEvent(a.installation_id, agentEvent(approved.active_execution_id!, 1, 'execution.started', { text: 'Working' }));
+    await store.acceptEvent(a.installation_id, agentEvent(approved.active_execution_id!, 2, 'execution.completed', { text: 'Done', response: {
+      messages: [], tools: [], components: [],
+      memory: { notes: [{ kind: 'decision', title: 'Duplicate charge fix', content: 'Dedupe on idempotency_key.', message_ids: [] }] },
+    } as any }));
+    const notes = (await pool.query('SELECT title, producer_id, evidence FROM knowledge_notes WHERE channel_id=$1', [a.channel_id])).rows;
+    assert.deepEqual(notes, change === 'late reply' ? [{ title: 'Duplicate charge fix', producer_id: a.installation_id, evidence: [evidence.id] }] : []);
+  });
+}
 
 import { parseInvocation } from '@space/contracts';
 

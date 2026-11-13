@@ -71,6 +71,8 @@
       "types": "./dist/assets.d.ts",
       "default": "./dist/assets.js"
     },
+    "./markdown-memory": {"types":"./dist/markdown-memory.d.ts","default":"./dist/markdown-memory.js"},
+    "./import-memory": {"types":"./dist/import-memory.d.ts","default":"./dist/import-memory.js"},
     "./memory": {
       "types": "./dist/memory.d.ts",
       "default": "./dist/memory.js"

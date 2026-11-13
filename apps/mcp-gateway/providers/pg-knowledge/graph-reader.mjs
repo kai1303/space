@@ -16,8 +16,8 @@ import { applyOps, fillChannelText, publish, publishNeeded, rebuild, resyncChann
 const schema = process.env.GRAPH_SOURCE_SCHEMA ?? 'public';
 if (!/^[a-z_][a-z0-9_]*$/.test(schema)) throw new Error('Invalid GRAPH_SOURCE_SCHEMA');
 const slot = ('space_graph_' + schema).slice(0, 63), publication = slot;
-// The legacy space_knowledge reader consumed this same WAL slot. Its LSN cannot certify space_memory.
-const checkpoint = 'space_memory:' + slot;
+// Older checkpoints predate archive tracking. A one-time snapshot also repairs archives and restores missed before upgrade.
+const checkpoint = 'space_memory_v2:' + slot;
 const source = createPool(process.env.GRAPH_SOURCE_URL);
 const index = createPool(process.env.GRAPH_INDEX_URL);
 const lookup = sourceLookup(source);
@@ -37,7 +37,7 @@ async function prepare() {
   if (!rowCount) await source.query(`CREATE PUBLICATION "${publication}"`).catch(error => { if (error.code !== '42710') throw error; });
   await source.query(`ALTER PUBLICATION "${publication}" SET (publish_via_partition_root = true)`);
   await source.query(`ALTER PUBLICATION "${publication}" SET TABLE
-    ${q('channels')} (id, workspace_id, name, private, kind, memory_enabled, knowledge_enabled, topic, description),
+    ${q('channels')} (id, workspace_id, name, private, kind, memory_enabled, knowledge_enabled, archived_at, topic, description),
     ${q('messages')} (id, workspace_id, channel_id, thread_id, agent_session_id, search_revision, deleted_at, retained_at),
     ${q('knowledge_notes')} (id, workspace_id, channel_id, kind, title, evidence, revision, removed_at),
     ${q('agent_sessions')} (id, workspace_id, origin_thread_id, title, state),
@@ -67,16 +67,17 @@ async function channelsToResync(batch) {
   // A thread-search opt-in or opt-out changes the knowledge flag of every message in that channel.
   const ids = batch.filter(c => c.table === 'channels').map(c => c.row.id);
   const rows = ids.length ? (await index.query(
-    'SELECT id, memory_enabled, knowledge_enabled FROM kb.m_channels WHERE id=ANY($1::text[])', [ids])).rows : [];
+    'SELECT id, memory_enabled, knowledge_enabled, archived FROM kb.m_channels WHERE id=ANY($1::text[])', [ids])).rows : [];
   const known = new Map(rows.map(r => [r.id, r]));
   const pending = new Map();
   for (const { table, op, row, lsn } of batch) {
     if (table === 'knowledge_thread_channels') pending.set(row.channel_id, lsnToVersion(lsn));
     if (table !== 'channels' || op === 'delete' || row.kind !== 'channel') continue;
     const previous = known.get(row.id);
-    if ((previous?.memory_enabled ?? false) !== row.memory_enabled ||
+    const archived = row.archived_at === undefined ? (previous?.archived ?? false) : row.archived_at !== null;
+    if (archived !== (previous?.archived ?? false) || (previous?.memory_enabled ?? false) !== row.memory_enabled ||
         (previous?.knowledge_enabled ?? false) !== row.knowledge_enabled) pending.set(row.id, lsnToVersion(lsn));
-    known.set(row.id, row);
+    known.set(row.id, { ...row, archived });
   }
   return pending;
 }

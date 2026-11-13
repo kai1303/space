@@ -68,11 +68,15 @@ try {
     const cap = Number(process.env.MEMORY_EXTRACT_HOURLY_CAP ?? 60);
     // Messages start queuing extraction runs only once a worker that can run them exists.
     await pool.query(`WITH activated AS (
-      UPDATE memory_extract_config SET enabled=true WHERE NOT enabled RETURNING id
+      UPDATE memory_extract_config SET enabled=true, restores_pending=false WHERE NOT enabled RETURNING id
     ) UPDATE memory_extract_threads t SET available_at=now()+interval '60 seconds'
       FROM channels c WHERE EXISTS (SELECT 1 FROM activated) AND c.id=t.channel_id AND c.memory_enabled
         AND c.archived_at IS NULL AND t.done_through=0 AND t.pending_through>0 AND t.attempts=0
         AND NOT t.waiting_for_index AND NOT isfinite(t.available_at)`);
+    await bus.subscribe('memory.extract.restore.*', {durable:'memory-restores',queue:'memory-restores',maxPending:2}, handle(async event => {
+      await pool.query('SELECT restore_memory_extract_page($1,$2,$3)', [event.aggregate_id, event.data.revision, event.data.after_thread ?? null]);
+      return undefined;
+    }));
     await bus.subscribe('memory.extract.ready.*', {durable:'memory-extractors',queue:'memory-extractors',maxPending:4}, handle(async event => {
       const id=event.data.thread_id;
       if(typeof id!=='string')throw new Error('thread_id required');

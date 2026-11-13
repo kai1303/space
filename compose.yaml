@@ -67,6 +67,8 @@ services:
     build: .
     environment: &database
       DATABASE_URL: postgres://workplace:${POSTGRES_PASSWORD:-local_demo_only}@postgres:5432/workplace
+    volumes:
+      - memory_data:/app/.space-memory:ro
     command: ["node", "scripts/dist/migrate.js"]
     depends_on:
       postgres:
@@ -114,7 +116,6 @@ services:
       SPACE_WORKFLOW_ON_CALL_CHANNEL_ID: ${SPACE_WORKFLOW_ON_CALL_CHANNEL_ID:-}
       AUTH_TRUSTED_ORIGINS: ${AUTH_TRUSTED_ORIGINS:-http://127.0.0.1:5173,http://127.0.0.1:5174}
       ALLOW_DEVELOPMENT_TOKENS: ${ALLOW_DEVELOPMENT_TOKENS:-false}
-      MEMORY_DIRECTORY: /app/.space-memory
       MEMORY_MCP_ALLOWED_HOSTS: ${MEMORY_MCP_ALLOWED_HOSTS:-}
       REDIS_URL: redis://redis:6379
       ASSET_STORAGE_ENDPOINT: http://seaweedfs:8333
@@ -125,8 +126,6 @@ services:
       ASSET_STORAGE_ORIGINS: ${ASSET_STORAGE_ORIGINS:-http://127.0.0.1:5173,http://127.0.0.1:5174}
     ports:
       - "127.0.0.1:3000:3000"
-    volumes:
-      - memory_data:/app/.space-memory
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -152,8 +151,6 @@ services:
       NAVIGATOR_L2_API_KEY: ${NAVIGATOR_L2_API_KEY:-}
       AG_UI_URL: ${AG_UI_URL:-}
       AG_UI_TOKEN: ${AG_UI_TOKEN:-}
-    volumes:
-      - memory_data:/app/.space-memory:ro
     command: ["node", "apps/worker/dist/main.js"]
     depends_on:
       migrate:

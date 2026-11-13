@@ -165,7 +165,7 @@ Evidence is resolved from the key's channel. A message ID from any other channel
 | Notes per block | 0–3 |
 | Title | 1–160 characters |
 | Content | 1–2,000 characters |
-| `message_ids` | Optional, 0–20. Empty means the thread's latest human message |
+| `message_ids` | Optional, 0–20. Empty uses the most recent human message included in the prepared invocation, if it is still shareable. Conflicting retry contexts or missing evidence skip the note |
 | A block with only `notes` | Valid. `session` and `thread` stay optional, but the block needs at least one of the three |
 
 `parseAgentMemoryUpdate` validates each note on its own. One bad note is dropped and the rest of the block still parses. A list longer than 3 is dropped as a whole, and the memories still parse. Dropped notes never reach Space, so they leave no trace entry.
