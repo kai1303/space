@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Select, Button } from '@space/ui/primitives';
+import { Select, Button, toast } from '@space/ui/primitives';
 import { Reveal } from '@space/ui/motion';
 import type { MemoryConnection, AgentMemoryPermission, AgentMemoryAccess } from '@space/contracts';
 import { request } from '../../shared/api/request.js';
@@ -71,7 +71,11 @@ export function MemoryConnections({ channel, enabled }: { channel: string; enabl
     {loaded && !items.length && <small>No MCP connections yet.</small>}
     <ul>{items.map(item => <li key={item.id}><div><strong>{item.name}</strong><small>{item.access === 'write' ? 'Read and write memory' : item.access === 'contribute' ? 'Read and contribute knowledge' : 'Read memory'} · Can read channel conversations</small></div><Button size="sm" disabled={busy} aria-label={`Revoke ${item.name}`} onClick={() => void run(async () => {
       await request(`${path}/${item.id}/revoke`, {});
-      if (active.current) { setItems(previous => previous.filter(connection => connection.id !== item.id)); setIssued(previous => previous?.connection.id === item.id ? undefined : previous); }
+      if (active.current) {
+        toast.success(`Memory key “${item.name}” revoked`);
+        setItems(previous => previous.filter(connection => connection.id !== item.id));
+        setIssued(previous => previous?.connection.id === item.id ? undefined : previous);
+      }
     })}>Revoke</Button></li>)}</ul>
   </section>;
 }

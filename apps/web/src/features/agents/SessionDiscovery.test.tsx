@@ -1,3 +1,4 @@
+import {toast} from '@space/ui/primitives';
 import {afterEach,beforeAll,expect,it,vi} from 'vitest';
 import {cleanup,fireEvent,render,screen,waitFor} from '@testing-library/react';
 import {SessionDiscovery} from './SessionDiscovery.js';
@@ -11,7 +12,7 @@ beforeAll(()=>{
   HTMLDialogElement.prototype.showModal=function(){this.open=true;};
   HTMLDialogElement.prototype.close=function(){this.open=false;this.dispatchEvent(new Event('close'));};
 });
-afterEach(()=>{cleanup();mocks.read.mockReset();});
+afterEach(()=>{cleanup();mocks.read.mockReset();vi.restoreAllMocks();});
 it('opens a source session inside the workspace and routes reviewer-only matches to the review room',async()=>{
   const id='d15c0ffe-0000-4000-a000-000000000001', second='d15c0ffe-0000-4000-a000-000000000002';
   const source={id,access:'source',origin_thread_id:'t',channel_id:'c',channel_archived:false,title:'Ship regression fix',status:'needs_attention',agent_name:'Claude',channel_name:'general'};
@@ -70,10 +71,12 @@ it('creates an agent session for a selected conversation, reusing its identity o
 });
 
 it('labels only archived sessions and restores them through the sidebar archive action',async()=>{
+  const success=vi.spyOn(toast,'success');
   const id='d15c0ffe-0000-4000-a000-000000000003';
   mocks.read.mockResolvedValue({items:[{id,access:'source',title:'Archived project',sidebar_archived:true}],next_cursor:null});
   render(<SessionDiscovery workspace="w" viewer="owner"/>);
   expect(await screen.findByText('Archived',{selector:'span'})).toBeTruthy();
   fireEvent.click(screen.getByRole('button',{name:'Unarchive session'}));
   await waitFor(()=>expect(mocks.read).toHaveBeenCalledWith('/agent-sessions/'+id+'/sidebar',{archived:false},undefined,'PATCH',undefined,'owner'));
+  expect(success).toHaveBeenCalledWith('Session restored');
 });

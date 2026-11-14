@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Clock, PaperPlaneRight, PencilSimple, Trash, Warning } from '@phosphor-icons/react';
 import type { ScheduledMessage } from '@space/contracts';
-import { Button } from '@space/ui/primitives';
+import { Button, toast } from '@space/ui/primitives';
 import { RichContent } from '@space/ui/rich-text';
 import { scheduleError } from '@space/ui/composer';
 import { request } from '../../shared/api/request.js';
@@ -34,6 +34,7 @@ export function ScheduledMessages({ workspace, onOpen }: { workspace: string; on
     setBusy(id); setError('');
     try {
       const updated = await run();
+      if (updated.status === 'cancelled') toast.success('Scheduled message canceled');
       setItems(list => (list ?? []).flatMap(item => item.id !== id ? [item] : updated.status === 'cancelled' ? [] : [updated]));
     } catch (reason) { setError(errorText(reason)); setRevision(n => n + 1); }
     finally { setBusy(''); }

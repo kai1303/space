@@ -1,6 +1,6 @@
 import { subscribeUpdates } from '../../../shared/realtime/live-updates.js';
 import { useEffect, useRef, useState } from 'react';
-import { Avatar, Button, Dialog, Select } from '@space/ui/primitives';
+import { Avatar, Button, Dialog, Select, toast } from '@space/ui/primitives';
 import { ArrowLeft, ArrowRight, CheckCircle, Cloud, Copy, Desktop, Plug, ShieldCheck } from '@phosphor-icons/react';
 import { type PairedConnector, type AgentPairing, type AgentPairingStatus, type WorkspaceParticipant } from '@space/contracts';
 import { listAll, request } from '../../../shared/api/request.js';
@@ -85,11 +85,12 @@ function MemberDialog({ returnOnPaired, initialConnector, agent, workspace, view
     } catch (e) { if (active.current) setError(errorText(e)); }
     finally { if (active.current) setBusy(false); }
   }
-  async function revoke(id: string) {
+  async function revoke({id, name}: WorkspaceParticipant) {
     setBusy(true); setError('');
     try {
       await request(`/agents/connections/${id}/revoke`, {});
       if (active.current) {
+        toast.success(`Disconnected ${name}`);
         if (status.current?.installation_id === id) {
           pending.current = undefined; status.current = undefined; setPairing(undefined); setPairStatus(undefined);
         }
@@ -163,7 +164,7 @@ function MemberDialog({ returnOnPaired, initialConnector, agent, workspace, view
       {loaded && (!pairing || pairStatus?.status === 'claimed') && agents.length > 0 && <section className="space-agent-connections" aria-label="Connected agents"><h3>{agent ? 'Connection status' : 'In this workspace'}<span>{agents.length}</span></h3><ul className="space-member-list">{agents.map(member => <li key={member.id}>
         <Avatar name={member.name} initials={member.name.slice(0, 2).toUpperCase()} size="sm" tone="purple"/>
         <div className="space-member-details"><strong>{member.name}</strong><small><span className={`space-agent-status-dot space-agent-status-dot--${member.status ?? 'offline'}`}/>{statusText[member.status ?? 'offline']}{member.owner_id === viewer ? ' · Owned by you' : ''}</small></div>
-        {member.owner_id === viewer && <Button size="sm" variant="ghost" aria-label={`Disconnect ${member.name}`} disabled={busy} onClick={() => void revoke(member.id)}>Disconnect</Button>}
+        {member.owner_id === viewer && <Button size="sm" variant="ghost" aria-label={`Disconnect ${member.name}`} disabled={busy} onClick={() => void revoke(member)}>Disconnect</Button>}
       </li>)}</ul></section>}
       <div className="space-agent-permissions"><ShieldCheck size={18}/><p>A paired agent inherits your access to conversations. Channel memory requires a separate grant.</p></div>
     </div>

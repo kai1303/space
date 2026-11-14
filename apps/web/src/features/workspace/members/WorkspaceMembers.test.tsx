@@ -1,3 +1,4 @@
+import { toast } from '@space/ui/primitives';
 import { afterEach, beforeAll, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -11,7 +12,7 @@ beforeAll(() => {
   HTMLDialogElement.prototype.showModal = function () { this.open = true; };
   HTMLDialogElement.prototype.close = function () { this.open = false; };
 });
-afterEach(() => { cleanup(); vi.clearAllMocks(); vi.useRealTimers(); });
+afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.clearAllMocks(); vi.useRealTimers(); });
 const humans = [{ id: 'kai', name: 'Kai', kind: 'human' }];
 const props = { workspace: 'workspace', viewer: 'kai', open: true, onClose: vi.fn() };
 it('pairs a local Codex without repository or channel setup, and cancels an unused code', async () => {
@@ -41,7 +42,9 @@ it('shows agent connections separately from people and limits disconnect to the 
   expect(screen.queryByText('Kai')).toBeNull();
   const disconnect = screen.getByRole('button', { name: 'Disconnect Kai’s Codex' });
   expect(screen.queryByRole('button', { name: 'Disconnect Anna’s Codex' })).toBeNull();
+  const success = vi.spyOn(toast, 'success');
   await userEvent.click(disconnect);
+  expect(success).toHaveBeenCalledWith('Disconnected Kai’s Codex');
   expect(api.request).toHaveBeenCalledWith('/agents/connections/agent/revoke', {});
 });
 it('displays creation failures and clears member identities when workspace changes', async () => {

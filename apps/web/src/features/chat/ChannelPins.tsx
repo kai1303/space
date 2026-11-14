@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { ChannelPin, Page } from '@space/contracts';
-import { Button, Menu } from '@space/ui/primitives';
+import { Button, Menu, toast } from '@space/ui/primitives';
 import { DotsThree, PushPin } from '@phosphor-icons/react';
 import { request } from '../../shared/api/request.js';
 import { invalidateUpdates, subscribeUpdates } from '../../shared/realtime/live-updates.js';
@@ -46,6 +46,21 @@ export function ChannelPins({ pins, archived, onMessage }: {
   pins: ReturnType<typeof useChannelPins>; archived: boolean; onMessage: (id: string) => void;
 }) {
   const [error, setError] = useState('');
+  async function unpin(id: string) {
+    setError('');
+    try {
+      await pins.change(id, false);
+      toast.success('Message unpinned', {
+        id: `unpin-${id}`, duration: 8000,
+        action: { label: 'Undo', onClick: () => {
+          void pins.change(id, true).then(
+            () => toast.success('Message pinned to channel'),
+            () => toast.error('Could not pin this message again.'),
+          );
+        } },
+      });
+    } catch { setError('Could not unpin this message. Try again.'); }
+  }
   return <section className="channel-pins" aria-label="Pinned messages">
     {(error || pins.error) && <p role="alert">{error || pins.error}</p>}
     {!pins.error && !pins.page && <p role="status">Loading pins…</p>}
@@ -57,9 +72,7 @@ export function ChannelPins({ pins, archived, onMessage }: {
         <span>{pin.text || 'Shared a file'}</span>
       </button>
       {!archived && <Menu floating label="Pinned message actions" trigger={<DotsThree size={19}/>} items={[{
-        label: 'Unpin from channel', onSelect: () => {
-          setError(''); void pins.change(pin.id, false).catch(() => setError('Could not unpin this message. Try again.'));
-        },
+        label: 'Unpin from channel', onSelect: () => void unpin(pin.id),
       }]}/>}
     </li>)}</ul>
     <footer>{pins.before && <Button size="sm" onClick={() => pins.setBefore(undefined)}>Newest pins</Button>}

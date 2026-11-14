@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Button } from '@space/ui/primitives';
+import { Button, toast } from '@space/ui/primitives';
 import type { AgentSessionOutputs, SessionTeamView, SharedSessionOutput, WorkspaceDirectory } from '@space/contracts';
 import { request } from '../../shared/api/request.js';
 import { subscribeUpdates, invalidateUpdates } from '../../shared/realtime/live-updates.js';
@@ -72,7 +72,10 @@ export function SessionTeam({id,viewer,outputs,standalone}:Props) {
           <input type="checkbox" checked={team.workspace_visible} disabled={pending} onChange={e=>{const value=e.target.checked;void run(async()=>{await request(base+'/visibility',{workspace_visible:value},undefined,'PUT',undefined,viewer);});}}/> Make discussion and shared snapshots visible to workspace members
         </label>}
         {team.reviewers.map(person=><div className="session-team-row" key={person.user_id}><span>{person.display_name}</span>
-          {(team.can_manage || person.user_id===viewer) && <Button size="sm" variant="ghost" disabled={pending} onClick={()=>void run(async()=>{await request(base+'/reviewers/'+person.user_id,undefined,undefined,'DELETE',undefined,viewer);})}>{team.can_manage?'Remove invitation':'Leave review'}</Button>}</div>)}
+          {(team.can_manage || person.user_id===viewer) && <Button size="sm" variant="ghost" disabled={pending} onClick={()=>void run(async()=>{
+            await request(base+'/reviewers/'+person.user_id,undefined,undefined,'DELETE',undefined,viewer);
+            toast.success(team.can_manage ? 'Reviewer invitation removed' : 'You left the review');
+          })}>{team.can_manage?'Remove invitation':'Leave review'}</Button>}</div>)}
         {team.can_manage && team.writable && <InviteReviewer team={team} invite={user=>run(async()=>{await request(base+'/reviewers/'+user,{},undefined,'PUT',undefined,viewer);})} pending={pending}/>}
         <a href={'/review/'+id}>Open review room</a>
       </details>

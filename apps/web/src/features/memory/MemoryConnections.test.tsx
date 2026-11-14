@@ -1,9 +1,10 @@
+import { toast } from '@space/ui/primitives';
 import { afterEach, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryConnections } from './MemoryConnections.js';
 
-afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
+afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 const connection = { id: 'key-id', name: 'Navigator', access: 'write', created_at: '2026-11-03T00:00:00Z' };
 it('creates a scoped MCP key, shows configuration once, and revokes it', async () => {
   let exists = false;
@@ -21,7 +22,9 @@ it('creates a scoped MCP key, shows configuration once, and revokes it', async (
   expect((config as HTMLTextAreaElement).value).toContain('/mcp/memory');
   expect((config as HTMLTextAreaElement).value).toContain('Bearer smem_disposable-secret');
   expect(screen.getByText(/shown only once/)).toBeTruthy();
+  const success = vi.spyOn(toast, 'success');
   await userEvent.click(screen.getByRole('button', { name: 'Revoke Navigator' }));
+  expect(success).toHaveBeenCalledWith('Memory key “Navigator” revoked');
   await screen.findByText('No MCP connections yet.');
   expect(screen.queryByRole('textbox', { name: 'MCP client configuration' })).toBeNull();
 });

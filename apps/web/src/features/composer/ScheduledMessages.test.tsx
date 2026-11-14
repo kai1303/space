@@ -1,10 +1,11 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { toast } from '@space/ui/primitives';
 import userEvent from '@testing-library/user-event';
 import type { ScheduledMessage } from '@space/contracts';
 import { ScheduledMessages } from './ScheduledMessages.js';
 
-afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 const item = (patch: Partial<ScheduledMessage> = {}): ScheduledMessage => ({ id: 'one', workspace_id: 'w', channel_id: 'c', channel_name: 'launch', thread_id: null,
   text: 'Release notes at nine', document: null, attachments: [], send_at: new Date(Date.now() + 86_400_000).toISOString(), status: 'pending',
   message_id: null, error: null, created_at: new Date().toISOString(), ...patch });
@@ -24,6 +25,7 @@ function server(list: ScheduledMessage[]) {
 }
 
 it('lists scheduled messages with their channel and time, and cancels one', async () => {
+  const success = vi.spyOn(toast, 'success');
   const calls = server([item()]);
   render(<ScheduledMessages workspace="w" onOpen={() => {}} />);
   expect(await screen.findByText('#launch')).toBeTruthy();
@@ -32,6 +34,7 @@ it('lists scheduled messages with their channel and time, and cancels one', asyn
   await waitFor(() => expect(screen.queryByText('#launch')).toBeNull());
   expect(calls.at(-1)).toMatchObject({ method: 'DELETE', url: '/v1/scheduled-messages/one' });
   expect(screen.getByText('No scheduled messages')).toBeTruthy();
+  expect(success).toHaveBeenCalledWith('Scheduled message canceled');
 });
 
 it('sends now and edits the time with validation', async () => {

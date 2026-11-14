@@ -1,3 +1,4 @@
+import { toast } from '@space/ui/primitives';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, expect, it, vi } from 'vitest';
@@ -8,7 +9,7 @@ vi.mock('../../shared/realtime/live-updates.js',()=>({
   subscribeUpdates:(_scope:string,_id:string,read:()=>unknown,deny:()=>void)=>{live.refresh=read;live.revoke=deny;void read();return ()=>{};},
   invalidateUpdates:async()=>{await live.refresh?.();},
 }));
-afterEach(()=>{cleanup();vi.unstubAllGlobals();});
+afterEach(()=>{cleanup();vi.restoreAllMocks();vi.unstubAllGlobals();});
 it('posts human discussion to the review room and clears shared content on revocation',async()=>{
   let comment='';
   const fetch=vi.fn(async(_path:string,init?:RequestInit)=>{
@@ -26,4 +27,23 @@ it('posts human discussion to the review room and clears shared content on revoc
   act(()=>live.revoke?.());
   expect(screen.queryByText('Please check this diff')).toBeNull();
   expect(screen.getByRole('alert').textContent).toMatch(/unavailable/);
+});
+
+it.each([
+  {manager:true, label:'Remove invitation', confirmation:'Reviewer invitation removed'},
+  {manager:false, label:'Leave review', confirmation:'You left the review'},
+])('confirms $label after the request succeeds',async({manager,label,confirmation})=>{
+  const success=vi.spyOn(toast,'success');
+  const viewer=manager?'owner':'sam';
+  const team={workspace_id:'w',viewer_id:viewer,can_manage:manager,writable:false,reviewers:[{user_id:'sam',display_name:'Sam'}],shared:[],messages:[]};
+  let removed=false;
+  vi.stubGlobal('fetch',vi.fn(async(path:string,init?:RequestInit)=>{
+    if(path.endsWith('/team/reviewers/sam') && init?.method==='DELETE') removed=true;
+    return Response.json({...team,reviewers:removed?[]:team.reviewers});
+  }));
+  render(<SessionTeam id="session" viewer={viewer}/>);
+  await userEvent.click(await screen.findByText('People and access 1'));
+  await userEvent.click(screen.getByRole('button',{name:label}));
+  expect(removed).toBe(true);
+  expect(success).toHaveBeenCalledWith(confirmation);
 });

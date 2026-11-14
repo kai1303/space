@@ -1,6 +1,6 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { sessionPath, type AgentSessionReference, type SessionDiscoveryPage } from '@space/contracts';
-import { Badge, Button, Tabs } from '@space/ui/primitives';
+import { Badge, Button, Tabs, toast } from '@space/ui/primitives';
 import { MagnifyingGlass, Plus } from '@phosphor-icons/react';
 import { NewCodeChannel } from './NewCodeChannel.js';
 import { request } from '../../shared/api/request.js';
@@ -52,6 +52,7 @@ export function SessionDiscovery({workspace,viewer,onOpen}: {workspace:string;vi
     setMutation({busy:id,error:''});
     try {
       await request(`/agent-sessions/${id}/sidebar`,{archived:false},undefined,'PATCH',undefined,viewer);
+      toast.success('Session restored');
       await invalidateUpdates('workspace',workspace);
       setMutation({busy:'',error:''});
     } catch(reason) { setMutation({busy:'',error:errorText(reason)}); }

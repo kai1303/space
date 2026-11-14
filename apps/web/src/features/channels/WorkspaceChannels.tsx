@@ -155,7 +155,12 @@ export function WorkspaceChannels({ codeChannelView, onOpenOrigin, onReturnDirec
     const openSplit = () => setSplitId(c.id);
     return { onSplit:conversationPath(c.id) && window.self === window.top ? openSplit : undefined, actions:channelMenu(item, starred.ids.includes(c.id), {
       split:openSplit, dialog:kind => kind === 'details' ? setDetailsId(c.id) : setMenuDialog({id:c.id,kind}),
-      copy:value => { void navigator.clipboard.writeText(value).catch(reportMenuError); },
+      copy:async (value, confirmation) => {
+        try {
+          await navigator.clipboard.writeText(value);
+          toast.success(confirmation);
+        } catch (reason) { reportMenuError(reason); }
+      },
       star:() => { void starred.toggle(c.id, {...c,kind:'channel'}).catch(reportMenuError); },
       save:patch => { void savePreferences(c.id,patch).catch(reportMenuError); },
     }) };
