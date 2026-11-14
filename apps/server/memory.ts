@@ -1,6 +1,6 @@
 import { messagePath } from '@space/contracts';
 import type { FastifyInstance } from 'fastify';
-import { AppError, parseAgentMemoryContext, MAX_AGENT_MEMORY_CHARS, MAX_MEMORY_IMPORT_BYTES, memorySourceId, parseKnowledgeSettings, parseMemorySettings, parseMemorySource, parseMemoryWrite, record, text, uuid, type ChannelMemory } from '@space/contracts';
+import { AppError, parseAgentMemoryContext, MAX_AGENT_MEMORY_CHARS, MAX_MEMORY_IMPORT_BYTES, memorySourceId, parseKnowledgeSettings, parseMemorySettings, parseMemorySource, parseMemoryWrite, record, text, uuid, type ChannelMemory, type ChatMessage, type MemorySource } from '@space/contracts';
 import type { AgentMemoryContext, Task } from '@space/contracts';
 import type { MemoryProvider } from '@space/core/memory';
 import { MemoryStore, type MemoryChannel } from '@space/postgres/memory';
@@ -46,6 +46,17 @@ export function createAgentMemoryReader(store: MemoryStore, providers = createMe
     } finally { clearTimeout(timer); }
   });
 }
+export function messageMemorySource(message: ChatMessage): MemorySource {
+  const attachments = message.attachments?.map(asset => `Attachment: ${asset.name} (file content not imported)`);
+  return { id: `message:${message.id}`, title: `Message from ${message.author.name} · ${message.created_at}`,
+    text: [message.text, ...(attachments ?? [])].filter(Boolean).join('\n'), url: messagePath(message.channel_id, message.id) };
+}
+
+export async function removeMemorySource(store: MemoryStore, provider: MemoryProvider, channel: MemoryChannel, id: string) {
+  if (provider.onMessageChanged && id.startsWith('message:')) await store.revokeProviderQuotes(channel, id.slice(8));
+  return provider.remove(channel, id);
+}
+
 export type SessionLocator = { location(actor: string, id: string): Promise<{ channel_id: string }> };
 export function registerMemoryRoutes(app: FastifyInstance, store: MemoryStore, providers = createMemoryProviders(store), sessions?: SessionLocator) {
   const providerFor = (channel: MemoryChannel, requireEnabled = true) => {
@@ -125,9 +136,12 @@ export function registerMemoryRoutes(app: FastifyInstance, store: MemoryStore, p
       const provider = providerFor(channel);
       if ('message_id' in input) {
         const message = await store.message(c, channel, input.message_id);
-        const attachments = message.attachments?.map(asset => `Attachment: ${asset.name} (file content not imported)`).join('\n');
-        return provider.ingest(channel, { id: `message:${message.id}`, title: `Message from ${message.author.name} · ${message.created_at}`,
-          text: [message.text, attachments].filter(Boolean).join('\n'), url: messagePath(channel.channel_id, message.id) });
+        const source = messageMemorySource(message);
+        if (provider.onMessageChanged) {
+          source.evidence_revisions = { [message.id]: message.search_revision };
+          await store.trackProviderEvidence(channel, source.evidence_revisions, 'quote');
+        }
+        return provider.ingest(channel, source);
       }
       if (Buffer.byteLength(input.content, 'utf8') > MAX_MEMORY_IMPORT_BYTES) throw new AppError(413, 'memory_import_too_large');
       const now = new Date().toISOString();
@@ -136,7 +150,7 @@ export function registerMemoryRoutes(app: FastifyInstance, store: MemoryStore, p
   });
   app.delete<{ Params: { channelId: string; sourceId: string } }>(`${path}/sources/:sourceId`, r => {
     const id = memorySourceId(r.params.sourceId);
-    return store.channel(r.actorId, r.params.channelId, channel => providerFor(channel).remove(channel, id));
+    return store.channel(r.actorId, r.params.channelId, channel => removeMemorySource(store, providerFor(channel), channel, id));
   });
   app.get<{ Params: { channelId: string }; Querystring: { q?: unknown } }>(`${path}/search`, r => {
     record(r.query, ['q']);
@@ -145,7 +159,9 @@ export function registerMemoryRoutes(app: FastifyInstance, store: MemoryStore, p
   });
   app.delete<{ Params: { channelId: string } }>(path, r => store.channel(r.actorId, r.params.channelId, async channel => {
     if (!channel.can_manage) throw new AppError(403, 'channel_management_forbidden');
-    await providerFor(channel, false).clear(channel);
+    const provider = providerFor(channel, false);
+    if (provider.onMessageChanged) await store.revokeProviderQuotes(channel);
+    await provider.clear(channel);
     return { deleted: true };
   }));
 }

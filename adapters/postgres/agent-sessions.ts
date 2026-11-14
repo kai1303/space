@@ -6,7 +6,7 @@ import { SidekickStore } from './sidekick.js';
 import { createHash } from 'node:crypto';
 import type { Pool } from 'pg';
 import { and, eq, sql } from 'drizzle-orm';
-import { AppError, parseAgentSessionInput, parseAgentSessionMessage, parseAgentResponse, record, text, uuid, type SessionRelatedAgent, type AgentSessionDetail, type AgentSessionSummary, type WorkspaceAgentSession, type AgentSessionTurn, type SessionInput, type Task } from '@space/contracts';
+import { isLocalAgentSkill, supportsModelSettings, isLegacyCodexSetting, type CodexSettings, AppError, parseAgentSessionInput, parseAgentSessionMessage, parseAgentResponse, record, text, uuid, type SessionRelatedAgent, type AgentSessionDetail, type AgentSessionSummary, type WorkspaceAgentSession, type AgentSessionTurn, type SessionInput, type Task } from '@space/contracts';
 import { database, type DbSession } from './database.js';
 import { hasThreadAccess, requireWorkspaceAccess } from './access.js';
 import { sessionTransaction, SessionConflict } from './session-concurrency.js';
@@ -32,6 +32,27 @@ export class AgentSessionStore {
     const [session] = await c.select().from(s.agentSessions).where(eq(s.agentSessions.id, uuid(id)));
     if (!session || !await hasThreadAccess(c, actor, session.origin_thread_id)) throw notFound();
     return session;
+  }
+  async models(actor:string, id:string) {
+    return this.db.transaction(async c => {
+      const session = await this.visible(c,actor,id);
+      return await this.connectedModels(c,session.installation_id) ?? [];
+    }, {isolationLevel:'repeatable read', accessMode:'read only'});
+  }
+  private async connectedModels(c:DbSession, installation:string) {
+    const [connection] = await c.select({models:s.agentConnections.model_catalog}).from(s.agentConnections)
+      .where(and(eq(s.agentConnections.installation_id,installation),sql`auth_status='ready' AND connection_id IS NOT NULL AND revoked_at IS NULL AND last_seen_at > now()-interval '45 seconds'`));
+    return connection?.models;
+  }
+  private async validateSelection(c:DbSession, installation:string, skill:string, settings?:CodexSettings) {
+    if (!settings) return;
+    const catalog = await this.connectedModels(c,installation);
+    if (!catalog) {
+      // Existing clients can still send their original Codex settings to an older connector.
+      if (skill === 'codex.run' && isLegacyCodexSetting(settings)) return;
+      throw new AppError(409,'model_selection_unavailable');
+    }
+    if (!supportsModelSettings(catalog,settings)) throw new AppError(409,'model_selection_unavailable');
   }
   async location(actor: string, id: string) {
     return this.db.transaction(async c => {
@@ -215,7 +236,7 @@ export class AgentSessionStore {
         JOIN users u ON u.id=i.owner_id LEFT JOIN agent_connections ac ON ac.installation_id=i.id
         WHERE a.origin_thread_id=${session.origin_thread_id} AND (a.id=${session.parent_session_id}::uuid OR a.parent_session_id=${session.id})
         ORDER BY a.created_at,a.id LIMIT 33`);
-      return { related_agents:related.rows, inputs:inputs.rows.filter(input => input.kind === 'queue'), audience:audienceLabel, tool_approvals:await sessionToolApprovals(c,id), ...(session.handoff_context ? {context:session.handoff_context} : {}), ...(session.managed ? { outputs: session.outputs } : {}), session: await this.summary(c, id), turns, next_cursor: (after || result.rows.length > 20) && turns.length ? turns[0]!.task.id : null, has_newer: after ? result.rows.length > 20 : !!before };
+      return { related_agents:related.rows, session_goal:session.session_goal, inputs:inputs.rows.filter(input => input.kind === 'queue'), audience:audienceLabel, tool_approvals:await sessionToolApprovals(c,id), ...(session.handoff_context ? {context:session.handoff_context} : {}), ...(session.managed ? { outputs: session.outputs } : {}), session: await this.summary(c, id), turns, next_cursor: (after || result.rows.length > 20) && turns.length ? turns[0]!.task.id : null, has_newer: after ? result.rows.length > 20 : !!before };
     }, { isolationLevel: 'repeatable read', accessMode: 'read only' });
   }
   async send(actor: string, id: string, raw: unknown, key: string): Promise<Task> {
@@ -230,15 +251,22 @@ export class AgentSessionStore {
     const session = await this.visible(c, actor, id);
     if (!session.managed) throw new AppError(409, 'session_unmanaged');
     if (session.state === 'ended') throw new AppError(409, 'session_ended');
+    if (input.codex_settings && !isLocalAgentSkill(session.skill)) throw new AppError(400,'invalid_codex_settings');
     if (input.browser_url && !session.handoff_context?.browser_url) throw new AppError(400,'invalid_browser_page');
-    const taskInput = { ...(input.browser_url ? {browser_url:input.browser_url} : {}), workspace_id: session.workspace_id, thread_id: session.origin_thread_id, installation_id: session.installation_id, goal: input.text || 'Review the attached files.', skill: session.skill, ...(input.document ? { request_document: input.document } : {}) };
+    const taskInput = { ...(input.browser_url ? {browser_url:input.browser_url} : {}), ...(input.goal_action ? {goal_action:input.goal_action} : {}), ...(input.codex_settings ? {codex_settings:input.codex_settings} : {}), workspace_id: session.workspace_id, thread_id: session.origin_thread_id, installation_id: session.installation_id, goal: input.text || 'Review the attached files.', skill: session.skill, ...(input.document ? { request_document: input.document } : {}) };
     const installation = await this.tasks.eligible(c, { ...taskInput, requester_id: actor, session_id: session.id }, true);
+    if (input.goal_action) {
+      if (actor !== installation.owner_id) throw new AppError(403,'owner_required');
+      if (!['codex.local','claude.local'].includes(installation.connector_id) || !['codex.run','claude.run'].includes(session.skill) || input.asset_ids.length ||
+          (session.skill==='claude.run' && ['pause','resume'].includes(input.goal_action.kind))) throw new AppError(400,'invalid_goal_action');
+    }
     const hash = createHash('sha256').update(JSON.stringify({ ...taskInput, ...(input.asset_ids.length ? { text:input.text, asset_ids:input.asset_ids, asset_descriptions:input.asset_descriptions } : {}), agent_session_id: id })).digest('hex');
     const [existing] = await c.select().from(s.tasks).where(and(eq(s.tasks.workspace_id, session.workspace_id), eq(s.tasks.requester_id, actor), eq(s.tasks.idempotency_key, key)));
     if (existing) {
       if (existing.request_hash !== hash) throw new AppError(409, 'idempotency_conflict');
       return { existing };
     }
+    await this.validateSelection(c,session.installation_id,session.skill,input.codex_settings);
     const busy = await c.execute(sql`SELECT 1 FROM tasks WHERE session_id=${id} AND status IN ('awaiting_approval','queued','running') LIMIT 1`);
     if (!queueInputId && (await c.execute(sql`SELECT 1 FROM agent_session_inputs WHERE session_id=${id} AND kind='queue' AND state IN ('pending','blocked') LIMIT 1`)).rows.length) throw new AppError(409,'session_queue_pending');
     if (busy.rows.length) throw new AppError(409, 'session_busy');
@@ -277,23 +305,27 @@ export class AgentSessionStore {
   private async addInputIn(c:DbSession,actor:string,id:string,key:string,kind:'queue'|'steer',raw:unknown,execution?:string,sourceId?:string) {
     key=uuid(key);
     const body=parseAgentSessionMessage(raw);
+    if (body.goal_action && kind!=='steer') throw new AppError(400,'send_goal_separately');
     if (kind==='steer' && (!body.text.trim() || body.asset_ids.length)) throw new AppError(400,'steer_requires_text');
     const hash=createHash('sha256').update(JSON.stringify([kind,execution,body,...(sourceId ? [sourceId] : [])])).digest('hex');
     const session=await this.visible(c,actor,id);
     if (!session.managed || session.state!=='active') throw new AppError(409,'session_unavailable');
     const installation=await this.tasks.eligible(c,{...session,session_id:id,thread_id:session.origin_thread_id,requester_id:actor},true);
     if (body.browser_url && !session.handoff_context?.browser_url) throw new AppError(400,'invalid_browser_page');
+    if(body.codex_settings && (kind==='steer' || !isLocalAgentSkill(session.skill))) throw new AppError(400,'invalid_codex_settings');
+    if (body.goal_action && (session.skill==='claude.run' && !['set','clear'].includes(body.goal_action.kind) || !['claude.run','codex.run'].includes(session.skill))) throw new AppError(400,'invalid_goal_action');
     if(kind==='steer' && actor!==installation.owner_id) throw new AppError(403,'owner_required');
     const prior=(await c.execute<{actor_id:string;session_id:string;request_hash:string;state:string}>(sql`SELECT actor_id,session_id,request_hash,state FROM agent_session_inputs WHERE id=${key}`)).rows[0];
     if(prior){
       if(prior.actor_id!==actor || prior.session_id!==id || prior.request_hash!==hash) throw new AppError(409,'idempotency_conflict');
       return {state:prior.state,connection:null};
     }
+    await this.validateSelection(c,session.installation_id,session.skill,body.codex_settings);
     let connection:string|null=null;
     if(kind==='steer'){
       if(!['codex.local','claude.local'].includes(installation.connector_id)) throw new AppError(409,'steer_unsupported');
       const run=(await c.execute<{connection_id:string}>(sql`SELECT a.connection_id FROM tasks t JOIN agent_connections a ON a.installation_id=t.installation_id
-        WHERE t.session_id=${id} AND t.status='running' AND t.active_execution_id=${execution} AND a.last_seen_at>now()-interval '45 seconds' AND a.auth_status='ready' AND a.connection_id IS NOT NULL AND a.revoked_at IS NULL`)).rows[0];
+        WHERE t.session_id=${id} AND t.status='running' AND (${!body.goal_action} OR t.goal_action IS NOT NULL) AND t.active_execution_id=${execution} AND a.last_seen_at>now()-interval '45 seconds' AND a.auth_status='ready' AND a.connection_id IS NOT NULL AND a.revoked_at IS NULL`)).rows[0];
       if(!run) throw new AppError(409,'turn_not_running');
       connection=run.connection_id;
     }
@@ -307,7 +339,7 @@ export class AgentSessionStore {
       if (!claimed.rows.length) throw new AppError(409,'queue_item_changed');
     }
     // Keep the wire payload canonical and omit absent optional fields on replay.
-    const payload={browser_url:body.browser_url,text:body.text,document:body.document,asset_ids:body.asset_ids,asset_descriptions:body.asset_descriptions};
+    const payload={browser_url:body.browser_url,goal_action:body.goal_action,codex_settings:body.codex_settings,text:body.text,document:body.document,asset_ids:body.asset_ids,asset_descriptions:body.asset_descriptions};
     const state=kind==='queue'?'pending':'sending';
     await c.execute(sql`INSERT INTO agent_session_inputs(id,session_id,actor_id,kind,execution_id,body,request_hash,state,source_input_id)
       VALUES(${key},${id},${actor},${kind},${execution??null},${JSON.stringify(payload)}::jsonb,${hash},${state},${sourceId??null})`);

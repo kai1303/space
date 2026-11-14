@@ -89,6 +89,7 @@ it('uses separate action capabilities and exposes posting and manager editors', 
   expect(screen.queryByRole('button', { name: 'Remove Owner from channel' })).toBeNull();
   await userEvent.click(screen.getByRole('tab', { name: 'Settings' }));
   expect(screen.queryByRole('button', { name: 'Archive channel for everyone' })).toBeNull();
+  expect(screen.queryByRole('switch', { name: /cross-channel/i })).toBeNull();
   await userEvent.click(screen.getByRole('button', { name: 'Edit posting permissions' }));
   expect(screen.getByRole('dialog', { name: 'Posting permissions' })).toBeTruthy();
 });

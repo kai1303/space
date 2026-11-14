@@ -30,8 +30,9 @@ export function mergePage(previous: MessagePage | null, page: MessagePage, direc
   if (direction === 'latest') {
     const live = previous.has_newer ? [] : previous.messages.filter(message => BigInt(message.sequence!) > BigInt(page.event_cursor));
     const ids = new Set(page.messages.map(message => message.id));
-    const deleted = previous.messages.filter(message => message.deleted_at && ids.has(message.id));
-    const messages = ordered([...page.messages, ...live, ...deleted]);
+    const updates = previous.messages.filter(message => ids.has(message.id) && (message.deleted_at ||
+      BigInt(message.reaction_sequence ?? '0') > BigInt(page.event_cursor)));
+    const messages = ordered([...page.messages, ...live, ...updates]);
     return boundaries({ ...page, has_older: page.has_older || messages.length > HISTORY_LIMIT }, messages.slice(-HISTORY_LIMIT));
   }
   const messages = ordered([...previous.messages, ...page.messages]);

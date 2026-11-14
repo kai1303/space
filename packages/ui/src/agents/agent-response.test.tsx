@@ -25,6 +25,14 @@ it('renders Markdown, Space code blocks, tool results and registered cards/table
   await userEvent.click(screen.getByRole('button', { name: 'Expand timeline' }));
   expect(screen.getByText('Found 3 records')).toBeTruthy();
 });
+it('shows document edit blocks as literal text in messages outside the editor', () => {
+  const edit = { type: 'document_edit' as const, id: 'edit', title: 'Agenda.docx', original: 'Before', replacement: '<b>After</b>' };
+  render(<AgentResponse response={{ messages: [], tools: [], components: [edit] }} />);
+  expect(screen.getByRole('article', { name: edit.title })).toBeTruthy();
+  expect(screen.getByText(edit.replacement)).toBeTruthy();
+  expect(screen.queryByRole('button')).toBeNull();
+});
+
 it('never mounts agent HTML, executable links or remote images', () => {
   const { container } = render(<AgentResponse response={{ ...response, messages: [{ id: 'm', status: 'complete', text: '<script>alert(1)</script>\n\n[click](javascript:alert)\n\n![tracking](https://example.com/pixel.png)' }] }} />);
   expect(container.querySelector('script, iframe, img, a[href^="javascript:"]')).toBeNull();
@@ -40,13 +48,23 @@ it('preserves workspace profile citations while dropping other relative links', 
   }
   expect(screen.getAllByRole('link')).toHaveLength(2);
 });
-it.each(['/c/WKg-kkvDSN66pfa8v7JNFA/message/YoTtlDdtRiusFXmjIRoVTw', '/v1/assets/58a83e92-4bc3-48de-baa5-f6bcbfb24d14/download'])('opens the canonical citation %s and drops malformed paths', (path) => {
+it.each([
+  {path: '/c/WKg-kkvDSN66pfa8v7JNFA/message/YoTtlDdtRiusFXmjIRoVTw', target: null},
+  {path: '/v1/assets/58a83e92-4bc3-48de-baa5-f6bcbfb24d14/download', target: '_blank'},
+  {path: '/file/58a83e92-4bc3-48de-baa5-f6bcbfb24d14?page=7', target: '_blank'},
+])('opens the canonical citation $path and drops malformed paths', ({ path, target }) => {
   render(<AgentMarkdown text={`[Original message](${path}) [other](${path}?redirect=1) [invalid](${path}/more)`} />);
   expect(screen.getAllByRole('link')).toHaveLength(1);
   const link = screen.getByRole('link', { name: 'Original message' });
   expect(link.getAttribute('href')).toBe(path);
-  expect(link.getAttribute('target')).toBe('_blank');
-  expect(link.getAttribute('rel')).toContain('noopener');
+  expect(link.getAttribute('target')).toBe(target);
+  if (target === '_blank') expect(link.getAttribute('rel')).toContain('noopener');
+});
+it('rejects invalid PDF citation pages and URL suffixes', () => {
+  const file = '/file/58a83e92-4bc3-48de-baa5-f6bcbfb24d14';
+  const paths = [file+'?page=0', file+'?page=-1', file+'?page=1.5', file+'?page=9007199254740992', file+'?page=7&redirect=https://example.com', file+'?page=7#extra'];
+  render(<AgentMarkdown text={paths.map(path => `[invalid](${path})`).join(' ')} />);
+  expect(screen.queryAllByRole('link')).toHaveLength(0);
 });
 it('renders canonical channel citations as same-tab channel mentions', () => {
   const href = '/c/hBRc483YT8KupyFKN8gHEQ';
@@ -213,4 +231,78 @@ it('reveals a completed live arrival once and renders restored history immediate
     expect(history.container.textContent).toBe(text);
     expect(history.container.querySelector('.sp-agent-word')).toBeNull();
   } finally { vi.useRealTimers(); }
+});
+
+it('keeps an updated alert between its messages during streaming and in the saved reply', () => {
+  const warning = { type: 'alert' as const, id: 'flag', level: 'warning' as const, title: 'Dependency conflict', body: 'Check `lodash`.' };
+  const reply: Response = {
+    messages: ['Before', 'After'].map(text => ({ id: text, text, status: 'complete' })),
+    tools: [], components: [warning], items: [
+      { type: 'message', id: 'Before' }, { type: 'component', id: 'flag' }, { type: 'message', id: 'After' },
+    ],
+  };
+  const { rerender } = render(<AgentResponse response={reply} streaming />);
+  const alert = screen.getByRole('alert');
+  expect(alert.textContent).toContain('Warning · Dependency conflict');
+  expect(screen.getByText('lodash').tagName).toBe('CODE');
+  expect(screen.getByText('Before').compareDocumentPosition(alert) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(alert.compareDocumentPosition(screen.getByText('After')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  rerender(<AgentResponse response={{ ...reply, components: [{ ...warning, level: 'error' }] }} />);
+  expect(screen.getByRole('alert')).toBe(alert);
+  expect(alert.textContent).toContain('Error · Dependency conflict');
+});
+
+it('renders Markdown alert quotes inline and preserves ordinary quotes and code examples', () => {
+  const text = ['Before', '> [!WARNING]\n> Review **permissions**.', '> [!ERROR]\n> Upload failed.',
+    '> An ordinary quote', '```md\n> [!WARNING]\n> example\n```', 'After'].join('\n\n');
+  render(<AgentMarkdown text={text} />);
+  const alerts = screen.getAllByRole('alert');
+  expect(alerts.map(alert => alert.querySelector('strong')?.textContent)).toEqual(['Warning', 'Error']);
+  expect(screen.getByText('permissions').tagName).toBe('STRONG');
+  expect(screen.getByText('An ordinary quote').closest('blockquote')).toBeTruthy();
+  expect(screen.getByRole('group', {name: /code block/i}).textContent).toContain('[!WARNING]');
+});
+
+it('renders a quoted carousel between paragraphs and keeps malformed lists readable', () => {
+  vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+  try {
+    const source = '> [!CAROUSEL] Rollout options\n>\n> - **Pilot** One team\n> - **Expand** All teams';
+    const view = render(<AgentMarkdown text={'Before\n\n' + source + '\n\nAfter'} />);
+    const region = screen.getByRole('region', { name: 'Rollout options' });
+    expect(region.querySelectorAll('article')).toHaveLength(2);
+    expect(region.textContent).toContain('All teams');
+    view.rerender(<AgentMarkdown text={source.replace('**Expand**', 'Expand')} />);
+    expect(screen.queryByRole('region')).toBeNull();
+    expect(screen.getByText('Expand All teams')).toBeTruthy();
+  } finally { vi.unstubAllGlobals(); }
+});
+
+it('sorts and filters data table results across same-ID streamed snapshots', async () => {
+  const block = { type: 'data_table' as const, id: 'plans', title: 'Customers', columns: ['Plan', 'Owner', 'Count'],
+    rows: [['Pro', 'East', 12], ['Starter', 'West', 2], ['Team', 'East', 5]] };
+  const view = (rows: typeof block.rows) => <AgentResponse response={{ messages: [], tools: [], components: [{ ...block, rows }] }} />;
+  const { rerender } = render(view(block.rows));
+  const firstColumn = () => screen.getAllByRole('row').slice(1).map(row => row.firstElementChild?.textContent);
+  const proRow = screen.getByRole('row', { name: 'Pro East 12' });
+  expect(firstColumn()).toEqual(['Pro', 'Starter', 'Team']);
+  const sort = screen.getByRole('button', { name: 'Count' });
+  await userEvent.click(sort);
+  expect(firstColumn()).toEqual(['Starter', 'Team', 'Pro']);
+  expect(sort.closest('th')?.getAttribute('aria-sort')).toBe('ascending');
+  await userEvent.keyboard('{Enter}');
+  expect(firstColumn()).toEqual(['Pro', 'Team', 'Starter']);
+  const filter = screen.getByRole('searchbox', { name: 'Filter Customers' });
+  await userEvent.type(filter, 'EAST');
+  expect(firstColumn()).toEqual(['Pro', 'Team']);
+  rerender(view([...block.rows, ['Partner', 'East', 100]]));
+  expect(screen.getByRole('row', { name: 'Pro East 12' })).toBe(proRow);
+  expect(firstColumn()).toEqual(['Partner', 'Pro', 'Team']);
+  await userEvent.click(screen.getByRole('button', { name: 'Plan' }));
+  expect(firstColumn()).toEqual(['Partner', 'Pro', 'Team']);
+  await userEvent.type(filter, 'x');
+  expect(screen.getByRole('status').textContent).toBe('No matching rows');
+  await userEvent.clear(filter);
+  expect(firstColumn()).toEqual(['Partner', 'Pro', 'Starter', 'Team']);
+  rerender(view([]));
+  expect(screen.getByRole('status').textContent).toBe('No results');
 });

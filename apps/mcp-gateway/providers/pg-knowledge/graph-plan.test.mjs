@@ -117,3 +117,18 @@ test('a session in a direct-message thread is skipped, one in a channel thread i
 test('other tables are ignored', async () => {
   assert.deepEqual(await planChange({ table: 'threads', op: 'insert', row: {} }, 1n, lookup), []);
 });
+
+test('file-only attachment writes bounded metadata and its origin without materializing message text or vectors', async () => {
+  const row = { id: 'a1', workspace_id: ws, channel_id: 'c1', thread_id: 't1', message_id: 'm1',
+    name: 'Plan.pdf', type: 'application/pdf', size: 322 };
+  const ops = await planChange({ table: 'graph_source_attachments', op: 'insert', row }, 88n, lookup);
+  const upsert = has(ops, /INSERT INTO kb\.m_attachments\(/);
+  assert.ok(upsert);
+  assert.deepEqual(upsert.values, ['a1', ws, 'c1', 't1', 'm1', 'Plan.pdf', 'application/pdf', 322, '88']);
+  assert.match(upsert.text, /WHERE kb\.m_attachments\.version<EXCLUDED\.version/);
+  assert.ok(has(ops, /INSERT INTO kb\.m_threads/));
+  assert.ok(!has(ops, /kb\.m_messages|pgcontext/));
+  const gone = await planChange({ table: 'graph_source_attachments', op: 'delete', row: { id: 'a1' } }, 89n);
+  assert.match(gone[0].text, /DELETE FROM kb\.m_attachments/);
+  assert.deepEqual(gone[0].values, ['a1', '89']);
+});

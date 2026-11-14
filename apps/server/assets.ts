@@ -1,3 +1,4 @@
+import { expectedActor } from './expected-actor.js';
 import type { FastifyInstance } from 'fastify';
 import { AppError, MAX_ASSET_BYTES, MAX_MESSAGE_ASSETS, record, uuid } from '@space/contracts';
 import { AssetStore, assetAttachment } from '@space/postgres/assets';
@@ -22,7 +23,7 @@ export function registerAssetRoutes(app: FastifyInstance, assets: AssetStore, st
   app.get<{ Params: { channelId: string } }>('/v1/channels/:channelId/assets', r => assets.list(r.actorId, uuid(r.params.channelId), r.query));
   app.post<{ Params: { channelId: string } }>('/v1/channels/:channelId/assets', async (r, reply) => {
     const backend = enabled();
-    const row = await assets.create(r.actorId, uuid(r.params.channelId), r.body);
+    const row = await assets.create(expectedActor(r), uuid(r.params.channelId), r.body);
     const upload = await backend.createUpload(row.staging_key, row.size, row.upload_expires_at);
     return reply.code(201).send({ asset: assetAttachment(row), upload, expires_at: row.upload_expires_at.toISOString() });
   });
@@ -30,10 +31,24 @@ export function registerAssetRoutes(app: FastifyInstance, assets: AssetStore, st
     const backend = enabled();
     record(r.body, []);
     const id = uuid(r.params.assetId);
-    return assets.complete(r.actorId, id, async (from, to, size, name) => {
+    return assets.complete(expectedActor(r), id, async (from, to, size, name, encrypted) => {
       await backend.finalize(from, to, size);
-      return generateAssetPreview(backend, id, name, to, size);
+      return encrypted ? {kind:'unsupported',reason:'Encrypted file'} : generateAssetPreview(backend, id, name, to, size);
     });
+  });
+  let encryptedReads = 0;
+  app.get<{ Params: { assetId: string } }>('/v1/assets/:assetId/encrypted-content', async (r, reply) => {
+    const row = await assets.download(expectedActor(r), uuid(r.params.assetId));
+    if (!row.encrypted) throw new AppError(404, 'not_found');
+    if (encryptedReads >= 4) throw new AppError(503,'asset_processing_busy');
+    encryptedReads++;
+    try {
+      const bytes = await enabled().read(row.object_key,row.size);
+      await assets.download(r.actorId,row.id);
+      if (bytes.length !== row.size) throw new AppError(409,'invalid_upload');
+      return reply.type('application/octet-stream').header('cache-control','private, no-store')
+        .header('content-length',row.size).header('content-disposition','attachment').send(Buffer.from(bytes));
+    } finally { encryptedReads--; }
   });
   app.get<{ Params: { assetId: string } }>('/v1/assets/:assetId/download', async (r, reply) => {
     const backend = enabled();

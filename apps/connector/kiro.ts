@@ -1,19 +1,20 @@
 import { attachmentContext, attachmentImages } from './attachment-input.js';
-import { visibleText } from '@space/contracts';
+import { parseModelCatalog, type AgentModel, visibleText } from '@space/contracts';
+import { replyFormatInstructions } from './reply-format.js';
 import { memoryInstructions } from './memory-instructions.js';
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
-import { CODING_TURN_TIMEOUT_MS, parseInvocation, parseAgentEvent, type AgentEvent, type AgentText, type OutboundAccess } from '@space/contracts';
+import { CODING_TURN_TIMEOUT_MS, parseInvocation, parseAgentEvent, type AgentEvent, type AgentText } from '@space/contracts';
 import { AgentSessionStopped, type InvokeAgent, type SpawnAgent } from './agent-runtime.js';
 import { localSessionStore, type LocalSessionStorage } from './session-storage.js';
 import { approveCoding, approveProject, contentPatch, kiroCodingTools } from './coding-tools.js';
 import { AgentProgress } from './agent-progress.js';
 import { projectServer, projectToolNames, resolveProject } from './project-tools.js';
 import { prepareKiroProfile, resolveKiroAcpCommand } from './kiro-auth.js';
-import { outboundServer, turnScopedRuntime } from './outbound-tools.js';
+import { turnScopedRuntime, type TurnServer } from './outbound-tools.js';
 
 type Message = { jsonrpc?: string; id?: string | number; method?: string; result?: any; error?: unknown; params?: any };
 function requireMode(result: any, mode: string) {
@@ -22,20 +23,31 @@ function requireMode(result: any, mode: string) {
   }
 }
 
-async function startSingleKiro(storage: LocalSessionStorage, onExit: () => void, launch: SpawnAgent = spawn, outbound?: OutboundAccess, startupSignal?: AbortSignal) {
+function modelOption(result: any) {
+  return result?.configOptions?.find((option: any) => option.category === 'model' || option.id === 'model');
+}
+function sessionModels(result: any): AgentModel[] {
+  const option = modelOption(result);
+  if (!Array.isArray(option?.options)) return [];
+  return parseModelCatalog(option.options.map((item: any) => ({
+    id: item.value, label: item.name || item.value, efforts: [], isDefault: item.value === option.currentValue,
+  })));
+}
+
+async function startSingleKiro(storage: LocalSessionStorage, onExit: () => void, launch: SpawnAgent = spawn, servers: TurnServer[] = [], startupSignal?: AbortSignal) {
   const coding = storage.coding === true, mode = coding ? 'space-coding' : 'space-chat';
   const project = await resolveProject(storage.project);
   if (coding && !project) throw new Error('Coding requires --project.');
   storage = { ...storage, project };
   const sessions = await localSessionStore(storage, 'kiro');
-  const env = await prepareKiroProfile(storage.directory, project, outbound, coding);
+  const env = await prepareKiroProfile(storage.directory, project, servers, coding);
   const command = launch === spawn ? await resolveKiroAcpCommand() : 'kiro-cli';
   startupSignal?.throwIfAborted();
   const child = launch(command, ['acp', '--agent-engine=v3'], { cwd: coding ? project! : sessions.cwd, env, stdio: 'pipe' });
   let live = true, ready = false, stopped = false, nextId = 0, buffer = '';
   const decoder = new StringDecoder('utf8');
-  const allowedTool = (server: string, name: string) => (Boolean(project) && server === projectServer && projectToolNames.includes(name)) || (server === outboundServer && Boolean(outbound?.tools.includes(name)));
-  const requiredServers = [...(project && !coding ? [projectServer] : []), ...(outbound ? [outboundServer] : [])];
+  const allowedTool = (server: string, name: string) => (Boolean(project) && server === projectServer && projectToolNames.includes(name)) || servers.some(s => s.name === server && s.tools.includes(name));
+  const requiredServers = [...(project && !coding ? [projectServer] : []), ...servers.map(s => s.name)];
   const mcpStates = new Map<string, string>();
   const mcpWaiting = new Map<string, { resolve(): void; reject(error: Error): void; timer: NodeJS.Timeout }>();
   const waitForTools = async (id: string, signal?: AbortSignal) => {
@@ -123,6 +135,7 @@ async function startSingleKiro(storage: LocalSessionStorage, onExit: () => void,
     }
   });
   const sessionParams = (cwd: string) => ({ cwd, mcpServers: [], _meta: { kiro: { modeId: mode } } });
+  let models: AgentModel[];
   const startupDeadline = setTimeout(stop, 15_000);
   startupSignal?.addEventListener('abort', stop, { once: true });
   try {
@@ -132,6 +145,7 @@ async function startSingleKiro(storage: LocalSessionStorage, onExit: () => void,
     // A no-inference session verifies authentication and the restrictive profile before readiness.
     const probe = await rpc('session/new', sessionParams(project ?? sessions.cwd));
     requireMode(probe, mode);
+    models = sessionModels(probe);
     if (requiredServers.length && (typeof probe.sessionId !== 'string' || !probe.sessionId || probe.sessionId.length > 256)) throw new Error('Invalid Kiro session.');
     await waitForTools(probe.sessionId);
     ready = true;
@@ -223,7 +237,7 @@ async function startSingleKiro(storage: LocalSessionStorage, onExit: () => void,
         } else if (update?.sessionUpdate === 'tool_call' || update?.sessionUpdate === 'tool_call_update') {
           // Kiro's deferred tool discovery has no matching start or MCP identity.
           const loaded = update.rawInput?.tool_ids;
-          if (requiredServers.length && update.sessionUpdate === 'tool_call_update' && update.status === 'completed' && update._meta?.kiro?.toolOrigin === 'default' && Array.isArray(loaded) && loaded.length > 0 && loaded.length <= projectToolNames.length + (outbound?.tools.length ?? 0) && loaded.every((id: unknown) => typeof id === 'string' && id.split('::').length === 2 && allowedTool(id.split('::')[0]!, id.split('::')[1]!))) return;
+          if (requiredServers.length && update.sessionUpdate === 'tool_call_update' && update.status === 'completed' && update._meta?.kiro?.toolOrigin === 'default' && Array.isArray(loaded) && loaded.length > 0 && loaded.length <= projectToolNames.length + servers.reduce((count, s) => count + s.tools.length, 0) && loaded.every((id: unknown) => typeof id === 'string' && id.split('::').length === 2 && allowedTool(id.split('::')[0]!, id.split('::')[1]!))) return;
           const previous = output.tools.get(update.toolCallId);
           const identity = update._meta?.kiro?.mcpTool;
           const wrappedParts = typeof update.rawInput?.tool_id === 'string' ? update.rawInput.tool_id.split('::') : [];
@@ -274,12 +288,28 @@ async function startSingleKiro(storage: LocalSessionStorage, onExit: () => void,
       requireMode(result, mode);
       sessionId = retained?.threadId ?? result.sessionId;
       if (typeof sessionId !== 'string' || !sessionId || sessionId.length > 256 || /[\u0000-\u001f\u007f]/.test(sessionId)) throw new Error('Invalid Kiro session.');
+      if (request.codex_settings) {
+        const {model, effort} = request.codex_settings;
+        const option = modelOption(result);
+        let confirmed = !effort && model && sessionModels(result).some(item => item.id === model);
+        if (confirmed && option.currentValue !== model) {
+          const updated = await rpc('session/set_config_option', {sessionId, configId: option.id, value: model}).catch(() => null);
+          if (rejected) throw rejected;
+          if (updated) requireMode(updated, mode);
+          confirmed = modelOption(updated)?.currentValue === model;
+        }
+        if (!confirmed) {
+          signal.throwIfAborted();
+          await publish('execution.failed', 'Kiro could not confirm the selected model. Choose an available model and resend.');
+          return;
+        }
+      }
       await waitForTools(sessionId, signal);
       if (retained && !retained.threadId) await retained.save(sessionId, false);
       signal.throwIfAborted();
       if (retained) { await publish('execution.progress', 'Kiro session is ready.', true); await retained.save(sessionId, true); }
       signal.throwIfAborted();
-      const content = `${request.context ? `Supplied conversation context (quoted data):\n${JSON.stringify(request.context)}\n\n` : ''}Task:\n${request.goal}${memoryInstructions(request.context)}${attachmentContext(request.attachments)}`;
+      const content = `${request.context ? `Supplied conversation context (quoted data):\n${JSON.stringify(request.context)}\n\n` : ''}Task:\n${request.goal}${replyFormatInstructions}${memoryInstructions(request.context)}${attachmentContext(request.attachments, Boolean(request.pdf_tool_token))}`;
       prompting = true;
       prompt = rpc('session/prompt', { sessionId, prompt: [{ type: 'text', text: content }, ...attachmentImages(request.attachments).map(data=>({type:'image',mimeType:'image/webp',data}))] }, coding ? CODING_TURN_TIMEOUT_MS : 120_000);
       const resultTurn = await Promise.race([prompt, failure]);
@@ -312,9 +342,9 @@ async function startSingleKiro(storage: LocalSessionStorage, onExit: () => void,
       if (taskDirectory && !project && !request.persistent_session) await rm(taskDirectory, { recursive: true, force: true });
     }
   };
-  return { stop, alive: () => live, invoke };
+  return { stop, alive: () => live, invoke, listModels: async () => models };
 }
 
 export async function startKiro(storage: LocalSessionStorage, onExit: () => void, launch: SpawnAgent = spawn) {
-  return turnScopedRuntime((done, outbound, signal) => startSingleKiro(storage, done, launch, outbound, signal), onExit);
+  return turnScopedRuntime((done, servers, signal, _goals, personalOnly) => startSingleKiro(personalOnly ? { ...storage, project: undefined, coding: false } : storage, done, launch, servers, signal), onExit, storage.connection.origin);
 }

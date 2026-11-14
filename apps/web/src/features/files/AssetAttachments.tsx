@@ -1,4 +1,6 @@
 import { subscribeUpdates } from '../../shared/realtime/live-updates.js';
+import { VideoClipPlayer } from './VideoClipPlayer.js';
+import { VoiceClipPlayer } from './VoiceClipPlayer.js';
 import { FileDetailsForm } from './FileDetailsForm.js';
 import { sessionFetch } from '../../shared/api/session-fetch.js';
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
@@ -114,8 +116,16 @@ function AttachmentCard({ asset, tile, hidden, onOpen, onPreview }: { tile?: Gal
       {!tile?.overflow && <a className="asset-image-download sp-button sp-button--secondary sp-button--sm sp-icon-button" aria-label={`Download ${asset.name}`} title={`Download ${asset.name}`} href={assetUrl(asset.id, 'download')}><DownloadSimple size={18} /></a>}
     </div>;
   }
+  // Older previews can report the shared WebM/MP4 container as video.
+  if ((preview?.kind === 'audio' || preview?.kind === 'video' && asset.type.startsWith('audio/')) &&
+    /^Audio clip\.(weba|m4a|ogg)$/i.test(asset.name)) {
+    return <VoiceClipPlayer src={assetUrl(asset.id, 'content')} name={asset.name}
+      download={assetUrl(asset.id, 'download')} onOpen={onOpen} onError={fail}/>;
+  }
+  const videoClip = preview?.kind === 'video' && /^Video clip\.(webm|mp4)$/i.test(asset.name);
   return <div className="asset-card">
-    {(preview?.kind === 'video' || preview?.kind === 'audio') && <NativeMedia asset={asset} kind={preview.kind} onError={fail} />}
+    {videoClip ? <VideoClipPlayer src={assetUrl(asset.id, 'content')} name={asset.name} onError={fail}/> :
+      (preview?.kind === 'video' || preview?.kind === 'audio') && <NativeMedia asset={asset} kind={preview.kind} onError={fail} />}
     <div className="asset-card-info">
       <span className={`asset-file-icon asset-file-icon--${office?.[2] ?? preview?.kind ?? 'file'}`}>{OfficeIcon ? <OfficeIcon size={28} aria-hidden="true" /> : <FileSymbol kind={preview?.kind} />}</span>
       <button type="button" className="asset-filename" title={asset.name} aria-label={`Open ${asset.name}`} onClick={event => onOpen(event.currentTarget)}><span>{asset.name}</span><small>{fileTypeLabel(asset.name, preview)} · {Math.max(1, Math.round(asset.size / 1024))} KB</small></button>
@@ -163,7 +173,8 @@ function DesktopOffice({ id, close, children }: { id: string; close: () => void;
   }, [id]);
   return fallback ? children : <p role="status">Opening in the side panel…</p>;
 }
-function ViewerContent({ asset, state, exit, close, onAccessLost, actions }: {
+function ViewerContent({ asset, state, exit, close, onAccessLost, actions, initialPage }: {
+  initialPage?: number;
   asset: AssetAttachment; state: ReturnType<typeof usePreview>; close: () => void; exit: OfficeExit;
   onAccessLost?: (status: number) => void; actions: React.ReactNode;
 }) {
@@ -177,7 +188,7 @@ function ViewerContent({ asset, state, exit, close, onAccessLost, actions }: {
     const office = <Suspense fallback={<p role="status">Opening document…</p>}><OfficePreview id={asset.id} exit={exit} onAccessLost={onAccessLost} /></Suspense>;
     return window.spaceDesktop?.openOffice ? <DesktopOffice id={asset.id} close={close}>{office}</DesktopOffice> : office;
   }
-  else if (preview.kind === 'pdf') content = <Suspense fallback={<p role="status">Loading PDF viewer…</p>}><PdfPreview assetId={asset.id} size={asset.size} /></Suspense>;
+  else if (preview.kind === 'pdf') content = <Suspense fallback={<p role="status">Loading PDF viewer…</p>}><PdfPreview assetId={asset.id} size={asset.size} initialPage={initialPage} /></Suspense>;
   else if (preview.kind === 'text') content = <TextPreview preview={preview} />;
   else content = <div className="asset-media-preview"><NativeMedia asset={asset} kind={preview.kind} onError={fail} /></div>;
   return <><p className="asset-preview-type">{kindLabel}{'mime' in preview ? ` · ${preview.mime}` : ''}</p>{content}</>;
@@ -218,7 +229,8 @@ export function AssetAttachments({ assets }: { assets: AssetAttachment[] }) {
     {selected && <AssetViewer assets={ordered} selectedId={selected} onSelect={setSelected} onClose={close} previews={previews} />}
   </>;
 }
-export function AssetViewer({ assets, selectedId, onSelect, onClose, onAccessLost, channelLabel, previews = {}, standalone = false }: {
+export function AssetViewer({ assets, selectedId, onSelect, onClose, onAccessLost, channelLabel, previews = {}, standalone = false, initialPage }: {
+  initialPage?: number;
   standalone?: boolean;
   channelLabel?: string;
   assets: AssetAttachment[];
@@ -276,7 +288,7 @@ export function AssetViewer({ assets, selectedId, onSelect, onClose, onAccessLos
           <div className="asset-file-navigation"><IconButton label="Previous file" disabled={index <= 0} onClick={() => navigate(-1)}><ArrowLeft size={20} /></IconButton><span>{index + 1} of {assets.length}</span><IconButton label="Next file" disabled={index >= assets.length - 1} onClick={() => navigate(1)}><ArrowRight size={20} /></IconButton></div>
           {!image && actions}
         </div>
-        <div key={current.id} className="asset-viewer-content"><ViewerContent state={state} actions={actions} asset={current} close={onClose} exit={exit} onAccessLost={onAccessLost} /></div>
+        <div key={current.id} className="asset-viewer-content"><ViewerContent initialPage={initialPage} state={state} actions={actions} asset={current} close={onClose} exit={exit} onAccessLost={onAccessLost} /></div>
         {assets.length > 1 && <div className="asset-filmstrip" role="group" aria-label="Attached files">{assets.map((asset, position) => <button type="button" key={asset.id} aria-label={`View ${asset.id === current.id ? current.name : asset.name}`} aria-pressed={position === index} onClick={() => leave(() => onSelect(asset.id))}><FilmstripPreview asset={asset} preview={previews[asset.id]} /><span>{asset.id === current.id ? current.name : asset.name}</span></button>)}</div>}
       </div>
     </Dialog>

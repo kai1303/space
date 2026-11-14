@@ -1,3 +1,5 @@
+const providers = require('./providers.cjs');
+
 function spaceUrl(value) {
   if (typeof value !== 'string' || !value.trim()) throw new Error('A Space web URL is required.');
   const url = new URL(value);
@@ -42,7 +44,7 @@ function desktopHandoff(value) {
     const workspace = link.searchParams.get('workspace');
     const provider = link.searchParams.get('provider');
     if (link.protocol !== 'space-desktop:' || link.host !== 'connect' || link.username || link.password || link.pathname || link.hash
-      || link.searchParams.size !== 3 || !/^[a-zA-Z0-9_-]{1,100}$/.test(workspace || '') || !['codex', 'kiro', 'claude'].includes(provider)) return;
+      || link.searchParams.size !== 3 || !/^[a-zA-Z0-9_-]{1,100}$/.test(workspace || '') || !providers.has(provider)) return;
     const target = new URL(spaceUrl(origin));
     if (target.origin !== origin) return;
     if (/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(workspace)) {

@@ -1,3 +1,5 @@
+import { parseSessionGoal, type SessionGoal, type GoalAction } from './session-goal.js';
+export * from './session-goal.js';
 export * from './space-links.js';
 export * from './local-tools.js';
 export * from './sidekick.js';
@@ -8,11 +10,16 @@ import { parseAgentResponse, type AgentResponse } from './agent-response.js';
 export * from './agent-response.js';
 export * from './agent-sessions.js';
 export * from './session-discovery.js';
+export * from './codex-settings.js';
 export { AppError, record, text, uuid } from './validation.js';
 export * from './foundation.js';
 export * from './workspace.js';
+export * from './sidebar-sections.js';
+export * from './composer-drafts.js';
 export * from './profile.js';
 export * from './chat.js';
+export { isEmojiOnlyText } from './emoji.js';
+export * from './encrypted-dm.js';
 export * from './rich-text.js';
 export * from './assets.js';
 export * from './memory.js';
@@ -29,13 +36,13 @@ export interface AgentInstallation { id: string; workspace_id: string; owner_id:
 export interface AgentSession { id: string; workspace_id: string; installation_id: string; origin_thread_id: string }
 export type TaskStatus = 'awaiting_approval' | 'queued' | 'running' | 'completed' | 'failed' | 'rejected';
 export interface TaskInput { workspace_id: string; thread_id: string; installation_id: string; goal: string; skill: string }
-export interface Task extends TaskInput { browser_url?:string|null; attachments?: import('./assets.js').AssetAttachment[]; request_document?: RichDocument | null; id: string; requester_id: string; approved_by: string | null; status: TaskStatus; session_id: string | null; active_execution_id: string | null; revision: number; result: string | null }
+export interface Task extends TaskInput { browser_url?:string|null; goal_action?: GoalAction | null; codex_settings?: import('./codex-settings.js').CodexSettings | null; attachments?: import('./assets.js').AssetAttachment[]; request_document?: RichDocument | null; id: string; requester_id: string; approved_by: string | null; status: TaskStatus; session_id: string | null; active_execution_id: string | null; revision: number; result: string | null }
 export interface Execution { id: string; task_id: string; workspace_id: string; installation_id: string; session_id: string; status: 'queued' | 'running' | 'completed' | 'failed'; last_sequence: number }
 export interface ControlCommand { id: string; execution_id: string; expected_revision: number; operation: 'steer' | 'follow_up' | 'cancel' | 'pause' | 'resume'; status: 'created' | 'authorized' | 'queued' | 'delivered' | 'acknowledged' | 'applied' | 'rejected' | 'failed' | 'expired'; text?: string }
 export type AgentEventType = 'execution.started' | 'execution.progress' | 'execution.completed' | 'execution.failed';
-export interface AgentEvent { id: string; schema_version: '1.0'; execution_id: string; sequence: number; type: AgentEventType; occurred_at: string; payload: { session_lifecycle?: 'open' | 'archive'; text: string; response?: AgentResponse; session_ready?: true } }
+export interface AgentEvent { id: string; schema_version: '1.0'; execution_id: string; sequence: number; type: AgentEventType; occurred_at: string; payload: { session_lifecycle?: 'open' | 'archive'; session_goal?: SessionGoal | null; text: string; response?: AgentResponse; session_ready?: true } }
 export interface WorkplaceEvent { id: string; schema_version: '1.0'; type: string; workspace_id: string; actor_id: string; resource_id: string; correlation_id: string; causation_id: string | null; sequence: number; occurred_at: string; payload: Record<string, unknown> }
-export interface InvocationRequest { attachments?: import('./assets.js').AgentInputFile[]; outbound?: import('./outbound.js').OutboundAccess; persistent_session?: { resume: boolean }; schema_version: typeof SCHEMA_VERSION; task_id: string; execution_id: string; session_id: string; idempotency_key: string; goal: string; skill: string; context?: {handoff?:import('./sidekick.js').SidekickContext;channel_notes?:import('./memory.js').AgentMemoryContext;channel_memory?:import('./layered-memory.js').ChannelMemoryPage;agent_session_memory?:import('./layered-memory.js').SessionMemory;knowledge_notes?:import('./knowledge-notes.js').KnowledgeNotesContext;working_memory?:ThreadContext;thread_id:string;messages:{id:string;text:string;author_type:'human'|'agent'|'app'|'workflow'}[]} }
+export interface InvocationRequest { goal_action?: GoalAction; codex_settings?: import('./codex-settings.js').CodexSettings; pdf_tool_token?: string; attachments?: import('./assets.js').AgentInputFile[]; outbound?: import('./outbound.js').OutboundAccess; persistent_session?: { resume: boolean }; schema_version: typeof SCHEMA_VERSION; task_id: string; execution_id: string; session_id: string; idempotency_key: string; goal: string; skill: string; context?: {handoff?:import('./sidekick.js').SidekickContext;channel_notes?:import('./memory.js').AgentMemoryContext;channel_memory?:import('./layered-memory.js').ChannelMemoryPage;agent_session_memory?:import('./layered-memory.js').SessionMemory;knowledge_notes?:import('./knowledge-notes.js').KnowledgeNotesContext;working_memory?:ThreadContext;thread_id:string;messages:{id:string;text:string;author_type:'human'|'agent'|'app'|'workflow'}[]} }
 export interface InvocationReceipt { external_execution_id: string; status: 'completed' }
 // Invoke resolves only after terminal events are accepted in Increment A. Async receipt/status
 // transports will extend this contract after local/cloud conformance in Increment B.
@@ -53,11 +60,11 @@ export function parseAgentEvent(value: unknown): AgentEvent {
   if (v.schema_version !== '1.0' || !Number.isSafeInteger(v.sequence) || (v.sequence as number) < 1 || !['execution.started', 'execution.progress', 'execution.completed', 'execution.failed'].includes(v.type as string)) throw new AppError(400, 'invalid_event');
   const occurred_at = text(v.occurred_at, 30);
   if (!/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/.test(occurred_at) || (!Number.isFinite(Date.parse(occurred_at)) || new Date(occurred_at).toISOString() !== occurred_at)) throw new AppError(400, 'invalid_timestamp');
-  const payload = record(v.payload, ['text', 'response', 'session_ready', 'session_lifecycle']);
+  const payload = record(v.payload, ['text', 'response', 'session_ready', 'session_goal', 'session_lifecycle']);
   const lifecycle = payload.session_lifecycle;
   if (lifecycle !== undefined && !(lifecycle === 'open' && v.type === 'execution.progress' || lifecycle === 'archive' && v.type === 'execution.completed')) throw new AppError(400, 'invalid_session_lifecycle');
   if (payload.session_ready !== undefined && (payload.session_ready !== true || v.type !== 'execution.progress')) throw new AppError(400, 'invalid_session_ready');
-  return { id: uuid(v.id), schema_version: '1.0', execution_id: uuid(v.execution_id), sequence: v.sequence as number, type: v.type as AgentEventType, occurred_at, payload: { ...(lifecycle === 'open' || lifecycle === 'archive' ? {session_lifecycle:lifecycle} : {}), ...(payload.session_ready === true ? { session_ready: true as const } : {}), text: text(payload.text, 16000), ...(payload.response === undefined ? {} : { response: parseAgentResponse(payload.response) }) } };
+  return { id: uuid(v.id), schema_version: '1.0', execution_id: uuid(v.execution_id), sequence: v.sequence as number, type: v.type as AgentEventType, occurred_at, payload: { ...(lifecycle === 'open' || lifecycle === 'archive' ? {session_lifecycle:lifecycle} : {}), ...(payload.session_goal === undefined ? {} : {session_goal: parseSessionGoal(payload.session_goal)}), ...(payload.session_ready === true ? { session_ready: true as const } : {}), text: text(payload.text, 16000), ...(payload.response === undefined ? {} : { response: parseAgentResponse(payload.response) }) } };
 }
 const transitions: Record<TaskStatus, TaskStatus[]> = { awaiting_approval: ['queued', 'rejected'], queued: ['running', 'failed'], running: ['completed', 'failed'], completed: [], failed: [], rejected: [] };
 export function assertTransition(from: TaskStatus, to: TaskStatus): void {

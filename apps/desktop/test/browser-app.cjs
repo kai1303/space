@@ -3,7 +3,7 @@ const { once } = require('node:events');
 const { createServer } = require('node:http');
 const { join } = require('node:path');
 const { writeFileSync, readFileSync, mkdirSync } = require('node:fs');
-const { app } = require('electron');
+const { app, dialog } = require('electron');
 const { createSpaceWindow } = require('../src/window.cjs');
 
 const directory = process.env.SPACE_SMOKE_PROFILE;
@@ -62,7 +62,36 @@ app.whenReady().then(async () => {
     await loaded;
     await waitFor(bar, '#address-slot #address', '');
   }
-  await waitFor(bar, '#workspace-start:not([hidden])', 'Open a tool');
+  const assetId = '282b6a70-ea37-45c3-92e6-cf889470ac99';
+  async function click(id) {
+    await bar.executeJavaScript('document.querySelector(' + JSON.stringify(id) + ').click()');
+  }
+  await waitFor(bar, '#workspace-start:not([hidden])', 'Manage plugins');
+  await click('#manage');
+  for (const id of ['browser', 'office']) {
+    await waitFor(bar, '[data-plugin="' + id + '"]', restart ? 'Remove' : 'Install');
+  }
+  if (!restart) {
+    await click('[data-plugin="office"]');
+    await waitFor(bar, '[data-plugin="office"]', 'Remove');
+    await click('[data-plugin="office"]');
+    await waitFor(bar, '[data-plugin="office"]', 'Install');
+    assert.ok(await bar.executeJavaScript('document.querySelector("#new").hidden && document.querySelector("#office").hidden'));
+    await click('[data-plugin="browser"]');
+    await waitFor(bar, '[data-plugin="browser"]', 'Remove');
+    assert.ok(await bar.executeJavaScript('document.querySelector("#office").hidden'));
+    const original = dialog.showMessageBox;
+    try {
+      dialog.showMessageBox = async (_win, options) => {
+        assert.equal(options.message, 'Install Office editor?');
+        assert.deepEqual(options.buttons, ['Install and open', 'Cancel']);
+        return { response: 1 };
+      };
+      assert.equal(await win.spaceBrowser.openOffice('file', assetId), false);
+      assert.equal(panel.children.length, 1);
+    } finally { dialog.showMessageBox = original; }
+  }
+  await click('#plugins-done');
   assert.equal(await bar.executeJavaScript("document.querySelectorAll('#tabs .tab').length"), 0);
   await bar.executeJavaScript("document.querySelector('#new').click()");
   for (const theme of ['light', 'dark']) {
@@ -74,10 +103,17 @@ app.whenReady().then(async () => {
   assert.ok(await bar.executeJavaScript("document.querySelector('.space-mark').naturalWidth > 0"));
   assert.ok(await bar.executeJavaScript("document.fonts.load('13px Lato').then(faces => faces.length > 0)"));
   // An Office tab shares the workspace login. Ordinary browser tabs keep their own cookie jar.
-  const assetId = '282b6a70-ea37-45c3-92e6-cf889470ac99';
   await win.webContents.executeJavaScript(`spaceDesktop.onOfficePicker(() => spaceDesktop.openOffice('library','${assetId}')); true`);
   await bar.executeJavaScript("document.querySelector('#add-tool').click()");
-  await waitFor(bar, '#tool-slot #tools:not([hidden])', 'Office editor');
+  await waitFor(bar, '#tool-slot #tools:not([hidden])', 'Manage plugins');
+  if (!restart) {
+    await click('#manage');
+    await click('[data-plugin="browser"]');
+    await waitFor(bar, '#notice', 'Close all Web Browser tabs');
+    await click('[data-plugin="office"]');
+    await waitFor(bar, '[data-plugin="office"]', 'Remove');
+    await click('#plugins-done');
+  }
   await bar.executeJavaScript("document.querySelector('#office').click()");
   await waitFor(bar, '#tabs .current button', 'Reports');
   const library = guest();
@@ -101,6 +137,7 @@ app.whenReady().then(async () => {
   assert.equal(panel.getVisible(), true);
   assert.deepEqual(panel.children.map(view => view.webContents.id), tabIds);
   assert.equal(panel.children.find(view => view.webContents === file).getVisible(), true);
+  await assert.rejects(file.executeJavaScript("spaceOffice.checkEditAccess('old.edit.0')"), /Editing access changed/);
   await assert.rejects(file.executeJavaScript("spaceOffice.ask('Rewrite', 'selected text', 'old.edit.0')"), /Editing access changed/);
   await assert.rejects(library.executeJavaScript("spaceOffice.ask('Rewrite', 'selected text', 'old.edit.0')"), /Office task unavailable/);
   await file.executeJavaScript("spaceOffice.onClose(done => { window.confirmClose = done; }); true");
@@ -112,6 +149,32 @@ app.whenReady().then(async () => {
   await send('close', library.id);
   await go();
   const first = guest();
+  const observeSidekick = () => win.webContents.executeJavaScript(`new Promise(resolve => {
+    const unsubscribe = spaceDesktop.onBrowserSidekick(tab => {unsubscribe(); resolve(tab);});
+  })`);
+  await first.executeJavaScript("history.replaceState(null,'','/report?private=yes#details')");
+  const opening = observeSidekick();
+  await click('#sidekick');
+  const handoff = await opening;
+  assert.deepEqual({page:handoff.page,actor:handoff.actor},{page:base+'/report',actor:'alice'});
+  const sessionFor = (workspace) => win.webContents.executeJavaScript(
+    'spaceDesktop.browserSessionId(' + JSON.stringify(handoff.tab) + ',' + JSON.stringify(workspace) + ')');
+  const tabSession = await sessionFor(assetId);
+  assert.match(tabSession,/^[a-f0-9-]{36}$/);
+  assert.notEqual(await sessionFor('8485b2a9-59fa-4ff0-aa50-762f2a074759'),tabSession);
+  const dismissed = observeSidekick();
+  await win.webContents.executeJavaScript('spaceDesktop.dismissBrowserSidekick('+JSON.stringify(handoff.tab)+')');
+  assert.equal(await dismissed,null);
+  assert.equal(await sessionFor(assetId),null);
+  const reopening = observeSidekick();
+  await click('#sidekick');
+  assert.deepEqual(await reopening,handoff);
+  assert.equal(await sessionFor(assetId),tabSession);
+  const navigation = observeSidekick();
+  await first.executeJavaScript("history.replaceState(null,'','/report/new?private=yes')");
+  assert.deepEqual(await navigation,{...handoff,page:base+'/report/new'});
+  await first.executeJavaScript("history.replaceState(null,'','/report')");
+
   const width = win.getContentSize()[0];
   const chat = win.contentView.children.find(view => view.webContents === win.webContents);
   assert.ok(chat, 'chat remains mounted beside the browser');
@@ -178,7 +241,17 @@ app.whenReady().then(async () => {
     const closed = once(first, 'destroyed');
     await win.webContents.executeJavaScript('spaceDesktop.browserAccountChanged("bob")');
     await closed;
-    await win.spaceBrowser.open(true);
+    const original = dialog.showMessageBox;
+    let prompts = 0;
+    try {
+      dialog.showMessageBox = async (_win, options) => {
+        assert.equal(options.message, 'Install Web Browser?');
+        prompts++;
+        return { response: 0 };
+      };
+      await win.spaceBrowser.open(true);
+      assert.equal(prompts, 1, 'a second account must install its own browser plugin');
+    } finally { dialog.showMessageBox = original; }
     const second = guest();
     await second.loadURL(base + '/report');
     assert.equal(await second.executeJavaScript('localStorage.quarter ?? null'), null);

@@ -10,7 +10,7 @@ import type { MemoryChannel, MemoryStore } from '@space/postgres/memory';
 import { addNote, listNoteTitles, removeNote, updateNote } from '@space/postgres/knowledge-notes';
 import { readThreadContext, readThreadMessages } from '@space/postgres/thread-context';
 import { readChannelMemory, readThreadMemory, readSessionMemory } from '@space/postgres/layered-memory';
-import { memoryProviderFor } from './memory.js';
+import { memoryProviderFor, removeMemorySource } from './memory.js';
 
 export const MEMORY_MCP_PATH = '/mcp/memory';
 const tokenFrom = (authorization: unknown) => typeof authorization === 'string' && authorization.startsWith('Bearer ') ? authorization.slice(7) : undefined;
@@ -56,14 +56,20 @@ function memoryServer(store: MemoryStore, providers: Map<string, MemoryProvider>
       const sourceIds = [...new Set(input.source_ids)].sort();
       const fingerprint = createHash('sha256').update(JSON.stringify({ ...input, id: input.id.toLowerCase(), message_ids: messageIds, source_ids: sourceIds, connection_id: connection.id })).digest('hex');
       const current = await provider.read(channel);
+      const revisions: Record<string, string> = {};
       const evidence: { label: string; url?: string }[] = [];
       for (const messageId of messageIds) {
         const message = await store.message(c, channel, messageId);
+        revisions[message.id] = message.search_revision;
         evidence.push({ label: `${message.author.name} · ${message.created_at}`, url: messagePath(channel.channel_id, message.id) });
       }
       for (const sourceId of sourceIds) {
         const source = current.sources.find(source => source.id === sourceId);
         if (!source) throw new AppError(404, 'memory_source_not_found');
+        if (sourceId.startsWith('message:')) {
+          const message = await store.message(c, channel, sourceId.slice(8));
+          revisions[message.id] = message.search_revision;
+        }
         evidence.push({ label: `${source.title} [${source.id}]`, url: source.url });
       }
       const previous = current.sources.find(source => source.id === id);
@@ -73,15 +79,17 @@ function memoryServer(store: MemoryStore, providers: Map<string, MemoryProvider>
       }
       const text = `${input.content}\n\nExtracted by ${connection.name} (MCP connection ${connection.id})\nSaved at ${new Date().toISOString()}\n\nEvidence:\n${evidence.map(({ label, url }) => `- ${label}${url ? `: ${url}` : ''}`).join('\n')}`;
       // Evidence retrieval may await an external provider; check authority again before mutating.
-      return store.connected(token, true, current => {
+      return store.connected(token, true, async current => {
         if (current.provider !== channel.provider) throw new AppError(409, 'memory_settings_changed');
-        return memoryProviderFor(providers, current).ingest(current, { id, title: `${input.kind}: ${input.title}`, text, url: evidence[0]!.url, fingerprint });
+        const target = memoryProviderFor(providers, current);
+        if (target.onMessageChanged) await store.trackProviderEvidence(current, revisions, 'citation');
+        return target.ingest(current, { id, title: `${input.kind}: ${input.title}`, text, url: evidence[0]!.url, fingerprint, evidence_revisions: revisions });
       });
     }));
   }
   if (access === 'write') {
     server.registerTool('memory_write', { description: 'Replace the complete canonical channel memory. Read first, preserve source markers and other members’ notes, and provide the exact current revision. Stale edits fail.', inputSchema: z.strictObject({ content: z.string().max(MAX_MEMORY_CHARS), revision: z.string().regex(/^[a-f0-9]{64}$/) }), annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false } }, ({ content, revision }) => call(true, channel => memoryProviderFor(providers, channel).write(channel, content, revision)));
-    server.registerTool('memory_forget', { description: 'Remove one saved message/document/knowledge source section from channel memory. This does not delete the original conversation.', inputSchema: z.strictObject({ source_id: z.string().regex(/^(message|document|knowledge):[a-f0-9-]{36}$/) }), annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false } }, ({ source_id }) => call(true, channel => memoryProviderFor(providers, channel).remove(channel, source_id)));
+    server.registerTool('memory_forget', { description: 'Remove one saved message/document/knowledge source section from channel memory. This does not delete the original conversation.', inputSchema: z.strictObject({ source_id: z.string().regex(/^(message|document|knowledge):[a-f0-9-]{36}$/) }), annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false } }, ({ source_id }) => call(true, channel => removeMemorySource(store, memoryProviderFor(providers, channel), channel, source_id)));
   }
   if (knowledge) {
     // Discovery shows these only while Knowledge is on; every call checks the live switch again.

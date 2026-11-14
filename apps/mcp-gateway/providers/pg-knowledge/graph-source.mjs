@@ -57,6 +57,7 @@ const snapshotQueries = [
   ['channels', "SELECT id::text, workspace_id::text, name, private, kind, memory_enabled, knowledge_enabled, archived_at, topic, description FROM channels WHERE kind='channel' ORDER BY id"],
   ['agent_sessions', 'SELECT id::text, workspace_id::text, origin_thread_id::text, title, state FROM agent_sessions ORDER BY id'],
   ['messages', 'SELECT id::text, workspace_id::text, channel_id::text FROM graph_source_messages ORDER BY channel_id, id'],
+  ['graph_source_attachments', 'SELECT id,workspace_id,channel_id,thread_id,message_id,name,type,size FROM graph_source_attachments ORDER BY channel_id,id'],
   ['knowledge_notes', 'SELECT id::text, workspace_id::text, channel_id::text, kind, title, evidence, revision, removed_at FROM knowledge_notes WHERE removed_at IS NULL ORDER BY id'],
 ];
 

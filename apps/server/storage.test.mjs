@@ -182,3 +182,19 @@ test('range reads request only inclusive bytes and reject ignored or inconsisten
   }
   assert.equal(requests.length, before, 'invalid ranges never reach storage');
 });
+
+test('an attachment deadline aborts a response stalled after headers', {timeout:3000}, async () => {
+  const server = createServer((_req, res) => {
+    res.writeHead(200, {'content-type':'application/pdf','content-length':'100'});
+    res.write('%PDF-1.4\n');
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const adapter = new storage.SeaweedStorage({...config, endpoint:`http://127.0.0.1:${server.address().port}`});
+  try {
+    await assert.rejects(adapter.read('files/pdf',100,undefined,undefined,AbortSignal.timeout(100)), {code:'storage_unavailable'});
+  } finally {
+    adapter.client.destroy();
+    server.closeAllConnections();
+    await new Promise(resolve => server.close(resolve));
+  }
+});

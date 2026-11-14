@@ -169,3 +169,24 @@ test('repeated serialization conflicts exhaust the bounded retry budget without 
   assert.equal(conflicts, 5);
   await assertMessageCount(seed.channel_id, 0);
 });
+
+test('sent message edits enforce ownership, reject competing saves and replay the saved content once', async () => {
+  const seed = await bootstrap(pool);
+  const original = await chat.send(seed.owner_id, seed.channel_id, { client_message_id: randomUUID(), text: '😂' });
+  const edit = (actor: string, text: string, revision = original.reaction_sequence ?? '0') =>
+    chat.editMessage(actor, seed.channel_id, original.id, { document: { ops: [{ insert: text + '\n' }] }, revision });
+  await assert.rejects(edit(seed.collaborator_id, 'Other author'), { code: 'not_found' });
+  const results = await Promise.allSettled([edit(seed.owner_id, '😂 hello'), edit(seed.owner_id, '😂 hi')]);
+  const saved = results.find(result => result.status === 'fulfilled')?.value;
+  assert.ok(saved);
+  assert.equal(results.find(result => result.status === 'rejected')?.reason.code, 'message_changed');
+  assert.equal((await edit(seed.owner_id, saved.text)).reaction_sequence, saved.reaction_sequence);
+  const restored = await edit(seed.owner_id, '😂', saved.reaction_sequence);
+  assert.equal(restored.sequence, original.sequence);
+  assert.equal(restored.thread_id, original.thread_id);
+  const events = await pool.query("SELECT payload FROM channel_events WHERE channel_id=$1 AND type='message.updated' ORDER BY sequence", [seed.channel_id]);
+  assert.deepEqual(events.rows.map(row => row.payload.text), [saved.text, '😂']);
+  assert.deepEqual(events.rows[1].payload.document, restored.document);
+  await chat.deleteMessage(seed.owner_id, seed.channel_id, original.id);
+  await assert.rejects(edit(seed.owner_id, 'Restored', restored.reaction_sequence), { code: 'not_found' });
+});

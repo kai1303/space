@@ -26,6 +26,7 @@
 .chat-sidebar .sp-sidebar-profile{padding:14px 16px;min-height:64px}.chat-sidebar .sp-sidebar-profile small{margin-top:2px}.chat-sidebar-loading{position:absolute;top:120px;padding:12px 20px;font-size:13px;color:var(--sp-text-secondary)}
 .chat-conversation{position:relative;isolation:isolate;display:flex;flex:1;min-width:0;min-height:0;background:var(--sp-surface)}
 .chat-channel,.chat-thread{display:flex;flex:1;flex-direction:column;min-width:0;min-height:0;outline:none}
+.chat-session-retained{position:absolute;inset-block:0;inset-inline-end:0;visibility:hidden;pointer-events:none}
 .chat-channel-header{display:flex;align-items:center;justify-content:space-between;gap:4px;min-height:49px;padding:0 12px 0 18px;border-bottom:1px solid var(--sp-border);flex-shrink:0}
 .chat-channel-header h1,.chat-channel-header h2{font-size:18px;line-height:24px;font-weight:900;margin:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .chat-channel-title{display:flex;align-items:center;gap:8px;padding:4px 6px;margin-left:-6px;min-width:0;border:0;border-radius:5px;background:transparent;color:var(--sp-text);cursor:pointer}.chat-channel-title:hover{background:var(--sp-surface-hover)}.chat-channel-title svg{flex-shrink:0}
@@ -267,9 +268,11 @@
 .chat-session-result button{background:none;border:0;color:var(--sp-info);font:inherit;cursor:pointer;padding:0}
 .chat-session-result button:hover{text-decoration:underline}
 
-/* Let the message viewport end above the attached toolbar, including when its buttons wrap. */
-.channel-message-view > .chat-compose .sp-rich-editor-shell > :has(> .sp-rich-toolbar--attached) {
-  position: relative;
-  inset: auto;
-  margin-inline: -1px;
-}
+.sidebar-section-fields { display: grid; gap: 8px; }
+.sidebar-section-name-row, .sidebar-section-suggestions { display: flex; gap: 8px; align-items: center; }
+.sidebar-section-name-row input { flex: 1; min-width: 0; }
+.sidebar-section-name-row .sp-emoji-trigger > summary { display: grid; place-items: center; width: 36px; height: 36px; cursor: pointer; border: 1px solid var(--sp-border); border-radius: 6px; }
+.sidebar-section-suggestions { flex-wrap: wrap; }
+.sidebar-section-suggestions [aria-pressed="true"] { border-color: var(--sp-info); }
+.conversation-section-trigger { display: inline-flex; }
+.conversation-section-menu { max-height: min(360px, 65vh); overflow-y: auto; }

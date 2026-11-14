@@ -1,4 +1,5 @@
-import {execFile, spawn} from 'node:child_process';
+import { runNativeLogin } from './native-login.js';
+import {execFile} from 'node:child_process';
 import {createHash} from 'node:crypto';
 import {constants} from 'node:fs';
 import {access, realpath} from 'node:fs/promises';
@@ -43,12 +44,10 @@ export async function claudeIdentity(directory: string, signal: AbortSignal): Pr
   } catch { throw new Error('Claude sign-in is required. Restart with --provider claude --login.'); }
 }
 
-export async function claudeLogin(directory: string, signal: AbortSignal, logout = false) {
+export async function claudeLoginCommand(directory: string, logout = false) {
   const command = await resolveClaudeCommand();
-  const env = await claudeEnvironment(directory);
-  await new Promise<void>((resolve, reject) => {
-    const child = spawn(command, ['auth', logout ? 'logout' : 'login'], {cwd: env.HOME, env, stdio: 'inherit', signal});
-    child.once('error', () => reject(new Error('Could not start Claude Code authentication.')));
-    child.once('exit', code => code === 0 ? resolve() : reject(new Error('Claude sign-in or sign-out did not complete.')));
-  });
+  return { command, args: ['auth', logout ? 'logout' : 'login'], env: await claudeEnvironment(directory) };
+}
+export async function claudeLogin(directory: string, signal: AbortSignal, logout = false) {
+  await runNativeLogin(await claudeLoginCommand(directory, logout), signal, 'Claude');
 }

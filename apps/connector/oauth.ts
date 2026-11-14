@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { createServer } from 'node:http';
+import timers from 'node:timers/promises';
 import { createRemoteJWKSet, jwtVerify, type JWTVerifyGetKey } from 'jose';
 import type { Credentials, Registration } from './storage.js';
 
@@ -34,14 +35,25 @@ export async function validateTokens(raw: unknown, clientId: string, options: { 
   return { ...fields, id_token: idToken, client_id: clientId, subject: payload.sub, issuer };
 }
 
+class TemporaryExchangeError extends Error {}
+
 async function exchange(form: URLSearchParams, options: OAuthOptions): Promise<unknown> {
-  const response = await (options.fetch ?? fetch)(tokenEndpoint, {
-    method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: form,
-    signal: options.signal ? AbortSignal.any([options.signal, AbortSignal.timeout(30_000)]) : AbortSignal.timeout(30_000),
-    redirect: 'error',
-  });
-  if (!response.ok) throw new Error('ChatGPT authorization could not be renewed. Run with --login to authorize again.');
-  return response.json();
+  let response: Response;
+  try {
+    response = await (options.fetch ?? fetch)(tokenEndpoint, {
+      method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: form,
+      signal: options.signal ? AbortSignal.any([options.signal, AbortSignal.timeout(30_000)]) : AbortSignal.timeout(30_000),
+      redirect: 'error',
+    });
+  } catch {
+    options.signal?.throwIfAborted();
+    throw new TemporaryExchangeError('ChatGPT token service could not be reached.');
+  }
+  if (response.ok) return response.json();
+  await response.body?.cancel();
+  const reason = `ChatGPT token service returned HTTP ${response.status}.`;
+  if (response.status === 408 || response.status === 429 || response.status >= 500) throw new TemporaryExchangeError(reason);
+  throw new Error(`${reason} Run with --login to authorize again.`);
 }
 
 export async function authorize(hostId: string, registration?: Registration, options: OAuthOptions = {}): Promise<Credentials> {
@@ -100,8 +112,25 @@ export async function authorize(hostId: string, registration?: Registration, opt
   }
 }
 
-export async function refreshCredentials(current: Credentials, options: OAuthOptions = {}): Promise<Credentials> {
-  const raw = await exchange(new URLSearchParams({ grant_type: 'refresh_token', client_id: current.client_id, refresh_token: current.refresh_token, resource }), options);
+export async function refreshCredentials(current: Credentials, options: OAuthOptions & {
+  onRetry?: (reason: string, delay: number) => void;
+} = {}): Promise<Credentials> {
+  const form = new URLSearchParams({ grant_type: 'refresh_token', client_id: current.client_id, refresh_token: current.refresh_token, resource });
+  const delays = [2000, 10_000, 30_000, 60_000];
+  let raw: unknown;
+  for (let attempt = 0; ; attempt++) {
+    options.signal?.throwIfAborted();
+    try {
+      raw = await exchange(form, options);
+      break;
+    } catch (error) {
+      if (!(error instanceof TemporaryExchangeError)) throw error;
+      const delay = delays[attempt];
+      if (delay === undefined) throw new Error(`${error.message} Restart the connector to retry.`);
+      options.onRetry?.(error.message, delay);
+      await timers.setTimeout(delay, undefined, { signal: options.signal });
+    }
+  }
   const value = raw as Record<string, unknown>;
   // OAuth permits omitting unchanged fields on refresh; rotate any replacements together.
   const response = { ...value, refresh_token: value.refresh_token ?? current.refresh_token, scope: value.scope ?? current.scopes.join(' ') };

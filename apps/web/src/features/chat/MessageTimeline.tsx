@@ -1,16 +1,16 @@
 import { useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { useReducedMotion } from 'motion/react';
+import { animate, useReducedMotion } from 'motion/react';
 import { Button } from '@space/ui/primitives';
 import type { ChatEvent, MessagePage } from '@space/contracts';
 import type { HistoryDirection } from './history-window.js';
 
 export type TimelineHandle = { reveal: (id: string) => void };
 type TimelineItem = ChatEvent | { id: string; messageId?: string };
-export function MessageTimeline<T extends TimelineItem>({ label, items, page, loading, latestVersion, load, pinned, handle, render, children, header, trailing, footer, busy, onAtEndChange, role, hidden }: {
+export function MessageTimeline<T extends TimelineItem>({ label, items, page, loading, latestVersion, load, pinned, handle, target, render, children, header, trailing, footer, busy, onAtEndChange, role, hidden }: {
   label: string; items: T[]; page: Pick<MessagePage,'has_older'|'has_newer'> | null; loading: HistoryDirection | null;
   latestVersion: number; load: (direction: HistoryDirection) => unknown;
-  pinned: RefObject<boolean>; handle?: RefObject<TimelineHandle | null>;
+  pinned: RefObject<boolean>; handle?: RefObject<TimelineHandle | null>; target?: { id: string };
   render: (event: T, index: number) => ReactNode; children?: ReactNode; header?: ReactNode; trailing?: ReactNode; footer?: ReactNode; busy?: boolean;
   onAtEndChange?: (atEnd: boolean) => void; role?: 'log'; hidden?: boolean;
 }) {
@@ -63,17 +63,70 @@ export function MessageTimeline<T extends TimelineItem>({ label, items, page, lo
       else virtualizer.scrollToOffset(lastOffset.current);
     }
   }, [latestVersion, virtualizer, hidden, atEnd, page?.has_newer]);
+  const revealedTarget = useRef<typeof target>(undefined);
+  const highlight = useRef<Animation | undefined>(undefined);
+  const activeReveal = useRef<(() => void) | null>(null);
+  function cancelReveal() {
+    activeReveal.current?.();
+    activeReveal.current = null;
+  }
+  useLayoutEffect(() => () => {
+    cancelReveal();
+    highlight.current?.cancel();
+    revealedTarget.current = undefined;
+  }, [hidden, target]);
   useLayoutEffect(() => {
-    if (!handle) return;
-    handle.current = { reveal: id => {
+    function reveal(id: string) {
       const index = items.findIndex(item => 'id' in item ? item.messageId === id : item.type === 'message.created' && item.payload.id === id);
-      if (index < 0) return;
-      virtualizer.scrollToIndex(index + headerCount, { align: 'center' });
-      requestAnimationFrame(() => document.getElementById(`chat-message-${id}`)?.focus({ preventScroll: true }));
-    } };
-    return () => { handle.current = null; };
-  }, [handle, items, virtualizer, headerCount]);
+      const node = element.current;
+      if (index < 0 || !node) return false;
+      cancelReveal();
+      const rowIndex = index + headerCount;
+      const finish = () => {
+        virtualizer.scrollToIndex(rowIndex, { align: 'center' });
+        const frame = requestAnimationFrame(() => {
+          activeReveal.current = null;
+          const row = document.getElementById(`thread-message-${id}`);
+          const anchor = row && node.contains(row) ? row : document.getElementById(`chat-message-${id}`);
+          if (anchor && node.contains(anchor)) {
+            anchor.focus({ preventScroll: true });
+            if (target?.id === id) {
+              const tint = {
+                backgroundColor: 'color-mix(in srgb, var(--sp-info) 24%, transparent)',
+                boxShadow: 'inset 3px 0 var(--sp-info)',
+              };
+              highlight.current?.cancel();
+              highlight.current = anchor.animate?.([
+                tint, { ...tint, offset: 0.7, easing: reducedMotion ? 'step-end' : 'ease-out' },
+                { backgroundColor: 'transparent', boxShadow: 'inset 3px 0 transparent' },
+              ], 1800);
+            }
+          }
+        });
+        activeReveal.current = () => cancelAnimationFrame(frame);
+      };
+      const start = node.scrollTop;
+      const center = () => virtualizer.getOffsetForIndex(rowIndex, 'center')?.[0];
+      const end = !reducedMotion && node.clientHeight ? center() : undefined;
+      if (end === undefined || Math.abs(end - start) < 1) finish();
+      else {
+        const animation = animate(0, 1, {
+          duration: 0.36, ease: [0.22, 1, 0.36, 1],
+          // The centered offset can change as virtual rows enter view and are measured.
+          onUpdate: progress => { node.scrollTop = start + ((center() ?? end) - start) * progress; },
+          onComplete: finish,
+        });
+        activeReveal.current = () => animation.stop();
+      }
+      return true;
+    }
+    if (handle) handle.current = { reveal };
+    if (!target) revealedTarget.current = undefined;
+    else if (!hidden && revealedTarget.current !== target && reveal(target.id)) revealedTarget.current = target;
+    return () => { if (handle) handle.current = null; };
+  }, [handle, items, virtualizer, headerCount, target, hidden, reducedMotion]);
   async function jumpToLatest() {
+    cancelReveal();
     const behavior = reducedMotion ? 'auto' : 'smooth';
     if (!page?.has_newer) { virtualizer.scrollToEnd({ behavior }); return; }
     latestScrollBehavior.current = behavior;
@@ -81,14 +134,15 @@ export function MessageTimeline<T extends TimelineItem>({ label, items, page, lo
   }
   const showJump = !!page?.has_newer || !atEnd;
   return <div className="chat-timeline-shell" hidden={hidden}>
-    <div className="chat-timeline chat-timeline--virtual" role={role} aria-label={label} aria-busy={busy} ref={element} onScroll={event => {
+    <div className="chat-timeline chat-timeline--virtual" role={role} aria-label={label} aria-busy={busy} ref={element}
+      onWheel={cancelReveal} onTouchStart={cancelReveal} onPointerDown={cancelReveal} onKeyDown={cancelReveal} onScroll={event => {
       const node = event.currentTarget, offset = node.scrollTop;
       if (hidden || !node.clientHeight) return;
       const movingUp = offset < lastOffset.current, movingDown = offset > lastOffset.current;
       lastOffset.current = offset;
       pinned.current = node.scrollHeight - offset - node.clientHeight < 80;
       setAtEnd(pinned.current); onAtEndChange?.(pinned.current);
-      if (loading || offset < 0) return;
+      if (activeReveal.current || loading || offset < 0) return;
       if (movingUp && offset < 300 && page?.has_older) void load('older');
       else if (movingDown && node.scrollHeight - offset - node.clientHeight < 300 && page?.has_newer) void load('newer');
     }}>

@@ -39,6 +39,13 @@ it('keeps messages delivered during a latest-page request without retaining old 
   expect(result.messages.some(m => m.id === '101')).toBe(false); // snapshot watermark is 103
 });
 
+it('retains an edit delivered while the latest history page was loading', () => {
+  const snapshot = page(51, 54);
+  const edited = { ...message(52), text: '😂 hello', reaction_sequence: '58' };
+  const updated = appendLive(snapshot, [edited], true);
+  expect(mergePage(updated, snapshot, 'latest').messages[1]).toEqual(edited);
+});
+
 it('updates reactions in older history without inserting unseen messages or moving the window', () => {
   const old = page(1, 50, false, true);
   const updated = {...message(10),reaction_sequence:'101',reactions:[{emoji:'👀',count:1,user_ids:['user']}]};

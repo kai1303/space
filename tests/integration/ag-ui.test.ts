@@ -30,11 +30,15 @@ const finished = (request: any) => ({ type: 'RUN_FINISHED', threadId: request.th
 
 test('HTTP AG-UI streams text, tool activity and structured results through replayable Space envelopes', async () => {
   const request = invocation();
+  const warning = { id: 'dependency', type: 'alert', level: 'warning', title: 'Dependency conflict' };
+  const error = { ...warning, level: 'error', body: 'Build failed.' };
+  const edit = { id: 'proposal', type: 'document_edit', title: 'Notes.odt', original: 'Before', replacement: 'After' };
   await backend(input => [started(input),
     { type: 'TEXT_MESSAGE_START', messageId: 'm', role: 'assistant' },
     { type: 'TEXT_MESSAGE_CONTENT', messageId: 'm', delta: 'Hello **' },
     { type: 'TEXT_MESSAGE_CONTENT', messageId: 'm', delta: 'Kai**' },
     { type: 'TEXT_MESSAGE_END', messageId: 'm' },
+    { type: 'CUSTOM', name: 'space.ui', value: warning },
     { type: 'TOOL_CALL_START', toolCallId: 't', toolCallName: 'search' },
     { type: 'TOOL_CALL_ARGS', toolCallId: 't', delta: '{"query":' },
     { type: 'TOOL_CALL_ARGS', toolCallId: 't', delta: '"churn"}' },
@@ -42,6 +46,8 @@ test('HTTP AG-UI streams text, tool activity and structured results through repl
     { type: 'TOOL_CALL_RESULT', toolCallId: 't', messageId: 'result', content: 'Found 3 records' },
     { type: 'CUSTOM', name: 'space.ui', value: { id: 'card', type: 'card', title: 'Churn', body: 'Down 2%' } },
     { type: 'CUSTOM', name: 'space.ui', value: { id: 'table', type: 'table', title: 'Customers', columns: ['Plan'], rows: [['Pro']] } },
+    { type: 'CUSTOM', name: 'space.ui', value: edit },
+    { type: 'CUSTOM', name: 'space.ui', value: error },
     finished(input),
   ], async url => {
     const invoke = async () => {
@@ -57,7 +63,11 @@ test('HTTP AG-UI streams text, tool activity and structured results through repl
     assert.equal(response.messages[0]?.text, 'Hello **Kai**');
     assert.equal(response.tools[0]?.arguments, '{"query":"churn"}');
     assert.equal(response.tools[0]?.status, 'completed');
-    assert.equal(response.components.length, 2);
+    assert.equal(response.components.length, 4);
+    assert.deepEqual(response.components[3], edit);
+    assert.deepEqual(response.components[0], error);
+    assert.deepEqual(response.items?.slice(0, 3), [{ type: 'message', id: 'm' }, { type: 'component', id: warning.id }, { type: 'tool', id: 't' }]);
+    assert.ok(events.some(event => event.payload.response?.components.some(block => block.type === 'alert' && block.level === 'warning')));
     assert.ok(events.some(e => e.payload.response?.tools[0]?.status === 'running'), 'argument end does not mean tool execution finished');
     assert.deepEqual(await invoke(), events, 'backend replay produces identical persisted envelopes');
   });

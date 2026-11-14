@@ -1,19 +1,20 @@
+import { parseModelCatalog } from './codex-settings.js';
 import type { AgentCapabilities } from './index.js';
 import { AppError, record, text } from './validation.js';
-export const localProviders = {
-  codex: { name: 'Codex', connector: 'codex.local', skill: 'codex.run', definition: '41a5de8a-63df-4c25-8666-1d0290bc921f' },
-  kiro: { name: 'Kiro', connector: 'kiro.local', skill: 'kiro.run', definition: 'f6090a5c-8959-4674-aec1-f7e611f35c42' },
-  claude: { name: 'Claude', connector: 'claude.local', skill: 'claude.run', definition: '16decd58-62df-4592-a3cf-939837cc2164' },
-} as const;
+import catalog from './local-providers.json' with {type:'json'};
+export const localProviders = catalog;
 export type LocalProvider = keyof typeof localProviders;
+export function isLocalProvider(value: unknown): value is LocalProvider {
+  return typeof value === 'string' && Object.hasOwn(localProviders, value);
+}
 export function parseLocalProvider(value: unknown = 'codex'): LocalProvider {
-  if (value !== 'codex' && value !== 'kiro' && value !== 'claude') throw new AppError(400, 'invalid_provider');
+  if (!isLocalProvider(value)) throw new AppError(400, 'invalid_provider');
   return value;
 }
 export function localProviderForConnector(connector: string) {
   return Object.values(localProviders).find(provider => provider.connector === connector);
 }
-export function isLocalAgentSkill(skill: string) { return Object.values(localProviders).some(provider => provider.skill === skill); }
+export function isLocalAgentSkill(skill: unknown) { return Object.values(localProviders).some(provider => provider.skill === skill); }
 export interface PairedConnector { id: string; definition_id: string; name: string; capabilities: AgentCapabilities; provider?: LocalProvider }
 export interface ChannelAgent { inherits_owner_access?: boolean; id: string; name: string; connector_id: string; provider?: LocalProvider; skills: string[]; granted_skills: string[]; enabled_in_channel: boolean; persistent_sessions: boolean }
 export const defaultPairedConnectors: PairedConnector[] = Object.entries(localProviders).map(([provider, entry]) => ({ id: entry.connector, definition_id: entry.definition, name: entry.name, provider: provider as LocalProvider, capabilities: { skills: [entry.skill], controls: { progress_stream: true }, persistent_sessions: true } }));
@@ -36,8 +37,8 @@ export function parsePairingClaim(value: unknown) {
   const v = record(value, ['code', 'credential', 'provider']);
   return { provider: v.provider === undefined ? undefined : parseLocalProvider(v.provider), code: connectionSecret(v.code, 32), credential: connectionSecret(v.credential, 43) };
 }
-export function parseAgentHeartbeat(value: unknown): AgentAuthStatus {
-  const v = record(value, ['auth_status']);
+export function parseAgentHeartbeat(value: unknown) {
+  const v = record(value, ['auth_status','model_catalog']);
   if (!['required', 'ready', 'error'].includes(v.auth_status as string)) throw new AppError(400, 'invalid_auth_status');
-  return v.auth_status as AgentAuthStatus;
+  return { auth_status:v.auth_status as AgentAuthStatus, model_catalog:v.model_catalog === undefined ? undefined : parseModelCatalog(v.model_catalog) };
 }

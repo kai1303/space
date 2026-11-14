@@ -14,6 +14,7 @@ async function buildRunner() {
     banner: { js: "import {createRequire as createNodeRequire} from 'node:module'; const require = createNodeRequire(import.meta.url);" },
   });
   for (const [source, name] of [
+    [join(root, '../../packages/contracts/local-providers.json'), 'local-providers.json'],
     [require.resolve('@xterm/xterm'), 'xterm.js'],
     [require.resolve('@xterm/xterm/css/xterm.css'), 'xterm.css'],
     ...['worker.mjs', 'login.exp', 'login.html', 'login.js', 'login-preload.cjs'].map(name => [join(root, 'runner', name), name]),

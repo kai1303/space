@@ -37,6 +37,7 @@ export function useNavigation(workspaces: Workspace[], workspace: string, setWor
       // Activity can mention a public channel before joining; discovery renders its join screen.
       const destination = item.channel_kind === 'channel' ? {id:item.channel_id,kind:'channel'} : await request<Channel>(`/channels/${item.channel_id}`);
       if (attempt !== mentionNavigation.current) return;
+      if ('workspace_id' in destination && destination.workspace_id && destination.workspace_id !== workspace) changeWorkspace(destination.workspace_id);
       setNavigationError(''); setHubView(undefined); setActivityOpen(false); setDirectCompose(0); setSearchOpen(false);
       setDirectOpen(destination.kind === 'direct');
       setDirectId(destination.kind === 'direct' ? destination.id : undefined);

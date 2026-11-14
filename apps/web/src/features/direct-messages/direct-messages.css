@@ -73,3 +73,17 @@
   .dm-row-body strong { font-size: 16px; }
   .dm-row-body p, .dm-row-body > span:not(:first-child) { font-size: 14px; color: var(--sp-text-secondary); }
 }
+
+.dm-encryption-settings { display:grid; gap:8px; padding-block:12px; }
+.dm-encryption-settings h3,.dm-encryption-settings p { margin:0; }
+.dm-encryption-settings code { overflow-wrap:anywhere; user-select:all; }
+.dm-encryption-settings label { display:block; }
+.dm-encryption-settings .sp-button { justify-self:start; }
+.dm-encryption-boundary { text-align:center; padding:8px; color:var(--sp-text-secondary); font-size:12px; }
+
+.dm-encrypted-files { display:flex; flex-wrap:wrap; gap:8px; margin-top:8px; }
+.dm-encrypted-file { display:flex; flex-direction:column; gap:6px; padding:12px; border:1px solid var(--sp-border); border-radius:8px; max-width:min(320px,100%); overflow-wrap:anywhere; }
+.dm-encrypted-file > span { font-size:12px; color:var(--sp-text-muted); }
+.dm-encrypted-image { padding:0; border:0; background:transparent; cursor:zoom-in; }
+.dm-encrypted-image img { display:block; width:100%; max-height:220px; object-fit:contain; }
+.dm-encrypted-full-image { display:block; max-width:100%; max-height:70vh; margin-bottom:12px; object-fit:contain; }

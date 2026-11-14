@@ -22,3 +22,46 @@ test('provider result actions are bounded HTTPS links without embedded credentia
  for(const actions of [Array(9).fill(action),[{...action,url:'javascript:alert(1)'}],[{...action,url:'https://user:secret@host.example'}]])
    assert.throws(()=>parseAgentResponse({...response,outputs:{...outputs,actions}}));
 });
+
+test('document edit blocks preserve passage formatting and reject invalid payloads', () => {
+  const edit = { type: 'document_edit', id: 'edit', title: 'Report', original: '  First line\nSecond line', replacement: 'New text' };
+  const parse = (component: unknown) => parseAgentResponse({ ...response, components: [component] }).components[0];
+  assert.deepEqual(parse(edit), edit);
+  for (const extra of [{ replacement: '' }, { original: 'x'.repeat(16001) }, { action: 'apply' }]) {
+    assert.throws(() => parse({ ...edit, ...extra }));
+  }
+});
+
+test('alert levels and payload sizes are checked, including ordered component references', () => {
+  const warning = { id: 'flag', type: 'alert', level: 'warning', title: 'Incomplete results' };
+  const item = { type: 'component', id: warning.id };
+  const parse = (component: unknown, items: unknown[] = [item]) =>
+    parseAgentResponse({ ...response, components: [component], items });
+  assert.deepEqual(parse(warning).components, [warning]);
+  for (const fields of [{ level: 'urgent' }, { level: undefined }, { body: 'x'.repeat(8001) }, { action: 'run' }]) {
+    assert.throws(() => parse({ ...warning, ...fields }));
+  }
+  assert.throws(() => parse(warning, [item, item]));
+  assert.throws(() => parse(warning, [{ ...item, id: 'missing' }]));
+});
+
+test('carousels bound the number of cards, require distinct IDs and reject unexpected actions', () => {
+  const parse = (cards: unknown[]) => parseAgentResponse({ ...response, components: [{ id: 'options', type: 'carousel', title: 'Options', cards }] });
+  const ten = Array.from({ length: 10 }, (_, i) => ({ id: String(i), title: 'Option', body: 'Details' }));
+  assert.equal(parse(ten).components.length, 1);
+  for (const invalid of [[], [...ten, { ...ten[0], id: 'extra' }], [ten[0], ten[0]], [{ ...ten[0], action: 'run' }]]) {
+    assert.throws(() => parse(invalid));
+  }
+});
+
+test('data tables validate numeric and text cells, dimensions and field limits', () => {
+  const block = { type: 'data_table', id: 'plans', title: 'Plans', columns: ['Plan', 'Customers'], rows: [['Pro', 20]] };
+  const parse = (fields: Record<string, unknown>) => parseAgentResponse({ ...response, components: [{ ...block, ...fields }] });
+  assert.deepEqual(parse({}).components, [block]);
+  assert.deepEqual(parse({ rows: [] }).components, [{ ...block, rows: [] }]);
+  for (const fields of [{ rows: [['Pro']] }, { rows: [['Pro', 1, 2]] }, { columns: [] }, { columns: Array(11).fill('x') },
+    { rows: Array(101).fill(['Pro', 1]) }, { rows: [['x'.repeat(1001), 0]] }, { rows: [['Pro', Infinity]] },
+    { rows: [['Pro', { html: '<b>1</b>' }]] }, { type: 'table' }]) {
+    assert.throws(() => parse(fields));
+  }
+});

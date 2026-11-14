@@ -43,7 +43,9 @@ function DetailsDialog({ channel, viewer, initialTab = 'about', permissions, per
   useEffect(() => { setDetails(previous => previous ? { ...previous, ...channel } : previous); }, [channel]);
   function saved(detail: Details) { setDetails(detail); onChange(detail); }
   const current = details ?? channel, archived = Boolean(current.archived_at);
-  const policy = permissionsPending ? undefined : permissions ?? details?.permissions;
+  const loaded = details?.permissions;
+  const policy = permissionsPending ? undefined
+    : loaded && (!permissions || BigInt(loaded.revision) > BigInt(permissions.revision)) ? loaded : permissions ?? loaded;
   const can = (action: keyof ChannelPermissionSnapshot['capabilities']) => !permissionsPending && (policy?.capabilities[action] ?? details?.can_manage ?? false);
   const isManager = (member: ChannelMember) => policy ? policy.manager_ids.includes(member.id) : !!member.is_manager;
   const editable = can('edit_details') && !archived;

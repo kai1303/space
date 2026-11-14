@@ -1,13 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parsePairing, parsePairingClaim } from '@space/contracts';
+import { localProviders, parsePairing, parsePairingClaim } from '@space/contracts';
 test('pairing selects a supported provider and preserves the Codex default', () => {
   assert.equal(parsePairing({}).provider, 'codex');
-  assert.equal(parsePairing({ provider: 'kiro' }).provider, 'kiro');
-  assert.equal(parsePairing({ provider: 'claude' }).provider, 'claude');
-  assert.equal(parsePairingClaim({ code: 'a'.repeat(32), credential: 'b'.repeat(43), provider: 'claude' }).provider, 'claude');
-  assert.throws(() => parsePairing({ provider: 'shell' }), /invalid_provider/);
-  assert.equal(parsePairingClaim({ code: 'a'.repeat(32), credential: 'b'.repeat(43), provider: 'kiro' }).provider, 'kiro');
+  for (const provider of Object.keys(localProviders)) {
+    assert.equal(parsePairing({provider}).provider, provider);
+    assert.equal(parsePairingClaim({code:'a'.repeat(32), credential:'b'.repeat(43), provider}).provider, provider);
+  }
+  for (const provider of ['shell', 'constructor', '__proto__']) {
+    assert.throws(() => parsePairing({provider}), /invalid_provider/);
+  }
 });
 
 test('session capability is an optional boolean and pairing identity cannot carry capabilities', async () => {

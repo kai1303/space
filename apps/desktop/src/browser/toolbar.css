@@ -87,10 +87,16 @@ h1 { margin: 12px 0 20px; font-size: var(--sp-text-xl); line-height: var(--sp-le
 #workspace-start { flex:1; display:grid; place-items:center; padding:20px; }
 #workspace-start section { width:min(100%, 340px); }
 #workspace-start h1 { margin:0 0 14px; color:var(--sp-text); }
-#tools { display:flex; gap:6px; }
+#launch-tools { display:flex; flex-wrap:wrap; gap:6px; }
 #tool-slot #tools { padding:6px 8px; border-bottom:1px solid var(--sp-border); }
 #tools button { display:flex; align-items:center; gap:8px; padding:7px 10px; }
-#start-tools button { flex:1; border:1px solid var(--sp-border); padding:12px; }
+#start-tools #launch-tools button { flex:1; border:1px solid var(--sp-border); padding:12px; }
 .tab button:first-child { display:flex; align-items:center; gap:5px; }
 .tab button:first-child span { overflow:hidden; text-overflow:ellipsis; }
 .tab button:first-child svg { width:12px; height:12px; }
+
+#plugins { width:100%; padding:4px 8px; }
+.plugins-heading, .plugin-row { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+.plugins-heading { margin-bottom:4px; }
+.plugin-row { border-top:1px solid var(--sp-border); padding-block:4px; }
+.plugin-row button { color:var(--sp-accent); font-weight:700; }

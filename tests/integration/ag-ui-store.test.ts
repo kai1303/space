@@ -31,6 +31,11 @@ test('an approved AG-UI installation executes through the worker and saves a ric
   await foundation.grant(seed.owner_id, installation.id, { channel_id: seed.channel_id, skill: 'ag-ui.run' });
   const task = await store.createTask(seed.owner_id, { workspace_id: seed.workspace_id, thread_id: seed.thread_id, installation_id: installation.id, skill: 'ag-ui.run', goal: 'Review results' }, randomUUID());
   await store.approveTask(seed.owner_id, task.id);
+  const carousel = { type: 'carousel', id: 'options', title: 'Next steps', cards: [
+    { id: 'small', title: 'Pilot', body: 'One team' }, { id: 'large', title: 'Expand', body: 'All teams' },
+  ] };
+  const dataTable = { type: 'data_table', id: 'plans', title: 'Customers', columns: ['Plan', 'Count'], rows: [['Pro', 12], ['Starter', 2]] };
+  const alert = { type: 'alert', id: 'stale', level: 'warning', title: 'Cached results' };
   const server = createServer(async (req, res) => {
     let body = '';
     for await (const chunk of req) body += chunk;
@@ -38,8 +43,13 @@ test('an approved AG-UI installation executes through the worker and saves a ric
     res.writeHead(200, { 'content-type': 'text/event-stream' });
     for (const event of [
       { type: 'RUN_STARTED', runId: input.runId, threadId: input.threadId },
+      { type: 'CUSTOM', name: 'space.ui', value: alert },
       { type: 'TEXT_MESSAGE_CHUNK', messageId: 'm', role: 'assistant', delta: '**Saved result**' },
       { type: 'CUSTOM', name: 'space.ui', value: { id: 'c', type: 'card', title: 'Result', body: 'Ready for review' } },
+      { type: 'CUSTOM', name: 'space.ui', value: { ...carousel, cards: carousel.cards.slice(0, 1) } },
+      { type: 'CUSTOM', name: 'space.ui', value: carousel },
+      { type: 'CUSTOM', name: 'space.ui', value: { ...dataTable, rows: [] } },
+      { type: 'CUSTOM', name: 'space.ui', value: dataTable },
       { type: 'RUN_FINISHED', runId: input.runId, threadId: input.threadId },
     ]) res.write(`data: ${JSON.stringify(event)}\n\n`);
     res.end();
@@ -53,7 +63,13 @@ test('an approved AG-UI installation executes through the worker and saves a ric
     const page = await chat.messageHistory(seed.owner_id, seed.channel_id);
     assert.equal(page.messages.length, 1);
     assert.equal(page.messages[0]?.agent_response?.messages[0]?.text, '**Saved result**');
-    assert.equal(page.messages[0]?.agent_response?.components[0]?.title, 'Result');
+    assert.deepEqual(page.messages[0]?.agent_response?.components[0], alert);
+    assert.equal(page.messages[0]?.agent_response?.components[1]?.title, 'Result');
+    assert.deepEqual(page.messages[0]?.agent_response?.components.slice(2), [carousel, dataTable]);
+    const history = await chat.history(seed.owner_id, seed.channel_id);
+    const progress = history.events.filter(e => e.type === 'task.event' && e.payload.type === 'execution.progress');
+    assert.ok(progress.some(e => e.type === 'task.event' && e.payload.data.channel_post_author === 'AG-UI test agent'));
+    assert.deepEqual(page.messages[0]?.agent_response?.items?.[0], { type: 'component', id: alert.id });
   } finally { server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); }
 });
 

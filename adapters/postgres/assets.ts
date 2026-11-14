@@ -33,7 +33,7 @@ export class AssetStore {
     return this.db.transaction(async c => {
       const [channel] = await c.select().from(channels).where(eq(channels.id, uuid(channelId)));
       if (!channel || !await hasChannelAccess(c, actor, channel.workspace_id, channel.id)) throw notFound();
-      const scope = and(eq(assets.channel_id, channel.id), eq(assets.workspace_id, channel.workspace_id), eq(assets.status, 'ready'), isNotNull(assets.message_id));
+      const scope = and(eq(assets.channel_id, channel.id), eq(assets.workspace_id, channel.workspace_id), eq(assets.encrypted,false), eq(assets.status, 'ready'), isNotNull(assets.message_id));
       const source = and(eq(messages.id, assets.message_id), eq(messages.channel_id, assets.channel_id), eq(messages.workspace_id, assets.workspace_id));
       const previewKind = sql<ChannelFile['preview_kind']>`coalesce(${assets.preview}->>'kind', 'file')`;
       let cursor;
@@ -61,17 +61,23 @@ export class AssetStore {
     });
   }
   async create(actor: string, channelId: string, input: unknown): Promise<Asset> {
-    const data = parseAssetInput(input);
+    const value = record(input, ['name','size','type','encrypted']);
+    if (value.encrypted !== undefined && value.encrypted !== true) throw new AppError(400,'invalid_encryption');
+    const encrypted = value.encrypted === true;
+    const data = parseAssetInput({name:value.name,size:value.size,type:value.type});
+    if (encrypted && (data.name !== 'Encrypted file' || data.type !== 'application/octet-stream'))
+      throw new AppError(400,'invalid_encrypted_metadata');
     // All allocations share serializable quota checks, including mixed channel/DM races.
     return sessionTransaction(this.db, async c => {
       const channel = await this.channel(c, actor, channelId);
+      if (Boolean(channel.encrypted_since) !== encrypted) throw new AppError(409,'dm_encryption_mode_changed');
       if (channel.kind !== 'direct') await c.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${`${channel.workspace_id}:${actor}:assets`}))`);
       const pending = await c.select({ id: assets.id }).from(assets)
         .where(and(eq(assets.workspace_id, channel.workspace_id), eq(assets.uploader_id, actor), isNull(assets.message_id), isNull(assets.task_id), sql`${assets.expires_at} > now()`)).limit(20);
       if (pending.length >= 20) throw new AppError(429, 'too_many_uploads');
       const id = randomUUID();
       const [row] = await c.insert(assets).values({ id, workspace_id: channel.workspace_id, channel_id: channelId, uploader_id: actor,
-        ...data, staging_key: `staging/${id}`, object_key: `files/${id}`,
+        ...data, encrypted, staging_key: `staging/${id}`, object_key: `files/${id}`,
         upload_expires_at: new Date(Date.now() + 300_000), expires_at: new Date(Date.now() + 86_400_000) }).returning();
       return row!;
     });
@@ -122,13 +128,13 @@ export class AssetStore {
         .where(and(eq(assets.id, id), eq(assets.processing_token, token)));
     }
   }
-  async complete(actor: string, id: string, finalize: (stagingKey: string, finalKey: string, size: number, name: string) => Promise<AssetPreview>): Promise<AssetAttachment> {
+  async complete(actor: string, id: string, finalize: (stagingKey: string, finalKey: string, size: number, name: string, encrypted: boolean) => Promise<AssetPreview>): Promise<AssetAttachment> {
     await this.owned(this.db, actor, id);
     const result = await this.processing(id, async (_claimed, token) => {
       const row = await this.owned(this.db, actor, id);
       if (!row.message_id && !row.task_id && !row.queue_input_id && row.expires_at <= new Date()) throw new AppError(410, 'upload_expired');
       if (row.status === 'pending') {
-        const preview = await finalize(row.staging_key, row.object_key, row.size, row.name);
+        const preview = await finalize(row.staging_key, row.object_key, row.size, row.name, row.encrypted);
         const current = await this.owned(this.db, actor, id);
         if (!current.message_id && !current.task_id && !current.queue_input_id && current.expires_at <= new Date()) throw new AppError(410, 'upload_expired');
         const saved = await this.db.update(assets).set({ status: 'ready', preview })
@@ -156,7 +162,7 @@ export class AssetStore {
     const detail = await c.execute<AssetDetails>(sql`
       SELECT a.id, a.name, a.size, a.type, a.channel_id, m.thread_id, u.display_name AS uploader,
         to_json(coalesce(m.created_at,a.created_at)) #>> '{}' AS shared_at,
-        a.uploader_id=${actor} AND m.id IS NOT NULL AND ch.archived_at IS NULL AS can_edit,
+        a.uploader_id=${actor} AND m.id IS NOT NULL AND ch.archived_at IS NULL AND NOT a.encrypted AS can_edit,
         coalesce((SELECT item->>'description' FROM jsonb_array_elements(m.attachments) item
           WHERE item->>'id'=a.id::text),'') AS description
       FROM assets a JOIN users u ON u.id=a.uploader_id JOIN channels ch ON ch.id=a.channel_id
@@ -245,6 +251,7 @@ export class AssetStore {
   }
   async preview(actor: string, id: string, generate: (asset: Asset) => Promise<AssetPreview>): Promise<AssetPreview> {
     const current = await this.download(actor, id);
+    if (current.encrypted) return {kind:'unsupported',reason:'Encrypted file'};
     if (current.preview) return current.preview;
     const result = await this.processing(id, async (row, token) => {
       await this.assertAccess(this.db, actor, row);

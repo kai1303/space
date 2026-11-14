@@ -21,6 +21,7 @@ export const workspaceEvents = pgTable('workspace_events', {
   payload: jsonb().$type<object>().notNull(), occurred_at: time(),
 });
 export const channels = pgTable('channels', {
+  encrypted_since: timestamp({withTimezone:true}),
   kind: text().$type<'channel' | 'direct'>().notNull().default('channel'), direct_user_low: uuid(), direct_user_high: uuid(),
   id: id(), workspace_id: uuid().notNull(), name: text().notNull().default('general'), private: boolean().notNull().default(true),
   topic: text().notNull().default(''), description: text().notNull().default(''), archived_at: timestamp({ withTimezone: true }),
@@ -47,10 +48,13 @@ export const humanCredentials = pgTable('human_credentials', { token_hash: text(
 export const agentDefinitions = pgTable('agent_definitions', { id: id(), name: text().notNull(), capabilities: jsonb().$type<AgentCapabilities>().notNull() });
 export const agentInstallations = pgTable('agent_installations', { id: id(), workspace_id: uuid().notNull(), owner_id: uuid().notNull(), definition_id: uuid().notNull(), connector_id: text().notNull(), enabled: boolean().notNull().default(true) });
 export const agentGrants = pgTable('agent_grants', { workspace_id: uuid().notNull(), installation_id: uuid().notNull(), channel_id: uuid().notNull(), skill: text().notNull() });
-export const agentSessions = pgTable('agent_sessions', { parent_session_id:uuid(), queue_paused: boolean().notNull().default(false), handoff_context: jsonb().$type<import('@space/contracts').SidekickContext>(), handoff_hash: text(), id: id(), workspace_id: uuid().notNull(), installation_id: uuid().notNull(), origin_thread_id: uuid().notNull(), revision: integer().notNull().default(1), outputs: jsonb().$type<AgentSessionOutputs>().notNull().default({ files: [], changes: [] }), creation_title: text(), codex_title: text(), title: text().notNull().default('Agent run'), state: text().$type<'active' | 'ended'>().notNull().default('active'), managed: boolean().notNull().default(false), created_by: uuid(), created_at: time(), skill: text().notNull().default('codex.run') });
-export const tasks = pgTable('tasks', { browser_url:text(),
+export const agentSessions = pgTable('agent_sessions', { parent_session_id:uuid(), session_goal: jsonb().$type<import('@space/contracts').SessionGoal>(), queue_paused: boolean().notNull().default(false), handoff_context: jsonb().$type<import('@space/contracts').SidekickContext>(), handoff_hash: text(), id: id(), workspace_id: uuid().notNull(), installation_id: uuid().notNull(), origin_thread_id: uuid().notNull(), revision: integer().notNull().default(1), outputs: jsonb().$type<AgentSessionOutputs>().notNull().default({ files: [], changes: [] }), creation_title: text(), codex_title: text(), title: text().notNull().default('Agent run'), state: text().$type<'active' | 'ended'>().notNull().default('active'), managed: boolean().notNull().default(false), created_by: uuid(), created_at: time(), skill: text().notNull().default('codex.run') });
+export const tasks = pgTable('tasks', {
   id: id(), workspace_id: uuid().notNull(), thread_id: uuid().notNull(), installation_id: uuid().notNull(),
   attachments: jsonb().$type<AssetAttachment[]>().notNull().default([]),
+  goal_action: jsonb().$type<import('@space/contracts').GoalAction>(),
+  codex_settings: jsonb().$type<import('@space/contracts').CodexSettings>(),
+  browser_url: text(),
   request_document: jsonb().$type<RichDocument>(),
   goal: text().notNull(), skill: text().notNull(), requester_id: uuid().notNull(), approved_by: uuid(),
   status: text().$type<TaskStatus>().notNull(), session_id: uuid(), active_execution_id: uuid(),
@@ -68,6 +72,7 @@ export const taskEvents = pgTable('task_events', {
 });
 export const agentEventReceipts = pgTable('agent_event_receipts', { installation_id: uuid().notNull(), event_id: uuid().notNull(), event: jsonb().$type<AgentEvent>().notNull() });
 export const messages = pgTable('messages', {
+  encrypted: jsonb().$type<import('@space/contracts').EncryptedDm>(),
   // The insert trigger replaces this placeholder under the channel row lock.
   sequence: bigint({ mode: 'bigint' }).notNull().default(0n),
   id: uuid().notNull(), workspace_id: uuid().notNull(), channel_id: uuid().notNull(), thread_id: uuid().notNull(), task_id: uuid(), installation_id: uuid(),
@@ -87,6 +92,7 @@ export const messageIdentities = pgTable('message_identities', {
 export const assets = pgTable('assets', {
   id: id(), workspace_id: uuid().notNull(), channel_id: uuid().notNull(), uploader_id: uuid().notNull(),
   name: text().notNull(), size: integer().notNull(), type: text().notNull(),
+  encrypted: boolean().notNull().default(false),
   staging_key: text().notNull(), object_key: text().notNull(), status: text().$type<'pending' | 'ready'>().notNull().default('pending'),
   queue_input_id: uuid(), task_id: uuid(), message_id: uuid(), upload_expires_at: timestamp({ withTimezone: true }).notNull(), expires_at: timestamp({ withTimezone: true }).notNull(),
   staging_deleted_at: timestamp({ withTimezone: true }), created_at: time(),
@@ -132,6 +138,7 @@ export const agentPairings = pgTable('agent_pairings', {
 });
 export const agentConnections = pgTable('agent_connections', {
   installation_id: uuid().primaryKey(), name: text().notNull(), token_hash: text(),
+  model_catalog: jsonb().$type<import('@space/contracts').AgentModel[]>(),
   auth_status: text().$type<import('@space/contracts').AgentAuthStatus>().notNull().default('required'),
   connection_id: uuid(), last_seen_at: timestamp({ withTimezone: true }), revoked_at: timestamp({ withTimezone: true }), created_at: time(),
 });

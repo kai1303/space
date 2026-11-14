@@ -1,6 +1,8 @@
 import { AppError, record, text, uuid } from './validation.js';
 import { parsePage } from './workspace.js';
 
+export const PDF_TOOL_PATH = '/v1/agent-tools/pdf';
+export const PDF_TOOL_NAME = 'read_pdf_page';
 export const MAX_ASSET_BYTES = 25 * 1024 * 1024;
 export const MAX_MESSAGE_ASSETS = 5;
 export const MAX_ASSET_DESCRIPTION_LENGTH = 1000;
@@ -76,9 +78,41 @@ export function parseAssetDescriptions(input: unknown, ids: string[]): Record<st
   return Object.keys(descriptions).length ? descriptions : undefined;
 }
 
+export const MAX_AGENT_PDF_PAGES = 8;
+export const MAX_AGENT_PDF_CHARS = 16000;
+export interface AgentPdfContent {
+  kind: 'pdf';
+  status: 'readable' | 'no_text' | 'out_of_range' | 'unavailable' | 'not_read';
+  page_count: number | null;
+  pages: { page: number; text: string; truncated: boolean }[];
+}
+
+function parsePdfContent(value: unknown): AgentPdfContent {
+  const invalid = () => new AppError(400, 'invalid_asset_content');
+  const c = record(value, ['kind', 'status', 'page_count', 'pages']);
+  const total = c.page_count, status = c.status;
+  if (status !== 'readable' && status !== 'no_text' && status !== 'out_of_range' && status !== 'unavailable' && status !== 'not_read') throw invalid();
+  if (typeof total !== 'number' || !Number.isSafeInteger(total) || total < 1) {
+    if (total !== null || (status !== 'unavailable' && status !== 'not_read')) throw invalid();
+  }
+  if (!Array.isArray(c.pages) || c.pages.length > MAX_AGENT_PDF_PAGES) throw invalid();
+  let remaining = MAX_AGENT_PDF_CHARS, previous = 0;
+  const pages = c.pages.map(value => {
+    const p = record(value, ['page', 'text', 'truncated']);
+    if (typeof p.page !== 'number' || !Number.isSafeInteger(p.page) || p.page <= previous || total === null || p.page > total ||
+        typeof p.text !== 'string' || p.text.length > remaining || typeof p.truncated !== 'boolean') throw invalid();
+    remaining -= p.text.length;
+    previous = p.page;
+    return {page:p.page, text:p.text, truncated:p.truncated};
+  });
+  if ((status === 'readable' || status === 'no_text') !== Boolean(pages.length) ||
+      (status === 'readable') !== pages.some(p => p.text.trim().length > 0)) throw invalid();
+  return {kind:'pdf', page_count:total, status, pages};
+}
+
 /** A bounded rendering of each uploaded file for the current agent turn. */
 export type AgentInputFile = AssetAttachment & {
-  content: { kind: 'text'; text: string; truncated: boolean } | { kind: 'image'; webp: string } | { kind: 'file' };
+  content: { kind: 'text'; text: string; truncated: boolean } | { kind: 'image'; webp: string } | { kind: 'file' } | AgentPdfContent;
 };
 
 export function parseAgentInputFiles(value: unknown): AgentInputFile[] {
@@ -87,6 +121,8 @@ export function parseAgentInputFiles(value: unknown): AgentInputFile[] {
     const v = record(entry, ['id','name','size','type','description','content']);
     const id = uuid(v.id);
     const file = { id, ...parseAssetInput({ name:v.name, size:v.size, type:v.type }), ...(v.description ? {description:text(v.description, MAX_ASSET_DESCRIPTION_LENGTH)} : {}) };
+    if (v.content && typeof v.content === 'object' && 'kind' in v.content && v.content.kind === 'pdf')
+      return {...file, content:parsePdfContent(v.content)};
     const c = record(v.content, ['kind','text','truncated','webp']);
     if (c.kind === 'file') return {...file, content:{kind:'file'}};
     if (c.kind === 'text' && typeof c.text === 'string' && c.text.length <= 16000 && typeof c.truncated === 'boolean')

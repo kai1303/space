@@ -11,7 +11,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "start": "node dist/main.js",
     "dev": "node dist/main.js",
-    "test": "pnpm build && node --test agent-connectors.test.mjs storage.test.mjs previews.test.mjs pdf-thumbnail.test.mjs invitation-email.test.mjs calling-config.test.mjs huddle-media.test.mjs request-metrics.test.mjs live-receipts.test.mjs",
+    "test": "pnpm build && node --test agent-connectors.test.mjs storage.test.mjs previews.test.mjs pdf-thumbnail.test.mjs pdf-text.test.mjs invitation-email.test.mjs calling-config.test.mjs huddle-media.test.mjs request-metrics.test.mjs live-receipts.test.mjs",
     "test:storage": "pnpm build && node --test storage.integration.test.mjs",
     "search:backfill": "node dist/search-backfill.js"
   },
@@ -35,6 +35,10 @@
     "./storage": {
       "types": "./dist/storage.d.ts",
       "default": "./dist/storage.js"
+    },
+    "./pdf-text": {
+      "types": "./dist/pdf-text.d.ts",
+      "default": "./dist/pdf-text.js"
     },
     "./memory": {
       "types": "./dist/memory.d.ts",

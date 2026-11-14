@@ -424,6 +424,7 @@ export function Dialog({
   open,
   onClose,
   onBeforeClose,
+  closeOnBackdrop = true,
   title,
   subtitle,
   description,
@@ -432,6 +433,7 @@ export function Dialog({
   open: boolean;
   onClose: () => void;
   onBeforeClose?: () => boolean;
+  closeOnBackdrop?: boolean;
   title: string;
   subtitle?: string;
   description?: string;
@@ -479,7 +481,7 @@ export function Dialog({
       onClose={onClose}
       onCancel={event => { event.preventDefault(); requestClose(); }}
       onClick={(event) => {
-        if (event.target === event.currentTarget) {
+        if (closeOnBackdrop && event.target === event.currentTarget) {
           const r = event.currentTarget.getBoundingClientRect();
           if (
             event.clientX < r.left ||

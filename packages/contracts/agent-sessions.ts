@@ -1,5 +1,7 @@
 import type { SessionWorkStatus } from './session-discovery.js';
+import { parseGoalAction, type SessionGoal } from './session-goal.js';
 import { sidekickPageUrl } from './sidekick.js';
+import { parseCodexSettings } from './codex-settings.js';
 import { parseAssetIds, parseAssetDescriptions } from './assets.js';
 import { parseRichDocument } from './rich-text.js';
 import type { AgentResponse, AgentSession, AgentSessionOutputs, Task } from './index.js';
@@ -17,17 +19,17 @@ export interface SessionInput {
   execution_id:string|null; detail:string|null; file_count?:number;
 }
 export type SessionRelatedAgent = { id:string; title:string; agent_name:string; owner_name:string; relation:'parent'|'helper' };
-export interface AgentSessionDetail { related_agents?: SessionRelatedAgent[]; inputs?:SessionInput[]; audience?: string; tool_approvals?: import('./local-tools.js').LocalToolApproval[]; context?: import('./sidekick.js').SidekickContext; outputs?: AgentSessionOutputs; session: AgentSessionSummary; turns: AgentSessionTurn[]; next_cursor: string | null; has_newer?: boolean }
+export interface AgentSessionDetail { related_agents?: SessionRelatedAgent[]; session_goal?: SessionGoal | null; inputs?:SessionInput[]; audience?: string; tool_approvals?: import('./local-tools.js').LocalToolApproval[]; context?: import('./sidekick.js').SidekickContext; outputs?: AgentSessionOutputs; session: AgentSessionSummary; turns: AgentSessionTurn[]; next_cursor: string | null; has_newer?: boolean }
 export function parseAgentSessionInput(value: unknown) {
   const v = record(value, ['client_session_id', 'installation_id', 'title', 'skill']);
   return { skill: v.skill === undefined ? undefined : text(v.skill, 80), client_session_id: uuid(v.client_session_id), installation_id: uuid(v.installation_id), title: text(v.title, 160) };
 }
 export function parseAgentSessionMessage(value: unknown) {
-  const v = record(value, ['text', 'document', 'asset_ids', 'asset_descriptions', 'browser_url']);
+  const v = record(value, ['text', 'document', 'asset_ids', 'asset_descriptions', 'codex_settings', 'goal_action', 'browser_url']);
   const asset_ids = v.asset_ids === undefined ? [] : parseAssetIds(v.asset_ids);
   const asset_descriptions = v.asset_descriptions === undefined ? undefined : parseAssetDescriptions(v.asset_descriptions, asset_ids);
   const content = asset_ids.length && v.text === '' ? '' : text(v.text, 4000);
   const document = v.document === undefined ? undefined : parseRichDocument(v.document);
   if (document && document.ops.map(op => op.insert).join('').trim() !== content.trim()) throw new AppError(400, 'invalid_document');
-  return { asset_ids, asset_descriptions, text: content, ...(v.browser_url === undefined ? {} : {browser_url:sidekickPageUrl(v.browser_url)}), ...(document ? { document } : {}) };
+  return { asset_ids, asset_descriptions, text: content, ...(v.browser_url === undefined ? {} : {browser_url:sidekickPageUrl(v.browser_url)}), ...(v.goal_action === undefined ? {} : {goal_action:parseGoalAction(v.goal_action)}), ...(v.codex_settings === undefined ? {} : {codex_settings:parseCodexSettings(v.codex_settings)}), ...(document ? { document } : {}) };
 }

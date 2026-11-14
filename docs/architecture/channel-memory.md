@@ -52,8 +52,8 @@ Source: [View original](/chat?workspace=...&channel=...&message=...)
 
 Keep these delimiters to retain idempotent saving and per-source removal. Manually
 rewriting/removing a source block is allowed; provenance beyond those markers is
-not immutable audit history. This application currently has no message editing or
-deletion API; automatic source-change reconciliation must accompany those features.
+not immutable audit history. Editing a chat message refreshes its saved Markdown quote and invalidates claims
+that cite the previous revision. Deleting the message removes its saved quote and invalidates dependent claims.
 Memory is untrusted reference data, and future model integrations must keep it out
 of privileged instruction channels. The UI displays Markdown as editable text.
 
@@ -91,6 +91,16 @@ scope isolation, enforce content limits, preserve source references, and handle
 failures without discarding stored data. Implement timeouts inside remote adapters.
 No third-party memory adapter ships in this slice; the integration test verifies
 that a supplied adapter is selected and disabled/unauthorized requests never call it.
+
+### Receiving message edits and deletions
+
+A custom adapter can implement `onMessageChanged(scope, change, signal)`. Space records the provider ID at API startup and queues changes in the same PostgreSQL transaction as the message update. The API delivers them through JetStream, including after a restart. A failed callback is retried. Implement the hook on each replica that serves this provider and honor the abort signal when calling remote storage.
+
+- For `edited`, look up existing copies and dependent claims by `scope` and `change.message_id`. Call `await change.readSource()` during the callback to retrieve the exact edited revision of a saved source. A null result means the adapter should discard or invalidate that version. An edit notification alone should never create a new copy.
+- For `deleted`, remove the copy and invalidate any claims that relied on it. Deletions carry only identifiers and a revision. Workspace retention also uses this path.
+- Commit the data change and the message revision together before resolving. Compare decimal revisions numerically, including during initial ingestion (`source.evidence_revisions`). Preserve the last revision after removal so a delayed edit or ingest cannot restore stale content. `change.event_id` stays the same across retries.
+
+The selected provider receives change IDs for shared messages in channels with Memory enabled. Space tracks message IDs explicitly saved or cited through the provider after it adopts the hook. For those IDs, invalidations continue after disablement or a provider switch. Fresh text requires a directly saved message quote, the same enabled provider at edit and read time, and a live matching message revision. Forgetting a quote or clearing the provider’s document revokes that refresh access. Claims that only cite a message receive invalidations. Message bodies stay out of the queue. Providers with older, untracked copies can invalidate them using the IDs received while selected. Space has no historical inventory of another provider’s storage.
 
 Provider registration currently applies to the server deployment. Channel managers
 choose from that registry; a workspace credential-management UI is not included.

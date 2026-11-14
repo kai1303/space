@@ -13,13 +13,14 @@ import { ComposerSendError } from '@space/ui/composer';
 import { SidekickContextSection } from './SidekickContextSection.js';
 import {useDestinationPresence} from '../../shared/ui/useDestinationPresence.js';
 import { AgentSessionComposer } from './AgentSessionComposer.js';
-import {ConversationHeader,ConversationMessage,ConversationIntroduction} from '../chat/ThreadConversation.js';
+import {ConversationComposer,ConversationHeader,ConversationMessage,ConversationIntroduction} from '../chat/ThreadConversation.js';
 import {MessageTimeline} from '../chat/MessageTimeline.js';
 import {ConversationSkeleton} from '../chat/ConversationSkeleton.js';
 import {useStarredChannels} from '../channels/useStarredChannels.js';
 import {useAgentSessionHistory} from './useAgentSessionHistory.js';
 import {useCallback,useEffect,useId,useMemo,useRef,useState,type FormEvent} from 'react';
-import type {ChannelAgent,AgentSessionDetail,AgentSessionSummary,AgentSessionOutputs,NavigatorCandidate,RichDocument,Task,ChatEvent,ChatMessage,MentionReference,SessionInput} from '@space/contracts';
+import {isLocalAgentSkill} from '@space/contracts';
+import type {AgentModel,GoalAction,CodexSettings,ChannelAgent,AgentSessionDetail,AgentSessionSummary,AgentSessionOutputs,NavigatorCandidate,RichDocument,Task,ChatEvent,ChatMessage,MentionReference,SessionInput} from '@space/contracts';
 import { Select, Button, Tabs, Avatar, Dialog, Menu, IconButton } from '@space/ui/primitives';
 import {ArrowBendUpRight,ListBullets,Plus,Robot,Info,Stop,Paperclip,ChatCircle,Browser,GitDiff,DotsThree,Star,PencilSimple} from '@phosphor-icons/react';
 import { request } from '../../shared/api/request.js';
@@ -35,8 +36,19 @@ const denied=(error:unknown)=>error instanceof Error&&['unauthorized','forbidden
 const errorText=(error:unknown)=>error instanceof Error?error.message.replaceAll('_',' '):'Unable to update the session';
 const busy=(task?:Task)=>!!task&&['awaiting_approval','queued','running'].includes(task.status);
 
-export function AgentSessions({initialArtifact,artifactRequest,uploads,drafts:externalDrafts,onDraftChange:externalDraftChange,attempt:externalAttempt,acknowledged:externalAcknowledged,onAccepted,thread,channel,viewerId,onAccessLost,initialSessionId,onOpenSession,archived=false,channelName,onBack,onClose}: {
- artifactRequest?:number;initialArtifact?:NonNullable<import('@space/contracts').SessionReport['artifact']>;uploads?:UploadDrafts;acknowledged?:Record<string,RichDocument>;onAccepted?:(key:string,document:RichDocument,files:Attachment[])=>void;
+// Older browser messages stored the generated page header as a separate, unformatted operation.
+function requestForDisplay(task:Task, browserSession:boolean) {
+ const document=task.request_document;
+ const header=document?.ops[0];
+ if (browserSession && !task.browser_url && document && header && !header.attributes &&
+     /^Browser page: https?:\/\/[^\s]+\n\n$/.test(header.insert) && task.goal.startsWith(header.insert)) {
+  return {text:task.goal.slice(header.insert.length),document:{ops:document.ops.slice(1)}};
+ }
+ return {text:task.goal,document};
+}
+
+export function AgentSessions({primary,agentName,initialArtifact,artifactRequest,browserPage,uploads,drafts:externalDrafts,onDraftChange:externalDraftChange,attempt:externalAttempt,acknowledged:externalAcknowledged,onAccepted,thread,channel,viewerId,onAccessLost,initialSessionId,onOpenSession,archived=false,channelName,onBack,onClose}: {
+ primary?:boolean;agentName?:string;artifactRequest?:number;initialArtifact?:NonNullable<import('@space/contracts').SessionReport['artifact']>;browserPage?:string;uploads?:UploadDrafts;acknowledged?:Record<string,RichDocument>;onAccepted?:(key:string,document:RichDocument,files:Attachment[])=>void;
  drafts?:Record<string,RichDocument>;onDraftChange?:(key:string,document:RichDocument)=>void;attempt?:(key:string)=>MessageAttempt;
  thread:string;channel:string;viewerId:string;onAccessLost:()=>void;initialSessionId?:string;onOpenSession?:(id:string)=>void;archived?:boolean;channelName?:string;onBack?:()=>void;onClose?:()=>void;
 }) {
@@ -94,16 +106,20 @@ export function AgentSessions({initialArtifact,artifactRequest,uploads,drafts:ex
   }catch(reason){if(denied(reason))revoke();else setError(errorText(reason));}
   finally{if(alive.current)setSaving(false);}
  }
- async function send(id:string,text:string,document:RichDocument,files:Attachment[],mode:DeliveryMode,execution?:string){
-  const payload=messageContent(text,document,files);
-  const body=JSON.stringify([mode,mode==='steer'?execution:null,payload]);
+ async function send(id:string,text:string,document:RichDocument,files:Attachment[],mode:DeliveryMode,execution?:string,settings?:CodexSettings){
+  const payload={
+   ...messageContent(text,document,files),
+   ...(browserPage ? {browser_url:browserPage} : {}),
+   ...(mode==='steer' ? {execution_id:execution} : settings ? {codex_settings:settings} : {}),
+  };
+  const body=JSON.stringify([mode,payload]);
   let state=externalAttempt?.(draftKey(id))??attempts.current.get(id);
   if(!state){state={};attempts.current.set(id,state);}
   if(state.current?.content!==body)state.current={content:body,id:crypto.randomUUID()};
   const attempt=state.current;
   if(mode==='steer' && files.length) throw new ComposerSendError('Steering accepts text. Queue the message to include files.');
   let accepted:{id:string;state?:string};
-  try { accepted=await request<{id:string;state?:string}>(`/agent-sessions/${id}/${mode}`,mode==='steer'?{text,execution_id:execution}:payload,attempt.id);
+  try { accepted=await request<{id:string;state?:string}>(`/agent-sessions/${id}/${mode}`,payload,attempt.id);
     if(mode==='steer' && accepted.state==='blocked') {state.current=undefined;throw new ComposerSendError('The turn is no longer accepting instructions. Your draft is saved.');}
   }
   catch(reason) { if(denied(reason))revoke(); if(reason instanceof Error && ['agent_busy','session_busy','agent_capacity','agent_unavailable','agent_start_failed'].includes(reason.message)){
@@ -122,24 +138,29 @@ export function AgentSessions({initialArtifact,artifactRequest,uploads,drafts:ex
  const current=sessions.find(item=>item.id===selected);
  return <div className={`agent-sessions${picker?' agent-sessions-picker':''}`}>
   {picker&&<div className="agent-sessions-bar"><strong><Robot size={17}/>Agent sessions</strong><Button size="sm" disabled={archived} onClick={()=>setCreating(true)}><Plus size={15}/>New agent session</Button></div>}
-  {!picker&&!current&&<ConversationHeader title="Agent session" channel={channelName} icon={<Robot size={20}/>} onBack={onBack} onClose={onClose}/>}
+  {!picker&&!current&&<ConversationHeader primary={primary} title={agentName ?? "Agent session"} channel={channelName} icon={<Robot size={20}/>} onBack={onBack} onClose={onClose}/>}
   {error&&<p role="alert" className="agent-sessions-error">{error} <Button size="sm" disabled={loading} onClick={()=>{setError('');setLoading(true);setLoadAttempt(value=>value+1);}}>{picker?'Retry loading sessions':'Retry loading messages'}</Button></p>}
   {loading&&(picker?<p role="status" className="agent-sessions-empty">Loading sessions…</p>:!current&&<div className="chat-timeline-shell"><div className="chat-timeline chat-timeline--virtual" aria-busy="true"><p className="sp-sr-only" role="status" aria-label="Loading messages">Loading messages…</p><ConversationSkeleton/></div></div>)}
+  {primary && selected && loading && !current && !archived && <ConversationComposer primary conversationKey={draftKey(selected)}
+    channel="agent session" placeholder={`Message ${agentName ?? 'agent'}`} controls={{}} sendDisabled
+    maxLength={4000} draftValue={getDraft(selected) ?? null} attachments={uploads?.drafts[draftKey(selected)] ?? []}
+    onDraftChange={doc => saveDraft(selected, doc)} onSend={() => {}}/>}
   {picker&&<nav aria-label="Sessions in this thread" className="agent-sessions-list">{sessions.map(session=><button key={session.id} type="button" aria-label={session.title} onClick={()=>onOpenSession?.(session.id)}><span><SessionTitle title={session.title}/></span><small>{session.agent_name} · {session.state==='ended'?'Ended':`${session.turn_count} ${session.turn_count===1?'turn':'turns'}`}</small></button>)}</nav>}
   {picker&&creating&&<form className="agent-session-create" onSubmit={create}><h3>New agent session</h3><label>Session name<input required maxLength={120} value={title} onChange={event=>setTitle(event.target.value)} placeholder="What are we working on?"/></label><label>Agent<Select aria-label="Agent" value={agent} onChange={event=>setAgent(event.target.value)}>{catalog.map(item=><option key={`${item.installation_id}|${item.skill}`} value={`${item.installation_id}|${item.skill}`}>{item.name} · {item.skill}</option>)}</Select></label>{!catalog.length&&<p>No session-capable agent is available in this conversation.</p>}{local.filter(item=>item.persistent_sessions&&!item.inherits_owner_access).flatMap(item=>item.skills.filter(skill=>!item.granted_skills.includes(skill)).map(skill=><Button key={`${item.id}|${skill}`} size="sm" disabled={saving} onClick={()=>void enable(item.id,skill)}>Enable {item.name}{item.skills.length>1?` · ${skill}`:''} in this channel</Button>))}<div><Button type="submit" disabled={saving||!title.trim()||!agent}>Start session</Button><Button variant="ghost" onClick={()=>setCreating(false)}>Cancel</Button></div></form>}
-  {!picker&&current&&detail?.session.id===current.id&&<SessionConversation initialArtifact={initialArtifact} artifactRequest={artifactRequest} key={current.id} initial={detail} session={current} channel={channel} channelName={channelName} onBack={onBack} onClose={onClose} viewerId={viewerId} revision={revision} draft={getDraft(current.id)} acknowledged={externalAcknowledged?.[draftKey(current.id)]??acknowledged[current.id]} onDraftChange={document=>saveDraft(current.id,document)} uploads={uploads} onSend={(text,document,files,mode,execution)=>send(current.id,text,document,files,mode,execution)} onAccessLost={revoke} archived={archived}/>}
+  {!picker&&current&&detail?.session.id===current.id&&<SessionConversation primary={primary} artifactRequest={artifactRequest} initialArtifact={initialArtifact} key={current.id} initial={detail} session={current} channel={channel} channelName={channelName} onBack={onBack} onClose={onClose} viewerId={viewerId} revision={revision} draft={getDraft(current.id)} acknowledged={externalAcknowledged?.[draftKey(current.id)]??acknowledged[current.id]} onDraftChange={document=>saveDraft(current.id,document)} uploads={uploads} onSend={(text,document,files,mode,execution,settings)=>send(current.id,text,document,files,mode,execution,settings)} onAccessLost={revoke} archived={archived}/>}
   {picker&&!loading&&!creating&&!sessions.length&&<p className="agent-sessions-empty">No agent sessions yet.</p>}
   {!picker&&!loading&&!current&&!error&&<p role="alert" className="agent-sessions-empty">This session is unavailable.</p>}
  </div>;
 }
-function SessionConversation({initialArtifact,artifactRequest,uploads,initial,session,channel,channelName,onBack,onClose,viewerId,revision,draft,acknowledged,onDraftChange,onSend,onAccessLost,archived}: {
- artifactRequest?:number;initialArtifact?:NonNullable<import('@space/contracts').SessionReport['artifact']>;uploads?:UploadDrafts;initial:AgentSessionDetail;session:AgentSessionSummary;channel:string;channelName?:string;onBack?:()=>void;onClose?:()=>void;viewerId:string;revision:number;draft?:RichDocument;acknowledged?:RichDocument;onDraftChange:(document:RichDocument)=>void;onSend:(text:string,document:RichDocument,files:Attachment[],mode:DeliveryMode,execution?:string)=>Promise<{id:string}>;onAccessLost:()=>void;archived:boolean;
+function SessionConversation({primary,initialArtifact,artifactRequest,uploads,initial,session,channel,channelName,onBack,onClose,viewerId,revision,draft,acknowledged,onDraftChange,onSend,onAccessLost,archived}: {
+ primary?:boolean;artifactRequest?:number;initialArtifact?:NonNullable<import('@space/contracts').SessionReport['artifact']>;uploads?:UploadDrafts;initial:AgentSessionDetail;session:AgentSessionSummary;channel:string;channelName?:string;onBack?:()=>void;onClose?:()=>void;viewerId:string;revision:number;draft?:RichDocument;acknowledged?:RichDocument;onDraftChange:(document:RichDocument)=>void;onSend:(text:string,document:RichDocument,files:Attachment[],mode:DeliveryMode,execution?:string,settings?:CodexSettings)=>Promise<{id:string}>;onAccessLost:()=>void;archived:boolean;
 }) {
  const starred=useStarredChannels(session.workspace_id,session.id,viewerId,'starred-sessions');
  const searchMentions=useMentionSearch(channel);
  const findReferences=useCallback(async(query:string)=>{const result=await searchMentions(query);return {...result,items:result.items.filter(item=>item.kind!=='broadcast').map(item=>({...item,detail:`${item.detail||'Member'} · Reference only`}))};},[searchMentions]);
  const [submittedTask,setSubmittedTask]=useState<string>();
  const [error,setError]=useState(''),[tab,setTab]=useState<string>(initialArtifact ?? 'messages'),[pending,setPending]=useState(false);
+
  const [refreshing,setRefreshing]=useState(false),[detailsOpen,setDetailsOpen]=useState(false);
  const profiles = useMemberProfile();
  const [selectedMention,setSelectedMention]=useState<MentionReference>();
@@ -153,6 +174,20 @@ function SessionConversation({initialArtifact,artifactRequest,uploads,initial,se
  const lastRevision=useRef(revision);
  useEffect(()=>{if(lastRevision.current!==revision){lastRevision.current=revision;void refresh();}},[revision]);
  const turns=data.turns,latestTurn=history.latest.turns.at(-1),latest=latestTurn?.task,activeSession=history.latest.session;
+ const [ending,setEnding] = useState(false);
+ const [models,setModels] = useState<AgentModel[]>([]);
+ useEffect(()=>{
+   if (!isLocalAgentSkill(activeSession.skill)) return;
+   const controller = new AbortController();
+   const refreshModels = async () => {
+     try {
+       const catalog = await request<AgentModel[]>(`/agent-sessions/${activeSession.id}/models`,undefined,undefined,undefined,controller.signal);
+       if (!controller.signal.aborted) setModels(Array.isArray(catalog) ? catalog : []);
+     } catch { if (!controller.signal.aborted) setModels([]); }
+   };
+   const unsubscribe = subscribeUpdates('workspace',activeSession.workspace_id,refreshModels,()=>{controller.abort();setModels([]);});
+   return () => {controller.abort();unsubscribe();};
+ },[activeSession.id,activeSession.skill,activeSession.workspace_id]);
  const [preference,setPreference]=useFollowUpPreference();
  const [draftExecution,setDraftExecution]=useState<string>();
  const inputs=history.latest.inputs??[];
@@ -161,7 +196,6 @@ function SessionConversation({initialArtifact,artifactRequest,uploads,initial,se
  const staleSteer = !!draftExecution && (!canSteer || draftExecution !== latest?.active_execution_id);
  const mode:DeliveryMode=canSteer ? preference : busy(latest)||queue.length ? 'queue' : 'messages';
  const sendDisabled=staleSteer || Boolean(submittedTask&&!history.latest.turns.some(turn=>turn.task.id===submittedTask));
- const [ending,setEnding]=useState(false);
  const outputs=useMemo<AgentSessionOutputs>(() => {
    if (history.latest.outputs) return history.latest.outputs;
    const files = new Map<string, AgentSessionOutputs['files'][number]>(), changes = new Map<string, AgentSessionOutputs['changes'][number]>();
@@ -196,7 +230,8 @@ function SessionConversation({initialArtifact,artifactRequest,uploads,initial,se
  const manage=viewerId===activeSession.owner_id||viewerId===activeSession.created_by;
  const rows=turns.flatMap((turn,index)=>{
   const base={channel_id:channel,thread_id:session.origin_thread_id,task_id:turn.task.id,client_message_id:null,created_at:turn.created_at??session.created_at};
-  const requestRow={turn,request:true,showMessage:true,notice:null,message:{...base,id:`${turn.task.id}:request`,sequence:String(index*2+1),text:turn.task.goal,attachments:turn.task.attachments,document:turn.task.request_document,author:{kind:'human' as const,id:turn.task.requester_id,name:turn.requester_name}}};
+  const requestContent=requestForDisplay(turn.task,Boolean(data.context?.browser_url));
+  const requestRow={turn,request:true,showMessage:true,notice:null,message:{...base,id:`${turn.task.id}:request`,sequence:String(index*2+1),...requestContent,attachments:turn.task.attachments,author:{kind:'human' as const,id:turn.task.requester_id,name:turn.requester_name}}};
   const {task,response}=turn;
   const hasContent=response?.messages.some(message=>message.text.trim())||response?.tools.length||response?.components.length;
   const notice=task.status==='rejected'?'Request declined':task.status==='failed'
@@ -220,31 +255,56 @@ function SessionConversation({initialArtifact,artifactRequest,uploads,initial,se
    const base=`/agent-sessions/${session.id}`,path=`${base}/queue/${item.id}`;
    if(operation==='move') return action(path,{move_to:value},'PATCH');
    if(operation==='edit') return action(path,{text:value,previous_text:item.text},'PATCH');
-   if(operation==='steer') return action(base+'/steer',{text:item.text,execution_id:latest?.active_execution_id,source_input_id:item.id},'POST',crypto.randomUUID());
+   if(operation==='steer') return action(base+'/steer',{text:item.text,document:item.document??undefined,browser_url:item.browser_url??undefined,execution_id:latest?.active_execution_id,source_input_id:item.id},'POST',crypto.randomUUID());
    return action(path+'/'+operation);
  }
- async function submit(text:string,document:RichDocument,files:Attachment[],delivery:DeliveryMode) {
+ async function submit(text:string,document:RichDocument,files:Attachment[],delivery:DeliveryMode,settings?:CodexSettings) {
    pinned.current=true;
-   const result=await onSend(text,document,files,delivery,latest?.active_execution_id??undefined);
+   const result=await onSend(text,document,files,delivery,latest?.active_execution_id??undefined,settings);
    setDraftExecution(undefined);
    if(delivery==='messages')setSubmittedTask(result.id);else await refresh();
  }
+ const goalAttempt=useRef<{body:string;key:string} | undefined>(undefined);
+ async function sendGoal(goal:GoalAction, settings?:CodexSettings) {
+   const running=busy(latest);
+   if (running && !(canSteer && latest?.goal_action)) throw new ComposerSendError('Wait for this turn to finish before changing the goal.');
+   const text=goal.kind==='set' ? goal.objective : '/goal '+goal.kind;
+   const payload=running ? {text,goal_action:goal,execution_id:latest!.active_execution_id} : {text,goal_action:goal,codex_settings:settings};
+   const body=JSON.stringify(payload);
+   if (goalAttempt.current?.body!==body) goalAttempt.current={body,key:crypto.randomUUID()};
+   try {
+     const result=await request<{id:string;state?:string}>(`/agent-sessions/${session.id}/${running?'steer':'messages'}`,payload,goalAttempt.current.key);
+     if (running && result.state!=='sent') {
+       if (result.state==='blocked') goalAttempt.current=undefined;
+       throw new ComposerSendError('Goal delivery was not confirmed. Check the session before trying again.');
+     }
+     goalAttempt.current=undefined;
+     pinned.current=true;
+     if (!running) setSubmittedTask(result.id);
+     await refresh();
+   } catch(reason) {
+     if (denied(reason)) lost.current();
+     throw new ComposerSendError(errorText(reason));
+   }
+ }
  const footer=activeSession.state==='ended'?<p className="agent-session-notice">This session has ended. Its conversation and outputs are saved.</p>:!session.managed?<p className="agent-session-notice">Start a new session to continue this earlier run.</p>:!archived?<>
   {staleSteer && <div className="agent-session-system-notice" role="status">The turn you were steering has ended. <Button size="sm" onClick={()=>setDraftExecution(undefined)}>Use draft as follow-up</Button></div>}
-  <AgentSessionComposer typingIndicator={<>
+  <AgentSessionComposer primary={primary} conversationKey={uploadKey} models={models} startingGoal={busy(latest) && latest?.goal_action?.kind==='set' ? latest.goal_action.objective : undefined} sessionGoal={history.latest.session_goal} onGoalAction={viewerId===activeSession.owner_id && activeSession.supports_steering ? sendGoal : undefined} initialSettings={initial.turns.at(-1)?.task.codex_settings} typingIndicator={<>
     <ResultActions actions={outputs.actions}/><AgentActivityIndicator name={session.agent_name} turn={latestTurn}/><SessionQueue items={queue} canManage={item => viewerId === item.actor_id || viewerId === activeSession.owner_id}
     pending={pending} onAction={queueAction} canSteer={canSteer} paused={activeSession.queue_paused}
     onResume={manage?()=>void action(`/agent-sessions/${session.id}/queue/resume`):undefined} mode={preference} onModeChange={canSteer?setPreference:undefined}/>
     </>} submitLabel={mode==='messages'?undefined:mode==='queue'?'Queue':'Steer'}
     submitIcon={mode==='messages'?undefined:mode==='queue'?<ListBullets size={18}/>:<ArrowBendUpRight size={18}/>}
-    submitAccessory={canSteer && <span className="agent-followup-menu" title="Follow-up behavior"><FollowUpMenu mode={preference} change={setPreference}/></span>}
-    onAlternateSend={canSteer?(text,doc,files)=>submit(text,doc,files,mode==='steer'?'queue':'steer'):undefined} workspace={session.workspace_id} skill={session.skill} channel="agent session" placeholder={`Message ${session.agent_name}`} findMentions={findReferences} sendDisabled={sendDisabled} maxLength={4000} showUnavailableActions={false} attachmentsEnabled={!!uploads?.enabled} attachments={uploads?.drafts[uploadKey]??[]} onAttachmentsChange={files=>uploads?.change(uploadKey,channel,files)} onRetryAttachment={id=>uploads?.retry(uploadKey,channel,id)} defaultValue={draft} acknowledgedDocument={acknowledged} onDraftChange={doc=>{
+    controls={{ attachmentsEnabled: !!uploads?.enabled, findMentions: findReferences,
+      submitAccessory: canSteer && <span className="agent-followup-menu" title="Follow-up behavior"><FollowUpMenu mode={preference} change={setPreference}/></span>,
+    }}
+    onAlternateSend={canSteer?(text,doc,files,options)=>submit(text,doc,files,mode==='steer'?'queue':'steer',options?.codex_settings):undefined} workspace={session.workspace_id} skill={session.skill} channel="agent session" placeholder={`Message ${session.agent_name}`} sendDisabled={sendDisabled} maxLength={4000} attachments={uploads?.drafts[uploadKey]??[]} onAttachmentsChange={files=>uploads?.change(uploadKey,channel,files)} onRetryAttachment={id=>uploads?.retry(uploadKey,channel,id)} draftValue={draft ?? null} acknowledgedDocument={acknowledged} onDraftChange={doc=>{
       if (!doc.ops.some(op=>op.insert.trim())) setDraftExecution(undefined);
       else if (mode==='steer' && !draftExecution) setDraftExecution(latest?.active_execution_id??undefined);
       onDraftChange(doc);
-    }} onSend={(text,doc,files)=>submit(text,doc,files,mode)}/></>:null;
+    }} onSend={(text,doc,files,options)=>submit(text,doc,files,mode,options?.codex_settings)}/></>:null;
  return <div className="agent-session" aria-label={`Agent session ${session.title}`}>
-  <ConversationHeader title="Agent session" topic={session.managed&&<div className="agent-session-header-title">
+  <ConversationHeader primary={primary} title="Agent session" topic={session.managed&&<div className="agent-session-header-title">
     <span title={session.title}><SessionTitle title={session.title}/></span>
     {manage&&<IconButton label="Rename session" onClick={()=>setRenaming(true)}><PencilSimple size={15}/></IconButton>}
   </div>} backLabel={data?.context?"Back to my sidekick":undefined} heading={<ConversationHeading title={session.agent_name} label={`Conversation details for ${session.agent_name}`} onClick={()=>profiles ? profiles.open({kind:'agent',id:session.installation_id}) : setDetailsOpen(true)} leading={session.managed&&<IconButton label={starred.active?'Unstar conversation':'Star conversation'} aria-pressed={starred.active} aria-disabled={starred.busy||undefined} onClick={()=>void starred.toggle(session.id,{id:session.id,name:session.title,kind:'agent_session',private:false,working:latest?.status==='running',can_rename:manage,session:{id:session.id,agent_name:session.agent_name,origin_thread_id:session.origin_thread_id,channel_id:channel,channel_archived:archived}}).catch(reason=>setError(errorText(reason)))}><Star size={19} weight={starred.active?'fill':'regular'}/></IconButton>} icon={<Avatar name={session.agent_name} initials={session.agent_name.slice(0,2).toUpperCase()} tone="green"/>}/>} channel={channelName} icon={<Robot size={20}/>} onBack={onBack} onClose={onClose} actions={<>{manage&&busy(latest)&&<Button size="sm" disabled={pending} onClick={()=>void action(`/agent-sessions/${session.id}/stop`)}><Stop size={14}/>Stop</Button>}<Menu label="More conversation actions" floating trigger={<DotsThree size={22} weight="bold"/>} items={[{label:"Conversation details",onSelect:()=>setDetailsOpen(true)},...(profiles?[{label:"View full profile",onSelect:()=>profiles.open({kind:'agent',id:session.installation_id})}]:[]),{label:"Browse files",onSelect:()=>setTab("files")},...(manage && session.managed && activeSession.state==='active' ? [{label:"End session for everyone",onSelect:()=>setEnding(true)}] : []),...(onClose?[{label:"Close agent session",separatorBefore:true,onSelect:onClose}]:[])]}/></>}/>
@@ -264,7 +324,7 @@ function SessionConversation({initialArtifact,artifactRequest,uploads,initial,se
       if (item.state !== 'sent') return <SteeringReceipt key={item.id} item={item}/>;
       const message:ChatMessage = {
         id:item.id, channel_id:channel, thread_id:session.origin_thread_id, task_id:turn.task.id,
-        client_message_id:null, sequence:row.message.sequence, text:item.text, created_at:item.created_at ?? row.message.created_at,
+        client_message_id:null, sequence:row.message.sequence, text:item.text,document:item.document, created_at:item.created_at ?? row.message.created_at,
         author:{kind:'human',id:item.actor_id,name:item.actor_name ?? (item.actor_id===viewerId?'You':'Member')},
       };
       const previous=turn.steering?.[index-1];
@@ -272,7 +332,7 @@ function SessionConversation({initialArtifact,artifactRequest,uploads,initial,se
         previous={previous?.state==='sent'?{created_at:previous.created_at??row.message.created_at,author:{kind:'human',id:previous.actor_id,name:previous.actor_name??'Member'}}:index===0?row.message:undefined}
         actions={{copyMessage:()=>navigator.clipboard.writeText(item.text)}}/>;
     })}
-    {row.notice&&<div role="status" className="agent-session-system-notice"><Info size={16} aria-hidden="true"/><span><strong>Space</strong> · {row.notice}</span></div>}
+    {row.notice&&<div role="status" className="sp-message agent-session-turn-notice"><Info size={16} aria-hidden="true"/><span><strong>Space</strong> · {row.notice}</span></div>}
    </div>;
   }}/>{footer}
   </div>{tab==='team' && <div id={viewsId+'-team'} className="session-team-panel" role="tabpanel" aria-label="Team"><SessionAgentHandoff session={activeSession} channel={channel} viewer={viewerId} writable={reviewAllowed} turns={turns} related={history.latest.related_agents??[]} refresh={refresh}/><SessionTeam key={session.id+viewerId} id={session.id} viewer={viewerId} outputs={outputs}/></div>}{(tab==='preview'||tab==='files')&&<div className="agent-session-output-view" role="tabpanel" id={`${viewsId}-${tab}`} aria-label={tab==='preview'?'Preview':'Files'} tabIndex={0}>

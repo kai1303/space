@@ -3,7 +3,7 @@ import type { ChatMessage, MessagePage } from '@space/contracts';
 import { request } from '../../shared/api/request.js';
 import { appendLive, HISTORY_LIMIT, mergePage, type HistoryDirection } from './history-window.js';
 
-export function useMessageHistory(path: string, onError: (reason: unknown) => void, rootsOnly = false) {
+export function useMessageHistory(path: string, onError: (reason: unknown) => void, rootsOnly = false, target?: ChatMessage) {
   const [page, setPage] = useState<MessagePage | null>(null);
   const [loading, setLoading] = useState<HistoryDirection | null>(null);
   const [latestVersion, setLatestVersion] = useState(0);
@@ -25,7 +25,7 @@ export function useMessageHistory(path: string, onError: (reason: unknown) => vo
     }
     if (current.current) update(appendLive(current.current, messages, pinned, rootsOnly));
   }, [rootsOnly]);
-  const load = useCallback(async (direction: HistoryDirection): Promise<MessagePage | undefined> => {
+  const load = useCallback(async (direction: HistoryDirection, targetSequence?: string): Promise<MessagePage | undefined> => {
     if (busy.current) {
       if (direction !== 'latest') return;
       epoch.current++;
@@ -36,7 +36,10 @@ export function useMessageHistory(path: string, onError: (reason: unknown) => vo
     busy.current = direction; setLoading(direction);
     const version = epoch.current;
     try {
-      const url = `${path}${direction === 'latest' ? '' : `?${direction === 'older' ? 'before' : 'after'}=${boundary}`}`;
+      // The API uses an exclusive sequence cursor. Include the linked message at the start of its page.
+      let url = path;
+      if (targetSequence) url += `?after=${BigInt(targetSequence) - 1n}`;
+      else if (direction !== 'latest') url += `?${direction === 'older' ? 'before' : 'after'}=${boundary}`;
       let result = await request<MessagePage>(url);
       if (epoch.current !== version) return;
       if (overflow.current === 'deletion') {
@@ -46,11 +49,11 @@ export function useMessageHistory(path: string, onError: (reason: unknown) => vo
         if (epoch.current !== version) return;
         if (overflow.current === 'deletion') throw new Error('Messages changed while loading. Try again.');
       }
-      let next = mergePage(current.current, result, direction);
+      let next = mergePage(targetSequence ? null : current.current, result, direction);
       if (direction === 'latest' || direction === 'newer') {
         if (overflow.current) next = { ...next, has_newer: true };
         else next = appendLive(next, buffer.current.filter(message => BigInt(message.reaction_sequence ?? '0') > BigInt(result.event_cursor) || BigInt(message.sequence!) > BigInt(result.event_cursor)), direction === 'latest', rootsOnly);
-        if (direction === 'latest') setLatestVersion(value => value + 1);
+        if (direction === 'latest' && !targetSequence) setLatestVersion(value => value + 1);
       }
       // Updates retain their creation sequence and can overlap any page being fetched.
       const ids = new Set(next.messages.map(message => message.id));
@@ -61,6 +64,15 @@ export function useMessageHistory(path: string, onError: (reason: unknown) => vo
     } catch (reason) { if (epoch.current === version) error.current(reason); }
     finally { if (epoch.current === version) { busy.current = null; setLoading(null); } }
   }, [path, rootsOnly]);
+  const located = useRef<ChatMessage | undefined>(undefined);
+  useEffect(() => {
+    if (!target) { located.current = undefined; return; }
+    if (!page || located.current === target) return;
+    located.current = target;
+    if (!page.messages.some(message => message.id === target.id) && target.sequence) {
+      void load('latest', target.sequence);
+    }
+  }, [page, target, load]);
   const sent = useCallback((message: ChatMessage) => {
     if (!mounted.current || !current.current) return;
     receive([message], true);

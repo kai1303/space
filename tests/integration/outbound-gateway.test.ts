@@ -551,6 +551,60 @@ test('workspace knowledge plugins share discovery, scoped grants, cited search a
   } finally { await client.close(); await gateway.close(); }
 });
 
+test('a lost permission listener cancels active work and recovers on the same gateway', async () => {
+  const { createGateway } = await import('../../apps/mcp-gateway/dist/gateway.js');
+  const listenerName = 'recovery_' + randomUUID();
+  const gatewayPool = new Pool({ connectionString: process.env.TEST_DATABASE_URL, application_name: listenerName,
+    options: `-c search_path=${schema}` });
+  const store = new OutboundStore(gatewayPool, randomBytes(32).toString('hex'));
+  const seed = await fixture();
+  const connection = await store.create(seed.owner_id, { name: 'Listener test', url: 'https://example.com/mcp', auth_type: 'none' });
+  let markStarted!: () => void;
+  const started = new Promise<void>(resolve => { markStarted = resolve; });
+  let calls = 0;
+  const gateway = createGateway(store, { remote: {
+    async discover(_connection, signal = AbortSignal.timeout(30_000)) {
+      if (++calls === 1) {
+        markStarted();
+        await new Promise<void>(resolve => signal.addEventListener('abort', () => resolve(), { once: true }));
+        signal.throwIfAborted();
+      }
+      return [{ name: 'search', inputSchema: { type: 'object' } }];
+    },
+    async call() { throw new Error('unexpected dispatch'); },
+  } });
+  try {
+    await gateway.ready();
+    const token = store.security.sign({ owner: seed.owner_id, installation: '', execution: '', aud: 'outbound-internal', exp: Date.now() + 30000 });
+    const discover = (revision: number) => gateway.inject({ method: 'POST', url: '/internal/discover',
+      headers: { authorization: 'Bearer ' + token }, payload: { connection_id: connection.id, revision } });
+    const pending = discover(connection.revision).then(reply => reply.statusCode);
+    await started;
+    const killed = await admin.query("SELECT pg_terminate_backend(pid) AS killed FROM pg_stat_activity WHERE application_name=$1 AND query='LISTEN space_outbound_changed'", [listenerName]);
+    assert.deepEqual(killed.rows, [{ killed: true }]);
+    // The listener has stopped and the upstream call has observed cancellation.
+    assert.notEqual(await pending, 200);
+    assert.equal((await gateway.inject('/healthz')).statusCode, 503);
+    assert.equal((await gateway.inject({method:'POST',url:'/mcp'})).statusCode, 503);
+    const current = await store.get(seed.owner_id, connection.id);
+    const updated = await store.update(seed.owner_id, connection.id, { revision: current.revision, name: 'Updated during outage' });
+    await assertEventuallyReady();
+    assert.notEqual((await discover(connection.revision)).statusCode, 200);
+    assert.equal((await discover(updated.revision)).statusCode, 200);
+    assert.equal(calls, 2);
+  } finally {
+    await gateway.close();
+    await gatewayPool.end();
+  }
+  async function assertEventuallyReady() {
+    const deadline = Date.now() + 5000;
+    while ((await gateway.inject('/healthz')).statusCode !== 200) {
+      assert.ok(Date.now() < deadline, 'gateway did not resubscribe');
+      await new Promise(resolve => setTimeout(resolve, 25));
+    }
+  }
+});
+
 test('a browser session exposes only tools granted on the owner’s personal connection, even if a shared tool name is known', async () => {
   const seed = await fixture(true);
   const store = new OutboundStore(pool, randomBytes(32).toString('hex'));

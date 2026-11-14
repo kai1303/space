@@ -295,3 +295,20 @@ describe('sender outbox', () => {
     expect(box.getSnapshot()).toHaveLength(100);
   });
 });
+
+it('replays an encrypted send under the same ID without serializing message text or document',async()=>{
+  const workspace=crypto.randomUUID(),id=crypto.randomUUID(),sender=crypto.randomUUID();
+  const encrypted={version:1 as const,sender,recipients:[sender],ciphertext:'YWJjZA=='};
+  const box=getMessageOutbox(viewer,workspace);
+  await box.enqueue({channelId,text:'Encrypted message',encrypted},id);
+  const timedOut=vi.fn().mockRejectedValue(new Error('operation has timed out'));
+  await box.send(id,socketWith(timedOut));
+  vi.resetModules();
+  const reopened=(await import('./message-outbox.js')).getMessageOutbox(viewer,workspace);
+  const delivered=vi.fn().mockResolvedValue({data:{...saved(id),text:'Encrypted message',encrypted}});
+  await reopened.resumeSends(socketWith(delivered),()=>true);
+  const wire={expected_actor:viewer,channel_id:channelId,client_message_id:id,encrypted};
+  expect(timedOut).toHaveBeenCalledWith('message.send',wire);
+  expect(delivered).toHaveBeenCalledWith('message.send',wire);
+  expect(reopened.getSnapshot()).toEqual([]);
+});

@@ -1,18 +1,17 @@
+import { expectedActor } from './expected-actor.js';
 import { registerReplySuggestions } from './reply-suggestions.js';
-import type { FastifyInstance, FastifyRequest } from 'fastify';
-import { AppError, record, uuid } from '@space/contracts';
+import type { FastifyInstance } from 'fastify';
+import { record, uuid } from '@space/contracts';
 import type { ChatStore } from '@space/postgres/chat';
 
 export const incomingWebhookPath = '/v1/hooks/incoming/:token';
 
-function messageActor(request: FastifyRequest) {
-  const expected = request.headers['x-expected-actor'];
-  if (expected !== undefined && uuid(expected) !== request.actorId) throw new AppError(409, 'actor_changed');
-  return request.actorId;
-}
-
 export function registerChatRoutes(app: FastifyInstance, chat: ChatStore) {
   registerReplySuggestions(app, chat);
+  app.get<{Params:{channelId:string}}>('/v1/channels/:channelId/encryption',r=>chat.encryption.state(expectedActor(r),uuid(r.params.channelId)));
+  for(const op of ['enroll','revoke','enable'] as const){
+    app.post<{Params:{channelId:string}}>(`/v1/channels/:channelId/encryption/${op}`,{bodyLimit:12000},r=>chat.encryption.change(expectedActor(r),uuid(r.params.channelId),op,r.body));
+  }
   app.get<{ Params: { channelId: string } }>('/v1/channels/:channelId/webhooks', r => chat.webhooks.list(r.actorId, uuid(r.params.channelId)));
   app.post<{ Params: { channelId: string } }>('/v1/channels/:channelId/webhooks', async (r, reply) =>
     reply.code(201).send(await chat.webhooks.create(r.actorId, uuid(r.params.channelId), r.body)));
@@ -59,28 +58,29 @@ export function registerChatRoutes(app: FastifyInstance, chat: ChatStore) {
   app.get<{ Params: { channelId: string } }>('/v1/channels/:channelId/tabs', r => chat.channelTabs(r.actorId, uuid(r.params.channelId)));
   app.get<{ Params: { channelId: string } }>('/v1/channels/:channelId/links', r => chat.channelLinks(r.actorId, uuid(r.params.channelId), r.query));
   app.put<{ Params: { channelId: string } }>('/v1/channels/:channelId/tabs/order', async (r, reply) => {
-    await chat.moveChannelTab(messageActor(r), uuid(r.params.channelId), r.body);
+    await chat.moveChannelTab(expectedActor(r), uuid(r.params.channelId), r.body);
     return reply.code(204).send();
   });
   app.put<{ Params: { channelId: string; tab: string } }>('/v1/channels/:channelId/tabs/:tab', async (r, reply) => {
-    await chat.setTabVisibility(messageActor(r), uuid(r.params.channelId), r.params.tab, r.body);
+    await chat.setTabVisibility(expectedActor(r), uuid(r.params.channelId), r.params.tab, r.body);
     return reply.code(204).send();
   });
   app.get<{ Params: { channelId: string } }>('/v1/channels/:channelId/pins', r => chat.channelPins(r.actorId, uuid(r.params.channelId), r.query));
   app.put<{ Params: { channelId: string; messageId: string } }>('/v1/channels/:channelId/pins/:messageId', async (r, reply) => {
-    await chat.setChannelPin(messageActor(r), uuid(r.params.channelId), uuid(r.params.messageId), true);
+    await chat.setChannelPin(expectedActor(r), uuid(r.params.channelId), uuid(r.params.messageId), true);
     return reply.code(204).send();
   });
   app.delete<{ Params: { channelId: string; messageId: string } }>('/v1/channels/:channelId/pins/:messageId', async (r, reply) => {
-    await chat.setChannelPin(messageActor(r), uuid(r.params.channelId), uuid(r.params.messageId), false);
+    await chat.setChannelPin(expectedActor(r), uuid(r.params.channelId), uuid(r.params.messageId), false);
     return reply.code(204).send();
   });
   app.get<{ Params: { channelId: string } }>('/v1/channels/:channelId/history', r => chat.history(r.actorId, uuid(r.params.channelId), r.query));
   app.get<{ Params: { channelId: string } }>('/v1/channels/:channelId/messages', r => chat.messageHistory(r.actorId, uuid(r.params.channelId), r.query));
   app.get<{ Params: { channelId: string; messageId: string } }>('/v1/channels/:channelId/messages/:messageId', r => chat.sourceMessage(r.actorId, uuid(r.params.channelId), uuid(r.params.messageId)));
-  app.post<{ Params: { channelId: string } }>('/v1/channels/:channelId/messages', { bodyLimit: 131072 }, async (r, reply) => reply.code(201).send(await chat.send(messageActor(r), uuid(r.params.channelId), r.body)));
-  app.delete<{ Params: { channelId: string; clientId: string } }>('/v1/channels/:channelId/outgoing/:clientId', r => chat.cancelOutgoing(messageActor(r), uuid(r.params.channelId), uuid(r.params.clientId)));
-  app.delete<{ Params: { channelId: string; messageId: string } }>('/v1/channels/:channelId/messages/:messageId', r => chat.deleteMessage(messageActor(r), uuid(r.params.channelId), uuid(r.params.messageId)));
+  app.post<{ Params: { channelId: string } }>('/v1/channels/:channelId/messages', { bodyLimit: 131072 }, async (r, reply) => reply.code(201).send(await chat.send(expectedActor(r), uuid(r.params.channelId), r.body)));
+  app.delete<{ Params: { channelId: string; clientId: string } }>('/v1/channels/:channelId/outgoing/:clientId', r => chat.cancelOutgoing(expectedActor(r), uuid(r.params.channelId), uuid(r.params.clientId)));
+  app.patch<{ Params: { channelId: string; messageId: string } }>('/v1/channels/:channelId/messages/:messageId', r => chat.editMessage(expectedActor(r), uuid(r.params.channelId), uuid(r.params.messageId), r.body));
+  app.delete<{ Params: { channelId: string; messageId: string } }>('/v1/channels/:channelId/messages/:messageId', r => chat.deleteMessage(expectedActor(r), uuid(r.params.channelId), uuid(r.params.messageId)));
   app.post<{ Params: { channelId: string; messageId: string } }>('/v1/channels/:channelId/messages/:messageId/reactions', r => chat.react(r.actorId, uuid(r.params.channelId), uuid(r.params.messageId), r.body));
   app.post<{ Params: { channelId: string } }>('/v1/channels/:channelId/join', r => {
     record(r.body, []);

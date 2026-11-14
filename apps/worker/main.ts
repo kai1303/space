@@ -1,3 +1,4 @@
+import { readPdfPages } from '@space/server/pdf-text';
 import { agentImageReader, createAssetStorageFromEnv } from '@space/server/storage';
 import { MemoryStore } from '@space/postgres/memory';
 import { createAgentMemoryReader } from '@space/server/memory';
@@ -22,7 +23,11 @@ async function embedTexts(texts: string[]): Promise<number[][]> {
 const pool = createPool(process.env.DATABASE_URL);
 const store = new PostgresStore(pool);
 const storage = createAssetStorageFromEnv();
-if (storage) store.attachmentImage = agentImageReader(storage);
+if (storage) {
+  const uploads = storage;
+  store.attachmentImage = agentImageReader(uploads);
+  store.attachmentPdf = (key, size, page, count, budget) => readPdfPages(uploads, key, size, page, count, budget);
+}
 store.memoryReader = createAgentMemoryReader(new MemoryStore(pool));
 const connectors = [new MockConnector(), ...(process.env.AG_UI_URL ? [new AgUiConnector({ url: process.env.AG_UI_URL, token: process.env.AG_UI_TOKEN })] : [])];
 const navigator = new NavigatorStore(pool, createNavigatorProviders(process.env));

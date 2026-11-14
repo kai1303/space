@@ -34,6 +34,18 @@ export function assetDownloadPath(id: string) {
   return `/v1/assets/${id}/download`;
 }
 
+export function assetPagePath(id: string, page: number) {
+  if (!uuid.test(id) || !Number.isSafeInteger(page) || page < 1) throw new Error('Invalid PDF page link.');
+  return `/file/${id}?page=${page}`;
+}
+
+export function parseAssetPagePath(path: string) {
+  const match = /^\/file\/([^/?]+)\?page=([1-9]\d*)$/.exec(path);
+  if (!match || !uuid.test(match[1]!)) return undefined;
+  const page = Number(match[2]);
+  return Number.isSafeInteger(page) ? { id: match[1]!, page } : undefined;
+}
+
 export function isAssetDownloadPath(path: string) {
   const match = /^\/v1\/assets\/([^/]+)\/download$/.exec(path);
   return !!match && uuid.test(match[1]!);

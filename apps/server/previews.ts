@@ -66,6 +66,11 @@ export async function generateAssetPreview(storage: AssetStorage, id: string, na
   if (ext === 'docx' || ext === 'xlsx' || ext === 'pptx' || ext === 'odt' || ext === 'ods' || ext === 'odp')
     return { kind: 'office', fileType: ext };
   if (detected?.mime === 'application/pdf') return { kind: 'pdf', mime: 'application/pdf' };
+  // The detector identifies the container. Audio-only WebM and MP4 can share video magic.
+  if (detected?.mime === 'video/webm' && /\.weba$/i.test(name)) return { kind: 'audio', mime: 'audio/webm' };
+  if (detected?.mime === 'audio/x-m4a' || (detected?.mime === 'video/mp4' && /\.m4a$/i.test(name)))
+    return { kind: 'audio', mime: 'audio/mp4' };
+  if (detected?.mime === 'audio/ogg; codecs=opus') return { kind: 'audio', mime: 'audio/ogg' };
   if (detected && mediaTypes[detected.mime]) return { kind: mediaTypes[detected.mime]!, mime: detected.mime };
   // Recognized binary formats never fall back to text, even with a misleading extension.
   if (detected && detected.mime !== 'application/xml') return unsupported('A preview is not available for this file type.');

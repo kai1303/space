@@ -7,17 +7,17 @@ vi.mock('../../shared/realtime/live-updates.js',()=>({
  invalidateUpdates:vi.fn(),
 }));
 afterEach(()=>{cleanup();vi.unstubAllGlobals();mocks.subscriptions=[];});
-it('replaces bounded pages and returns to recent sessions',async()=>{
+it('appends bounded pages and keeps older rows on a workspace refresh',async()=>{
  const fetch=vi.fn(async(path:string)=>({ok:true,json:async()=>path.includes('before=')?{items:[{id:'older'}],next_cursor:null}:{items:[{id:'recent'}],next_cursor:'cursor'}}));
  vi.stubGlobal('fetch',fetch);
  const {result}=renderHook(()=>useAgentSessionList('workspace'));
  await waitFor(()=>expect(result.current.items[0]?.id).toBe('recent'));
- act(()=>result.current.older());
- await waitFor(()=>expect(result.current.items.map(item=>item.id)).toEqual(['older']));
+ act(()=>result.current.loadMore());
+ await waitFor(()=>expect(result.current.items.map(item=>item.id)).toEqual(['recent','older']));
  expect(fetch.mock.calls.at(-1)?.[0]).toBe('/v1/workspaces/workspace/agent-sessions?before=cursor');
- expect(result.current.hasPrevious).toBe(true);
- act(()=>result.current.first());
- await waitFor(()=>expect(result.current.items[0]?.id).toBe('recent'));
+ expect(result.current.next_cursor).toBeNull();
+ await act(async()=>mocks.subscriptions[0]!.read());
+ expect(result.current.items.map(item=>item.id)).toEqual(['recent','older']);
 });
 it('ignores late results from a previous workspace and clears revoked session titles',async()=>{
  let finish!:(value:unknown)=>void;

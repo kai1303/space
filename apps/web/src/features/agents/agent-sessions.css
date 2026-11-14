@@ -18,6 +18,7 @@
 .agent-session{container-type:inline-size}
 .agent-session-body{display:flex;flex:1;min-width:0;min-height:0;position:relative;overflow:hidden}
 .agent-session-conversation{display:flex;flex:1;min-width:0;min-height:0;flex-direction:column}
+.agent-session-conversation > .chat-timeline-shell:not(:last-child){margin-bottom:12px}
 .agent-session-conversation[hidden]{display:none}
 .agent-session-output-view{display:flex;flex:1;flex-direction:column;min-width:0;min-height:0}
 .agent-session-tabs.sp-tabs{flex:none;gap:18px;height:38px;padding:0 22px;overflow-x:auto}
@@ -30,6 +31,9 @@
 /* The activity line above the composer already describes the active turn. */
 .agent-session .sp-agent-streaming{display:none}
 
+.agent-session-disclosure { display:flex; flex-wrap:wrap; gap:2px 8px; margin-inline-start:24px; }
+.agent-session-disclosure button { display:inline-flex; align-items:center; gap:6px; min-height:28px; padding:0 4px; border:0; border-radius:4px; background:transparent; color:var(--sp-sidebar-content); font:inherit; font-size:13px; cursor:pointer; }
+.agent-session-disclosure button:hover { background:var(--sp-sidebar-item-hover); }
 .agent-session-sidebar-notice{margin:4px 12px 8px;font-size:12px;line-height:1.5;color:var(--sp-sidebar-text)}
 
 .agent-session > .chat-channel-header > .sp-conversation-heading { max-width: 50%; }
@@ -39,6 +43,8 @@
 .agent-session-header-title > button { flex-shrink:0; }
 
 .agent-session-system-notice { display:flex; align-items:center; gap:7px; margin:6px 20px; padding:5px 10px; border-inline-start:2px solid var(--sp-border); color:var(--sp-text-secondary); font-size:13px; line-height:1.4; }
+.chat-timeline .agent-session-turn-notice { align-items:center; padding-block:6px; color:var(--sp-text-secondary); font-size:13px; line-height:1.4; }
+.agent-session-turn-notice > svg { justify-self:center; }
 .agent-turn-inputs { overflow:clip; margin:0 20px -1px; border:1px solid var(--sp-border); border-radius:10px 10px 0 0; background:var(--sp-surface-hover); color:var(--sp-text-secondary); }
 .agent-turn-inputs ol { max-height:26vh; overflow:auto; margin:0; padding:3px 5px; list-style:none; }
 .agent-turn-input,.agent-queue-paused { display:flex; align-items:center; gap:4px; min-height:31px; padding:0 4px; font-size:13px; }

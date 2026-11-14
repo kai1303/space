@@ -1,3 +1,4 @@
+import { parseAssetPagePath } from '@space/contracts';
 import { ConversationLinkLoading } from './shell/ConversationLinkLoading.js';
 import { lazy, Suspense } from 'react';
 const LaunchPage = lazy(() => import('../features/launch/LaunchPage.js').then(module => ({ default: module.LaunchPage })));
@@ -13,7 +14,7 @@ const AgentPreview = lazy(() => import('../gallery/AgentSessionPreview.js').then
 export function App() {
   const { pathname, hash, search } = window.location;
   const file = /^\/file\/([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})$/i.exec(pathname);
-  if (file) return <Suspense fallback={<p role="status">Opening file…</p>}><FileWindow id={file[1]!}/></Suspense>;
+  if (file) return <Suspense fallback={<p role="status">Opening file…</p>}><FileWindow id={file[1]!} initialPage={parseAssetPagePath(pathname + search)?.page} /></Suspense>;
   const office = /^\/office\/(library|file)\/([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})$/i.exec(pathname);
   if (office) return <Suspense fallback={<p role="status">Opening Office editor…</p>}>
     <OfficePanel library={office[1] === 'library'} id={office[2]!} />

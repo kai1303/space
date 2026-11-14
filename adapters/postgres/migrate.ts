@@ -21,13 +21,19 @@ export const migrationFiles = [
   '068_session_sidebar_activity.sql', '069_thread_reply_summary.sql', '070_outbound_authority_notifications.sql', '071_workflow_messages.sql', '072_channel_webhooks.sql', '073_published_help_workflows.sql', '074_workflow_edits.sql', '075_channel_message_pins.sql', '076_channel_tabs.sql', '077_channel_tab_order.sql', '078_channel_notification_preferences.sql', '079_knowledge_plugins.sql', '080_channel_notification_controls.sql', '081_channel_knowledge.sql', '082_thread_knowledge.sql',
   '083_office_previews.sql', '084_markdown_knowledge.sql', '085_layered_memory.sql', '086_memory_pending.sql', '087_memory_updates.sql', '088_knowledge_notes.sql', '089_scheduled_messages.sql', '090_memory_rename.sql', '091_memory_visible_summaries.sql', '092_graph_rag_memory.sql', '093_drop_agent_memory.sql', '094_memory_extract.sql', '095_memory_extract_switch.sql', '096_memory_extract_revisions.sql',
   '097_shared_memory_evidence.sql', '098_office_edits.sql',
-  '099_channel_memory_documents.sql', '100_topic_evidence.sql', '101_knowledge_note_evidence_changes.sql', '102_execution_note_evidence.sql', '103_session_attachments.sql', '104_session_messages.sql', '105_session_queue_controls.sql', '106_codex_session_title.sql',
-  '115_browser_turn_url.sql',
+  '099_channel_memory_documents.sql', '100_topic_evidence.sql', '101_knowledge_note_evidence_changes.sql', '102_execution_note_evidence.sql', '103_session_attachments.sql', '104_session_messages.sql', '105_session_queue_controls.sql', '106_codex_session_title.sql', '107_encrypted_direct_messages.sql', '108_encrypted_dm_files.sql', '109_attachment_graph.sql', '110_codex_turn_settings.sql', '111_always_index_attachments.sql', '112_always_index_channel_decisions.sql', '113_session_goals.sql', '114_agent_models.sql', '115_browser_turn_url.sql',
   '116_session_sidebar_preferences.sql',
+  '117_kiro_model_settings.sql',
   '118_session_report_origin.sql',
   '119_session_team.sql',
   '120_session_discovery.sql',
+  '122_sidebar_sections.sql',
   '123_session_handoffs.sql',
+  '124_provider_registry.sql',
+  '125_knowledge_evidence_revisions.sql',
+  '126_memory_provider_changes.sql',
+  '127_sidebar_section_emoji.sql',
+  '129_composer_drafts.sql',
 ] as const;
 
 export async function migrate(pool: Pool): Promise<void> {

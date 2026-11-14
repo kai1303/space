@@ -1,11 +1,13 @@
 import { useLayoutEffect, useRef, useSyncExternalStore } from 'react';
-import type { ChatMessage } from '@space/contracts';
+import { isEmojiOnlyText, type ChatMessage } from '@space/contracts';
 import { Message } from '@space/ui/conversation';
 import { RichContent } from '@space/ui/rich-text';
 import type { Profile } from '../profile/profile-types.js';
 import type { getMessageOutbox, OutboxEntry } from './message-outbox.js';
 
 const deliveryErrors: Record<string, string> = {
+  devices_changed: 'The device list changed. Verify it, delete this queued message and resend.',
+  dm_encryption_mode_changed: 'Encryption changed. Delete this queued message and resend from the conversation.',
   channel_posting_forbidden: 'Posting is restricted in this channel.',
   channel_replies_forbidden: 'Replies are restricted in this thread.',
   channel_broadcast_forbidden: 'You don’t have permission to notify the whole channel.',
@@ -62,7 +64,7 @@ export function OutgoingMessage({ entry, grouped, profile, retryDisabled, onDele
         <button type="button" disabled={retryDisabled} onClick={() => onRetry(entry, confirm)}>{confirm ? 'Notify everyone and send' : 'Retry'}</button>
         <button type="button" onClick={() => onDelete(entry)}>Delete</button>
       </div>}>
-      {entry.document ? <RichContent document={entry.document} viewerId={profile.id}/> : entry.text}
+      {entry.document ? <RichContent document={entry.document} viewerId={profile.id}/> : <span data-emoji-only={isEmojiOnlyText(entry.text) || undefined}>{entry.text}</span>}
       {entry.attachments.map(file => <div key={file.id}>{file.name}</div>)}
     </Message>
   </div>;

@@ -103,3 +103,61 @@ test('rejects expired tokens and unsigned ID tokens', async () => {
   await assert.rejects(validateTokens(await response({}, { id_token: expired }), identity.client_id, { keys: jwks }));
   await assert.rejects(validateTokens(await response({}, { id_token: 'e30.e30.' }), identity.client_id, { keys: jwks }));
 });
+
+test('expired credentials recover after network and service failures on wake', async t => {
+  const current = await validateTokens(await response(), identity.client_id, { keys: jwks });
+  current.expires_at = Date.now() - 60_000;
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  let calls = 0;
+  const delays = [];
+  const refreshed = await refreshCredentials(current, {
+    fetch: async () => {
+      calls++;
+      if (calls === 1) throw new TypeError('fetch failed');
+      if (calls === 2) return new Response(null, { status: 503 });
+      return Response.json({ access_token: 'new', token_type: 'Bearer', expires_in: 3600 });
+    },
+    onRetry: (_reason, delay) => {
+      delays.push(delay);
+      queueMicrotask(() => t.mock.timers.tick(delay));
+    },
+  });
+  assert.equal(refreshed.access_token, 'new');
+  assert.equal(calls, 3);
+  assert.ok(delays[0] > 0 && delays[1] > delays[0]);
+});
+
+test('rejected refresh credentials request sign-in without retrying or logging the response body', async () => {
+  const current = await validateTokens(await response(), identity.client_id, { keys: jwks });
+  let calls = 0;
+  await assert.rejects(refreshCredentials(current, {
+    fetch: async () => {
+      calls++;
+      return new Response('sensitive response body', { status: 401 });
+    },
+  }), error => /401.*--login/.test(error.message) && !error.message.includes('sensitive'));
+  assert.equal(calls, 1);
+});
+
+test('shutdown interrupts the renewal delay before another exchange', async () => {
+  const current = await validateTokens(await response(), identity.client_id, { keys: jwks });
+  const controller = new AbortController();
+  let calls = 0;
+  await assert.rejects(refreshCredentials(current, {
+    signal: controller.signal,
+    fetch: async () => { calls++; return new Response(null, { status: 429 }); },
+    onRetry: () => controller.abort(),
+  }), { name: 'AbortError' });
+  assert.equal(calls, 1);
+});
+
+test('a persistent outage exhausts a bounded retry budget', async t => {
+  const current = await validateTokens(await response(), identity.client_id, { keys: jwks });
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  let calls = 0;
+  await assert.rejects(refreshCredentials(current, {
+    fetch: async () => { calls++; return new Response(null, { status: 503 }); },
+    onRetry: (_reason, delay) => queueMicrotask(() => t.mock.timers.tick(delay)),
+  }), /503.*[Rr]estart/);
+  assert.equal(calls, 5);
+});

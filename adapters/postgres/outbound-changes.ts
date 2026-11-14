@@ -1,36 +1,65 @@
-import type { Pool } from 'pg';
+import { setTimeout as delay } from 'node:timers/promises';
+import type { Pool, PoolClient } from 'pg';
 
-// A lost notification channel fails closed. The service must restart before
-// dispatching again; live database checks remain authoritative on every request.
-export async function watchOutboundChanges(pool: Pool, changed: (subject: string) => void, lost: () => void) {
-  const client = await pool.connect();
-  let closed = false;
-  try {
-    const schema = (await client.query('SELECT current_schema() AS schema')).rows[0].schema;
-    client.on('notification', (message) => {
-      if (message.channel !== 'space_outbound_changed' || !message.payload) return;
+export async function watchOutboundChanges(pool: Pool, changed: (subject: string) => void, setReady: (ready: boolean) => void) {
+  const shutdown = new AbortController();
+  const { signal } = shutdown;
+  let firstAttempt!: () => void;
+  const started = new Promise<void>(resolve => { firstAttempt = resolve; });
+
+  async function listen() {
+    let backoff = 500;
+    while (!signal.aborted) {
+      let client: PoolClient | undefined;
+      let disconnected = false;
+      let wake!: () => void;
+      const ended = new Promise<void>(resolve => { wake = resolve; });
+      const lost = () => {
+        if (disconnected) return;
+        disconnected = true;
+        setReady(false);
+        wake();
+      };
+      signal.addEventListener('abort', lost, { once: true });
       try {
-        const event = JSON.parse(message.payload);
-        if (event.schema === schema && typeof event.owner === 'string') changed(event.owner);
+        client = await pool.connect();
+        client.on('error', lost);
+        client.once('end', lost);
+        if (signal.aborted) return;
+        const schema = (await client.query('SELECT current_schema() AS schema')).rows[0].schema;
+        client.on('notification', message => {
+          if (disconnected || message.channel !== 'space_outbound_changed' || !message.payload) return;
+          try {
+            const event = JSON.parse(message.payload);
+            if (event.schema === schema && typeof event.owner === 'string') changed(event.owner);
+          } catch { /* Ignore malformed notifications. */ }
+        });
+        await client.query('LISTEN space_outbound_changed');
+        if (!disconnected) {
+          setReady(true);
+          backoff = 500;
+        }
+        firstAttempt();
+        await ended;
       } catch {
-        /* Ignore malformed notifications. */
+        lost();
+      } finally {
+        // The old client's late end/error events cannot invalidate its replacement.
+        disconnected = true;
+        signal.removeEventListener('abort', lost);
+        client?.release(true);
+        firstAttempt();
       }
-    });
-    client.on('error', () => {
-      if (!closed) lost();
-    });
-    client.on('end', () => {
-      if (!closed) lost();
-    });
-    await client.query('LISTEN space_outbound_changed');
-    return async () => {
-      if (closed) return;
-      closed = true;
-      client.release(true);
-    };
-  } catch (error) {
-    closed = true;
-    client.release(true);
-    throw error;
+      if (signal.aborted) return;
+      await delay(backoff + Math.random() * backoff, undefined, { signal }).catch(() => {});
+      backoff = Math.min(15_000, backoff * 2);
+    }
   }
+
+  const listening = listen();
+  await started;
+  return async () => {
+    shutdown.abort();
+    await listening;
+  };
 }

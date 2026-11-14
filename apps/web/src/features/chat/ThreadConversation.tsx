@@ -1,3 +1,4 @@
+import { FrameComposer, FrameHeader } from './ConversationFrame.js';
 import { useMemberProfile } from '../profile/MemberProfile.js';
 import { AttachFileDialog, workspaceFileSource, type FilePickerSource } from '../files/AttachFileDialog.js';
 import {useMemo,type ComponentProps,type ReactNode} from 'react';
@@ -11,8 +12,8 @@ import {channelTabIcons,channelTabNames} from '../channels/ChannelTabs.js';
 import {AgentMessageBody} from '../agents/AgentMessageBody.js';
 import {AssetAttachments} from '../files/AssetAttachments.js';
 
-export function ConversationHeader({title,channel,icon=<ChatCircle size={20}/>,status,actions,onBack,onClose,backLabel='Back to thread',heading,topic}: {
- title:string;channel?:string;icon?:ReactNode;status?:string;actions?:ReactNode;onBack?:()=>void;onClose?:()=>void;backLabel?:string;heading?:ReactNode;topic?:ReactNode;
+export function ConversationHeader({primary, title,channel,icon=<ChatCircle size={20}/>,status,actions,onBack,onClose,backLabel='Back to thread',heading,topic}: {
+ primary?:boolean;title:string;channel?:string;icon?:ReactNode;status?:string;actions?:ReactNode;onBack?:()=>void;onClose?:()=>void;backLabel?:string;heading?:ReactNode;topic?:ReactNode;
 }) {
  // Phones: panels open full screen, so closing reads as going back, with Slack's back arrow on the left.
  // One back per screen: the nearer step (onBack) wins over closing the panel.
@@ -20,7 +21,7 @@ export function ConversationHeader({title,channel,icon=<ChatCircle size={20}/>,s
  const step = !phone ? null : onBack ? { label: backLabel, go: onBack } : onClose ? { label: channel ? `Back to #${channel}` : `Close ${title.toLowerCase()}`, go: onClose } : null;
  const back = step && <IconButton className="chat-conversation-back" label={step.label} onClick={step.go}><CaretLeft size={20} weight="bold"/></IconButton>;
  if (step) { onBack = undefined; onClose = undefined; }
- return <header className="chat-channel-header">{back}{heading??<div className="chat-thread-title">{icon}<h2>{title}</h2>{channel&&<span>#{channel}</span>}{status&&<span role="status" className="chat-thread-status">{status}</span>}</div>}{topic}<div className="chat-header-actions">{onBack&&<IconButton label={backLabel} onClick={onBack}><ArrowLeft size={20}/></IconButton>}{actions}{onClose&&<IconButton label={`Close ${title.toLowerCase()}`} onClick={onClose}><X size={20}/></IconButton>}</div></header>;
+ return <FrameHeader primary={primary}>{back}{heading??<div className="chat-thread-title">{icon}<h2>{title}</h2>{channel&&<span>#{channel}</span>}{status&&<span role="status" className="chat-thread-status">{status}</span>}</div>}{topic}<div className="chat-header-actions">{onBack&&<IconButton label={backLabel} onClick={onBack}><ArrowLeft size={20}/></IconButton>}{actions}{onClose&&<IconButton label={`Close ${title.toLowerCase()}`} onClick={onClose}><X size={20}/></IconButton>}</div></FrameHeader>;
 }
 export function ConversationNavigation({children, order, view, onChange, onReorder}: {
   children: ReactNode; order: readonly ManagedChannelTab[]; view: string; onChange: (id: string) => void;
@@ -37,9 +38,32 @@ export function ConversationNavigation({children, order, view, onChange, onReord
 export function ConversationIntroduction({title,icon,children}:{title:string;icon:ReactNode;children:ReactNode}) {
  return <div className="chat-channel-welcome dm-conversation-intro"><div className="chat-empty-icon">{icon}</div><h2>{title}</h2><p>{children}</p></div>;
 }
-export function ConversationComposer({typingIndicator,onBlurCapture,workspace,filePickerSource,...props}:ComponentProps<typeof RichComposer>&{workspace?:string;filePickerSource?:FilePickerSource;typingIndicator?:ReactNode;onBlurCapture?:ComponentProps<'div'>['onBlurCapture']}) {
- const source=useMemo(()=>filePickerSource ?? (workspace ? workspaceFileSource(workspace) : undefined),[workspace,filePickerSource]);
- return <div className="chat-compose" onBlurCapture={onBlurCapture}>{typingIndicator}<RichComposer renderFilePicker={source && ((onInsert,onClose,remaining,onUpload)=><AttachFileDialog source={source} onUpload={onUpload} remaining={remaining} onInsert={onInsert} onClose={onClose}/>)} showKeyboardHint={false} feedbackAtSendButton {...props}/></div>;
+type RichComposerProps = ComponentProps<typeof RichComposer>;
+export type ComposerControls = Pick<RichComposerProps,
+  | 'formattingEnabled' | 'emojiEnabled' | 'attachmentsEnabled' | 'audioClipsEnabled' | 'videoClipsEnabled'
+  | 'findMentions' | 'mentions' | 'onSchedule' | 'renderAddMenuItems'
+  | 'renderBeforeSend' | 'renderExtraActions' | 'submitAccessory'
+>;
+type ConversationComposerProps = Omit<RichComposerProps, keyof ComposerControls | 'showUnavailableActions' | 'attachedFormattingToolbar' | 'addMenuVariant'> & {
+  primary?: boolean;
+  inactive?: boolean;
+  controls: ComposerControls;
+  workspace?: string;
+  filePickerSource?: FilePickerSource;
+  typingIndicator?: ReactNode;
+  onBlurCapture?: ComponentProps<'div'>['onBlurCapture'];
+};
+
+export function ConversationComposer({ primary, inactive, controls, typingIndicator, onBlurCapture, workspace, filePickerSource, ...props }: ConversationComposerProps) {
+  const source = useMemo(() => filePickerSource ?? (workspace ? workspaceFileSource(workspace) : undefined), [workspace, filePickerSource]);
+  const composer = <div className="chat-compose" inert={inactive} onBlurCapture={onBlurCapture}>
+    {typingIndicator}
+    <RichComposer {...props} attachmentsEnabled={false} {...controls} addMenuVariant="agent-session"
+      showKeyboardHint={false} feedbackAtSendButton showUnavailableActions={false}
+      renderFilePicker={source && ((onInsert, onClose, remaining, onUpload) =>
+        <AttachFileDialog source={source} onUpload={onUpload} remaining={remaining} onInsert={onInsert} onClose={onClose}/>)}/>
+  </div>;
+  return primary ? <FrameComposer>{composer}</FrameComposer> : composer;
 }
 type MessageIdentity = Pick<ChatMessage,'author'|'created_at'>;
 export function continuesMessageGroup(message:MessageIdentity,previous?:MessageIdentity) {

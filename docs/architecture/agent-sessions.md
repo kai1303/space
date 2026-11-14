@@ -6,6 +6,12 @@ A session owns its conversation, progress and outputs. The thread discussion omi
 
 `agent_sessions` remains the storage identity. Migration030 adds title, active/ended state, creator, skill, managed flag and durable outputs. Existing sessions remain readable legacy runs. Each managed turn is an ordinary task with the same session_id, grants, owner approval, installation checks, execution receipts and outbox attempt fencing. Owners' messages autoapprove; other users' messages await the installation owner's approval. Idempotent retries preserve the same task; overlapping turns are rejected. Session event snapshots and replies stay inside the session and do not enter human thread history or Navigator.
 
+## PDF attachments
+
+Codex, Claude and Kiro can call `space_files/read_pdf_page` with an attached asset ID and a one-based physical page number. The connector creates this MCP server entry for the current turn using its paired Space origin. The API serves it at `/v1/agent-tools/pdf` and checks the active delivery attempt, paired connection, task, session, channel membership of the requester and agent owner, and the task’s explicit PDF attachments. It repeats these checks after reading storage. No outbound connection configuration is required.
+
+Successful reads return bounded text and a citation such as `/file/<asset-id>?page=7`. Scanned pages can return `no_text`. A missing page returns `out_of_range` and the page count. The capability expires when the delivery attempt expires, the connection changes, or the turn ends.
+
 ## HTTP
 
 - GET/POST `/v1/threads/:threadId/agent-sessions`: list or create using client_session_id, title and installation_id.

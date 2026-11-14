@@ -3,7 +3,14 @@ import { parseAgentMemoryUpdate, type AgentMemoryUpdate } from './memory-block.j
 
 export type AgentText = { id: string; text: string; status: 'streaming' | 'complete'; phase?: 'commentary' | 'final_answer' };
 export type AgentTool = { id: string; name: string; arguments: string; result?: string; status: 'calling' | 'running' | 'completed' | 'interrupted' };
+export type DocumentEditBlock = { id: string; type: 'document_edit'; title: string; original: string; replacement: string };
+export type CarouselBlock = { id: string; type: 'carousel'; title: string; cards: { id: string; title: string; body: string }[] };
+export type DataTableBlock = { id: string; type: 'data_table'; title: string; columns: string[]; rows: (string | number)[][] };
 export type AgentComponent =
+  | DataTableBlock
+  | CarouselBlock
+  | DocumentEditBlock
+  | { id: string; type: 'alert'; level: 'warning' | 'error'; title: string; body?: string }
   | { id: string; type: 'card'; title: string; body: string }
   | { id: string; type: 'table'; title: string; columns: string[]; rows: string[][] };
 export type AgentSessionOutputs = {
@@ -13,7 +20,7 @@ export type AgentSessionOutputs = {
   changes: { path: string; patch: string }[];
 };
 export type AgentActivity = 'working' | 'thinking' | 'responding' | 'using_tools';
-export type AgentResponseItem = { type: 'message' | 'tool'; id: string };
+export type AgentResponseItem = { type: 'message' | 'tool' | 'component'; id: string };
 export type AgentResponse = { messages: AgentText[]; tools: AgentTool[]; components: AgentComponent[]; items?: AgentResponseItem[]; activity?: AgentActivity; step?: string; outputs?: AgentSessionOutputs; memory?: AgentMemoryUpdate };
 
 export function parseSessionOutputs(input: unknown): AgentSessionOutputs {
@@ -60,15 +67,44 @@ function unique<T extends { id: string }>(items: T[]): T[] {
   return items;
 }
 export function parseAgentComponent(input: unknown): AgentComponent {
+  if (input && typeof input === 'object' && 'type' in input && input.type === 'carousel') {
+    const v = record(input, ['id', 'type', 'title', 'cards']);
+    const cards = unique(list(v.cards, 10, value => {
+      const card = record(value, ['id', 'title', 'body']);
+      return { id: text(card.id, 128), title: text(card.title, 200), body: string(card.body, 8000) };
+    }));
+    if (!cards.length) throw new AppError(400, 'empty_carousel');
+    return { type: 'carousel', id: text(v.id, 128), title: text(v.title, 200), cards };
+  }
+  if (input && typeof input === 'object' && 'type' in input && input.type === 'alert') {
+    const v = record(input, ['id', 'type', 'level', 'title', 'body']);
+    if (v.level !== 'warning' && v.level !== 'error') throw new AppError(400, 'invalid_alert_level');
+    return { type: 'alert', id: text(v.id, 128), level: v.level, title: text(v.title, 200),
+      ...(v.body === undefined ? {} : { body: string(v.body, 8000) }) };
+  }
+  if (input && typeof input === 'object' && 'type' in input && input.type === 'document_edit') {
+    const v = record(input, ['id', 'type', 'title', 'original', 'replacement']);
+    return { type: 'document_edit', id: text(v.id, 128), title: text(v.title, 200),
+      original: text(v.original, 16000), replacement: text(v.replacement, 16000) };
+  }
   const v = record(input, ['id', 'type', 'title', 'body', 'columns', 'rows']);
   const base = { id: text(v.id, 128), title: text(v.title, 200) };
   if (v.type === 'card' && v.columns === undefined && v.rows === undefined) return { ...base, type: 'card', body: string(v.body, 8000) };
-  if (v.type === 'table' && v.body === undefined) {
+  if ((v.type === 'table' || v.type === 'data_table') && v.body === undefined) {
     const columns = list(v.columns, 10, value => text(value, 100));
     if (!columns.length) throw new AppError(400, 'invalid_agent_response');
-    const rows = list(v.rows, 100, row => list(row, columns.length, value => string(value, 1000)));
-    if (rows.some(row => row.length !== columns.length)) throw new AppError(400, 'invalid_agent_response');
-    return { ...base, type: 'table', columns, rows };
+    function rows<T>(parseCell: (value: unknown) => T) {
+      return list(v.rows, 100, row => {
+        const cells = list(row, columns.length, parseCell);
+        if (cells.length !== columns.length) throw new AppError(400, 'invalid_agent_response');
+        return cells;
+      });
+    }
+    if (v.type === 'data_table') {
+      return { ...base, type: v.type, columns, rows: rows(value =>
+        typeof value === 'number' && Number.isFinite(value) ? value : string(value, 1000)) };
+    }
+    return { ...base, type: v.type, columns, rows: rows(value => string(value, 1000)) };
   }
   throw new AppError(400, 'unsupported_agent_component');
 }
@@ -91,9 +127,15 @@ export function parseAgentResponse(input: unknown): AgentResponse {
   let items: AgentResponseItem[] | undefined;
   if (v.items !== undefined) {
     const remaining = new Set([...messages.map(message => `message:${message.id}`), ...tools.map(tool => `tool:${tool.id}`)]);
-    items = list(v.items, 60, value => {
+    // Older snapshots order only messages and tools. Unlisted components follow those items.
+    const componentIds = new Set(components.map(component => component.id));
+    items = list(v.items, 80, value => {
       const item = record(value, ['type', 'id']);
       const id = text(item.id, 128);
+      if (item.type === 'component') {
+        if (!componentIds.delete(id)) throw new AppError(400, 'invalid_agent_response_order');
+        return { type: 'component', id };
+      }
       if (!['message', 'tool'].includes(item.type as string) || !remaining.delete(`${item.type}:${id}`)) throw new AppError(400, 'invalid_agent_response_order');
       return { type: item.type as AgentResponseItem['type'], id };
     });

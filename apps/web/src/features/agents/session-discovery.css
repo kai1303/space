@@ -14,4 +14,3 @@
 .session-discovery nav { display:flex; gap:8px; }
 .session-row-status { display:inline-flex; align-items:center; justify-content:center; width:20px; color:var(--sp-text-secondary); }
 .session-row-status--needs_attention { color:var(--sp-warning,#956009); }
-.session-row-status--done { color:var(--sp-success,#237447); }

@@ -2,6 +2,12 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { ChannelMemory } from './ChannelMemory.js';
+let refreshMemory: () => Promise<void>;
+vi.mock('../../shared/realtime/live-updates.js', () => ({
+  subscribeUpdates: (_scope: string, _id: string, read: () => Promise<void>) => {
+    refreshMemory = read; void read(); return () => {};
+  },
+}));
 vi.mock('./MemoryConnections.js', () => ({ MemoryConnections: () => null }));
 vi.mock('./MemoryGraph.js', () => ({ MemoryGraph: () => null }));
 vi.mock('./MemoryInspector.js', () => ({ MemoryInspector: () => null }));
@@ -130,4 +136,20 @@ it('opens on the graph view by default and switches to notes', async () => {
   expect(screen.getByRole('tabpanel', { name: 'Graph' })).toBeTruthy();
   await notes();
   expect(await screen.findByRole('tabpanel', { name: 'Notes' })).toBeTruthy();
+});
+
+it('refreshes saved quotes and keeps an unsaved draft when its evidence changes', async () => {
+  let content = 'Friday';
+  vi.stubGlobal('fetch', vi.fn(async () => response({...state(true), document:{...empty, content, revision:content}})));
+  render(<ChannelMemory channel="first" name="general" />);
+  await notes();
+  const editor = await screen.findByRole('textbox', { name: 'Channel memory Markdown' }) as HTMLTextAreaElement;
+  content = 'Monday';
+  await act(() => refreshMemory());
+  expect(editor.value).toBe('Monday');
+  fireEvent.change(editor, {target:{value:'My changes'}});
+  content = '';
+  await act(() => refreshMemory());
+  expect(editor.value).toBe('My changes');
+  expect(screen.getByRole('button', {name:'Load latest for comparison'})).toBeTruthy();
 });

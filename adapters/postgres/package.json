@@ -11,7 +11,10 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "exports": {
+    "./composer-drafts": {"types":"./dist/composer-drafts.d.ts","default":"./dist/composer-drafts.js"},
+    "./sidebar-sections": {"types":"./dist/sidebar-sections.d.ts","default":"./dist/sidebar-sections.js"},
     "./session-reports": {"types":"./dist/session-reports.d.ts","default":"./dist/session-reports.js"},
+    "./pdf-access": {"types":"./dist/pdf-access.d.ts","default":"./dist/pdf-access.js"},
     "./channel-knowledge": {"types":"./dist/channel-knowledge.d.ts","default":"./dist/channel-knowledge.js"},
     "./people-knowledge": {"types":"./dist/people-knowledge.d.ts","default":"./dist/people-knowledge.js"},
     "./tool-approvals": {"types":"./dist/tool-approvals.d.ts","default":"./dist/tool-approvals.js"},

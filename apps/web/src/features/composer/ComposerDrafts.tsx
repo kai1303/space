@@ -1,37 +1,66 @@
-import { useEffect, useState } from 'react';
+import { useState, useSyncExternalStore } from 'react';
 import { Tabs, Button } from '@space/ui/primitives';
-import { RichContent } from '@space/ui/rich-text';
+import { RichContent, type Attachment } from '@space/ui/rich-text';
 import { PencilSimple } from '@phosphor-icons/react';
-import type { ChannelSummary } from '@space/contracts';
-import { request } from '../../shared/api/request.js';
 import type { ComposerDrafts as Drafts } from './composer-drafts.js';
+import { destination, type DraftSync } from './draft-sync.js';
 import { WorkspaceCollections } from '../workspace/collections/WorkspaceCollections.js';
 import { ScheduledMessages } from './ScheduledMessages.js';
 
-type Props = { workspace: string; drafts: Drafts; onOpen: (item: {channel_id:string;message_id?:string;thread_id?:string}) => void; onNewMessage: () => void };
-export function ComposerDrafts({workspace,drafts,onOpen,onNewMessage}:Props) {
-  const [tab,setTab] = useState('drafts');
-  const [items,setItems] = useState<{key:string;channel:ChannelSummary;thread?:string}[]>([]);
-  const [loading,setLoading] = useState(true),[error,setError] = useState(''),[retry,setRetry] = useState(0);
-  useEffect(() => {
-    let active=true;
-    setItems([]);setLoading(true);setError('');
-    const entries=Object.entries(drafts).filter(([,doc])=>doc.ops.some(op=>op.insert.trim())).slice(-100);
-    void (async()=>{
-      const found: typeof items=[];let failure=false;
-      for(let i=0;i<entries.length;i+=4) {
-        await Promise.all(entries.slice(i,i+4).map(async([key])=>{
-          const [,threadChannel,thread]=key.split(':'); const id=key.startsWith('thread:')?threadChannel:key;
-          try {const channel=await request<ChannelSummary>(`/channels/${id}`);if(channel.workspace_id===workspace&&channel.joined)found.push({key,channel,thread});}
-          catch(reason){if(!(reason instanceof Error&&['not_found','forbidden','unauthorized'].includes(reason.message)))failure=true;}
-        }));
-        if(!active)return;
-      }
-      if(active){setItems(found);setLoading(false);setError(failure?'Some drafts could not be loaded. Try again.':'');}
-    })();
-    return()=>{active=false;};
-  },[workspace,drafts,retry]);
-  return <section className="composer-drafts"><header><h1>Drafts & sent</h1></header><Tabs label="Outgoing messages" value={tab} onChange={setTab} items={[{id:'drafts',label:'Drafts'},{id:'scheduled',label:'Scheduled'},{id:'sent',label:'Sent'}]}/>
-    {tab==='sent'?<WorkspaceCollections view="sent" workspace={workspace} onOpen={onOpen}/>:tab==='scheduled'?<ScheduledMessages workspace={workspace} onOpen={onOpen}/>:<main id="chat-messages" tabIndex={-1} className="composer-drafts-body">{error&&<p role="alert">{error}<Button onClick={()=>setRetry(n=>n+1)}>Retry</Button></p>}{loading?<p role="status">Loading drafts…</p>:items.length?<><p className="composer-drafts-hint">Drafts are saved in this browser. Select one to continue writing.</p><ul>{items.map(item=><li key={item.key}><button onClick={()=>onOpen({channel_id:item.channel.id,...(item.thread?{thread_id:item.thread}:{})})}><strong>{item.channel.kind==='direct'?'':'#'}{item.channel.name}{item.thread?' · Thread':''}</strong><RichContent document={drafts[item.key]!}/><span>Continue editing →</span></button></li>)}</ul></>:<div className="composer-drafts-empty"><PencilSimple size={46}/><h2>Draft messages to send when you’re ready</h2><p>Start typing a message anywhere, then find it here. Re-read, revise, and send whenever you’d like.</p><Button onClick={onNewMessage}>New message</Button></div>}</main>}
+type Props = {
+  workspace: string;
+  drafts: Drafts;
+  files: Record<string, Attachment[]>;
+  locked: Record<string, boolean>;
+  sync: DraftSync;
+  onDiscard: (key: string) => void;
+  onOpen: (item: { channel_id: string; message_id?: string; thread_id?: string }) => void;
+  onNewMessage: () => void;
+};
+
+export function ComposerDrafts({ workspace, drafts, files, locked, sync, onDiscard, onOpen, onNewMessage }: Props) {
+  useSyncExternalStore(sync.subscribe, sync.snapshot);
+  const [tab, setTab] = useState('drafts');
+  const keys = new Set([...Object.keys(drafts), ...Object.keys(files), ...Object.keys(locked), ...sync.conflicts, ...sync.failures.keys()]);
+  const items = [...keys].flatMap(key => {
+    const room = destination(key), meta = sync.metadata(key);
+    if (!room || meta?.workspace_id !== workspace) return [];
+    const document = drafts[key], attachments = files[key] ?? [];
+    const conflict = sync.conflicts.has(key), failure = sync.failures.get(key);
+    if (!locked[key] && !conflict && !failure && !attachments.length && !document?.ops.some(op => op.insert.trim())) return [];
+    return [{ key, room, document, attachments, conflict, failure, name: meta.destination_name }];
+  });
+  const retry = <Button size="sm" onClick={() => void sync.retry()}>Retry</Button>;
+  return <section className="composer-drafts">
+    <header><h1>Drafts &amp; sent</h1></header>
+    <Tabs label="Outgoing messages" value={tab} onChange={setTab} items={[
+      { id: 'drafts', label: 'Drafts' }, { id: 'scheduled', label: 'Scheduled' }, { id: 'sent', label: 'Sent' },
+    ]}/>
+    {tab === 'sent' ? <WorkspaceCollections view="sent" workspace={workspace} onOpen={onOpen}/>
+      : tab === 'scheduled' ? <ScheduledMessages workspace={workspace} onOpen={onOpen}/>
+      : <main id="chat-messages" tabIndex={-1} className="composer-drafts-body">
+        {sync.loadError && <p role="alert">Couldn’t load your drafts. {retry}</p>}
+        {!!sync.failures.size && <p role="status">Some drafts haven’t synced. {retry}</p>}
+        {items.length ? <ul>{items.map(({ key, room, document, attachments, conflict, failure, name }) =>
+          <li key={key}>
+            <button onClick={() => onOpen({ channel_id: room.channel, ...(room.thread && { thread_id: room.thread }) })}>
+              <strong>{name}{room.thread && ' · Thread'}</strong>
+              {locked[key] ? <p>Link this device to read this encrypted draft.</p> : <>
+                {document && <RichContent document={document}/>}
+                {!!attachments.length && <p>{attachments.map(file => file.name).join(', ')}</p>}
+              </>}
+            </button>
+            {conflict ? <div className="draft-actions" role="alert">
+              <span>This draft changed on another device.</span>
+              <Button size="sm" onClick={() => void sync.resolve(key, true)}>Keep this device’s version</Button>
+              <Button size="sm" onClick={() => void sync.resolve(key, false)}>Use other device’s version</Button>
+            </div> : <div className="draft-actions">
+              {failure && <span role="alert">{failure.replaceAll('_', ' ')}</span>}
+              {!locked[key] && <Button size="sm" variant="ghost" onClick={() => onDiscard(key)}>Delete draft</Button>}
+            </div>}
+          </li>)}</ul> : !sync.loaded && !sync.loadError ? <p role="status">Loading drafts…</p>
+            : !sync.loadError && <div className="composer-drafts-empty"><PencilSimple size={46}/><h2>Draft messages to send when you’re ready</h2>
+              <p>Start a message in a channel, DM, or thread and pick it up here.</p><Button onClick={onNewMessage}>New message</Button></div>}
+      </main>}
   </section>;
 }

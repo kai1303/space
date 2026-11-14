@@ -36,7 +36,7 @@ async function sync(channel, ids) {
 
 // Repair both missing and obsolete rows in bounded pages, also after a channel opts out.
 async function reconcile() {
-  const { rows } = await source.query('SELECT channel_id FROM knowledge_thread_channels WHERE workspace_id=$1',[workspace]);
+  const { rows } = await source.query('SELECT channel_id FROM knowledge_thread_channels WHERE workspace_id=$1 AND index_markdown',[workspace]);
   channels = new Set(rows.map(row => row.channel_id));
   // Index side first: files whose message or channel left the source are removed by sync().
   let after = '00000000-0000-0000-0000-000000000000';

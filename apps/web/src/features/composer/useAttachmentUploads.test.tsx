@@ -43,3 +43,17 @@ it('tracks concurrent uploads independently and dismisses a cancelled upload wit
   expect(toast.update).toHaveBeenCalledWith('second', expect.objectContaining({ type: 'success' }));
   expect(toast.update).not.toHaveBeenCalledWith('first', expect.objectContaining({ type: 'success' }));
 });
+
+it('keeps private DM drafts in memory and removes them when access is lost', async () => {
+  const { result } = renderHook(() => useAttachmentUploads('viewer'));
+  await waitFor(() => expect(result.current.uploads.enabled).toBe(true));
+  const secret = { ops: [{ insert: 'private DM draft' }] };
+  act(() => {
+    result.current.saveDraft('encrypted:dm', secret);
+    result.current.saveDraft('channel', { ops: [{ insert: 'channel draft' }] });
+  });
+  expect(result.current.draftState.current['encrypted:dm']).toEqual(secret);
+  expect(localStorage.getItem('space:composer-drafts:viewer')).not.toContain('private DM draft');
+  act(() => result.current.forgetChannelDrafts('dm'));
+  expect(result.current.draftState.current['encrypted:dm']).toBeUndefined();
+});

@@ -19,14 +19,17 @@ async function fixture(behavior = 'normal') {
       const behavior=${JSON.stringify(behavior)};
       let buffer='',prompt,mcpReady=false;
       const modes={currentModeId:behavior==='wrong-mode'?'vibe':'space-chat',availableModes:[{id:'space-chat',name:'Space chat'}]};
+      const configOptions=(value='auto')=>[{id:'mode',currentValue:modes.currentModeId},{category:'model',id:'model',currentValue:value,options:[{value:'auto',name:'Auto'},{value:'test-model',name:'Test model'}]}];
       process.stdin.on('data',chunk=>{buffer+=chunk;while(buffer.includes('\\n')){
         const i=buffer.indexOf('\\n'),m=JSON.parse(buffer.slice(0,i));buffer=buffer.slice(i+1);
         fs.appendFileSync(${JSON.stringify(log)},JSON.stringify(m)+'\\n');
         if(m.method==='initialize') send({id:m.id,result:{protocolVersion:1,agentCapabilities:{loadSession:behavior!=='no-resume'}}});
-        else if(m.method==='session/new') {const id=crypto.randomUUID();send({id:m.id,result:{sessionId:id,modes}});if(['project-tools','turn-stream'].includes(behavior)){mcpReady=false;setTimeout(()=>{mcpReady=true;send({method:'_kiro/mcp/status',params:{sessionId:id,servers:[{name:'space_project',status:'connected'}]}});},100);}}
+        else if(m.method==='session/new') {const id=crypto.randomUUID();send({id:m.id,result:{sessionId:id,modes,configOptions:configOptions()}});if(['project-tools','turn-stream'].includes(behavior)){mcpReady=false;setTimeout(()=>{mcpReady=true;send({method:'_kiro/mcp/status',params:{sessionId:id,servers:[{name:'space_project',status:'connected'}]}});},100);}}
         else if(m.method==='session/load') {
           send({method:'session/update',params:{sessionId:m.params.sessionId,update:{sessionUpdate:'agent_message_chunk',content:{type:'text',text:'OLD REPLAY'}}}});
-          if(behavior==='slow-load')setTimeout(()=>send({id:m.id,result:{modes}}),200);else send({id:m.id,result:{modes}});
+          if(behavior==='slow-load')setTimeout(()=>send({id:m.id,result:{modes}}),200);else send({id:m.id,result:{modes,configOptions:configOptions()}});
+        } else if(m.method==='session/set_config_option') {
+          send({id:m.id,result:{configOptions:configOptions(behavior==='ignored-selection'?'auto':m.params.value)}});
         } else if(m.method==='session/prompt') {
           prompt=m;
           const update=value=>send({method:'session/update',params:{sessionId:m.params.sessionId,update:value}});
@@ -178,5 +181,32 @@ test('whole-turn Kiro streaming exposes intermediate tools and all text across a
   assert.equal(final.activity,undefined);assert.equal(JSON.stringify(events).includes('PRIVATE REASONING'),false);
   assert.deepEqual(events.map(e=>e.sequence),events.map((_,i)=>i+1));
   t.diagnostic(JSON.stringify({provider:'kiro',progressSnapshots:events.filter(e=>e.type==='execution.progress').length,textBlocks:final.messages.length,tools:final.tools.length,serializedBytes:events.reduce((sum,e)=>sum+Buffer.byteLength(JSON.stringify(e)),0)}));
+ }finally{runtime.stop();await f.close();}
+});
+
+
+test('Kiro advertises its ACP models and applies the selection before each new or resumed prompt',async()=>{
+ const f=await fixture(),runtime=await f.start();
+ try {
+  assert.deepEqual(await runtime.listModels(),[{id:'auto',label:'Auto',isDefault:true,efforts:[]},{id:'test-model',label:'Test model',efforts:[]}]);
+  for(const resume of [false,true]) await runtime.invoke({...invocation,persistent_session:{resume},codex_settings:{model:'test-model'}},async()=>{},new AbortController().signal);
+  const calls=(await f.requests()).filter(m=>['session/set_config_option','session/prompt'].includes(m.method));
+  assert.equal(calls.length,4);
+  for(const i of [0,2]){
+   assert.equal(calls[i+1].method,'session/prompt');
+   assert.deepEqual(calls[i].params,{sessionId:calls[i+1].params.sessionId,configId:'model',value:'test-model'});
+  }
+ }finally{runtime.stop();await f.close();}
+});
+
+test('Kiro does not send a prompt when a model is unconfirmed or an effort is unsupported',async()=>{
+ const f=await fixture('ignored-selection'),runtime=await f.start();
+ try {
+  for(const settings of [{model:'test-model'},{model:'auto',effort:'high'}]){
+   const events=[];await runtime.invoke({...invocation,codex_settings:settings},async e=>events.push(e),new AbortController().signal);
+   assert.equal(events.at(-1).type,'execution.failed');
+  }
+  assert.equal((await f.requests()).some(m=>m.method==='session/prompt'),false);
+  assert.equal(runtime.alive(),true);
  }finally{runtime.stop();await f.close();}
 });

@@ -125,10 +125,9 @@ Install **Node.js 24+**, **pnpm 8.10.3**, **Docker Compose**, and **OpenSSL**.
 The commands below use a POSIX shell on macOS or Linux. Docker Compose supplies
 PostgreSQL 16, NATS JetStream, Redis 7, and SeaweedFS for local development.
 
-For PDF thumbnails with a host-run API, also install **Poppler** (`pdftoppm`),
-fonts, and **`prlimit` on Linux**. These dependencies are included in the Docker
-image. Without them, PDF uploads retain the viewer/download path but may lack
-thumbnails. See [PDF preview setup](docs/architecture/assets.md#inline-pdf-message-thumbnails).
+For PDF thumbnails and agent document reading on a host-run API or worker, install
+**Poppler** (`pdftoppm`, `pdfinfo`, and `pdftotext`), fonts, and **`prlimit` on Linux**.
+The Docker image includes these dependencies. See [PDF preview setup](docs/architecture/assets.md#inline-pdf-message-thumbnails).
 
 ### 1. Get the project
 
@@ -274,8 +273,8 @@ Open a document, spreadsheet, or presentation from its message card or the chann
 file and see each other’s edits live. Space saves the working copy when the last
 editor closes the document. **Original upload** retrieves the file as first shared.
 
-On macOS, open the workspace panel and choose **Office editor** to keep the file
-beside chat. Use **+** to add a **Browser** tab. Double-click the workspace icon to
+On macOS, open **Manage plugins** in the workspace panel to install **Office editor** or **Web Browser** independently.
+Use **+** to open an installed tool beside chat. Double-click the workspace icon to
 hide the panel and click once to return to the active tab.
 
 When editing a DOCX or ODT in Space Desktop, select a passage and choose
@@ -369,6 +368,12 @@ Provider credentials and private provider history stay in separate local connect
 directories. Space stores submitted requests, streamed responses and tool details;
 the selected provider receives the context and file contents used during a task.
 Each provider can run in a separate terminal with its own local state.
+
+Attach a text-based PDF to an agent turn and ask a question such as “What is the delivery date? Cite the page.” Select a page citation to open the original at that page. Scanned pages need a text layer for the agent to read them.
+
+Active channels automatically contribute human discussions to cross-channel decision search. Use an agent with the workspace knowledge provider’s search tool enabled. Ask “Why did we move the launch date? Link to the discussion.” The search provider checks the requester’s access and the audience of the answer when it returns each source. [Knowledge provider setup](apps/mcp-gateway/providers/pg-knowledge/README.md)
+
+Agents with the knowledge search tool can find shared channel attachments by filename or type and return the original link when everyone in the conversation has access. [Attachment entity setup](apps/mcp-gateway/providers/pg-knowledge/README.md#attachment-entities)
 
 See the [connector guide](apps/connector/README.md) and
 [provider architecture](docs/architecture/local-agent-providers.md), plus

@@ -12,14 +12,15 @@ it('keeps Home mounted while its workspace changes',()=>{
  expect(screen.getByRole('button',{name:'Second workspace'})).toBeTruthy();
  expect(screen.queryByRole('button',{name:'First workspace'})).toBeNull();
 });
-it('keeps the active page mounted on updates and makes its outgoing content inert',async()=>{
+it('reuses the conversation page across Home and DMs',async()=>{
  const view=render(<DestinationTransition destination="Home"><button>Home content</button></DestinationTransition>);
  const home=screen.getByRole('region',{name:'Home page'});
  view.rerender(<DestinationTransition destination="Home"><button>Updated Home content</button></DestinationTransition>);
  expect(screen.getByRole('region',{name:'Home page'})).toBe(home);
  view.rerender(<DestinationTransition destination="DMs"><button>DM content</button></DestinationTransition>);
- expect(home.hasAttribute('inert')).toBe(true);expect(home.getAttribute('aria-hidden')).toBe('true');
+ expect(home.hasAttribute('inert')).toBe(false);
  const dms=await screen.findByRole('region',{name:'DMs page'});
+ expect(dms).toBe(home);
  await waitFor(()=>expect(dms.style.opacity).toBe('1'));
  view.rerender(<DestinationTransition destination="DMs"><button>Updated DM content</button></DestinationTransition>);
  expect(screen.getByRole('region',{name:'DMs page'})).toBe(dms);expect(dms.style.opacity).toBe('1');

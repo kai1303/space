@@ -2,6 +2,7 @@ import type { Pool } from 'pg';
 import { sql } from 'drizzle-orm';
 import { uuid } from '@space/contracts';
 import { database, type DbSession } from './database.js';
+import { syncSavedMemory } from './memory-sources.js';
 import { sessionTransaction } from './session-concurrency.js';
 
 const tombstone = 'Message removed by workspace retention.';
@@ -10,6 +11,7 @@ const versionOf = (value: unknown): string => {
   return value;
 };
 export async function eraseMessageReferences(c: DbSession, workspace: string, channel: string, message: string) {
+  await syncSavedMemory(c, channel);
   const assets=await c.execute<{id:string;staging_key:string;object_key:string}>(sql`DELETE FROM assets WHERE workspace_id=${workspace} AND channel_id=${channel} AND message_id=${message} RETURNING id,staging_key,object_key`);
   for (const asset of assets.rows) {
     const keys=JSON.stringify([asset.staging_key,asset.object_key,`previews/${asset.id}/display.webp`,`previews/${asset.id}/thumbnail.webp`]);

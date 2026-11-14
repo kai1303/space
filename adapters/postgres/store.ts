@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type { Pool } from 'pg';
 import { and, eq, gt, inArray, sql, getTableColumns } from 'drizzle-orm';
-import { AppError, assertTransition, parseAgentEvent, parseAgentResponse, parseTaskInput, text, uuid, type InvocationRequest, type RichDocument, type Task, type AgentInstallation, type WorkplaceEvent } from '@space/contracts';
+import { AppError, assertTransition, parseAgentEvent, parseAgentResponse, parseTaskInput, text, uuid, type AgentPdfContent, type InvocationRequest, type RichDocument, type Task, type AgentInstallation, type WorkplaceEvent } from '@space/contracts';
 import { assertEligible, assertApprover } from '@space/core/policy';
 import type { Delivery, DeliveryStore, PreparedDelivery } from '@space/core/ports';
 import { database, type DbSession } from './database.js';
@@ -14,6 +14,7 @@ import { readKnowledgeContext, saveTurnNotes } from './knowledge-notes.js';
 import { sessionTransaction, SessionConflict } from './session-concurrency.js';
 import { traceTool, traceToolChanges, traceTurn } from './turn-trace.js';
 import { directTurnTarget, runTurn, type AdmitLocalTurn, type TurnPlan } from './direct-turn-admission.js';
+import { pdfToolToken } from './pdf-access.js';
 import { FoundationStore } from './foundation.js';
 const notFound = () => new AppError(404, 'not_found');
 const now = sql`now()`;
@@ -40,6 +41,7 @@ async function navigatorPresent(c: DbSession) { return Boolean((await c.execute<
 export class PostgresStore implements DeliveryStore {
   readonly db;
   admitLocalTurn?: AdmitLocalTurn;
+  attachmentPdf?: (key: string, size: number, firstPage?: number, count?: number, budgetMs?: number) => Promise<AgentPdfContent>;
   attachmentImage?: (id:string, animated:boolean) => Promise<string>;
   outboundAccess?: (execution:string,installation:string) => Promise<import('@space/contracts').OutboundAccess|undefined>;
   memoryReader?: (task: Pick<Task, 'installation_id' | 'requester_id' | 'thread_id'>) => Promise<import('@space/contracts').AgentMemoryContext | undefined>;
@@ -102,6 +104,10 @@ export class PostgresStore implements DeliveryStore {
   }
   private async append(c: DbSession, task: Task, type: string, actor: string, payload: Record<string, unknown>, causationId: string | null = null): Promise<void> {
     const managed = task.session_id && (await c.select({ managed: s.agentSessions.managed }).from(s.agentSessions).where(eq(s.agentSessions.id, task.session_id)))[0]?.managed;
+    if (managed && task.goal_action && type === 'task.failed') {
+      await c.execute(sql`UPDATE agent_sessions SET session_goal = session_goal || jsonb_build_object('status','blocked','reason','The Space turn was interrupted.')
+        WHERE id=${task.session_id} AND session_goal->>'status'='active'`);
+    }
     if (managed) payload = { ...payload, session_managed: true, agent_session_id: task.session_id };
     const conversational=await navigatorPresent(c)&&(await c.execute(sql`SELECT 1 FROM agent_thread_subscriptions WHERE task_id=${task.id} UNION ALL SELECT 1 FROM navigator_decisions WHERE decision->>'task_id'=${task.id} LIMIT 1`)).rows.length>0;
     await c.insert(s.taskEvents).values({
@@ -117,7 +123,7 @@ export class PostgresStore implements DeliveryStore {
     const hash = createHash('sha256').update(JSON.stringify(input)).digest('hex');
     return sessionTransaction(this.db, c => this.createTaskIn(c, actor, input, key, hash));
   }
-  async createTaskIn(c: DbSession, actor: string, input: ReturnType<typeof parseTaskInput> & { browser_url?:string; request_document?: RichDocument; }, key: string, hash = createHash('sha256').update(JSON.stringify(input)).digest('hex'), managedSessionId?: string): Promise<Task> {
+  async createTaskIn(c: DbSession, actor: string, input: ReturnType<typeof parseTaskInput> & { browser_url?:string; request_document?: RichDocument; codex_settings?: InvocationRequest['codex_settings']; goal_action?: InvocationRequest['goal_action'] }, key: string, hash = createHash('sha256').update(JSON.stringify(input)).digest('hex'), managedSessionId?: string): Promise<Task> {
       if (!await hasThreadAccess(c, actor, input.thread_id)) throw notFound();
       const [thread] = await c.select().from(s.threads).where(eq(s.threads.id, input.thread_id));
       if (thread?.workspace_id !== input.workspace_id) throw notFound();
@@ -263,6 +269,7 @@ export class PostgresStore implements DeliveryStore {
   }
   async prepareDelivery(delivery: Delivery, connectionId?: string): Promise<PreparedDelivery | null> {
     const images: {index:number;id:string;animated:boolean}[] = [];
+    const pdfs: {index:number;key:string;size:number}[] = [];
     const prepared: PreparedDelivery | null = await this.taskTransaction(delivery.task_id, async c => {
       const task = await this.task(c, delivery.task_id);
       if (task.status === 'completed' || task.status === 'failed') return null;
@@ -306,9 +313,10 @@ export class PostgresStore implements DeliveryStore {
       const priorReady = session?.managed && (await c.execute(sql`SELECT 1 FROM tasks previous JOIN task_events e ON e.correlation_id=previous.id AND e.payload->>'session_ready'='true' WHERE previous.session_id=${task.session_id} AND previous.id<>${task.id} LIMIT 1`)).rows.length > 0;
       // Load only this turn's explicitly attached files. Session history stays bounded.
       images.length=0;
+      pdfs.length=0;
       const attached: NonNullable<InvocationRequest['attachments']> = [];
       if (task.attachments?.length) {
-        const rows = await c.select({id:s.assets.id,preview:s.assets.preview}).from(s.assets).where(eq(s.assets.task_id, task.id));
+        const rows = await c.select({id:s.assets.id,preview:s.assets.preview,key:s.assets.object_key,size:s.assets.size}).from(s.assets).where(eq(s.assets.task_id, task.id));
         for (const file of task.attachments) {
           const row = rows.find(item=>item.id===file.id);
           if (!row) throw new AppError(409,'asset_unavailable');
@@ -316,10 +324,11 @@ export class PostgresStore implements DeliveryStore {
           attached.push({...file,content:preview?.kind==='text'
             ? {kind:'text',text:preview.text.slice(0,16000),truncated:preview.truncated || preview.text.length>16000}
             : {kind:'file'}});
+          if (preview?.kind==='pdf') pdfs.push({index:attached.length-1,key:row.key,size:row.size});
           if (preview?.kind==='image') images.push({index:attached.length-1,id:file.id,animated:preview.mime==='image/gif'});
         }
       }
-      return { installation, request: { ...(attached.length ? {attachments:attached} : {}), ...(session?.managed ? { persistent_session: { resume: Boolean(priorReady) } } : {}), schema_version: '1.0', task_id: task.id, session_id: task.session_id!, execution_id: delivery.execution_id, idempotency_key: delivery.execution_id, goal: task.goal, skill: task.skill, context } };
+      return { installation, request: { ...(task.goal_action ? {goal_action:task.goal_action} : {}), ...(task.codex_settings ? {codex_settings:task.codex_settings} : {}), ...(attached.length ? {attachments:attached} : {}), ...(session?.managed ? { persistent_session: { resume: Boolean(priorReady) } } : {}), schema_version: '1.0', task_id: task.id, session_id: task.session_id!, execution_id: delivery.execution_id, idempotency_key: delivery.execution_id, goal: task.goal, skill: task.skill, context } };
     });
     if (prepared && this.outboundAccess) prepared.request.outbound = await this.outboundAccess(prepared.request.execution_id,prepared.installation.id);
     if (!prepared) return null;
@@ -327,8 +336,25 @@ export class PostgresStore implements DeliveryStore {
       if (!this.attachmentImage) throw new AppError(503,'uploads_unavailable');
       prepared.request.attachments![image.index]!.content = {kind:'image', webp:await this.attachmentImage(image.id,image.animated)};
     }
+    // A page-specific question gets the larger single-page excerpt. Other turns start at the beginning.
+    const page = Number(/\b(?:pages?\s+|p\.\s*)([1-9]\d{0,8})\b/i.exec(prepared.request.goal)?.[1]) || undefined;
+    const pdfDeadline = Date.now() + 8000;
+    for (const pdf of pdfs) {
+      const file = prepared.request.attachments![pdf.index]!;
+      const budget = pdfDeadline - Date.now();
+      file.content = {kind:'pdf', status:this.attachmentPdf ? 'not_read' : 'unavailable', page_count:null, pages:[]};
+      if (!this.attachmentPdf || budget <= 0) continue;
+      try { file.content = await this.attachmentPdf(pdf.key, pdf.size, page, page ? 1 : 2, budget); }
+      catch (error) {
+        if (!(error instanceof AppError)) throw error;
+        if (error.code === 'storage_unavailable') file.content.status = 'unavailable';
+        else if (error.code !== 'pdf_reader_busy') throw error;
+      }
+    }
+    if (!prepared.request.context?.handoff?.browser_url && this.attachmentPdf && pdfs.length && connectionId && ['codex.local','kiro.local','claude.local'].includes(prepared.installation.connector_id))
+      prepared.request.pdf_tool_token = pdfToolToken(delivery, connectionId);
     const readMemory = this.memoryReader && !!prepared.request.context?.working_memory && !prepared.request.context.handoff;
-    if (!readMemory && !images.length) return prepared;
+    if (!readMemory && !images.length && !pdfs.length) return prepared;
     const task = await this.task(this.db, delivery.task_id);
     const memory = readMemory ? await this.memoryReader!(task) : undefined;
     // Provider I/O does not hold a database connection. Revalidate the delivery afterwards.
@@ -401,11 +427,24 @@ export class PostgresStore implements DeliveryStore {
       if (!changedExecution.length || !changedTask.length) throw new SessionConflict();
       if (event.type === 'execution.started') traceTurn(c, task.id, 'execution', 'started');
       await traceToolChanges(c, task.id, event.payload.response?.tools);
-      await this.append(c, task, event.type, installationId, { ...event.payload, agent_event_id: event.id, agent_sequence: event.sequence, agent_occurred_at: event.occurred_at }, event.id);
+      // Only a reply which will become a channel root belongs in the main timeline.
+      let channelPostAuthor: string | undefined;
+      if (event.type === 'execution.progress' && event.payload.response && !optimistic && event.payload.session_lifecycle !== 'open') {
+        const root = await c.execute<{name:string}>(sql`SELECT d.name FROM threads t
+          JOIN agent_installations i ON i.id=${installationId} JOIN agent_definitions d ON d.id=i.definition_id
+          WHERE t.id=${task.thread_id} AND NOT EXISTS (SELECT 1 FROM messages m
+            WHERE m.workspace_id=t.workspace_id AND m.channel_id=t.channel_id AND m.thread_id=t.id)`);
+        channelPostAuthor = root.rows[0]?.name;
+      }
+      await this.append(c, task, event.type, installationId, { ...event.payload, ...(channelPostAuthor ? {channel_post_author:channelPostAuthor} : {}), agent_event_id: event.id, agent_sequence: event.sequence, agent_occurred_at: event.occurred_at }, event.id);
       if (next === 'completed' || next === 'failed') traceTurn(c, task.id, 'outcome', next);
       const session = task.session_id ? (await c.select().from(s.agentSessions).where(eq(s.agentSessions.id, task.session_id)))[0] : undefined;
       const managed = session?.managed;
       const incomingOutputs = event.payload.response?.outputs;
+      if (event.payload.session_goal !== undefined) {
+        if (!managed || !task.goal_action || !['codex.run','claude.run'].includes(task.skill)) throw new AppError(400,'invalid_session_goal');
+        await c.update(s.agentSessions).set({session_goal:event.payload.session_goal}).where(eq(s.agentSessions.id,session.id));
+      }
       if (managed && incomingOutputs) {
         const changedSession = await c.update(s.agentSessions).set({ revision: session.revision + 1, outputs: {
           ...(incomingOutputs.preview ?? session.outputs.preview ? { preview: incomingOutputs.preview ?? session.outputs.preview } : {}),

@@ -94,15 +94,19 @@ test('renaming a session preserves creation retries and rejects unauthorized or 
 test('turns preserve retry identity, serialize sends, reuse owner approval and stay out of human history', async () => {
   const a = await fixture(), one = await session(a), two = await session(a);
   const path = `/agent-sessions/${one.id}/messages`, key = randomUUID();
-  const task = await api(a.owner_token, 'POST', path, { text: 'First prompt' }, 201, key);
+  const selected={model:'gpt-6-astra',effort:'xhigh'};
+  await api(a.owner_token,'POST',path,{text:'Invalid effort',codex_settings:{...selected,effort:'bogus'}},409);
+  const task = await api(a.owner_token, 'POST', path, { text: 'First prompt',codex_settings:selected }, 201, key);
   assert.equal(task.status, 'queued'); assert.equal(task.session_id, one.id);
-  assert.equal((await api(a.owner_token, 'POST', path, { text: 'First prompt' }, 201, key)).id, task.id);
+  assert.equal((await api(a.owner_token, 'POST', path, { text: 'First prompt',codex_settings:selected }, 201, key)).id, task.id);
+  await api(a.owner_token,'POST',path,{text:'First prompt',codex_settings:{...selected,effort:'low'}},409,key);
   await api(a.owner_token, 'POST', path, { text: 'Changed' }, 409, key);
   await api(a.owner_token, 'POST', path, { text: 'Overlap' }, 409);
   const competing = await Promise.all([api(a.owner_token, 'POST', `/agent-sessions/${two.id}/messages`, { text: 'Other session' }, 201)]);
   assert.equal(competing[0].session_id, two.id);
   const delivery = (await store.claimDelivery(a.installation_id))!;
   const prepared = (await store.prepareDelivery(delivery))!;
+  assert.deepEqual(prepared.request.codex_settings,selected);
   assert.deepEqual(prepared.request.persistent_session, { resume: false });
   await store.acceptEvent(a.installation_id, event(task.active_execution_id, 1, 'execution.started'), delivery);
   await store.acceptEvent(a.installation_id, event(task.active_execution_id, 2, 'execution.completed'), delivery);
@@ -321,16 +325,16 @@ test('stopping one session and sending to another preserve concurrent updates', 
 });
 
 
-async function pairedSession() {
+async function pairedSession(provider:'codex'|'claude'='codex') {
   const a = await bootstrap(pool);
-  const pairing = await api(a.owner_token, 'POST', `/workspaces/${a.workspace_id}/agent-pairings`, {}, 201);
+  const pairing = await api(a.owner_token, 'POST', `/workspaces/${a.workspace_id}/agent-pairings`, {provider}, 201);
   const credential = randomBytes(32).toString('base64url');
-  const claim = await app.inject({ method: 'POST', url: '/v1/agent-pairings/claim', payload: { code: pairing.code, credential } });
+  const claim = await app.inject({ method: 'POST', url: '/v1/agent-pairings/claim', payload: { code: pairing.code, credential, provider } });
   assert.equal(claim.statusCode, 201, claim.body);
   const installation_id: string = claim.json().installation_id;
   const seed = { ...a, installation_id };
   await api(a.owner_token, 'POST', `/agents/connections/${installation_id}/channels/${a.channel_id}`, { enabled: true });
-  await pool.query("UPDATE agent_installations SET connector_id='codex.legacy-test' WHERE id=$1",[seed.installation_id]);
+  if (provider === 'codex') await pool.query("UPDATE agent_installations SET connector_id='codex.legacy-test' WHERE id=$1",[seed.installation_id]);
   const socket = io(`${origin}/agents`, { transports: ['websocket'], auth: { token: credential }, autoConnect: false, reconnection: false });
   sockets.push(socket);
   let available = false;
@@ -350,6 +354,31 @@ async function pairedSession() {
   };
   return { seed, one: await session(seed), command, claimReady };
 }
+
+test('the paired Claude catalog controls per-model settings at admission and dispatch', async () => {
+  const {seed,one,command,claimReady} = await pairedSession('claude');
+  const path = `/agent-sessions/${one.id}`;
+  const models = [{id:'claude-from-sdk',label:'Connected Claude',efforts:['high','max']},{id:'plain',label:'Plain',efforts:[]}];
+  assert.equal((await command('agent.heartbeat',{auth_status:'ready',model_catalog:models})).error,undefined);
+  assert.deepEqual(await api(seed.owner_token,'GET',path+'/models'),models);
+  const outsider = await fixture();
+  await api(outsider.owner_token,'GET',path+'/models',undefined,404);
+  await api(seed.owner_token,'POST',path+'/messages',{text:'Wrong level',codex_settings:{model:'plain',effort:'max'}},409);
+  const selection = {model:'claude-from-sdk',effort:'max'};
+  await api(seed.owner_token,'POST',path+'/messages',{text:'Run',codex_settings:selection},201);
+  const first = (await claimReady()).data;
+  assert.deepEqual(first.codex_settings,selection);
+  await api(seed.owner_token,'POST',path+'/queue',{text:'Next',codex_settings:{model:'plain'}});
+  for (const [sequence,type] of [[1,'execution.started'],[2,'execution.completed']] as const) {
+    assert.equal((await command('agent.task.event',{event:event(first.execution_id,sequence,type)})).data,true);
+  }
+  assert.equal((await command('agent.task.finish')).data,true);
+  await new AgentSessionStore(pool).drainQueue(one.id);
+  const queued = await api(seed.owner_token,'GET',path);
+  assert.deepEqual(queued.turns.at(-1).task.codex_settings,{model:'plain'});
+  assert.equal((await command('agent.heartbeat',{auth_status:'required'})).error,undefined);
+  assert.deepEqual(await api(seed.owner_token,'GET',path+'/models'),[]);
+});
 
 test('explicit stop returns a deliberate cancellation and releases the socket for the next session turn', async () => {
   const { seed: a, one, command, claimReady } = await pairedSession();
@@ -599,6 +628,8 @@ test('session uploads bind once to their authorized turn, survive expiry, and re
   assert.equal((await assets.download(a.collaborator_id,file.id)).task_id,task.id);
   await assert.rejects(assets.download(foreign.owner_id,file.id), /not_found/);
   assert.equal((await assets.list(a.owner_id,a.channel_id)).items.length,0);
+  assert.equal((await pool.query('SELECT 1 FROM graph_source_attachments WHERE id=$1', [file.id])).rowCount, 0);
+  assert.equal((await pool.query('SELECT 1 FROM knowledge_visible_attachments($1,$2,$3,$4::uuid[])', [a.workspace_id,a.owner_id,a.channel_id,[file.id]])).rowCount, 0);
   const detail = await api(a.owner_token,'GET',`/agent-sessions/${one.id}`);
   assert.equal(detail.turns[0].task.attachments[0].description,'Console log');
   const delivery = (await store.claimDelivery(a.installation_id))!;
@@ -614,8 +645,9 @@ test('session queue replays FIFO once under concurrent drains, rechecks approval
  const assets=new AssetStore(pool);
  const file=await assets.create(a.collaborator_id,a.channel_id,{name:'note.txt',size:4,type:'text/plain'});
  await assets.complete(a.collaborator_id,file.id,async()=>({kind:'text',text:'note',language:'plaintext',truncated:false}));
- const body={text:'Next',asset_ids:[file.id]};
+ const body={text:'Next',asset_ids:[file.id],codex_settings:{model:'gpt-6.1-sol',effort:'low'}};
  const first=await api(a.collaborator_token,'POST',queue,body,200,key);
+ assert.equal((await pool.query('SELECT 1 FROM graph_source_attachments WHERE id=$1', [file.id])).rowCount, 0);
  await api(a.collaborator_token,'POST',queue,body,409);
  await pool.query("UPDATE assets SET expires_at=now()-interval '1 day' WHERE id=$1",[file.id]);
  assert.equal(await assets.cleanup(async()=>{},1,file.id),0);
@@ -639,6 +671,7 @@ test('session queue replays FIFO once under concurrent drains, rechecks approval
  await Promise.all([sessions.drainQueue(s.id),sessions.drainQueue(s.id)]);
  const detail=await sessions.read(a.owner_id,s.id);
  assert.deepEqual(detail.turns.map(row=>row.task.goal),['Start','Next']);
+ assert.deepEqual(detail.turns[1]!.task.codex_settings,body.codex_settings);
  assert.equal(detail.turns[1]!.task.attachments?.[0]?.id,file.id);
  assert.equal(detail.turns[1]!.task.status,'awaiting_approval');
  assert.deepEqual(detail.inputs!.map(item=>item.text),['Finally']);
@@ -650,6 +683,93 @@ test('session queue replays FIFO once under concurrent drains, rechecks approval
  await sessions.drainQueue(s.id);
  assert.equal((await sessions.read(a.owner_id,s.id)).turns.at(-1)?.task.goal,'Finally');
  assert.deepEqual((await sessions.read(a.owner_id,s.id)).inputs,[]);
+});
+
+test('PDF preparation opens only the attached sealed object and rechecks authorization after reading it', async () => {
+  const a = await fixture(), one = await session(a);
+  const { AssetStore } = await import('@space/postgres/assets');
+  const assets = new AssetStore(pool);
+  const pdf = await assets.create(a.owner_id, a.channel_id, {name:'report.pdf',size:1200,type:'application/pdf'});
+  const other = await assets.create(a.owner_id, a.channel_id, {name:'other.pdf',size:1200,type:'application/pdf'});
+  for (const file of [pdf, other]) await assets.complete(a.owner_id, file.id, async () => ({kind:'pdf',mime:'application/pdf'}));
+  const task = await api(a.owner_token, 'POST', `/agent-sessions/${one.id}/messages`, {text:'What is on page 7?',asset_ids:[pdf.id]}, 201);
+  const delivery = (await store.claimDelivery(a.installation_id))!;
+  assert.equal(delivery.task_id, task.id);
+  const reader = new PostgresStore(pool);
+  const content = {kind:'pdf',status:'readable',page_count:8,pages:[{page:7,text:'page seven evidence',truncated:false}]} as const;
+  reader.attachmentPdf = async (key, size, page, count) => {
+    assert.deepEqual([key,size,page,count], [`files/${pdf.id}`,1200,7,1]);
+    return {...content, pages:[...content.pages]};
+  };
+  const prepared = await reader.prepareDelivery(delivery);
+  assert.deepEqual(prepared?.request.attachments?.map(f => [f.id, f.content]), [[pdf.id,content]]);
+  const authorizedRead = reader.attachmentPdf;
+  for (const [code, status] of [['pdf_reader_busy', 'not_read'], ['storage_unavailable', 'unavailable']] as const) {
+    reader.attachmentPdf = async () => { throw new AppError(503, code); };
+    const fallback = await reader.prepareDelivery(delivery);
+    assert.deepEqual(fallback?.request.attachments?.[0]?.content, {kind:'pdf',status,page_count:null,pages:[]});
+  }
+  reader.attachmentPdf = async (...args) => {
+    const result = await authorizedRead(...args);
+    await pool.query('UPDATE agent_installations SET enabled=false WHERE id=$1', [a.installation_id]);
+    return result;
+  };
+  await assert.rejects(() => reader.prepareDelivery(delivery), {code:'installation_not_authorized'});
+});
+
+test('PDF inline excerpts share one deadline and keep unread files available as attachment metadata', async t => {
+  const a = await fixture(), one = await session(a);
+  const { AssetStore } = await import('@space/postgres/assets');
+  const assets = new AssetStore(pool), ids = [];
+  for (const name of ['first.pdf','second.pdf']) {
+    const file = await assets.create(a.owner_id, a.channel_id, {name,size:100,type:'application/pdf'});
+    await assets.complete(a.owner_id, file.id, async () => ({kind:'pdf',mime:'application/pdf'}));
+    ids.push(file.id);
+  }
+  await api(a.owner_token, 'POST', `/agent-sessions/${one.id}/messages`, {text:'Summarize the attached files',asset_ids:ids}, 201);
+  const delivery = (await store.claimDelivery(a.installation_id))!;
+  const reader = new PostgresStore(pool), started = Date.now();
+  let reads = 0;
+  reader.attachmentPdf = async (_key, _size, page, count, budget) => {
+    reads++;
+    assert.equal(page, undefined);
+    assert.equal(count, 2);
+    assert.ok(budget! > 0 && budget! <= 8000);
+    t.mock.method(Date, 'now', () => started + 8100);
+    return {kind:'pdf',status:'readable',page_count:5,pages:[{page:1,text:'first page',truncated:false}]};
+  };
+  const prepared = await reader.prepareDelivery(delivery);
+  assert.equal(reads, 1);
+  assert.deepEqual(prepared?.request.attachments?.[1], {id:ids[1],name:'second.pdf',size:100,type:'application/pdf',
+    content:{kind:'pdf',status:'not_read',page_count:null,pages:[]}});
+});
+
+test('native goals require the owner and persist provider updates only in the addressed session', async () => {
+  const a = await fixture();
+  await pool.query("UPDATE agent_definitions SET capabilities=$2 WHERE id=$1",[a.definition_id,{skills:['claude.run'],controls:{},persistent_sessions:true}]);
+  await pool.query("UPDATE agent_installations SET connector_id='claude.local' WHERE id=$1",[a.installation_id]);
+  await pool.query("UPDATE agent_grants SET skill='claude.run' WHERE installation_id=$1",[a.installation_id]);
+  const one=await session(a), other=await session(a);
+  const sessions = new AgentSessionStore(pool,new PostgresStore(pool));
+  const connection = randomUUID();
+  await pool.query("UPDATE agent_connections SET connection_id=$2,auth_status='ready',last_seen_at=now() WHERE installation_id=$1",[a.installation_id,connection]);
+  const objective = 'The checks pass', input = {text:objective, goal_action:{kind:'set',objective}}, key = randomUUID();
+  await api(a.collaborator_token,'POST',`/agent-sessions/${one.id}/messages`,input,403);
+  await api(a.owner_token,'POST',`/agent-sessions/${one.id}/queue`,input,400);
+  const task = await sessions.send(a.owner_id,one.id,input,key);
+  assert.equal((await sessions.send(a.owner_id,one.id,input,key)).id,task.id);
+  assert.deepEqual(task.goal_action,input.goal_action);
+  const delivery = (await store.claimDelivery(a.installation_id))!;
+  assert.deepEqual((await store.prepareDelivery(delivery,connection))?.request.goal_action,input.goal_action);
+  const started = event(task.active_execution_id!,1,'execution.started');
+  const progress = {...event(task.active_execution_id!,2,'execution.progress'),payload:{text:'Goal set',session_goal:{objective,status:'active'}}};
+  await store.acceptEvent(a.installation_id,started,delivery,connection);
+  await store.acceptEvent(a.installation_id,progress,delivery,connection);
+  await store.acceptEvent(a.installation_id,progress,delivery,connection);
+  assert.deepEqual((await sessions.read(a.owner_id,one.id)).session_goal,progress.payload.session_goal);
+  assert.equal((await sessions.read(a.owner_id,other.id)).session_goal,null);
+  await sessions.control(a.owner_id,one.id,'stop');
+  assert.equal((await sessions.read(a.owner_id,one.id)).session_goal?.status,'blocked');
 });
 
 test('sidebar moves and archives are personal, reversible, and check both session permissions', async () => {

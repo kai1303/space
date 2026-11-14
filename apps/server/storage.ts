@@ -11,7 +11,7 @@ export interface AssetStorage {
   // Retries and concurrent processors must reuse sealed originals, never overwrite them.
   finalize(stagingKey: string, finalKey: string, size: number): Promise<void>;
   download(key: string, name: string, audience?: 'onlyoffice'): Promise<string>;
-  read(key: string, maxBytes: number, range?: { start: number; end: number }): Promise<Uint8Array>;
+  read(key: string, maxBytes: number, range?: { start: number; end: number }, expectedEtag?: string, signal?: AbortSignal): Promise<Uint8Array>;
   write(key: string, data: Uint8Array, type: string): Promise<void>;
   inline(key: string, type: string): Promise<string>;
   remove(key: string): Promise<void>;
@@ -135,7 +135,7 @@ export class SeaweedStorage implements AssetStorage {
       Bucket: this.config.bucket, Key: key, ResponseContentType: type, ResponseContentDisposition: 'inline',
     }), { expiresIn: 60 }));
   }
-  async read(key: string, maxBytes: number, range?: { start: number; end: number }, expectedEtag?: string): Promise<Uint8Array> {
+  async read(key: string, maxBytes: number, range?: { start: number; end: number }, expectedEtag?: string, signal?: AbortSignal): Promise<Uint8Array> {
     validateSize(maxBytes);
     if (range && (!Number.isSafeInteger(range.start) || !Number.isSafeInteger(range.end) || range.start < 0 || range.end < range.start || range.end - range.start + 1 > maxBytes)) throw new AppError(409, 'invalid_upload');
     const expected = range ? range.end - range.start + 1 : maxBytes;
@@ -144,7 +144,7 @@ export class SeaweedStorage implements AssetStorage {
       const object = await this.client.send(new GetObjectCommand({
         Bucket: this.config.bucket, Key: key, ...(range ? { Range: `bytes=${range.start}-${range.end}` } : {}),
         ...(expectedEtag ? { IfMatch: expectedEtag } : {}),
-      }), { abortSignal: controller.signal });
+      }), { abortSignal: signal ? AbortSignal.any([controller.signal, signal]) : controller.signal });
       const body = object.Body;
       try {
         if (range) {

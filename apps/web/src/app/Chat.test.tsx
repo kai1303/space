@@ -79,6 +79,7 @@ const latestChatSocket = () => mocks.sockets.at(-1);
 vi.mock('../shared/api/request.js', async original => {
   const actual = await original<typeof import('../shared/api/request.js')>();
   return { ...actual, request: async (...args: Parameters<typeof actual.request>) => {
+    if (/^\/channels\/[^/]+\/encryption$/.test(args[0])) return { enabled: false, devices: [] };
     if (/^\/channels\/[^/]+\/permissions$/.test(args[0])) {
       if (mocks.permissionsError) throw new Error('offline');
       return { revision: '1', posting: 'everyone', poster_ids: [], manager_ids: [], allow_replies: true, allow_broadcast: true, invite: 'managers', remove: 'managers', edit_details: 'managers', archive: 'managers', capabilities: { post: mocks.channelPost, reply: mocks.channelReply, broadcast: true, invite: true, remove: true, edit_details: true, archive: true, manage: true } } satisfies ChannelPermissionSnapshot;
@@ -129,15 +130,17 @@ it('browses channel files outside loaded history, opens their source and keeps d
   let finishOlder!: (value: unknown) => void;
   const message = { id: 'loaded-message', channel_id: 'first', thread_id: 'thread', created_at: '2026-11-03T00:00:00Z', text: 'Loaded conversation', author: { kind: 'human', id: 'user', name: 'Kai' } };
   const file = { id: '11111111-1111-4111-8111-111111111111', name: 'older-report.pdf', type: 'application/pdf', size: 4096, preview_kind: 'pdf', message_id: 'older-source', thread_id: 'old-thread', shared_at: '2026-11-02T00:00:00Z', uploader: { id: 'user', name: 'Kai' } };
+  const older = { ...message, id: 'older-source', sequence: '1', thread_id: 'old-thread', text: 'Original older file message' };
   vi.stubGlobal('fetch', vi.fn(async (path: string) => path.includes('/first/assets?') && filesRevoked ? { ok: false, status: 404, json: async () => ({ error: 'not_found' }) } : ({ ok: true, json: async () => {
     if (path === '/v1/me') return { id: 'user', display_name: 'Kai' };
     if (path.startsWith('/v1/workspaces?')) return { items: [{ id: 'workspace', name: 'Team' }], next_cursor: null };
     if (path.includes('/channels?')) return { items: [{ id: 'first', name: 'first', workspace_id: 'workspace', joined: true }], next_cursor: null };
+    if (path.endsWith('/first/messages?after=0')) return messagePage([older, { ...message, sequence: '2' }], {has_older:true});
     if (path.includes('/first/messages?before=')) return new Promise(resolve => { finishOlder = resolve; });
     if (isMessageHistory(path)) return messagePage([{ ...message, sequence: '1' }], { has_older: !path.includes('/threads/') });
     if (path.endsWith('/first/tabs')) return {has_files:true,has_links:false,visibility:{}};
     if (path.includes('/first/assets?')) return { items: [file, { ...file, id: '22222222-2222-4222-8222-222222222222', name: 'loaded-image.png', preview_kind: 'image', message_id: message.id }], next_cursor: null };
-    if (path.endsWith('/messages/older-source')) return { ...message, id: 'older-source', thread_id: 'old-thread', text: 'Original older file message' };
+    if (path.endsWith('/messages/older-source')) return older;
     if (path.includes('/history')) return { events: [], cursor: '0', has_more: false };
     return [];
   } })));
@@ -155,16 +158,16 @@ it('browses channel files outside loaded history, opens their source and keeps d
   await act(async () => { latestChatSocket().receive('chat.events', { channel_id: 'first', cursor: '2', events: [{ channel_id: 'first', thread_id: 'new-thread', sequence: '2', occurred_at: message.created_at, type: 'message.created', payload: { ...message, id: 'new-file-message', thread_id: 'new-thread', text: 'New file shared', attachments: [file], author: { kind: 'human', id: 'alex', name: 'Alex' } } }] }, vi.fn()); });
   await waitFor(() => expect(vi.mocked(fetch).mock.calls.filter(([path]) => String(path).includes('/first/assets?')).length).toBe(listReads + 1));
   await userEvent.click(within(files).getByRole('button', { name: 'View message for older-report.pdf' }));
-  const source = await screen.findByRole('dialog', { name: 'Original message in #first' });
-  await within(source).findByText('Original older file message');
-  fireEvent(source, new Event('close'));
-  await userEvent.click(within(files).getByRole('button', { name: 'View message for loaded-image.png' }));
+  await waitFor(() => expect(document.activeElement?.id).toBe('chat-message-older-source'));
+  expect(screen.queryByRole('dialog')).toBeNull();
+  await userEvent.click(filesButton);
+  await userEvent.click(await screen.findByRole('button', { name: 'View message for loaded-image.png' }));
   await waitFor(() => expect(screen.queryByRole('region', { name: 'Files in #first' })).toBeNull());
   await waitFor(() => expect(document.activeElement?.id).toBe('chat-message-loaded-message'));
   await userEvent.click(filesButton);
   await screen.findByRole('region', { name: 'Files in #first' });
   await userEvent.click(within(document.querySelector('main.chat-channel')!).getByRole('tab', {name:'Messages'}));
-  await userEvent.click(screen.getByRole('button', { name: 'Reply to Kai' }));
+  await userEvent.click(within(document.getElementById('chat-message-loaded-message')!).getByRole('button', { name: 'Reply to Kai' }));
   await screen.findByRole('region', { name: 'Thread' });
   await waitFor(() => expect(screen.queryByRole('region', { name: 'Files in #first' })).toBeNull());
   await userEvent.click(filesButton);
@@ -218,6 +221,7 @@ it('keeps the channel draft and pending send when an Office file disappears whil
     await userEvent.type(editor, 'Keep this draft');
     await userEvent.click(screen.getByRole('tab', {name: 'Files & links'}));
     await userEvent.click(await screen.findByRole('button', {name: 'Preview Meeting.docx'}));
+    await vi.dynamicImportSettled();
     await screen.findByText('No files shared yet');
     expect(screen.queryByRole('dialog')).toBeNull();
     await userEvent.click(screen.getByRole('tab', {name: 'Messages'}));
@@ -254,7 +258,7 @@ it.each([false, true])('revalidates channel access when an older file source is 
     expect(within(document.querySelector('main.chat-channel')!).queryByRole('tab', { name: 'Files & links', exact: true })).toBeNull();
   } else {
     expect(screen.getByText('Cached channel message')).toBeTruthy();
-    expect(screen.getByRole('dialog', { name: 'Original message in #first' })).toBeTruthy();
+    expect(await screen.findByText('not found')).toBeTruthy();
   }
 });
 it('keeps the sidebar mounted and immediately restores the last channel while revalidating a workspace', async () => {
@@ -517,12 +521,14 @@ it('opens an old workspace bookmark and shares its Activity view with a compact 
  expect(location.pathname).toBe(path);
 });
 
-it.each(['legacy', 'compact'])('opens the exact message from a %s link and returns to the channel on close', async format => {
+it.each(['legacy', 'compact'])('scrolls to the exact message from a %s link in its conversation', async format => {
  const room='550e8400-e29b-41d4-a716-446655440000', id='00000000-0000-4000-8000-000000000001';
  const channelPath='/c/VQ6EAOKbQdSnFkRmVUQAAA', path=channelPath+'/message/AAAAAAAAQACAAAAAAAAAAQ';
  window.history.replaceState(null,'',format==='compact' ? path : '/chat?workspace=workspace&channel='+room+'&message='+id);
- const message={...paginatedMessage('Linked original','1',id),channel_id:room};
- mockPaginatedChat(()=>messagePage([message]));
+ const reply = format === 'compact';
+ const message={...paginatedMessage('Linked original','12'),id,channel_id:room,thread_root_id:reply ? 'parent' : id};
+ const sibling=paginatedMessage('Later message','99');
+ mockPaginatedChat(url => messagePage(reply && !url.endsWith('/history?after=11') ? [sibling] : [message]));
  const fallback=vi.mocked(fetch).getMockImplementation()!;
  vi.mocked(fetch).mockImplementation(async(input,init)=>{
    const url=String(input);
@@ -532,11 +538,10 @@ it.each(['legacy', 'compact'])('opens the exact message from a %s link and retur
    return fallback(input,init);
  });
  render(<Chat/>);
- const dialog=await screen.findByRole('dialog',{name:'Original message in #design'});
- expect(await within(dialog).findByText('Linked original')).toBeTruthy();
+ await waitFor(()=>expect(document.activeElement?.id).toBe((reply ? 'thread-message-' : 'chat-message-')+id));
+ expect(document.activeElement?.textContent).toContain('Linked original');
+ expect(screen.queryByRole('dialog')).toBeNull();
  expect(location.pathname+location.search).toBe(path);
- await userEvent.click(within(dialog).getByRole('button',{name:'Close dialog'}));
- await waitFor(()=>expect(location.pathname+location.search).toBe(channelPath));
 });
 
 it('opens memory from message actions and follows source links to the authorized original message', async () => {
@@ -558,11 +563,8 @@ it('opens memory from message actions and follows source links to the authorized
   } })));
   try {
     render(<Chat />);
-    const sourceDialog = await screen.findByRole('dialog', { name: 'Original message in #source' });
+    await waitFor(() => expect(document.activeElement?.id).toBe('chat-message-source-message'));
     expect(screen.getByRole('button', { name: 'Switch workspaces… (Target team)' })).toBeTruthy();
-    await userEvent.click(screen.getByRole('button', { name: 'Close dialog' }));
-    // The native dialog stub does not emit close, so dispatch the browser event.
-    fireEvent(sourceDialog, new Event('close'));
     await userEvent.click(screen.getByLabelText('More actions'));
     await userEvent.click(screen.getByRole('menuitem', { name: 'Save to channel memory' }));
     await screen.findByText('Memory is off for this channel.');
@@ -607,7 +609,8 @@ it('isolates channel drafts and history, shows trusted agent authors, and clears
   expect(screen.getByRole('searchbox', { name: 'Find a conversation' })).toBeTruthy();
   expect(screen.getByRole('button', { name: 'Search in first' })).toBeTruthy();
   expect(screen.getByText('Agent')).toBeTruthy();
-  expect((screen.getByRole('button', { name: 'File uploads unavailable' }) as HTMLButtonElement).disabled).toBe(true);
+  expect(screen.queryByRole('button', { name: 'Add to message' })).toBeNull();
+  expect(screen.queryByRole('button', { name: /unavailable in this preview/ })).toBeNull();
   expect(screen.queryByLabelText('Development access token')).toBeNull();
   const options = vi.mocked(fetch).mock.calls[0]![1];
   expect(options?.credentials).toBe('same-origin');
@@ -731,7 +734,9 @@ it('keeps uploads with their channel and thread drafts across navigation, retrie
   expect(await screen.findByRole('button', { name: 'Open preview of download.html' })).toBeTruthy();
   expect(await screen.findByText('<script>alert(1)</script>')).toBeTruthy();
   expect(view.container.querySelector('script')).toBeNull();
-  await waitFor(() => expect(screen.getByRole('button', { name: 'Attach files' }).getAttribute('aria-disabled')).not.toBe('true'));
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Add to message' }).getAttribute('aria-disabled')).not.toBe('true'));
+  expect(screen.getByRole('button', { name: 'Record audio clip' })).toBeTruthy();
+  expect(screen.getByRole('button', { name: 'Record video clip' })).toBeTruthy();
   const report = new File(['data'], 'report.txt', { type: 'text/plain' });
   fireEvent.change(view.container.querySelector('#chat-messages input[type="file"]')!, { target: { files: [report] } });
   expect(mocks.upload.mock.calls[0].slice(0, 2)).toEqual(['first', report]);
@@ -789,7 +794,14 @@ it('cancels removed files and clears attachment drafts on authorization loss and
   } })));
   const view = render(<Chat />);
   await screen.findByRole('textbox', { name: 'Message first' });
-  const input = view.container.querySelector('input[type="file"]')!;
+  const readyUploadInput = () => waitFor(() => {
+    const menu = view.container.querySelector('#chat-messages [title="Attach · Double-click to upload"]');
+    const trigger = menu?.querySelector('summary');
+    expect(trigger).toBeTruthy();
+    expect(trigger!.getAttribute('aria-disabled')).not.toBe('true');
+    return view.container.querySelector('#chat-messages input[type="file"]')!;
+  });
+  const input = await readyUploadInput();
   const file = new File(['bytes'], 'private.txt');
   fireEvent.change(input, { target: { files: [file] } });
   await userEvent.click(screen.getByRole('button', { name: 'Remove private.txt' }));
@@ -804,7 +816,7 @@ it('cancels removed files and clears attachment drafts on authorization loss and
   view.rerender(<Chat />);
   await screen.findByRole('textbox', { name: 'Message first' });
   expect(screen.queryByText('private.txt')).toBeNull();
-  fireEvent.change(view.container.querySelector('input[type="file"]')!, { target: { files: [file] } });
+  fireEvent.change(await readyUploadInput(), { target: { files: [file] } });
   expect(jobs).toHaveLength(3);
   mocks.sessionId = 'another-upload-session';
   view.rerender(<Chat />);
@@ -1002,6 +1014,31 @@ function mockPaginatedChat(history: (path: string) => MessagePage | Promise<Mess
     return [];
   } })));
 }
+it('opens a section DM outside the recent DM page and drops it after a realtime revocation', async () => {
+  mockPaginatedChat(() => messagePage());
+  const fallback = vi.mocked(fetch).getMockImplementation()!;
+  const dm = { id:'old-dm', name:'Mina', kind:'direct', workspace_id:'workspace', private:true, joined:true,
+    participants:[{id:'mina', name:'Mina', image:null, presence:'away'}], hidden:false, topic:'', description:'', archived_at:null };
+  let assigned = true;
+  vi.mocked(fetch).mockImplementation(async (input, init) => {
+    const path = String(input);
+    if (path.endsWith('/sidebar-sections')) return new Response(JSON.stringify({
+      sections:[{id:'launch', name:'Launch', collapsed:false}],
+      assignments:assigned ? [{channel_id:dm.id, section_id:'launch', name:dm.name, kind:'direct', private:true}] : [],
+    }));
+    if (path.endsWith('/channels/old-dm')) return new Response(JSON.stringify(dm));
+    return fallback(input, init);
+  });
+  render(<Chat/>);
+  const section = await screen.findByRole('region', { name:'Launch' });
+  await userEvent.click(await within(section).findByRole('button', { name:'Mina', exact:true }));
+  await screen.findByRole('textbox', { name:'Message Mina' });
+  assigned = false;
+  await act(async () => {
+    latestChatSocket().receive('updates.changed', { scope:'sidebar-sections', id:'workspace' });
+  });
+  await waitFor(() => expect(within(section).queryByRole('button', { name:'Mina', exact:true })).toBeNull());
+});
 it('updates the Starred sidebar immediately after starring and unstarring without a pushed event', async () => {
   mockPaginatedChat(() => messagePage());
   const fallback = vi.mocked(fetch).getMockImplementation()!;
@@ -1016,13 +1053,13 @@ it('updates the Starred sidebar immediately after starring and unstarring withou
   const editor = await screen.findByRole('textbox', { name: 'Message first' });
   const section = screen.getByRole('button', { name: 'Starred', exact: true }).closest('section')!;
   expect(within(section).queryByRole('button', { name: 'first', exact: true })).toBeNull();
-  await userEvent.click(screen.getByRole('button', { name: 'Star conversation', exact: true }));
-  await screen.findByRole('button', { name: 'Unstar conversation', exact: true });
+  await userEvent.click(screen.getByRole('button', { name: 'Organize conversation' }));
+  await userEvent.click(screen.getByRole('menuitem', { name: 'Star conversation', exact: true }));
   await within(section).findByRole('button', { name: 'first', exact: true });
   expect(screen.getAllByRole('button', { name: 'first', exact: true })).toHaveLength(1);
   expect(screen.getByRole('textbox', { name: 'Message first' })).toBe(editor);
-  await userEvent.click(screen.getByRole('button', { name: 'Unstar conversation', exact: true }));
-  await screen.findByRole('button', { name: 'Star conversation', exact: true });
+  await userEvent.click(screen.getByRole('button', { name: 'Organize conversation' }));
+  await userEvent.click(screen.getByRole('menuitem', { name: 'Unstar conversation', exact: true }));
   await waitFor(() => expect(within(section).queryByRole('button', { name: 'first', exact: true })).toBeNull());
   expect(screen.getByRole('button', { name: 'first', exact: true })).toBeTruthy();
   expect(screen.getByRole('textbox', { name: 'Message first' })).toBe(editor);
@@ -1413,7 +1450,8 @@ it.each([false,true])('clears a text-only acknowledged draft after leaving its c
   fireEvent.keyDown(editor,{key:'Enter'});
   if (inThread) await userEvent.click(screen.getByRole('button',{name:'Close thread'}));
   else await userEvent.click(screen.getByRole('button',{name:'second',exact:true}));
-  await waitFor(()=>expect(editor.isConnected).toBe(false));
+  if (inThread) await waitFor(()=>expect(editor.isConnected).toBe(false));
+  else expect(await screen.findByRole('textbox',{name:'Message second'})).toBe(editor);
   await act(async()=>{acknowledge();await mocks.pendingSend;});
   if (inThread) await userEvent.click(await screen.findByRole('button',{name:'Reply to Kai'}));
   else await userEvent.click(screen.getByRole('button',{name:'first',exact:true}));
@@ -1677,20 +1715,24 @@ it.each(['channel', 'workspace'] as const)('opens self DMs inside Home and prese
     return [];
   } }));
   render(<Chat />);
-  await screen.findByRole('textbox', { name: 'Message general' });
+  const editor = await screen.findByRole('textbox', { name: 'Message general' });
+  const frame = editor.closest('main');
   const self = await screen.findByRole('button', { name: 'Kai (you)', exact: true });
   expect(self.querySelector('img')?.getAttribute('src')).toBe('/kai.png');
   await userEvent.click(self);
   const composer = await screen.findByRole('textbox', { name: 'Message Kai (you)' });
+  expect(composer).toBe(editor);
+  expect(composer.closest('main')).toBe(frame);
   expect(composer.getAttribute('data-placeholder')).toBe('Jot something down');
   expect(screen.getByRole('searchbox', { name: 'Find a conversation' })).toBeTruthy();
   expect(screen.getByRole('link', { name: 'Home' }).getAttribute('aria-current')).toBe('page');
   expect(screen.queryByRole('searchbox', { name: 'Find a DM' })).toBeNull();
+  await waitFor(() => expect(composer.closest('[inert]')).toBeNull());
   await userEvent.type(composer, 'Keep this draft');
   await userEvent.click(screen.getByRole('button', { name: 'general', exact: true }));
   await screen.findByRole('textbox', { name: 'Message general' });
   await userEvent.click(screen.getByRole('button', { name: 'Back in history' }));
-  expect((await screen.findByRole('textbox', { name: 'Message Kai (you)' })).textContent).toContain('Keep this draft');
+  await waitFor(() => expect(screen.getByRole('textbox', { name: 'Message Kai (you)' }).textContent).toContain('Keep this draft'));
   expect(screen.getByRole('link', { name: 'Home' }).getAttribute('aria-current')).toBe('page');
   await userEvent.click(screen.getByRole('button', { name: 'DMs', exact: true }));
   await screen.findByRole('searchbox', { name: 'Find a DM' });
@@ -1713,6 +1755,7 @@ it('opens DMs from the rail and selects a recipient into the shared message room
     if (path === '/v1/channels/second-direct') return { ...dm, id: 'second-direct', name: 'Sam' };
     if (path.endsWith('/mention-settings')) return { broadcast_permission: 'all', can_manage: false, paused_until: null };
     if (path.endsWith('/mentions')) return { items: [{ id: 'notice', channel_id: 'second-direct', channel_name: 'Sam', message_id: 'mentioned', author_name: 'Sam', text: 'Please check this DM', created_at: '2026-11-04T00:00:00Z' }], unread_count: 1, next_cursor: null };
+    if (path.endsWith('/second-direct/messages?after=0')) return messagePage([{ ...paginatedMessage('Mentioned DM message', '1'), id:'mentioned' }]);
     if (path.endsWith('/messages/mentioned')) return { ...paginatedMessage('Mentioned DM message', '1'), id: 'mentioned' };
 
     if (path.includes('/channels?')) return { items: [{ id: 'first', name: 'general', joined: true, workspace_id: 'workspace' }], next_cursor: null };
@@ -1729,7 +1772,7 @@ it('opens DMs from the rail and selects a recipient into the shared message room
   await userEvent.type(pending, 'Draft before choosing Alex');
   await userEvent.click(await screen.findByRole('button', { name: /Alex Designer/ }));
   const directComposer = await screen.findByRole('textbox', { name: 'Message Alex' });
-  expect(directComposer.textContent).toContain('Draft before choosing Alex');
+  await waitFor(() => expect(directComposer.textContent).toContain('Draft before choosing Alex'));
   expect(screen.queryByRole('button', { name: /recording unavailable/ })).toBeNull();
   await userEvent.click(screen.getByRole('button', { name: 'More conversation actions' }));
   await userEvent.click(screen.getByRole('menuitem', { name: 'Conversation details', exact: true }));
@@ -1762,7 +1805,7 @@ it('opens Activity from the rail and routes its notification to the source messa
   render(<Chat/>);await screen.findByRole('textbox',{name:'Message first'});
   await userEvent.click(await screen.findByRole('button',{name:'Activity (1 unread)',exact:true}));
   await userEvent.click(await screen.findByRole('button',{name:/Open notification from Alex/}));
-  await screen.findByRole('dialog',{name:'Original message in #first'});
+  await waitFor(()=>expect(document.activeElement?.id).toBe('chat-message-'+message.id));
   expect(await screen.findByRole('textbox',{name:'Message first'})).toBeTruthy();
 });
 
@@ -1785,7 +1828,7 @@ it('opens a public nonmember mention through the join screen before loading its 
   await userEvent.click(await screen.findByRole('button',{name:'Activity (1 unread)',exact:true}));
   await userEvent.click(await screen.findByRole('button',{name:/Open notification from Alex/}));
   await userEvent.click(await screen.findByRole('button',{name:'Join channel',exact:true}));
-  await screen.findByRole('dialog',{name:'Original message in #public'});
+  await waitFor(()=>expect(document.activeElement?.id).toBe('chat-message-'+message.id));
   expect(await screen.findByRole('textbox',{name:'Message public'})).toBeTruthy();
 });
 
@@ -1902,6 +1945,7 @@ it('searches the whole workspace from a hub and opens an older cross-channel mes
   vi.mocked(fetch).mockImplementation(async (...args) => {
     const path = String(args[0]);
     if (path.includes('/channels?')) return new Response(JSON.stringify({ items: ['first', 'second'].map(id => ({id,name:id,workspace_id:'workspace',joined:true})), next_cursor:null }), {status:200});
+    if (path.endsWith('/second/messages?after=0')) return new Response(JSON.stringify(messagePage([{...paginatedMessage('Freshly authorized old message','1'),id:'older',channel_id:'second'}])));
     const result = path.includes('/workspace/search?') ? { items: [{ id: 'older', channel_id: 'second', channel_name: 'second', channel_kind: 'channel', thread_id: 'old-thread', is_reply: false, text: 'Older indexed message', author: { id: 'user', name: 'Kai' }, created_at: '2026-01-01T00:00:00Z' }], next_cursor: null } : path === '/v1/channels/second' ? { id: 'second', name: 'second', workspace_id: 'workspace', joined: true } : path.endsWith('/second/messages/older') ? { ...paginatedMessage('Freshly authorized old message', '1'), id: 'older', channel_id: 'second' } : undefined;
     return result ? new Response(JSON.stringify(result), { status: 200 }) : original(...args);
   });
@@ -1915,8 +1959,8 @@ it('searches the whole workspace from a hub and opens an older cross-channel mes
   fireEvent.change(within(dialog).getByRole('searchbox'), { target: { value: 'older' } });
   fireEvent.submit(within(dialog).getByRole('searchbox').closest('form')!);
   await userEvent.click(await within(dialog).findByRole('button', { name: /Older indexed message/ }));
-  const source = await screen.findByRole('dialog', { name: 'Original message in #second' });
-  await within(source).findByText('Freshly authorized old message');
+  await waitFor(()=>expect(document.activeElement?.id).toBe('chat-message-older'));
+  expect(document.activeElement?.textContent).toContain('Freshly authorized old message');
   const searchRequest = vi.mocked(fetch).mock.calls.find(([url]) => String(url).includes('/workspace/search?'));
   expect(String(searchRequest?.[0])).not.toContain('channel_id=');
 });
@@ -2008,12 +2052,59 @@ it('keeps the thread header free of the sidekick handoff action',async()=>{
  expect(within(thread).getByRole('button',{name:'Close thread'})).toBeTruthy();
 });
 
+it('shows more recent sessions in batches and offers Undo after archiving',async()=>{
+ const user=userEvent.setup();
+ mockPaginatedChat(()=>messagePage([]));
+ const fallback=vi.mocked(fetch).getMockImplementation()!;
+ const items=Array.from({length:12},(_,i)=>({id:`session-${i}`,title:`Sidebar run ${i}`,working:false,agent_name:'Codex',origin_thread_id:'thread',channel_id:'first'}));
+ let archived=false;
+ vi.mocked(fetch).mockImplementation(async(input,init)=>{
+   const path=String(input);
+   if(path==='/v1/agent-sessions/session-11/sidebar' && init?.method==='PATCH'){
+     archived=JSON.parse(String(init.body)).archived;
+     return {ok:true,json:async()=>({ok:true})} as Response;
+   }
+   if(path==='/v1/agent-sessions/session-11')return {ok:true,json:async()=>({
+     session:{...items[11],workspace_id:'workspace',state:'active',managed:true,installation_id:'mine',skill:'codex.run',created_at:'2026-11-04T00:00:00Z'},
+     turns:[],next_cursor:null,
+   })} as Response;
+   if(path.startsWith('/v1/workspaces/workspace/agent-sessions')){
+     const rows=items.filter(item=>!archived || item.id!=='session-11');
+     return {ok:true,json:async()=>({items:rows,next_cursor:null})} as Response;
+   }
+   return fallback(input,init);
+ });
+ render(<Chat/>);
+ const nav=within(await screen.findByRole('navigation',{name:'Workspace conversations'}));
+ const visibleRuns=()=>nav.getAllByRole('button',{name:/^Sidebar run /}).length;
+ await nav.findByRole('button',{name:'Show more'});
+ expect(visibleRuns()).toBe(5);
+ await user.click(nav.getByRole('button',{name:'Show more'}));
+ expect(visibleRuns()).toBe(10);
+ await user.click(nav.getByRole('button',{name:'Show more'}));
+ expect(visibleRuns()).toBe(12);
+ await user.click(nav.getByRole('button',{name:'Sidebar run 11',exact:true}));
+ expect(nav.queryByRole('button',{name:'Show more'})).toBeNull();
+ expect(nav.queryByRole('button',{name:'Show less'})).toBeNull();
+ expect(nav.getByRole('button',{name:'Sidebar run 11',exact:true}).getAttribute('aria-current')).toBe('page');
+ fireEvent.contextMenu(nav.getByRole('button',{name:'Sidebar run 11',exact:true}));
+ await user.click(await screen.findByRole('menuitem',{name:'Archive session'}));
+ await waitFor(()=>expect(nav.queryByRole('button',{name:'Sidebar run 11',exact:true})).toBeNull());
+ expect(nav.queryByRole('button',{name:'View archived sessions'})).toBeNull();
+ const undo=toast.getState().toasts.find(item=>item.title==='Session archived')?.action;
+ expect(undo?.label).toBe('Undo');
+ await act(async()=>{undo!.onClick();});
+ await nav.findByRole('button',{name:'Sidebar run 11',exact:true});
+});
+
 it('opens agent sessions below direct messages, retains drafts, and refreshes sidebar entries from workspace events',async()=>{
  const user=userEvent.setup();
  mockPaginatedChat(()=>messagePage([paginatedMessage('Channel source','1')]));
  const fallback=vi.mocked(fetch).getMockImplementation()!;
  let session={working:false,id:'00000000-0000-4000-8000-000000000001',channel_id:'first',channel_archived:false,workspace_id:'workspace',origin_thread_id:'session-thread',installation_id:'mine',title:'Launch checklist',state:'active',managed:true,created_by:'user',owner_id:'user',agent_name:'My Codex',created_at:'2026-11-04T00:00:00Z',skill:'codex.run',turn_count:0};
  let items=[session];
+ let releaseDetail!: () => void;
+ const detailReady = new Promise<void>(resolve => { releaseDetail = resolve; });
  vi.mocked(fetch).mockImplementation(async(input,init)=>{
   const path=String(input);
   if(path==='/v1/workspaces/workspace/agent-sessions')return {ok:true,json:async()=>({items,next_cursor:null})} as Response;
@@ -2023,7 +2114,7 @@ it('opens agent sessions below direct messages, retains drafts, and refreshes si
    session={...session,title:edit.title};items=[session];
    return {ok:true,json:async()=>session} as Response;
   }
-  if(path===`/v1/agent-sessions/${session.id}`)return {ok:true,json:async()=>({session,turns:[],next_cursor:null})} as Response;
+  if(path===`/v1/agent-sessions/${session.id}`){await detailReady;return {ok:true,json:async()=>({session,turns:[],next_cursor:null})} as Response;}
   if(path===`/v1/agent-sessions/${session.id}/location`)return {ok:true,json:async()=>session} as Response;
   return fallback(input,init);
  });
@@ -2039,6 +2130,7 @@ it('opens agent sessions below direct messages, retains drafts, and refreshes si
  };
  await updateActivity(true);
  await within(entry).findByRole('img',{name:'My Codex is working'});
+ expect(entry.querySelector('.sp-avatar')?.textContent).toBe('MY');
  await updateActivity(false);
  await waitFor(()=>expect(within(entry).queryByRole('img',{name:'My Codex is working'})).toBeNull());
  fireEvent.contextMenu(entry);
@@ -2051,13 +2143,25 @@ it('opens agent sessions below direct messages, retains drafts, and refreshes si
  await user.click(rename.getByRole('button',{name:'Save'}));
  await within(nav).findByRole('button',{name:'Launch plan',exact:true});
  expect(entry.getAttribute('aria-current')).toBeNull();
+ const editor=await screen.findByRole('textbox',{name:'Message first'});
+ const frame=editor.closest('main'), header=frame?.querySelector('header');
  await user.click(entry);
  expect(entry.getAttribute('aria-current')).toBe('page');
+ const loading = await screen.findByRole('status',{name:'Loading messages'});
+ expect(loading.closest('.chat-timeline')).toBeTruthy();
+ expect(await screen.findByRole('textbox',{name:'Message agent session'})).toBe(editor);
+ expect(editor.closest('main')).toBe(frame);
+ expect(frame?.querySelector('header')).toBe(header);
+ await act(async () => releaseDetail());
  await screen.findByRole('heading',{name:'My Codex',exact:true,level:1});
  await updateActivity(true);
- expect(within(entry).queryByRole('img',{name:'My Codex is working'})).toBeNull();
+ await within(entry).findByRole('img',{name:'My Codex is working'});
+ expect(entry.querySelector('.sp-avatar')?.textContent).toBe('MY');
  await updateActivity(false);
- await user.type(await screen.findByRole('textbox',{name:'Message agent session'}),'Remember this draft');
+ expect(await screen.findByRole('textbox',{name:'Message agent session'})).toBe(editor);
+ expect(editor.closest('main')).toBe(frame);
+ expect(frame?.querySelector('header')).toBe(header);
+ await user.type(editor,'Remember this draft');
  await user.click(screen.getByRole('button',{name:'Rename session'}));
  const headerRename=within(await screen.findByRole('dialog',{name:'Rename session'}));
  const headerTitle=headerRename.getByRole('textbox',{name:'Session title'});
@@ -2214,4 +2318,36 @@ it('opens integrations for a sidebar channel while the active conversation stays
   await within(modal).findByRole('button',{name:'Create incoming webhook'});
   expect(composer.isConnected).toBe(true);
   expect(screen.getByRole('button',{name:'general',exact:true,hidden:true}).getAttribute('aria-current')).toBe('page');
+});
+
+it('animates the same sent message body across emoji-only and mixed edits', async () => {
+  const user = userEvent.setup();
+  let message: ChatMessage = { ...paginatedMessage('editable', '1'), text: '😂', reaction_sequence: '0' };
+  mockPaginatedChat(() => messagePage([message]));
+  const fallback = vi.mocked(fetch).getMockImplementation()!;
+  vi.mocked(fetch).mockImplementation(async (input, init) => {
+    if (init?.method !== 'PATCH') return fallback(input, init);
+    expect(String(input)).toBe('/v1/channels/first/messages/editable');
+    const { document, revision } = JSON.parse(String(init.body));
+    expect(revision).toBe(message.reaction_sequence);
+    message = { ...message, document, text: document.ops.map((op: { insert: string }) => op.insert).join('').trim(), reaction_sequence: String(Number(revision) + 1) };
+    return new Response(JSON.stringify(message));
+  });
+  render(<Chat />);
+  const body = (await screen.findByText('😂')).closest('.sp-rich-content')!;
+  const row = body.closest('article')!;
+  expect(body.getAttribute('data-emoji-only')).toBe('true');
+  for (const mixed of [true, false]) {
+    await user.click(within(row).getByLabelText('More actions'));
+    await user.click(screen.getByRole('menuitem', { name: /Edit message/ }));
+    const dialog = within(screen.getByRole('dialog', { name: 'Edit message' }));
+    const editor = await dialog.findByRole('textbox');
+    await user.clear(editor);
+    await user.type(editor, mixed ? '😂 hi' : '😂');
+    await user.click(dialog.getByRole('button', { name: 'Save changes' }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Edit message' })).toBeNull());
+    expect(body.isConnected).toBe(true);
+    expect(body.textContent).toBe(mixed ? '😂 hi' : '😂');
+    expect(body.getAttribute('data-emoji-only')).toBe(mixed ? null : 'true');
+  }
 });

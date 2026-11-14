@@ -41,7 +41,7 @@ export class DirectMessageStore {
   private async summaries(c: DbSession, actor: string, workspace: string, channel?: string, input: unknown = {}) {
     const { cursor, limit, q, unread } = search(input, true);
     if (cursor && !(await c.execute(sql`SELECT 1 FROM direct_message_views WHERE workspace_id=${workspace} AND user_id=${actor} AND channel_id=${cursor.id}`)).rows.length) throw new AppError(400, 'invalid_cursor');
-    const rows = await c.execute<DirectMessageRow & Record<string, unknown>>(sql`SELECT ch.id,ch.workspace_id,'direct' AS kind,
+    const rows = await c.execute<DirectMessageRow & Record<string, unknown>>(sql`SELECT ch.id,ch.workspace_id,to_json(ch.encrypted_since) AS encrypted_since,'direct' AS kind,
       CASE WHEN ch.direct_user_low=ch.direct_user_high THEN peer.display_name||' (you)' ELSE peer.display_name END AS name,
       true AS private,true AS joined,ch.topic,ch.description,NULL::text AS archived_at,ch.created_by,ch.created_at::text,
       v.hidden,p.participants,l.last_message,to_char(v.last_activity_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS activity_at

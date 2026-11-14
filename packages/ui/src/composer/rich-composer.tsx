@@ -1,12 +1,16 @@
+import { ClipRecorder } from "./clip-recorder.js";
 import { AttachmentDrafts } from "./attachment-drafts.js";
+import { formatPastedLinks } from "./pasted-links.js";
 import { registerMention } from "./mention-blot.js";
 import { useMentions, type FindMentions } from "./use-mentions.js";
-import { documentMentions } from "@space/contracts";
-import { useEffect, useRef, useState, useId, type ReactNode } from "react";
+import { documentMentions, isEmojiOnlyText } from "@space/contracts";
+import { useEffect, useLayoutEffect, useRef, useState, useId, type ReactNode } from "react";
 import { EmojiPicker } from "../emoji/emoji-picker.js";
 import { emojiCompletion, emojiDocument, emojiNative, emojiPreferences } from "../emoji/emoji.js";
 import type Quill from "quill";
 import { Reveal } from "../motion/reveal.js";
+import { motion, useReducedMotion } from "motion/react";
+import { motionTransition } from "../motion/motion.js";
 import { isDefaultComposerSendKey } from "./composer-keyboard.js";
 import { ScheduleSend, openScheduleMenu } from "./schedule-send.js";
 import { MAX_ASSET_BYTES, MAX_MESSAGE_ASSETS, MAX_MESSAGE_DOCUMENT_BYTES } from "@space/contracts";
@@ -42,12 +46,25 @@ import {
 /** A send failure with a message intended for the person composing the draft. */
 export class ComposerSendError extends Error {}
 
+// Keep only local offsets across composer remounts. Draft text stays with the caller.
+const draftSelections = new Map<string, { index: number; length: number }>();
+
+function rememberSelection(key: string | undefined, q: Quill) {
+  if (!key) return;
+  draftSelections.delete(key);
+  if (q.getLength() <= 1) return;
+  draftSelections.set(key, q.selection.savedRange);
+  if (draftSelections.size > 100) draftSelections.delete(draftSelections.keys().next().value!);
+}
+
 export function RichComposer({
   channel,
+  conversationKey,
   scope = "channel",
   placeholder,
   loadReplySuggestion,
   defaultValue,
+  draftValue,
   acknowledgedDocument,
   defaultAttachments = [],
   attachments,
@@ -61,21 +78,30 @@ export function RichComposer({
   plainText = false,
   maxLength = 10000,
   attachmentsEnabled = true,
+  audioClipsEnabled = false,
+  videoClipsEnabled = false,
+  formattingEnabled = true,
+  emojiEnabled = true,
   sendDisabledReason,
   sendDisabled = false,
   showUnavailableActions = true,
   showKeyboardHint = true,
   feedbackAtSendButton = false,
+  attachedFormattingToolbar = false,
   submitLabel, submitIcon, submitAccessory, onAlternateSend,
   renderFilePicker,
-  renderExtraActions,
+  renderExtraActions, renderAddMenuItems, renderBeforeSend,
+  addMenuVariant = "standard",
   autoFocus = false,
 }: {
   channel: string;
+  conversationKey?: string;
   scope?: "channel" | "thread";
   placeholder?: string;
   loadReplySuggestion?: (signal: AbortSignal) => Promise<string | null>;
   defaultValue?: RichDocument;
+  /** Live draft for this destination. Pass null for a cleared draft. */
+  draftValue?: RichDocument | null;
   acknowledgedDocument?: RichDocument;
   defaultAttachments?: Attachment[];
   attachments?: Attachment[];
@@ -95,24 +121,38 @@ export function RichComposer({
   plainText?: boolean;
   maxLength?: number;
   attachmentsEnabled?: boolean;
+  audioClipsEnabled?: boolean;
+  videoClipsEnabled?: boolean;
+  formattingEnabled?: boolean;
+  emojiEnabled?: boolean;
   sendDisabledReason?: string;
   sendDisabled?: boolean;
   showUnavailableActions?: boolean;
   showKeyboardHint?: boolean;
   feedbackAtSendButton?: boolean;
+  attachedFormattingToolbar?: boolean;
   submitLabel?: string;
   submitIcon?: ReactNode;
   submitAccessory?: ReactNode;
   onAlternateSend?: (text:string, document:RichDocument, attachments:Attachment[])=>void | Promise<void>;
   renderFilePicker?: (insert: (files: File[]) => void, close: () => void, remaining: number, upload: () => void) => ReactNode;
+  addMenuVariant?: "standard" | "agent-session";
+  renderAddMenuItems?: (close: (restoreFocus?: boolean) => void) => ReactNode;
+  renderBeforeSend?: (insertText: (value: string) => void, disabled: boolean) => ReactNode;
   renderExtraActions?: (insertText: (value: string) => void, disabled: boolean) => ReactNode;
   autoFocus?: boolean;
 }) {
+  const agentAddMenu = addMenuVariant === "agent-session";
   const mount = useRef<HTMLDivElement>(null);
   const editor = useRef<Quill | null>(null);
   const callbacks = useRef({ onDraftChange, onAttachmentsChange, onSend, onSchedule });
   callbacks.current = { onDraftChange, onAttachmentsChange, onSend, onSchedule };
-  const initial = useRef(defaultValue);
+  const initial = useRef(draftValue === undefined ? defaultValue : draftValue);
+  const restoreOnFocus = useRef(false);
+  const liveKey = useRef(draftValue === undefined ? undefined : conversationKey);
+  const seenDraft = useRef(draftValue);
+  const deferredDraft = useRef<RichDocument | null | undefined>(undefined);
+  const applyDraft = useRef<(value: RichDocument | null) => void>(undefined);
   const labels = useRef({ channel, placeholder });
   labels.current = { channel, placeholder };
   const selection = useRef({ index: 0, length: 0 });
@@ -125,11 +165,11 @@ export function RichComposer({
     if (!q || !acknowledgedDocument || seenAcknowledgment.current === acknowledgedDocument) return;
     seenAcknowledgment.current = acknowledgedDocument;
     if (JSON.stringify(normalizeDocument(q.getContents())) !== JSON.stringify(acknowledgedDocument)) return;
-    q.setText("");
-    q.history.clear();
-    callbacks.current.onDraftChange?.({ ops: [] });
+    clearSubmittedDraft(q);
   }, [acknowledgedDocument, ready]);
   const [text, setText] = useState("");
+  const emojiOnly = isEmojiOnlyText(text);
+  const reducedMotion = useReducedMotion();
   const [formats, setFormats] = useState<Record<string, unknown>>({});
   // Phones start with a slim composer; "Show formatting" brings the toolbar back.
   const [showFormats, setShowFormats] = useState(() => !(typeof window !== "undefined" && typeof window.matchMedia === "function" && window.matchMedia("(max-width: 720px)").matches));
@@ -255,7 +295,7 @@ export function RichComposer({
     root.setAttribute('aria-label', `Message ${channel}`);
     root.setAttribute('data-placeholder', visibleReply ? '' : placeholder ?? `Message #${channel}`);
   }, [channel, placeholder, editorVersion, visibleReply]);
-  const mentionsUI = useMentions(editor, ready, channel, findMentions, editorVersion);
+  const mentionsUI = useMentions(editor, ready, conversationKey ?? channel, findMentions, editorVersion);
   const mentionKeys = useRef(mentionsUI.key); mentionKeys.current = mentionsUI.key;
   const [broadcastWarning, setBroadcastWarning] = useState(false);
   const sendRef = useRef<(alternate?:boolean) => void>(() => {});
@@ -265,10 +305,87 @@ export function RichComposer({
   const holdTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   const heldSend = useRef(false);
   useEffect(() => () => clearTimeout(holdTimer.current), []);
+  const destination = useRef(conversationKey);
+  const generation = useRef(0);
+  useLayoutEffect(() => {
+    if (destination.current === conversationKey) return;
+    if (editor.current) rememberSelection(liveKey.current, editor.current);
+    liveKey.current = draftValue === undefined ? undefined : conversationKey;
+    deferredDraft.current = undefined;
+    seenDraft.current = draftValue;
+    destination.current = conversationKey;
+    generation.current++;
+    waitingForUploads.current?.reject(new Error("Conversation changed"));
+    waitingForUploads.current = null;
+    pending.current = false;
+    setSending(false);
+    clearTimeout(holdTimer.current);
+    heldSend.current = false;
+    seenAcknowledgment.current = acknowledgedDocument;
+    initial.current = draftValue === undefined ? defaultValue : draftValue;
+    const q = editor.current;
+    if (q) {
+      q.enable();
+      const focused = q.hasFocus();
+      q.setContents(normalizeDocument(initial.current, Infinity).ops, "silent");
+      restoreDraftSelection(q, focused);
+      q.history.clear();
+      setText(q.getText());
+    }
+    completionRef.current = null;
+    returnToSelection.current = false;
+    setFormats({});
+    setCompletion(null);
+    setLinkOpen(false);
+    setLinkText("");
+    setLinkUrl("");
+    setLinkError("");
+    setBroadcastWarning(false);
+    setPicking(false);
+    setDraggingFiles(false);
+    setError("");
+    setReply(undefined);
+    setLocalFiles(defaultAttachments);
+  }, [conversationKey, draftValue, defaultValue, acknowledgedDocument, defaultAttachments]);
+
+  useLayoutEffect(() => {
+    liveKey.current = draftValue === undefined ? undefined : conversationKey;
+    if (draftValue === seenDraft.current) return;
+    const previous = seenDraft.current;
+    seenDraft.current = draftValue;
+    if (draftValue === undefined || JSON.stringify(draftValue) === JSON.stringify(previous)) return;
+    initial.current = draftValue;
+    const q = editor.current;
+    if (q?.composition.isComposing) deferredDraft.current = draftValue;
+    else applyDraft.current?.(draftValue);
+  }, [conversationKey, draftValue]);
+
+  function restoreDraftSelection(q: Quill, focused: boolean) {
+    const saved = liveKey.current ? draftSelections.get(liveKey.current) : undefined;
+    const end = q.getLength() - 1;
+    const index = Math.min(saved?.index ?? (liveKey.current ? end : 0), end);
+    const range = { index, length: Math.min(saved?.length ?? 0, end - index) };
+    selection.current = q.selection.savedRange = range;
+    restoreOnFocus.current = !focused && !!liveKey.current;
+    if (focused) q.setSelection(range, "silent");
+  }
+
+  function clearSubmittedDraft(q: Quill) {
+    q.setText("", "silent");
+    q.history.clear();
+    setText(q.getText());
+    setFormats({});
+    setCompletion(null);
+    completionRef.current = null;
+    callbacks.current.onDraftChange?.({ ops: [] });
+  }
+
   // A scheduled send passes `at`; it shares validation, clearing and error handling with Send now.
   async function send(confirmed = false, at?: Date, alternate=false) {
     const q = editor.current;
     if (!q || pending.current || blocked || filesRef.current.some(file => file.status === "error" || (at && file.status === "uploading"))) return;
+    const version = generation.current;
+    const isCurrent = () => editor.current === q && generation.current === version;
     const raw = q.getText();
     const plain = raw.trim();
     if (!plain && !filesRef.current.length) return;
@@ -300,21 +417,22 @@ export function RichComposer({
             waitingForUploads.current = { keys: selected.map(file => file.draftId ?? file.id), resolve, reject };
           })
         : selected;
-      if (editor.current !== q) return;
+      if (!isCurrent()) return;
       if (at && callbacks.current.onSchedule) await callbacks.current.onSchedule(plainText, document, batch, at);
       else if (confirmed) await callbacks.current.onSend(plainText, document, batch, { broadcast_confirmed: true });
       else await (alternateSubmit ?? normalSubmit)(plainText, document, batch);
-      if (editor.current !== q) return;
-      q.setText("");
-      q.history.clear();
-      setFiles([]);
-      callbacks.current.onDraftChange?.({ ops: [] });
+      if (!isCurrent()) return;
+      if (JSON.stringify(normalizeDocument(q.getContents(), Infinity)) === JSON.stringify(document))
+        clearSubmittedDraft(q);
+      const sentIds = new Set(selected.map(file => file.draftId ?? file.id));
+      setFiles(filesRef.current.filter(file => !sentIds.has(file.draftId ?? file.id)));
     } catch (reason) {
+      if (!isCurrent()) return;
       if (reason instanceof Error && reason.message === 'broadcast_confirmation_required') setBroadcastWarning(true);
-      else if (editor.current === q)
+      else
         setError(reason instanceof ComposerSendError ? reason.message : "Could not send. Your draft is still here. Try again.");
     } finally {
-      if (editor.current === q) {
+      if (isCurrent()) {
         pending.current = false;
         setSending(false);
         q.enable();
@@ -328,7 +446,7 @@ export function RichComposer({
     let disposed = false;
     let cleanup = () => {};
     import("quill")
-      .then(({ default: Editor }) => {
+      .then(({ default: Editor, Delta }) => {
         if (disposed || !mount.current) return;
         const node = document.createElement("div");
         mount.current.append(node);
@@ -349,6 +467,7 @@ export function RichComposer({
           ],
           modules: { toolbar: false, history: { userOnly: true } },
         });
+        if (!plainText) formatPastedLinks(q, Delta);
         editor.current = q;
         completionRef.current = null; setCompletion(null);
         pending.current = false;
@@ -361,8 +480,38 @@ export function RichComposer({
             normalizeDocument(initial.current, Infinity).ops,
             "silent",
           );
+        restoreDraftSelection(q, false);
+        applyDraft.current = value => {
+          const next = new Delta(normalizeDocument(value, Infinity).ops);
+          const last = next.ops.at(-1)?.insert;
+          if (typeof last !== "string" || !last.endsWith("\n")) next.insert("\n");
+          const changes = q.getContents().diff(next);
+          if (!changes.ops.length) return; // Local echo. Preserve selection, formatting and undo.
+          const focused = q.hasFocus();
+          const range = q.getSelection() ?? q.selection.savedRange;
+          q.updateContents(changes, "silent");
+          const end = q.getLength() - 1;
+          const index = Math.min(changes.transformPosition(range.index), end);
+          const extent = Math.min(changes.transformPosition(range.index + range.length), end);
+          selection.current = q.selection.savedRange = {index, length: extent - index};
+          restoreOnFocus.current = !focused;
+          if (focused) q.setSelection(selection.current, "silent");
+          q.history.clear();
+          setText(q.getText());
+          setFormats(focused ? q.getFormat(selection.current) : {});
+          suggest(q, focused ? selection.current : null);
+          setBroadcastWarning(false);
+        };
+        const compositionEnd = () => queueMicrotask(() => {
+          if (disposed || deferredDraft.current === undefined) return;
+          const value = deferredDraft.current;
+          deferredDraft.current = undefined;
+          applyDraft.current?.(value);
+        });
         setText(q.getText());
         const change = () => {
+          // The committed IME change is the newest local edit.
+          deferredDraft.current = undefined;
           setText(q.getText());
           suggest(q);
           const range = q.getSelection();
@@ -419,10 +568,15 @@ export function RichComposer({
         q.on("text-change", change);
         q.on("selection-change", select);
         q.root.addEventListener("keydown", key, true);
+        q.root.addEventListener("compositionend", compositionEnd);
         setReady(true);
         if (autoFocus) q.focus();
         setEditorVersion(version => version + 1);
         cleanup = () => {
+          rememberSelection(liveKey.current, q);
+          applyDraft.current = undefined;
+          deferredDraft.current = undefined;
+          q.root.removeEventListener("compositionend", compositionEnd);
           q.off("text-change", change);
           q.off("selection-change", select);
           q.root.removeEventListener("keydown", key, true);
@@ -526,6 +680,31 @@ export function RichComposer({
       <Icon size={iconSize} />
     </IconButton>
   ); });
+  const formattingToolbar = (
+    <div
+      className={attachedFormattingToolbar ? "sp-rich-toolbar sp-rich-toolbar--attached" : "sp-rich-toolbar"}
+      role="toolbar"
+      aria-label="Message formatting"
+    >
+      {formatButtons.slice(0, 4)}
+      <span className="sp-rich-format-separator" aria-hidden="true" />
+      <IconButton
+        label="Add link"
+        size="sm"
+        disabled={!ready || sending || codeBlockActive}
+        data-send-disabled={sending && ready && !codeBlockActive || undefined}
+        aria-pressed={typeof formats.link === "string"}
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={openLink}
+      >
+        <Link size={19} />
+      </IconButton>
+      <span className="sp-rich-format-separator" aria-hidden="true" />
+      {formatButtons.slice(4, 7)}
+      <span className="sp-rich-format-separator" aria-hidden="true" />
+      {formatButtons.slice(7)}
+    </div>
+  );
   return (
     <div className={feedbackAtSendButton ? "sp-rich-composer sp-rich-composer--send-feedback" : "sp-rich-composer"} aria-busy={sending || undefined}>
       {mentionsUI.suggestions}
@@ -535,6 +714,7 @@ export function RichComposer({
       </div>}
       {picking && attachmentsEnabled && renderFilePicker?.(incoming=>{addFiles(incoming);setPicking(false);editor.current?.focus();},()=>{setPicking(false);editor.current?.focus();},MAX_MESSAGE_ASSETS-files.length,()=>{setPicking(false);fileInput.current?.click();})}
       <div className="sp-rich-editor-shell" data-file-drop={draggingFiles || undefined}
+        data-attached-formatting={attachedFormattingToolbar && formattingEnabled && !plainText ? (showFormats ? "open" : "closed") : undefined}
         onDragOverCapture={event=>{
           if (!event.dataTransfer.types.includes('Files')) return;
           event.preventDefault(); event.stopPropagation();
@@ -550,35 +730,24 @@ export function RichComposer({
           if (!event.clipboardData.files.length) return;
           event.preventDefault();event.stopPropagation();addFiles(Array.from(event.clipboardData.files));
         }}>
-        <Reveal open={!plainText && showFormats}>
-          <div
-            className="sp-rich-toolbar"
-            role="toolbar"
-            aria-label="Message formatting"
-          >
-            {formatButtons.slice(0, 4)}
-            <span className="sp-rich-format-separator" aria-hidden="true" />
-            <IconButton
-              label="Add link"
-              size="sm"
-              disabled={!ready || sending || codeBlockActive}
-              data-send-disabled={sending && ready && !codeBlockActive || undefined}
-              aria-pressed={typeof formats.link === "string"}
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={openLink}
-            >
-              <Link size={19} />
-            </IconButton>
-            <span className="sp-rich-format-separator" aria-hidden="true" />
-            {formatButtons.slice(4, 7)}
-            <span className="sp-rich-format-separator" aria-hidden="true" />
-            {formatButtons.slice(7)}
-          </div>
-        </Reveal>
-        <div className="sp-rich-input" onFocus={event => {
-          if (event.target === editor.current?.root) setFocused(true);
+        {!plainText && formattingEnabled && <Reveal open={showFormats} fadeOnExit={attachedFormattingToolbar}>{formattingToolbar}</Reveal>}
+        <div className="sp-rich-input" onPointerDown={() => { restoreOnFocus.current = false; }} onFocus={event => {
+          const q = editor.current;
+          if (q && event.target === q.root) {
+            if (restoreOnFocus.current) {
+              const range = selection.current;
+              const version = generation.current;
+              queueMicrotask(() => {
+                if (editor.current === q && generation.current === version && q.hasFocus()) q.setSelection(range, "silent");
+              });
+            }
+            restoreOnFocus.current = false;
+            setFocused(true);
+          }
         }} onBlur={() => setFocused(false)}>
-          <div className="sp-rich-editor" ref={mount} />
+          <motion.div className="sp-rich-editor" ref={mount} initial={false}
+            animate={{ fontSize: emojiOnly ? 32 : 15, lineHeight: emojiOnly ? "38.4px" : "22px" }}
+            transition={motionTransition(reducedMotion, 0.16)} />
           {visibleReply && <div className="sp-reply-suggestion" role="status">
             {visibleReply} <small>Tab to accept</small>
           </div>}
@@ -591,6 +760,7 @@ export function RichComposer({
         {sending && files.some(file => file.status === "uploading") && <span role="status" className="sp-draft-send-pending">Sending after upload…</span>}
         {files.length > 0 && <AttachmentDrafts files={files} onChange={setFiles} disabled={sending} onRetry={onRetryAttachment} />}
         <div
+          key={conversationKey}
           className="sp-rich-actions"
           role="toolbar"
           aria-label="Composer actions"
@@ -606,18 +776,28 @@ export function RichComposer({
               addFiles(incoming);
             }}
           />
-          {!plainText && attachmentsEnabled && <span className="sp-attach-menu" title="Attach · Double-click to upload"
-            onDoubleClick={event => { if (ready && !sending && (event.target as Element).closest('summary')) fileInput.current?.click(); }}>
-            <Popover label="Attach files" panelLabel="Attach" className="sp-composer-picker" triggerClassName="sp-attach-trigger"
-              floating align="start" role="menu" panelClassName="sp-menu-content sp-attach-options" disabled={!ready || sending} trigger={<Plus size={20}/>}>
-              {close => <>
-                {renderFilePicker && <button type="button" role="menuitem" onClick={()=>{close(false);setPicking(true);}}><FileIcon size={17}/>File</button>}
-                <button type="button" role="menuitem" onClick={()=>{close();fileInput.current?.click();}}><UploadSimple size={17}/>Upload from your computer</button>
-              </>}
+          {!plainText && (attachmentsEnabled || renderAddMenuItems) && <span className="sp-attach-menu" title={attachmentsEnabled ? "Attach · Double-click to upload" : "Add"}
+            onDoubleClick={event => { if (attachmentsEnabled && ready && !sending && (event.target as Element).closest('summary')) fileInput.current?.click(); }}>
+            <Popover label={agentAddMenu || renderAddMenuItems ? "Add to message" : "Attach files"} panelLabel={agentAddMenu || renderAddMenuItems ? "Add to message" : "Attach"} className="sp-composer-picker" triggerClassName="sp-attach-trigger"
+              floating align="start" role="menu" panelClassName={agentAddMenu ? "sp-menu-content sp-attach-options sp-agent-add-options" : "sp-menu-content sp-attach-options"} disabled={!ready || sending} trigger={<Plus size={20}/>}>
+              {close => {
+                const browse = attachmentsEnabled && renderFilePicker && <button type="button" role="menuitem" onClick={()=>{close(false);setPicking(true);}}>
+                  <FileIcon size={17}/>{agentAddMenu ? "Browse Space files" : "File"}
+                </button>;
+                const upload = attachmentsEnabled && <button type="button" role="menuitem" onClick={()=>{close();fileInput.current?.click();}}>
+                  <UploadSimple size={17}/>{agentAddMenu ? "Upload from computer" : "Upload from your computer"}
+                </button>;
+                return <>
+                  {agentAddMenu ? upload : browse}
+                  {agentAddMenu ? browse : upload}
+                  {agentAddMenu && attachmentsEnabled && renderAddMenuItems && <hr role="separator"/>}
+                  {renderAddMenuItems?.(close)}
+                </>;
+              }}
             </Popover>
           </span>}
-          {!plainText && !attachmentsEnabled && showUnavailableActions && <IconButton label="File uploads unavailable" className="sp-attach-trigger" size="sm" disabled><Plus size={20}/></IconButton>}
-          {!plainText && <IconButton
+          {!plainText && !attachmentsEnabled && !renderAddMenuItems && showUnavailableActions && <IconButton label="File uploads unavailable" className="sp-attach-trigger" size="sm" disabled><Plus size={20}/></IconButton>}
+          {!plainText && formattingEnabled && <IconButton
             label="Show formatting"
             size="sm"
             aria-pressed={showFormats}
@@ -625,7 +805,7 @@ export function RichComposer({
           >
             <TextAa size={20} />
           </IconButton>}
-          <EmojiPicker label="Choose emoji" disabled={!ready || sending} restoreFocus={false} onSelect={insert} />
+          {emojiEnabled && <EmojiPicker label="Choose emoji" disabled={!ready || sending} restoreFocus={false} onSelect={insert} />}
           {findMentions && <IconButton label="Mention someone" size="sm" disabled={!ready || sending} onMouseDown={event => event.preventDefault()} onClick={mentionsUI.begin}><At size={19} /></IconButton>}
           {!findMentions && mentions.length > 0 && (
             <Popover floating disabled={!ready || sending} className="sp-composer-picker" panelClassName="sp-menu-content sp-mention-options" label="Mention someone" trigger={<At size={19} />}>
@@ -646,26 +826,18 @@ export function RichComposer({
               </>}
             </Popover>
           )}
-          {!plainText && showUnavailableActions && <><span className="sp-composer-divider" />
-          <IconButton
-            label="Video recording unavailable in this preview"
-            className="sp-unavailable-action"
-            size="sm"
-            disabled
-          >
-            <VideoCamera size={18} />
-          </IconButton>
-          <IconButton
-            label="Audio recording unavailable in this preview"
-            className="sp-unavailable-action"
-            size="sm"
-            disabled
-          >
-            <Microphone size={18} />
-          </IconButton>
-          <IconButton label="Run shortcut unavailable in this preview" className="sp-unavailable-action" size="sm" disabled>
+          {!plainText && showUnavailableActions && <span className="sp-composer-divider" />}
+          {!plainText && (['video', 'audio'] as const).map(kind => {
+            const enabled = kind === 'video' ? videoClipsEnabled : audioClipsEnabled;
+            if (enabled && attachmentsEnabled) return <ClipRecorder key={kind} kind={kind}
+              disabled={!ready || sending || blocked || files.length >= MAX_MESSAGE_ASSETS} onAttach={file => addFiles([file])}/>;
+            return showUnavailableActions && <IconButton key={kind}
+              label={enabled ? 'Recording clips requires file uploads' : `${kind === 'video' ? 'Video' : 'Audio'} recording unavailable in this preview`}
+              className="sp-unavailable-action" size="sm" disabled>{kind === 'video' ? <VideoCamera size={18}/> : <Microphone size={18}/>}</IconButton>;
+          })}
+          {!plainText && showUnavailableActions && <IconButton label="Run shortcut unavailable in this preview" className="sp-unavailable-action" size="sm" disabled>
             <Lightning size={18} />
-          </IconButton></>}
+          </IconButton>}
           {renderExtraActions?.(insert, !ready || sending)}
           <div className="sp-rich-send-group"
             tabIndex={feedbackAtSendButton && sendDisabledReason ? 0 : undefined}
@@ -673,6 +845,7 @@ export function RichComposer({
             aria-label={feedbackAtSendButton && sendDisabledReason ? "Send unavailable" : undefined}
             aria-describedby={feedbackAtSendButton && sendDisabledReason ? feedbackId : undefined}>
           {submitAccessory}
+          {renderBeforeSend?.(insert, !ready || sending)}
           <IconButton
             label={submitLabel ?? "Send now"}
             size="sm"

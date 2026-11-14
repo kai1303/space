@@ -149,7 +149,7 @@ export class WorkspaceHubStore {
         JOIN messages m ON m.workspace_id=a.workspace_id AND m.channel_id=a.channel_id AND m.id=a.message_id
         JOIN users u ON u.id=a.uploader_id
         LEFT JOIN hub_file_state state ON state.workspace_id=a.workspace_id AND state.asset_id=a.id AND state.user_id=${actor}
-        WHERE a.workspace_id=${workspace} AND a.status='ready' AND m.agent_session_id IS NULL AND ${channelAccess(actor, workspace)}
+        WHERE a.workspace_id=${workspace} AND a.status='ready' AND NOT a.encrypted AND m.agent_session_id IS NULL AND ${channelAccess(actor, workspace)}
           ${query.q ? sql`AND a.name ILIKE ${pattern}` : sql``}
           ${query.kinds.length === HUB_FILE_KINDS.length ? sql`` : !query.kinds.length ? sql`AND false` : sql`AND (CASE WHEN a.preview->>'kind' IN ('image','pdf','text','audio','video') THEN a.preview->>'kind' ELSE 'other' END) IN (${sql.join(query.kinds.map(kind => sql`${kind}`), sql`,`)})`}
           ${query.ownership === 'created' ? sql`AND a.uploader_id=${actor}` : query.ownership === 'shared' ? sql`AND a.uploader_id<>${actor}` : sql``}
@@ -174,7 +174,7 @@ export class WorkspaceHubStore {
       SELECT a.workspace_id,${actor},a.id,${active},${action === 'view' ? sql`clock_timestamp()` : sql`NULL::timestamptz`}
       FROM assets a JOIN channels c ON c.workspace_id=a.workspace_id AND c.id=a.channel_id
       JOIN messages m ON m.workspace_id=a.workspace_id AND m.channel_id=a.channel_id AND m.id=a.message_id
-      WHERE a.workspace_id=${workspace} AND a.id=${id} AND a.status='ready' AND m.agent_session_id IS NULL AND ${channelAccess(actor, workspace)}
+      WHERE a.workspace_id=${workspace} AND a.id=${id} AND a.status='ready' AND NOT a.encrypted AND m.agent_session_id IS NULL AND ${channelAccess(actor, workspace)}
       ON CONFLICT(workspace_id,user_id,asset_id) DO UPDATE SET ${update}
       RETURNING starred,to_json(last_viewed_at)#>>'{}' AS last_viewed_at`);
     if (!result.rows[0]) throw missing();

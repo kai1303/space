@@ -1,6 +1,6 @@
 import type { Pool } from 'pg';
 import { randomBytes, randomUUID } from 'node:crypto';
-import { and, eq, gt, isNull, sql } from 'drizzle-orm';
+import { and, eq, gt, isNull, sql, getTableColumns } from 'drizzle-orm';
 import { AppError, chatCursor, parseMemoryConnection, parseAgentMemoryAccess, uuid, type AgentMemoryPermission, type AgentMemoryAccess, type Task, type ChatMessage, type MemoryConnection, type MemoryScope } from '@space/contracts';
 import { database, type DbSession } from './database.js';
 import { hasChannelAccess } from './access.js';
@@ -182,8 +182,42 @@ export class MemoryStore {
     const items = rows.slice(0, limit);
     return { messages: items.map(({ sequence: _cursor, ...message }) => message), cursor: items.at(-1)?.sequence.toString() ?? cursor, has_more: rows.length > limit };
   }
-  async message(c: DbSession, channel: MemoryScope, messageId: string): Promise<ChatMessage> {
-    const [row] = await c.select().from(s.messages).where(and(eq(s.messages.id, uuid(messageId)), eq(s.messages.channel_id, channel.channel_id),
+  // Register before checking the observed revisions. A concurrent change either queues
+  // an invalidation for this provider or causes the subsequent check to reject the save.
+  async trackProviderEvidence(channel: MemoryChannel, revisions: Record<string, string>, kind: 'quote' | 'citation') {
+    const ids = Object.keys(revisions);
+    if (!ids.length) return;
+    await this.pool.query(`INSERT INTO memory_provider_message_refs(channel_id,message_id,provider,has_quote)
+      SELECT m.channel_id,m.id,c.memory_provider,$5::boolean FROM messages m JOIN channels c ON c.id=m.channel_id
+      WHERE c.workspace_id=$1 AND c.id=$2 AND c.kind='channel' AND c.memory_enabled AND c.memory_provider=$3
+        AND m.agent_session_id IS NULL AND m.deleted_at IS NULL AND m.retained_at IS NULL AND m.id=ANY($4::uuid[])
+      ON CONFLICT (channel_id,message_id,provider) DO UPDATE SET has_quote=true
+        WHERE EXCLUDED.has_quote AND NOT memory_provider_message_refs.has_quote`,
+      [channel.workspace_id, channel.channel_id, channel.provider, ids, kind === 'quote']);
+    const { rows } = await this.pool.query(`SELECT m.id,m.search_revision::text AS revision
+      FROM messages m JOIN channels c ON c.id=m.channel_id
+      JOIN memory_provider_message_refs r ON r.channel_id=m.channel_id AND r.message_id=m.id AND r.provider=$3
+      WHERE c.workspace_id=$1 AND c.id=$2 AND c.kind='channel' AND c.memory_enabled AND c.memory_provider=$3 AND m.id=ANY($4::uuid[])
+        AND m.agent_session_id IS NULL AND m.deleted_at IS NULL AND m.retained_at IS NULL`,
+      [channel.workspace_id, channel.channel_id, channel.provider, ids]);
+    if (rows.length !== ids.length || rows.some(row => revisions[row.id] !== row.revision))
+      throw new AppError(409, 'memory_source_changed');
+  }
+
+  async revokeProviderQuotes(channel: MemoryChannel, messageId?: string) {
+    // Keep ID-only invalidations for claims that may still cite a removed quote.
+    await this.pool.query(`UPDATE memory_provider_message_refs SET has_quote=false
+      WHERE channel_id=$1 AND provider=$2 AND has_quote AND ($3::uuid IS NULL OR message_id=$3)`,
+      [channel.channel_id, channel.provider, messageId ?? null]);
+  }
+
+  async message(c: DbSession, channel: MemoryScope, messageId: string, refresh?: { provider: string; revision: string }): Promise<ChatMessage & { search_revision: string }> {
+    const [row] = await c.select({ ...getTableColumns(s.messages), search_revision: sql<string>`search_revision::text` }).from(s.messages).where(and(eq(s.messages.id, uuid(messageId)), eq(s.messages.channel_id, channel.channel_id),
+      refresh && sql`search_revision=${refresh.revision}::bigint AND EXISTS (
+        SELECT 1 FROM channels c JOIN memory_provider_message_refs r ON r.channel_id=c.id
+        WHERE c.id=${channel.channel_id} AND c.workspace_id=${channel.workspace_id} AND c.kind='channel'
+          AND c.memory_enabled AND c.memory_provider=${refresh.provider} AND r.provider=c.memory_provider AND r.message_id=${messageId} AND r.has_quote
+      )`,
       isNull(s.messages.agent_session_id), isNull(s.messages.deleted_at), sql`messages.retained_at IS NULL`));
     if (!row) throw new AppError(404, 'not_found');
     let name: string;
@@ -197,7 +231,7 @@ export class MemoryStore {
         .innerJoin(s.agentDefinitions, eq(s.agentDefinitions.id, s.agentInstallations.definition_id)).where(eq(s.agentInstallations.id, row.installation_id!));
       name = author!.name;
     }
-    return { id: row.id, channel_id: row.channel_id, thread_id: row.thread_id, task_id: row.task_id, client_message_id: row.client_message_id,
+    return { search_revision: row.search_revision, id: row.id, channel_id: row.channel_id, thread_id: row.thread_id, task_id: row.task_id, client_message_id: row.client_message_id,
       text: row.text, document: row.document, created_at: row.created_at.toISOString(),
       author: { kind: row.author_type, id: row.user_id ?? row.installation_id ?? row.webhook_id!, name }, attachments: row.attachments };
   }

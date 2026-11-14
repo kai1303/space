@@ -32,6 +32,7 @@ export async function saveNoteByTitle(c: DbSession, scope: NoteScope, draft: Not
         revision = knowledge_notes.revision + 1, updated_at = now()
       WHERE (knowledge_notes.kind, knowledge_notes.content, knowledge_notes.evidence)
         IS DISTINCT FROM (EXCLUDED.kind, EXCLUDED.content, EXCLUDED.evidence)
+        OR knowledge_notes.evidence_revisions <> EXCLUDED.evidence_revisions
       RETURNING *
     )
     INSERT INTO knowledge_note_revisions (note_id, revision, kind, title, content, evidence, producer_id, producer_name)
@@ -90,7 +91,7 @@ export async function updateNote(c: DbSession, channelId: string, id: string, re
         content = coalesce(${patch.content ?? null}::text, content), evidence = coalesce(${patch.message_ids ? sql.param(patch.message_ids) : null}::uuid[], evidence),
         producer_id = ${producer.id}, producer_name = ${producer.name}, fingerprint = NULL, revision = revision + 1, updated_at = now()
       WHERE id = ${id} AND channel_id = ${channelId} AND revision = ${revision} AND removed_at IS NULL
-        AND EXISTS (SELECT 1 FROM shared_knowledge_notes WHERE id = ${id})
+        AND (evidence = ${patch.message_ids ? sql.param(patch.message_ids) : null}::uuid[] OR EXISTS (SELECT 1 FROM shared_knowledge_notes WHERE id = ${id}))
       RETURNING *
     ), logged AS (
       INSERT INTO knowledge_note_revisions (note_id, revision, kind, title, content, evidence, producer_id, producer_name)

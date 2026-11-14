@@ -4,7 +4,7 @@ const { constants, existsSync, accessSync, statSync, openSync, readFileSync, clo
 const { join, isAbsolute } = require('node:path');
 const { homedir } = require('node:os');
 
-const providers = new Map([['codex', 'codex'], ['kiro', 'kiro-cli'], ['claude', 'claude']]);
+const providers = require('./providers.cjs');
 function validatePair(provider, code) {
   if (!providers.has(provider) || typeof code !== 'string' || !/^[A-Za-z0-9_-]{32}$/.test(code)) throw new Error('Invalid desktop pairing request.');
 }

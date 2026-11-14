@@ -241,10 +241,11 @@ for(const behavior of ['unknown-result','unknown-tool','overflow'])test(`Claude 
 });
 
 test('attachments are passed as quoted text and native image inputs to each provider', async t => {
-  const webp='UklGRg==';
+  const webp='UklGRg==', pdfId=randomUUID();
   const attachments=[
     {id:randomUUID(),name:'build.log',size:5,type:'text/plain',content:{kind:'text',text:'hello',truncated:false}},
     {id:randomUUID(),name:'screen.png',size:8,type:'image/png',content:{kind:'image',webp}},
+    {id:pdfId,name:'report.pdf',size:800,type:'application/pdf',content:{kind:'pdf',status:'readable',page_count:9,pages:[{page:7,text:'verified seven',truncated:false}]}},
   ];
   for (const [provider,fixture] of [['codex',codexFixture],['claude',claudeFixture],['kiro',kiroFixture]]) {
     const f=await fixture(t);
@@ -254,6 +255,8 @@ test('attachments are passed as quoted text and native image inputs to each prov
       : (await f.calls()).find(call=>call.method==='turn/start').params.input;
     assert.match(blocks[0].text,/build.log/);
     assert.match(blocks[0].text,/hello/);
+    assert.match(blocks[0].text,/verified seven/);
+    assert.ok(blocks[0].text.includes('/file/'+pdfId+'?page=7'));
     assert.equal(blocks[1].type,'image');
     assert.ok(JSON.stringify(blocks[1]).includes(webp));
   }

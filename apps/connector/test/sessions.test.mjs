@@ -17,7 +17,7 @@ const invocation = {
 const connection = { origin: 'http://localhost:3000', credential: 'private-credential', installation_id: '11111111-1111-4111-8111-111111111111', workspace_id: '22222222-2222-4222-8222-222222222222' };
 const identity = { issuer: 'https://auth.openai.com', subject: 'subject', client_id: 'client' };
 
-async function fixture({names=false}={}) {
+async function fixture({names=false, goalTurnBeforeReply=false}={}) {
   const directory = await mkdtemp(join(tmpdir(), 'space-session-test-'));
   const log = join(directory, 'rpc.jsonl');
   const launches = [];
@@ -33,6 +33,12 @@ async function fixture({names=false}={}) {
         const message = JSON.parse(line);
         fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify(message) + '\\n');
         if (message.method === 'initialize') send({ id: message.id, result: {} });
+        else if (message.method === 'model/list') {
+          const second = !!message.params.cursor;
+          const row = {model:second?'sdk-new':'configured-default',displayName:second?'New':'Configured',isDefault:!second,supportedReasoningEfforts:[{reasoningEffort:'ultra'}],defaultReasoningEffort:'ultra'};
+          send({id:message.id,result:{data:[row,{...row,model:'hidden',hidden:true}],nextCursor:second?null:'page-two'}});
+        }
+        else if (message.method === 'config/read') send({id:message.id,result:{config:{model:'configured-default'}}});
         else if (message.method === 'thread/start') {
           if (message.params.sandbox !== 'read-only' || message.params.approvalPolicy !== 'never') process.exit(42);
           const id = crypto.randomUUID();
@@ -42,6 +48,25 @@ async function fixture({names=false}={}) {
           if (message.params.sandbox !== 'read-only' || message.params.approvalPolicy !== 'never') process.exit(42);
           if (!fs.existsSync(path.join(process.env.CODEX_HOME, message.params.threadId))) process.exit(43);
           send({ id: message.id, result: { thread: { id: message.params.threadId, ...(${names}?{name:'Name saved while offline'}:{}) } } });
+        } else if (message.method === 'thread/goal/set') {
+          const {threadId, objective = 'Finish the checks', status} = message.params;
+          const goal = {threadId, objective, status};
+          const reply = {id:message.id,result:{goal}};
+          if (status !== 'active') { send(reply); continue; }
+          const started = id => ({method:'turn/started',params:{threadId,turn:{id}}});
+          const completed = id => ({method:'turn/completed',params:{threadId,turn:{id,status:'completed'}}});
+          const update = status => ({method:'thread/goal/updated',params:{threadId,goal:{...goal,status}}});
+          const first = [started('first'), completed('first')];
+          const last = [started('last'), update('complete'), completed('last')];
+          const batch = frames => process.stdout.write(frames.map(frame=>JSON.stringify(frame)).join('\\n')+'\\n');
+          if (${goalTurnBeforeReply}) {
+            batch([...first, reply]);
+            setTimeout(() => batch(last), 30);
+          } else {
+            batch([reply, ...first, ...last]);
+          }
+        } else if (message.method === 'thread/goal/clear') {
+          send({id:message.id,result:{cleared:true}});
         } else if (message.method === 'turn/start') {
           const turnId = crypto.randomUUID(), threadId = message.params.threadId;
           if (fs.existsSync(path.join(process.env.CODEX_HOME, threadId))) {
@@ -97,6 +122,22 @@ test('managed sessions create once, resume their thread, and isolate session his
     assert.equal((await stat(mappingPath)).mode & 0o777, 0o600);
     assert.equal((await stat(f.launches[0].options.env.CODEX_HOME)).mode & 0o777, 0o700);
     assert.equal((await stat(turns[0].params.cwd)).mode & 0o777, 0o700);
+  } finally { runtime.stop(); await f.close(); }
+});
+
+test('forwards model and reasoning selections per turn on the same Codex thread', async () => {
+  const f = await fixture(), runtime = await f.start();
+  try {
+    const models = await runtime.listModels();
+    assert.deepEqual(models.map(m=>[m.id,m.efforts]),[['configured-default',['ultra']],['sdk-new',['ultra']]]);
+    await f.invoke(runtime, false, {codex_settings:{model:models[1].id,effort:models[1].defaultEffort}});
+    await f.invoke(runtime, true, {codex_settings:{model:'gpt-6.1-sol',effort:'low'}});
+    await f.invoke(runtime, true, {codex_settings:{effort:'medium'}});
+    const turns=(await f.requests()).filter(call=>call.method==='turn/start');
+    assert.deepEqual(turns.map(({params})=>[params.model,params.effort]),[
+      ['sdk-new','ultra'],['gpt-6.1-sol','low'],['configured-default','medium'],
+    ]);
+    assert.equal(new Set(turns.map(({params})=>params.threadId)).size,1);
   } finally { runtime.stop(); await f.close(); }
 });
 
@@ -254,4 +295,33 @@ test('Codex syncs scoped thread names during a turn, after completion and on res
     await run(true);
     assert.deepEqual(names,['Upload progress','Renamed between turns','Name saved while offline','Upload progress','Renamed between turns']);
   } finally {runtime.stop();await f.close();}
+});
+
+test('goal commands isolate native goal mode, follow continuation turns, and restore the saved thread', {timeout:8000}, async () => {
+  const f = await fixture(), runtime = await f.start();
+  try {
+    const cmd = kind => ({goal_action:kind === 'set' ? {kind,objective:'Finish the checks'} : {kind}});
+    const events = await f.invoke(runtime,false,cmd('set'));
+    assert.deepEqual(events.flatMap(e => e.payload.session_goal ? [e.payload.session_goal.status] : []), ['active','complete']);
+    assert.equal(events.at(-1).type,'execution.completed');
+    const pause = await f.invoke(runtime,true,cmd('pause'));
+    assert.equal(pause.find(e => e.payload.session_goal)?.payload.session_goal.status,'paused');
+    const resumed = await f.invoke(runtime,true,cmd('resume'));
+    assert.equal(resumed.at(-1).type,'execution.completed');
+    const cleared = await f.invoke(runtime,true,cmd('clear'));
+    assert.ok(cleared.some(e => e.payload.session_goal === null));
+    assert.ok(f.launches[0].args.includes('features.goals=false'));
+    assert.ok(f.launches.slice(1).every(l => l.args.includes('features.goals=true')));
+    assert.ok(!(await f.requests()).some(c => c.method === 'turn/start'));
+  } finally { runtime.stop(); await f.close(); }
+});
+
+
+test('a continuation turn finishing before the goal reply does not finish the Space task', {timeout:5000}, async () => {
+  const f = await fixture({goalTurnBeforeReply:true}), runtime = await f.start();
+  try {
+    const events = await f.invoke(runtime, false, {goal_action:{kind:'set', objective:'Finish the checks'}});
+    assert.deepEqual(events.flatMap(event => event.payload.session_goal?.status ?? []), ['active', 'complete']);
+    assert.equal(events.at(-1).type, 'execution.completed');
+  } finally { runtime.stop(); await f.close(); }
 });

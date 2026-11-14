@@ -46,11 +46,9 @@ test('memory_source_messages follows the memory switch, deletes and archive; mem
 test('graph_source_messages carries memory and knowledge flags', async () => {
   const a = await bootstrap(pool);
   const m = await post(a.owner_token, a.channel_id, 'Flagged');
-  assert.equal((await pool.query('SELECT 1 FROM graph_source_messages WHERE id=$1', [m.id])).rowCount, 0, 'neither switch is on');
+  const [initial] = (await pool.query('SELECT memory, knowledge FROM graph_source_messages WHERE id=$1', [m.id])).rows;
+  assert.deepEqual(initial, { memory: false, knowledge: true });
   await pool.query('UPDATE channels SET memory_enabled=true WHERE id=$1', [a.channel_id]);
-  const [memoryOnly] = (await pool.query('SELECT memory, knowledge FROM graph_source_messages WHERE id=$1', [m.id])).rows;
-  assert.deepEqual([memoryOnly.memory, memoryOnly.knowledge], [true, false]);
-  await pool.query('INSERT INTO knowledge_thread_channels(workspace_id,channel_id) VALUES($1,$2)', [a.workspace_id, a.channel_id]);
   const [both] = (await pool.query('SELECT memory, knowledge FROM graph_source_messages WHERE id=$1', [m.id])).rows;
   assert.deepEqual([both.memory, both.knowledge], [true, true]);
   await pool.query('UPDATE channels SET memory_enabled=false WHERE id=$1', [a.channel_id]);

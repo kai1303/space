@@ -1,10 +1,11 @@
-import { MAX_MESSAGE_ASSETS, parseRichDocument, type AssetAttachment, type ChatMessage, type RichDocument } from '@space/contracts';
+import { MAX_MESSAGE_ASSETS, encryptedMessageLabel,parseEncryptedDm,type EncryptedDm, parseRichDocument, type AssetAttachment, type ChatMessage, type RichDocument } from '@space/contracts';
 import type { Socket } from 'socket.io-client';
 import { request } from '../../shared/api/request.js';
 import { transactOutbox } from './outbox-storage.js';
 import { messageContent, sendMessage } from './message-sender.js';
 
 type Draft = {
+  encrypted?:EncryptedDm;
   channelId: string; threadId?: string; text: string; document?: RichDocument;
   attachments?: AssetAttachment[]; broadcastConfirmed?: boolean;
 };
@@ -31,7 +32,9 @@ function copyContent(draft: Draft) {
     const label = description?.trim();
     return { id, name, size, type, ...(label ? { description: label } : {}) };
   });
+  if(draft.encrypted && (draft.threadId || draft.text!==encryptedMessageLabel || draft.document || attachments.length || draft.broadcastConfirmed)) throw new Error('Invalid encrypted message');
   return {
+    ...(draft.encrypted ? {encrypted:parseEncryptedDm(draft.encrypted)} : {}),
     channelId: draft.channelId, ...(draft.threadId ? { threadId: draft.threadId } : {}),
     text: draft.text.trim(), ...(draft.document ? { document: parseRichDocument(draft.document) } : {}),
     attachments, ...(draft.broadcastConfirmed === true ? { broadcastConfirmed: true } : {}),
@@ -172,8 +175,8 @@ export class MessageOutbox {
     }, delivered);
   }
 
-  async enqueue(draft: Draft): Promise<OutboxEntry> {
-    const entry: OutboxEntry = { ...copyContent(draft), id: crypto.randomUUID(), createdAt: new Date().toISOString(), status: 'sending' };
+  async enqueue(draft: Draft, id:string=crypto.randomUUID()): Promise<OutboxEntry> {
+    const entry: OutboxEntry = { ...copyContent(draft), id, createdAt: new Date().toISOString(), status: 'sending' };
     await this.migrate();
     await this.transaction(rows => {
       const next = [...rows, entry];
@@ -193,7 +196,7 @@ export class MessageOutbox {
     try {
       if (attempt !== entry && !await this.replace(entry, attempt)) return;
       if (!socket?.connected) throw new Error('Reconnecting. Try again when connected.');
-      const content = messageContent(attempt.text, attempt.document, attempt.attachments);
+      const content = attempt.encrypted ? {encrypted:attempt.encrypted} : messageContent(attempt.text, attempt.document, attempt.attachments);
       const saved = await sendMessage(socket, attempt.channelId, attempt.threadId, id, content, attempt.broadcastConfirmed, this.viewerId);
       if (!this.matches(attempt, saved)) throw new Error(unconfirmed);
       if (!this.entries.some(row => row.id === id && !cancelling(row))) return;

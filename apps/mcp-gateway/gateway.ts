@@ -58,12 +58,11 @@ export function createGateway(
       (subject) => {
         for (const [controller, operation] of active) if (operation.changeSubjects.includes(subject)) void recheck(controller);
       },
-      () => {
-        healthy = false;
-        for (const controller of active.keys()) controller.abort();
+      (ready) => {
+        healthy = ready;
+        if (!ready) for (const controller of active.keys()) controller.abort();
       },
     );
-    healthy = true;
   });
   async function bounded<T>(
     owner: string,

@@ -29,7 +29,7 @@ async function fixture(t, events = textEvents) {
     }
    }
   })();
-  return Object.assign(iterator,{initializationResult:async()=>({}),setMcpServers:async servers=>{call.servers=servers;return {added:Object.keys(servers),removed:[],errors:{}};},mcpServerStatus:async()=>[{name:'space_project',status:'connected'}],close(){call.closed=true;}});
+  return Object.assign(iterator,{initializationResult:async()=>({models:[{value:'sdk-alias',displayName:'SDK Alias',supportedEffortLevels:['low','max']},{value:'plain',displayName:'Plain'}]}),setMcpServers:async servers=>{call.servers=servers;return {added:Object.keys(servers),removed:[],errors:{}};},mcpServerStatus:async()=>[{name:'space_project',status:'connected'}],close(){call.closed=true;}});
  };
  const start=(overrides={},key='test-key')=>startClaude(key,{...storage,...overrides},()=>{},run);
  const runtime=await start();
@@ -48,6 +48,18 @@ test('Claude streams bounded ordered output and keeps API credentials and settin
  assert.equal(o.env.ANTHROPIC_API_KEY,'test-key');assert.notEqual(o.env.HOME,process.env.HOME);assert.equal(o.env.CLAUDE_CODE_OAUTH_TOKEN,undefined);
  assert.equal(o.permissionMode,'dontAsk');assert.equal(o.persistSession,false);assert.equal(f.calls.every(c=>c.closed),true);
  assert.ok(!JSON.stringify(events).includes('test-key'));
+});
+test('Claude uses SDK model values and only reported effort levels for each send',async t=>{
+ const f=await fixture(t);
+ const [model,plain]=await f.runtime.listModels();
+ assert.deepEqual(model,{id:'sdk-alias',label:'SDK Alias',efforts:['low','max']});
+ assert.deepEqual(plain.efforts,[]);
+ await f.invoke({codex_settings:{model:model.id,effort:'max'}});
+ assert.equal(f.calls.at(-1).options.model,model.id);
+ assert.equal(f.calls.at(-1).options.effort,'max');
+ await f.invoke({codex_settings:{model:plain.id}});
+ assert.equal(f.calls.at(-1).options.model,plain.id);
+ assert.equal(f.calls.at(-1).options.effort,undefined);
 });
 test('Claude waits for durable readiness before inference, resumes after restart, and isolates credentials',async t=>{
  const f=await fixture(t);
@@ -172,4 +184,40 @@ test('Claude native runtime uses the installed executable and the native login p
   assert.ok(options.env.CLAUDE_CONFIG_DIR.includes('claude-home'));
   assert.equal(events.at(-1).type,'execution.completed');
  }finally{runtime.stop();}
+});
+
+test('Claude dispatches the native goal command and publishes provider state',async t=>{
+ const condition='The release checks pass';
+ const f=await fixture(t,id=>[
+  {type:'active_goal',session_id:id,value:{condition,iterations:1,last_reason:'One check remains'}},
+  {type:'active_goal',session_id:id,value:null},...textEvents(id)
+ ]);
+ const output=await f.invoke({persistent_session:{resume:false},goal_action:{kind:'set',objective:condition}});
+ assert.equal(f.calls.at(-1).input.message.content,'/goal '+condition);
+ assert.deepEqual(output.find(e=>e.payload.session_goal)?.payload.session_goal,{objective:condition,status:'active',reason:'One check remains'});
+ assert.equal(output.filter(e=>e.payload.session_goal).at(-1).payload.session_goal.status,'ended');
+});
+test('Claude accepts its native empty-goal confirmation on clear',async t=>{
+ const f=await fixture(t,id=>[{type:'result',session_id:id,subtype:'success',is_error:false,result:'No goal set'}]);
+ const events=await f.invoke({persistent_session:{resume:false},goal_action:{kind:'clear'}});
+ assert.equal(f.calls.at(-1).input.message.content,'/goal clear');
+ assert.ok(events.some(e=>e.payload.session_goal===null));
+});
+
+test('reads new native goal verdicts for this Claude session after transcript flush',async t=>{
+ const {claudeGoalTranscript}=await import('../dist/claude-goal.js');
+ const dir=await realpath(await mkdtemp(join(tmpdir(),'space-goal-verdict-')));
+ t.after(()=>rm(dir,{recursive:true,force:true}));
+ const cwd=join(dir,'project'),id=randomUUID(),objective='The checks pass';
+ await mkdir(cwd);
+ const folder=join(dir,'projects',cwd.replace(/[^a-zA-Z0-9]/g,'-'));
+ await mkdir(folder,{recursive:true});
+ const path=join(folder,id+'.jsonl');
+ const row=(sessionId,condition,reason)=>JSON.stringify({sessionId,type:'attachment',attachment:{type:'goal_status',met:true,condition,reason}})+'\n';
+ await writeFile(path,row(id,objective,'previous run'));
+ const transcript=await claudeGoalTranscript(dir,cwd,id);
+ assert.equal(await transcript.read(objective),undefined);
+ await writeFile(path,row(randomUUID(),objective,'another session')+row(id,'another goal','wrong')+row(id,objective,'All checks passed.'),{flag:'a'});
+ assert.deepEqual(await transcript.read(objective),{objective,status:'complete',reason:'All checks passed.'});
+ assert.equal(await transcript.read(objective),undefined);
 });

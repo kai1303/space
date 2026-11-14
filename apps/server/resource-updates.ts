@@ -2,23 +2,23 @@ import { AppError, record, uuid } from '@space/contracts';
 import type { ChatStore } from '@space/postgres/chat';
 import { hasChannelAccess, hasThreadAccess, hasWorkspaceAccess } from '@space/postgres/access';
 
-export type ResourceSubscription = { scope: 'actor' | 'workspace' | 'channel' | 'thread' | 'task' | 'session-team'; id: string; revision?: string; keys?: string[] };
+export type ResourceSubscription = { scope: 'actor' | 'drafts' | 'workspace' | 'channel' | 'thread' | 'task' | 'session-team' | 'sidebar-sections'; id: string; revision?: string; keys?: string[] };
 export function parseResourceSubscription(input: unknown): ResourceSubscription {
   const value = record(input, ['scope', 'id']);
-  if (!['actor', 'workspace', 'channel', 'thread', 'task', 'session-team'].includes(value.scope as string)) throw new AppError(400, 'invalid_scope');
+  if (!['actor', 'drafts', 'workspace', 'channel', 'thread', 'task', 'session-team', 'sidebar-sections'].includes(value.scope as string)) throw new AppError(400, 'invalid_scope');
   return { scope: value.scope as ResourceSubscription['scope'], id: uuid(value.id) };
 }
 export async function resourceRevision(chat: ChatStore, actor: string, subscription: ResourceSubscription): Promise<string> {
   const { scope, id } = subscription;
-  if(scope==='actor'){
+  if(scope==='actor' || scope==='drafts'){
     if(id!==actor)throw new AppError(404,'not_found');
-    subscription.keys=[`actor:${actor}`];
-    const result=await chat.pool.query('SELECT revision::text FROM resource_update_revisions WHERE resource=$1',[`actor:${actor}`]);
+    subscription.keys=[`${scope}:${actor}`];
+    const result=await chat.pool.query('SELECT revision::text FROM resource_update_revisions WHERE resource=$1',subscription.keys);
     return result.rows[0]?.revision??'0';
   }
   let workspace: string, channel: string | undefined;
   let allowed = false;
-  if (scope === 'workspace') {
+  if (scope === 'workspace' || scope === 'sidebar-sections') {
     workspace = id;
     allowed = await hasWorkspaceAccess(chat.db, actor, workspace);
   } else if (scope === 'session-team') {
@@ -45,7 +45,8 @@ export async function resourceRevision(chat: ChatStore, actor: string, subscript
   const keys = ['global', `workspace:${workspace}`, ...(channel ? [`channel:${channel}`] : []),
     ...(scope === 'workspace' ? [`workspace-messages:${workspace}`] : scope === 'thread' || scope === 'task' ? [`${scope}:${id}`] : [])];
   subscription.keys = [...keys, `actor:${actor}`];
+  const revisionKeys = scope === 'sidebar-sections' ? subscription.keys : keys;
   const revisions = await chat.pool.query<{resource:string;revision:string}>(
-    'SELECT resource,revision::text FROM resource_update_revisions WHERE resource=ANY($1::text[]) ORDER BY resource',[keys]);
+    'SELECT resource,revision::text FROM resource_update_revisions WHERE resource=ANY($1::text[]) ORDER BY resource',[revisionKeys]);
   return JSON.stringify(revisions.rows);
 }

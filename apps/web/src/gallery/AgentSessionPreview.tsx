@@ -65,8 +65,8 @@ export function AgentSessionPreview() {
       }}/>
     <AgentSessionComposer submitLabel={running ? mode==='steer'?'Steer':'Queue' : paused?'Queue':undefined}
       submitIcon={running||paused ? running&&mode==='steer'?<ArrowBendUpRight size={18}/>:<ListBullets size={18}/> : undefined}
-      submitAccessory={running && <span className="agent-followup-menu"><FollowUpMenu mode={mode} change={setMode}/></span>}
-      onAlternateSend={running?(text,_doc,files)=>send(text,files,mode!=='steer'):undefined} previewConfig={{model:'GPT-6 Astra',effort:'High'}} filePickerSource={previewSource} skill="codex.run" channel="agent session" placeholder="Message Local Codex" maxLength={4000}
-      showUnavailableActions={false} attachmentsEnabled mentions={['Kai']} onSend={(text,_document,files)=>send(text,files,running && mode==='steer')}/>
+      controls={{ attachmentsEnabled: true, mentions: ['Kai'], submitAccessory: running && <span className="agent-followup-menu"><FollowUpMenu mode={mode} change={setMode}/></span> }}
+      onAlternateSend={running?(text,_doc,files)=>send(text,files,mode!=='steer'):undefined} preview models={[{id:'gpt-6-astra',label:'GPT-6 Astra',efforts:['low','medium','high','xhigh'],defaultEffort:'high',isDefault:true},{id:'gpt-6.1-sol',label:'GPT-6.1 Sol',efforts:['low','medium','high','xhigh'],defaultEffort:'medium'}]} filePickerSource={previewSource} skill="codex.run" channel="agent session" placeholder="Message Local Codex" maxLength={4000}
+      onSend={(text,_document,files)=>send(text,files,running && mode==='steer')}/>
   </main>;
 }

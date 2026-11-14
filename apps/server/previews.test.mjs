@@ -76,6 +76,8 @@ test('recognizes PDF and common audio/video containers from bytes rather than fi
   const mp4 = Buffer.from('00000018667479706d7034320000000069736f6d6d7034320000000866726565', 'hex');
   assert.deepEqual(await fixture(Buffer.from('%PDF-1.7\n1 0 obj\n<<>>\nendobj\n%%EOF')).run('file.txt'), { kind: 'pdf', mime: 'application/pdf' });
   assert.deepEqual(await fixture(wav).run('file.png'), { kind: 'audio', mime: 'audio/wav' });
+  assert.deepEqual(await fixture(mp4).run('Audio clip.m4a'), { kind: 'audio', mime: 'audio/mp4' });
+  assert.equal((await fixture(Buffer.from('<html>')).run('Audio clip.weba')).kind, 'unsupported');
   assert.deepEqual(await fixture(mp4).run('file.txt'), { kind: 'video', mime: 'video/mp4' });
 });
 

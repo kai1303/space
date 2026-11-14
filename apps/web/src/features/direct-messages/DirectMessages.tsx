@@ -127,14 +127,14 @@ export function NewDirectMessage({ workspace, viewer, defaultValue, onDraftChang
     {!searching && !error && !people.length && <p>No people found. Try another name.</p>}
     {!searching && people.length === 30 && <p className="dm-hint">Showing the first 30 matches. Type a name to narrow your search.</p>}
     {busy && <p role="status">Opening conversation…</p>}
-  </div><ConversationComposer channel="new conversation" placeholder="Write a message…" defaultValue={defaultValue} onDraftChange={document => { draft.current = document; onDraftChange?.(document); }} attachmentsEnabled={false} showUnavailableActions={false} sendDisabledReason="Choose a recipient before sending." onSend={() => {}} /></main>;
+  </div><ConversationComposer channel="new conversation" placeholder="Write a message…" defaultValue={defaultValue} onDraftChange={document => { draft.current = document; onDraftChange?.(document); }} controls={{ attachmentsEnabled: false }} sendDisabledReason="Choose a recipient before sending." onSend={() => {}} /></main>;
 }
 
 type RoomControls = { close: () => Promise<void>; change: (dm: DirectMessageSummary) => void; readState?: ChannelUnread };
-export function DirectMessages({ workspace, viewer, requestedId, compose = 0, width = 350, onVisit, onSearchAvailabilityChange, viewState, drafts = {}, onDraftChange, renderConversation }: {
+export function DirectMessages({ workspace, viewer, requestedId, compose = 0, width = 350, onVisit, onForgetChannel, onSearchAvailabilityChange, viewState, drafts = {}, onDraftChange, renderConversation }: {
   workspace: string; viewer: string; requestedId?: string; compose?: number; width?: number;
   viewState?: Snapshot<DirectView>; drafts?: Record<string, RichDocument>; onDraftChange?: (key: string, document: RichDocument) => void;
-  onVisit: (dm?: DirectMessageSummary) => void; onSearchAvailabilityChange?: (available: boolean) => void;
+  onForgetChannel?: (id: string) => void; onVisit: (dm?: DirectMessageSummary) => void; onSearchAvailabilityChange?: (available: boolean) => void;
   renderConversation: (dm: DirectMessageSummary, controls: RoomControls) => ReactNode;
 }) {
   const localView=useRef<DirectView>({query:'',unreads:false,after:'',scroll:0}),view=viewState??localView,sidebar=useRef<HTMLElement>(null);
@@ -153,8 +153,9 @@ export function DirectMessages({ workspace, viewer, requestedId, compose = 0, wi
   }
   function openNewMessage(dm: DirectMessageSummary, document: RichDocument) {
     if (document.ops.some(op => op.insert.trim())) {
-      const existing = drafts[dm.id];
-      onDraftChange?.(dm.id, existing?.ops.some(op => op.insert.trim()) ? { ops: [...existing.ops, { insert: '\n' }, ...document.ops] } : document);
+      const key = dm.encrypted_since ? `encrypted:${dm.id}` : dm.id;
+      const existing = drafts[key];
+      onDraftChange?.(key, existing?.ops.some(op => op.insert.trim()) ? { ops: [...existing.ops, { insert: '\n' }, ...document.ops] } : document);
     }
     saveNewDraft({ ops: [] }); choose(dm, true); setQuery(''); setAfter(''); setUnreads(false); void list.refresh();
   }
@@ -163,6 +164,7 @@ export function DirectMessages({ workspace, viewer, requestedId, compose = 0, wi
   const active = useRef(true), selectedId = useRef<string | undefined>(undefined); selectedId.current = selected?.id;
   useConversationLocation(newOpen || (!selected && !requestedId) ? null : undefined);
   const visit = useRef(onVisit); visit.current = onVisit;
+  const forget = useRef(onForgetChannel); forget.current = onForgetChannel;
   useEffect(() => { active.current = true; return () => { active.current = false; }; }, []);
   useEffect(() => { if (compose) setNewOpen(true); }, [compose]);
   useEffect(() => { onSearchAvailabilityChange?.(!!selected && !newOpen); return () => onSearchAvailabilityChange?.(false); }, [selected?.id, newOpen, onSearchAvailabilityChange]);
@@ -181,7 +183,7 @@ export function DirectMessages({ workspace, viewer, requestedId, compose = 0, wi
   useEffect(() => {
     if (!selected?.id) return;
     const id = selected.id; let current = true;
-    const revoke = (reason: unknown) => { if (current) { setSelected(undefined); setMobileConversation(false); setError(errorText(reason)); visit.current(undefined); } };
+    const revoke = (reason: unknown) => { if (current) { forget.current?.(id); setSelected(undefined); setMobileConversation(false); setError(errorText(reason)); visit.current(undefined); } };
     return (() => {
       const stop = subscribeUpdates('channel', id, async () => {
         try {
@@ -218,7 +220,7 @@ export function DirectMessages({ workspace, viewer, requestedId, compose = 0, wi
       <div className="dm-pages">{after && <Button size="sm" onClick={() => setAfter('')}>Back to newest</Button>}{list.next && <Button size="sm" onClick={() => setAfter(list.next!)}>More conversations</Button>}</div>
     </aside>
     <div className="dm-room">{(selected || newOpen) && <button className="dm-back" onClick={cancelNewMessage}>← All direct messages</button>}{error && <p role="alert" className="dm-error">{error}</p>}
-      {newOpen ? <NewDirectMessage workspace={workspace} viewer={viewer} defaultValue={localDraft.current} onDraftChange={saveNewDraft} onClose={cancelNewMessage} onOpen={openNewMessage} /> : openingConversation ? <ConversationLoading /> : selected ? renderConversation(selected, { close, change: setSelected, readState: unread.channels.find(item => item.channel_id === selected.id) }) : <main id="chat-messages" className="chat-empty" tabIndex={-1}><div className="chat-empty-icon"><ChatCircle size={36} /></div><h1>A conversation starts here</h1><p>Choose a direct message or start a new one.</p><Button variant="primary" onClick={() => setNewOpen(true)}>New message</Button></main>}
+      {newOpen ? <NewDirectMessage workspace={workspace} viewer={viewer} defaultValue={localDraft.current} onDraftChange={saveNewDraft} onClose={cancelNewMessage} onOpen={openNewMessage} /> : openingConversation ? <ConversationLoading conversationKey={`opening:${requestedId}`} /> : selected ? renderConversation(selected, { close, change: setSelected, readState: unread.channels.find(item => item.channel_id === selected.id) }) : <main id="chat-messages" className="chat-empty" tabIndex={-1}><div className="chat-empty-icon"><ChatCircle size={36} /></div><h1>A conversation starts here</h1><p>Choose a direct message or start a new one.</p><Button variant="primary" onClick={() => setNewOpen(true)}>New message</Button></main>}
     </div>
   </div>;
 }

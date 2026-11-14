@@ -1,8 +1,9 @@
 const { app, WebContentsView, View, systemPreferences, session, dialog } = require('electron');
-const { createHash } = require('node:crypto');
+const { createHash, randomUUID } = require('node:crypto');
 const { join } = require('node:path');
 const { runBrowserTask, runOfficeTask } = require('./agent.cjs');
 
+const { bundledPlugins, labels } = require('./plugins.cjs');
 const { isAssetDownload } = require('../policy.cjs');
 const uuid = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i;
 const maxTabs = 12;
@@ -23,7 +24,7 @@ function createBrowser(win, base, workspace) {
   const owner = win.webContents;
   let full = false, splitRatio, navigationWidth = 0, theme = 'dark';
   let currentActor, profile, toolbar, active, task, visible = false, ready = false, barHeight = 64;
-  let officeTask;
+  let officeTask, plugins;
   let generation = 0, opening = false, notice = '';
   let frameTimer, closingTab;
   const tabs = new Map();
@@ -43,7 +44,7 @@ function createBrowser(win, base, workspace) {
   function state() {
     const [width] = win.getContentSize();
     const tab = tabs.get(active);
-    return { theme, tool: tab ? (tab.officePath ? 'office' : 'browser') : null, newTab: !!tab && !tab.url && !tab.popup, tabs: [...tabs].map(([id, tab]) => ({ id, tool: tab.officePath ? 'office' : 'browser', title: tab.title || 'Browser' })), active, full, splitWidth: splitWidth(width), minSplit: minPaneWidth, maxSplit: width - dividerWidth - minPaneWidth, notice, controlling: !!task,
+    return { theme, installed: plugins?.installed() || [], tool: tab ? (tab.officePath ? 'office' : 'browser') : null, newTab: !!tab && !tab.url && !tab.popup, tabs: [...tabs].map(([id, tab]) => ({ id, tool: tab.officePath ? 'office' : 'browser', title: tab.title || 'Browser' })), active, full, splitWidth: splitWidth(width), minSplit: minPaneWidth, maxSplit: width - dividerWidth - minPaneWidth, notice, controlling: !!task,
       url: tabs.get(active)?.url || '', back: !!tabs.get(active)?.view.webContents.navigationHistory.canGoBack(),
       forward: !!tabs.get(active)?.view.webContents.navigationHistory.canGoForward(), maxTabs };
   }
@@ -103,7 +104,27 @@ function createBrowser(win, base, workspace) {
     notice = message;
     publish();
   }
+  function showSidekick(focus = true) {
+    const tab = tabs.get(active);
+    const address = tab && !tab.officePath && webAddress(tab.view.webContents.getURL());
+    if (!address || owner.isDestroyed() || new URL(owner.getURL()).origin !== origin) return;
+    const page = new URL(address);
+    page.search = page.hash = '';
+    tab.sidekickKey ??= randomUUID();
+    tab.sidekickOpen = true;
+    if (full) { full = false; layout(); publish(); }
+    owner.send('space-browser-sidekick', { tab: tab.sidekickKey, page: page.href, actor: currentActor });
+    if (focus) owner.focus();
+  }
+  function dismissSidekick() {
+    const tab = tabs.get(active);
+    if (tab?.sidekickOpen) {
+      tab.sidekickOpen = false;
+      if (!owner.isDestroyed()) owner.send('space-browser-sidekick', null);
+    }
+  }
   function hide(withMotion = true) {
+    dismissSidekick();
     officeTask?.abort();
     if (!toolbar) return;
     const slide = withMotion && visible && ready;
@@ -115,7 +136,7 @@ function createBrowser(win, base, workspace) {
   }
   function select(id, enter = false) {
     if (!tabs.has(id)) return;
-    if (id !== active) { officeTask?.abort(); stop(); }
+    if (id !== active) { dismissSidekick(); officeTask?.abort(); stop(); }
     active = id;
     for (const [key, tab] of tabs) tab.view.setVisible(visible && key === active && (!!tab.url || tab.popup));
     layout(enter); publish();
@@ -123,7 +144,7 @@ function createBrowser(win, base, workspace) {
   function remove(id) {
     const tab = tabs.get(id);
     if (!tab) return;
-    if (id === active) officeTask?.abort();
+    if (id === active) { dismissSidekick(); officeTask?.abort(); }
     tabs.delete(id);
     if (id === active) {
       active = undefined;
@@ -142,10 +163,11 @@ function createBrowser(win, base, workspace) {
       if (!toolbar.webContents.isDestroyed()) toolbar.webContents.close();
     }
     profile?.removeListener('will-download', handleDownload);
-    toolbar = profile = currentActor = undefined;
+    toolbar = profile = plugins = currentActor = undefined;
     ready = false;
   }
   function add(popupContents, enter = false, officePath) {
+    if (!plugins?.has(officePath ? 'office' : 'browser')) throw new Error('Install the plugin to open a tab.');
     if (tabs.size >= maxTabs) throw new Error('Close a tab before opening another.');
     const view = new WebContentsView({ ...(popupContents && { webContents: popupContents }), webPreferences: { ...isolated, disableDialogs: true,
       session: officePath ? owner.session : profile,
@@ -163,28 +185,32 @@ function createBrowser(win, base, workspace) {
       const trusted = event => event.senderFrame === guest.mainFrame && guest.getURL() === origin + officePath;
       guest.ipc.handle('office-open-file', (event, id) =>
         trusted(event) && uuid.test(id) && openOffice('file', id));
-      guest.ipc.handle('office-agent', async (event, goal, selection, key) => {
-        if (!trusted(event) || !visible || active !== id || officeTask || !officePath.startsWith('/office/file/')
-          || typeof goal !== 'string' || !goal.trim() || goal.length > 1000 || typeof key !== 'string' || key.length > 160
-          || typeof selection !== 'string' || !selection.trim() || selection.length > 16000) throw new Error('Office task unavailable.');
+      async function checkEditAccess(event, key, signal) {
+        const activeFile = () => trusted(event) && visible && active === id && officePath.startsWith('/office/file/');
+        if (!activeFile() || typeof key !== 'string' || key.length > 160) throw new Error('Office task unavailable.');
+        const fileId = officePath.slice('/office/file/'.length);
+        const response = await owner.session.fetch(origin + '/v1/assets/' + fileId + '/office-session?mode=edit',
+          { credentials: 'include', cache: 'no-store', redirect: 'error', signal });
+        if (!response.ok) {
+          await response.body?.cancel();
+          throw new Error('Editing access changed.');
+        }
+        const { config } = await response.json();
+        if (config?.document?.key !== key || config.editorConfig?.mode !== 'edit' || config.editorConfig.user?.id !== currentActor
+          || !activeFile() || signal.aborted) throw new Error('Editing access changed.');
+      }
+      guest.ipc.handle('office-check-edit', (event, key) => checkEditAccess(event, key, AbortSignal.timeout(6000)));
+      guest.ipc.handle('office-agent', async (event, goal, selection, key, previousDraft) => {
+        if (!trusted(event) || officeTask || typeof goal !== 'string' || !goal.trim() || goal.length > 1000
+          || typeof selection !== 'string' || !selection.trim() || selection.length > 16000
+          || (previousDraft !== undefined && (typeof previousDraft !== 'string' || previousDraft.length > 16000))) throw new Error('Office task unavailable.');
         const controller = new AbortController();
         officeTask = controller;
+        const authorized = () => checkEditAccess(event, key, AbortSignal.any([controller.signal, AbortSignal.timeout(6000)]));
         try {
-          const fileId = officePath.slice('/office/file/'.length);
-          const authorized = async () => {
-            const response = await owner.session.fetch(origin + '/v1/assets/' + fileId + '/office-session?mode=edit',
-              { credentials: 'include', cache: 'no-store', redirect: 'error', signal: AbortSignal.any([controller.signal, AbortSignal.timeout(6000)]) });
-            if (!response.ok) {
-              await response.body?.cancel();
-              throw new Error('Editing access changed.');
-            }
-            const { config } = await response.json();
-            if (config?.document?.key !== key || config.editorConfig?.mode !== 'edit' || config.editorConfig.user?.id !== currentActor
-              || !trusted(event) || active !== id || !visible || controller.signal.aborted) throw new Error('Editing access changed.');
-          };
           await authorized();
           const directory = app.isPackaged ? join(process.resourcesPath, 'runner') : join(__dirname, '../../dist/runner');
-          const result = await runOfficeTask(goal, selection, controller.signal, join(directory, 'office-mcp.mjs'));
+          const result = await runOfficeTask(goal, selection, controller.signal, join(directory, 'office-mcp.mjs'), previousDraft);
           await authorized();
           return result;
         } finally { if (officeTask === controller) officeTask = undefined; }
@@ -212,8 +238,13 @@ function createBrowser(win, base, workspace) {
         createWindow: options => add(options.webContents).webContents };
     });
     const updated = () => {
+      const previousUrl = tab.url;
       tab.url = guest.getURL() === 'about:blank' ? '' : guest.getURL();
       view.setVisible(visible && active === id && (!!tab.url || tab.popup));
+      if (active === id && tab.sidekickOpen && previousUrl !== tab.url) {
+        if (webAddress(tab.url)) showSidekick(false);
+        else dismissSidekick();
+      }
       tab.title = guest.getTitle() || (webAddress(tab.url) ? new URL(tab.url).hostname : '');
       publish();
     };
@@ -247,7 +278,17 @@ function createBrowser(win, base, workspace) {
     const guest = tabs.get(active)?.view.webContents;
     if (tabs.get(active)?.officePath && ['go', 'agent', 'reload', 'back', 'forward'].includes(action)) return;
     switch (action) {
-      case 'office': owner.send('space-office-picker'); break;
+      case 'install':
+      case 'uninstall': {
+        if (!Object.hasOwn(labels, arg)) return;
+        if (action === 'uninstall' && [...tabs.values()].some(tab => (tab.officePath ? 'office' : 'browser') === arg)) {
+          throw new Error('Close all ' + labels[arg] + ' tabs before removing the plugin.');
+        }
+        changePlugin(arg, action === 'install');
+        notice = ''; publish();
+        break;
+      }
+      case 'office': if (plugins.has('office')) owner.send('space-office-picker'); break;
       case 'new': add(); break;
       case 'switch': select(arg); break;
       case 'close': {
@@ -262,6 +303,7 @@ function createBrowser(win, base, workspace) {
       case 'space': hide(); break;
       case 'layout': full = !full; layout(); publish(); break;
       case 'stop': stop('You have control.'); break;
+      case 'sidekick': showSidekick(); break;
       case 'agent': begin(arg); break;
       case 'resize':
         if (!full && Number.isFinite(arg)) {
@@ -290,8 +332,13 @@ function createBrowser(win, base, workspace) {
       stop('You have control. Start the download yourself.');
     }
   }
+  function changePlugin(id, enabled) {
+    try { plugins.set(id, enabled); }
+    catch { throw new Error('Could not save plugin settings on this Mac. Try again.'); }
+  }
   function createToolbar(actor) {
     const hash = createHash('sha256').update(JSON.stringify([origin, actor])).digest('hex');
+    plugins = bundledPlugins(app.getPath('userData'), hash);
     profile = session.fromPartition('persist:space-browser-' + hash);
     profile.setPermissionRequestHandler((_contents, _permission, cb) => cb(false));
     profile.setPermissionCheckHandler(() => false);
@@ -337,6 +384,21 @@ function createBrowser(win, base, workspace) {
       if (currentActor && id !== currentActor) reset();
       currentActor = id;
       if (!toolbar) createToolbar(id);
+      const requested = officePath ? 'office' : newTab ? 'browser' : null;
+      if (requested && !plugins.has(requested)) {
+        const sessionVersion = generation;
+        const { response: choice } = await dialog.showMessageBox(win, {
+          type: 'question', message: 'Install ' + labels[requested] + '?',
+          detail: 'Activate this bundled plugin for your Space account on this Mac.',
+          buttons: ['Install and open', 'Cancel'], defaultId: 0, cancelId: 1,
+        });
+        if (choice !== 0 || sessionVersion !== generation || win.isDestroyed()) return false;
+        try { changePlugin(requested, true); }
+        catch (error) {
+          await dialog.showMessageBox(win, { type: 'error', message: error.message });
+          return false;
+        }
+      }
       const enter = !visible;
       visible = true; toolbar.setVisible(true);
       if (officePath) {
@@ -366,6 +428,21 @@ function createBrowser(win, base, workspace) {
       void dialog.showMessageBox(win, { message: 'Sign in to Space to open your browser.', detail: 'Space needs a connection to verify your account.' });
     } finally { opening = false; }
   }
+  owner.ipc.handle('space-browser-session', (event, tabKey, workspaceId) => {
+    const tab = tabs.get(active);
+    if (event.senderFrame !== owner.mainFrame || event.senderFrame.origin !== origin || !visible ||
+        !tab?.sidekickOpen || tab.sidekickKey !== tabKey || typeof workspaceId !== 'string' || !uuid.test(workspaceId)) return null;
+    // Keep each workspace's session stable across web-view remounts, bounded by the lifetime of the tab.
+    const bytes = createHash('sha256').update(JSON.stringify([currentActor, workspaceId, tabKey])).digest();
+    bytes[6] = (bytes[6] & 15) | 0x40;
+    bytes[8] = (bytes[8] & 63) | 0x80;
+    const hex = bytes.subarray(0, 16).toString('hex');
+    return [hex.slice(0,8), hex.slice(8,12), hex.slice(12,16), hex.slice(16,20), hex.slice(20)].join('-');
+  });
+  owner.ipc.on('space-browser-dismiss-sidekick', (event, key) => {
+    if (event.senderFrame === owner.mainFrame && event.senderFrame.origin === origin && tabs.get(active)?.sidekickKey === key)
+      dismissSidekick();
+  });
   owner.ipc.on('space-browser-theme', (event, value) => {
     if (event.senderFrame !== owner.mainFrame || event.senderFrame.origin !== origin) return;
     if ((value === 'light' || value === 'dark') && value !== theme) { theme = value; publish(); }

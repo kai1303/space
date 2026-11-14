@@ -2,7 +2,7 @@ import {type ReactNode} from 'react';
 import {AnimatePresence,motion,useIsPresent,useReducedMotion} from 'motion/react';
 import { motionTransition } from '@space/ui/motion';
 export function DestinationTransition({destination,scope='',children}:{destination:string;scope?:string;children:ReactNode}) {
- return <AnimatePresence initial={false} mode="wait"><Page key={destination==='Home'?'Home':`${scope}:${destination}`} destination={destination} scope={scope}>{children}</Page></AnimatePresence>;
+ return <AnimatePresence initial={false} mode="wait"><Page key={(destination==='Home'||destination==='DMs')?'conversations':`${scope}:${destination}`} destination={destination} scope={scope}>{children}</Page></AnimatePresence>;
 }
 function Page({destination,scope,children}:{destination:string;scope:string;children:ReactNode}) {
  const present=useIsPresent(),reduced=useReducedMotion();

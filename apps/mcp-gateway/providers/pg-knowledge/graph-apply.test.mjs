@@ -46,3 +46,22 @@ test('fillChannelText copies topic and description only into rows that lack them
   assert.deepEqual(reads, [2, 1], 'pages of at most 2 ids');
   assert.equal(await fillChannelText(index, source, 2), 0, 'a second start copies nothing new');
 });
+
+test('attachment CDC reconciles live and previously projected files for a post even when it has no indexed text', async () => {
+  const { attachmentChanges } = await import('./graph-apply.mjs');
+  const message = id(2), channel = id(3), retained = id(4), detached = id(5), renamed = id(6);
+  const row = { id: retained, message_id: message, channel_id: channel, name: 'kept.txt' };
+  const source = { async query(text) {
+    if (text.includes('unnest')) return { rows: [{ id: retained, message_id: message }] };
+    return { rows: [row, { ...row, id: renamed, name: 'latest.txt' }] };
+  } };
+  const index = { async query() { return { rows: [{ id: retained, message_id: message }, { id: detached, message_id: message }] }; } };
+  const changes = await attachmentChanges(index, source, [
+    { table: 'messages', row: { id: message, channel_id: channel }, lsn: '0/11' },
+    { table: 'assets', row: { id: renamed }, lsn: '0/32' },
+    { table: 'assets', row: { id: retained }, lsn: '0/10' },
+  ]);
+  assert.deepEqual(new Map(changes.map(c => [c.row.id, [c.op, c.lsn, c.row.name]])), new Map([
+    [retained, ['insert', '0/11', 'kept.txt']], [detached, ['delete', '0/11', undefined]], [renamed, ['insert', '0/32', 'latest.txt']],
+  ]));
+});

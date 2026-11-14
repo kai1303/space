@@ -13,7 +13,12 @@ export function AgUiExample() {
         tools: [{ id: 'report', name: 'Read customer report', arguments: '{"month":"October"}', status: streaming ? 'running' : 'completed', ...(streaming ? {} : { result: 'Reviewed 240 customers across two plans.' }) }],
         components: streaming ? [] : [
           { id: 'summary', type: 'card', title: 'Retention improved', body: 'Pro customers returned more often this month.' },
-          { id: 'plans', type: 'table', title: 'Retention by plan', columns: ['Plan', 'Customers', 'Retention'], rows: [['Pro', '180', '98%'], ['Starter', '60', '94%']] },
+          { id: 'follow-ups', type: 'carousel', title: 'Follow-up options', cards: [
+            { id: 'interview', title: 'Interview returning customers', body: 'Ask Pro customers which part of the product brought them back.' },
+            { id: 'cohort', title: 'Compare signup cohorts', body: 'Check whether the retention gap persists across signup months.' },
+            { id: 'onboarding', title: 'Review Starter onboarding', body: 'Find the first step where new customers stop.' },
+          ] },
+          { id: 'plans', type: 'data_table', title: 'Retention by plan', columns: ['Plan', 'Customers', 'Retention'], rows: [['Pro', 180, '98%'], ['Starter', 60, '94%']] },
         ],
         ...(streaming ? { step: 'Reading customer report…' } : {}),
       }} />

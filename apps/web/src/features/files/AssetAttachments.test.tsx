@@ -14,6 +14,55 @@ beforeAll(() => {
   HTMLDialogElement.prototype.close = function () { this.open = false; this.dispatchEvent(new Event('close')); };
 });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
+it('opens a recorded video inline from its duration badge and restores the thumbnail after playback', async () => {
+  previews({ clip: { kind: 'video', mime: 'video/mp4' }, upload: { kind: 'video', mime: 'video/mp4' } });
+  render(<AssetAttachments assets={[asset('clip', 'Video clip.mp4'), asset('upload', 'presentation.mp4')]} />);
+  const group = await screen.findByRole('group', { name: 'Video clip' });
+  const video = group.querySelector('video')!;
+  expect(video.controls).toBe(false);
+  Object.defineProperty(video, 'duration', { value: 65.2 });
+  fireEvent.loadedMetadata(video);
+  expect(within(group).getByText('1:05')).toBeTruthy();
+  const play = vi.spyOn(video, 'play').mockResolvedValue(undefined);
+  await userEvent.click(within(group).getByRole('button', { name: 'Play video clip' }));
+  expect(play).toHaveBeenCalledOnce();
+  expect(video.controls).toBe(true);
+  fireEvent.ended(video);
+  expect(video.controls).toBe(false);
+  expect(within(group).getByRole('button', { name: 'Play video clip' })).toBeTruthy();
+  expect((screen.getByLabelText('presentation.mp4') as HTMLVideoElement).controls).toBe(true);
+  fireEvent.error(video);
+  expect(screen.getByText('Preview unavailable')).toBeTruthy();
+  expect(screen.getByRole('link', { name: 'Download Video clip.mp4' })).toBeTruthy();
+});
+it('renders recorded WebM audio with its decoded duration and seekable waveform even with a video container preview', async () => {
+  vi.stubGlobal('OfflineAudioContext', class {
+    async decodeAudioData() {
+      return { duration: 6.25, getChannelData: () => Float32Array.from({ length: 80 }, (_, i) => i / 80) };
+    }
+  });
+  vi.stubGlobal('fetch', vi.fn(async (url: string) => url.endsWith('/content')
+    ? { ok: true, arrayBuffer: async () => new ArrayBuffer(1) }
+    : { ok: true, json: async () => ({ kind: 'video', mime: 'video/webm' }) }));
+  render(<AssetAttachments assets={[{ ...asset('voice', 'Audio clip.weba'), type: 'audio/webm' }]} />);
+  const player = await screen.findByRole('group', { name: 'Voice clip' });
+  const slider = within(player).getByRole('slider', { name: 'Seek voice clip' });
+  await within(player).findByText('0:06');
+  expect(slider.getAttribute('max')).toBe('6.25');
+  expect(new Set(Array.from(player.querySelectorAll<HTMLElement>('.voice-clip-bars i'), bar => bar.style.height)).size).toBeGreaterThan(1);
+  fireEvent.change(slider, { target: { value: '3' } });
+  const audio = player.querySelector('audio')!;
+  expect(audio.currentTime).toBe(3);
+  expect(slider.getAttribute('aria-valuetext')).toBe('0:03 of 0:06');
+  fireEvent.keyDown(slider, { key: 'ArrowRight' });
+  expect(audio.currentTime).toBe(4);
+  expect(player.querySelectorAll('[data-played]').length).toBeGreaterThan(0);
+  fireEvent.play(audio);
+  expect(within(player).getByRole('button', { name: 'Pause voice clip' })).toBeTruthy();
+  fireEvent.ended(audio);
+  expect(within(player).getByRole('button', { name: 'Play voice clip' })).toBeTruthy();
+  expect(slider.getAttribute('aria-valuetext')).toBe('0:00 of 0:06');
+});
 it('uses saved image descriptions for the card and full preview', async () => {
   previews({ a: { kind: 'image', mime: 'image/webp', width: 200, height: 100 } });
   render(<AssetAttachments assets={[{ ...asset('a'), description: 'Blue square on white' }]} />);

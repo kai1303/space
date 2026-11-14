@@ -11,13 +11,13 @@ import { LogicalReplicationService, PgoutputPlugin } from 'pg-logical-replicatio
 import { createPool } from '@space/postgres/database';
 import { TABLES, lsnToVersion, planChange } from './graph-plan.mjs';
 import { sourceLookup } from './graph-source.mjs';
-import { applyOps, fillChannelText, publish, publishNeeded, rebuild, resyncChannel, savedPosition } from './graph-apply.mjs';
+import { applyOps, attachmentChanges, fillChannelText, publish, publishNeeded, rebuild, resyncChannel, resyncChannelAttachments, savedPosition } from './graph-apply.mjs';
 
 const schema = process.env.GRAPH_SOURCE_SCHEMA ?? 'public';
 if (!/^[a-z_][a-z0-9_]*$/.test(schema)) throw new Error('Invalid GRAPH_SOURCE_SCHEMA');
 const slot = ('space_graph_' + schema).slice(0, 63), publication = slot;
-// Older checkpoints predate archive tracking. A one-time snapshot also repairs archives and restores missed before upgrade.
-const checkpoint = 'space_memory_v2:' + slot;
+// Earlier checkpoints can omit messages from channels that never opted in. Backfill using a consistent source snapshot.
+const checkpoint = 'space_memory_v5:' + slot;
 const source = createPool(process.env.GRAPH_SOURCE_URL);
 const index = createPool(process.env.GRAPH_INDEX_URL);
 const lookup = sourceLookup(source);
@@ -41,7 +41,7 @@ async function prepare() {
     ${q('messages')} (id, workspace_id, channel_id, thread_id, agent_session_id, search_revision, deleted_at, retained_at),
     ${q('knowledge_notes')} (id, workspace_id, channel_id, kind, title, evidence, revision, removed_at),
     ${q('agent_sessions')} (id, workspace_id, origin_thread_id, title, state),
-    ${q('knowledge_thread_channels')}`);
+    ${q('assets')} (id)`);
   let { rows: [state] } = await source.query('SELECT wal_status, confirmed_flush_lsn::text AS lsn FROM pg_replication_slots WHERE slot_name=$1', [slot]);
   if (state?.wal_status === 'lost') {
     console.error('Replication slot was lost; rebuilding the graph');
@@ -64,27 +64,26 @@ async function prepare() {
 
 // Channels whose switches differ from the stored copy need their messages brought in line.
 async function channelsToResync(batch) {
-  // A thread-search opt-in or opt-out changes the knowledge flag of every message in that channel.
   const ids = batch.filter(c => c.table === 'channels').map(c => c.row.id);
   const rows = ids.length ? (await index.query(
     'SELECT id, memory_enabled, knowledge_enabled, archived FROM kb.m_channels WHERE id=ANY($1::text[])', [ids])).rows : [];
   const known = new Map(rows.map(r => [r.id, r]));
-  const pending = new Map();
+  const pending = new Map(), attachments = new Map();
   for (const { table, op, row, lsn } of batch) {
-    if (table === 'knowledge_thread_channels') pending.set(row.channel_id, lsnToVersion(lsn));
     if (table !== 'channels' || op === 'delete' || row.kind !== 'channel') continue;
     const previous = known.get(row.id);
     const archived = row.archived_at === undefined ? (previous?.archived ?? false) : row.archived_at !== null;
+    if (archived !== (previous?.archived ?? false)) attachments.set(row.id, lsnToVersion(lsn));
     if (archived !== (previous?.archived ?? false) || (previous?.memory_enabled ?? false) !== row.memory_enabled ||
         (previous?.knowledge_enabled ?? false) !== row.knowledge_enabled) pending.set(row.id, lsnToVersion(lsn));
     known.set(row.id, { ...row, archived });
   }
-  return pending;
+  return { messages: pending, attachments };
 }
 
 async function flush(position) {
   const batch = buffer; buffer = [];
-  const resync = await channelsToResync(batch);
+  const { messages: resync, attachments } = await channelsToResync(batch);
   await lookup.prefetch(batch);
   // A message that is neither in the source view nor in the store (a direct message, a switched-off channel) needs no write.
   const absent = [], threads = new Set();
@@ -98,8 +97,10 @@ async function flush(position) {
   const skip = new Set(absent.filter(c => !known.has(c.row.id)));
   const ops = [];
   for (const change of batch) if (!skip.has(change)) ops.push(...await planChange(change, lsnToVersion(change.lsn), lookup));
+  for (const change of await attachmentChanges(index, source, batch)) ops.push(...await planChange(change, lsnToVersion(change.lsn)));
   // Leave the old flags and checkpoint visible until every page commits. If a page fails, WAL replay
   // detects the same switch, including in a partial chunk, and repeats its guarded writes.
+  for (const [id, version] of attachments) await serial(() => resyncChannelAttachments(index, source, id, version));
   for (const [id, version] of resync) await serial(() => resyncChannel(index, source, lookup, id, version));
   await serial(() => applyOps(index, ops, position ? { slot: checkpoint, lsn: position } : undefined));
   if (threads.size || resync.size) await source.query('SELECT wake_memory_extract($1::uuid[], $2::uuid[])', [[...threads], [...resync.keys()]]);
@@ -117,7 +118,7 @@ function schedulePublish() {
 async function onMessage(replication, lsn, message) {
   if (message.tag === 'begin') buffer = [];
   else if ((message.tag === 'insert' || message.tag === 'update' || message.tag === 'delete')
-      && message.relation.schema === schema && (TABLES.includes(message.relation.name) || message.relation.name === 'knowledge_thread_channels')) {
+      && message.relation.schema === schema && TABLES.includes(message.relation.name)) {
     buffer.push({ table: message.relation.name, op: message.tag, lsn, row: message.tag === 'delete' ? (message.old ?? message.key) : message.new });
     if (buffer.length >= CHUNK) await flush();            // partial chunk: guarded writes, position unchanged
   } else if (message.tag === 'commit') {

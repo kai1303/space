@@ -368,6 +368,9 @@ importers:
       motion:
         specifier: ^14.9.0
         version: 14.9.0(react-dom@19.3.1)(react@19.3.1)
+      openpgp:
+        specifier: 6.3.2
+        version: 6.3.2
       pdfjs-dist:
         specifier: ^6.5.438
         version: 6.5.438
@@ -516,6 +519,9 @@ importers:
       d3-force:
         specifier: ^3.0.0
         version: 3.0.1
+      linkifyjs:
+        specifier: ^4.3.2
+        version: 4.4.0
       motion:
         specifier: ^14.9.0
         version: 14.9.0(react-dom@19.3.1)(react@19.3.1)
@@ -7445,6 +7451,10 @@ packages:
       lightningcss-win32-x64-msvc: 1.33.0
     dev: true
 
+  /linkifyjs@4.4.0:
+    resolution: {integrity: sha512-InTexvtbai+2c+dEVGcc6O6P2DMVIiwD9a/i4zFroazOIYLOS6FSVmAJ7kFeumnCMx6/gQqNAkbUvgMubV4+MA==}
+    dev: false
+
   /listr2@11.4.0:
     resolution: {integrity: sha512-N6jpS9lEmqGcWqJqryuOfjPUTn7mcDvG5ndsTlZk4Aohwfywc7deqjscI9lm7K+FHS6anZmazE8/IQxQfVTHZg==}
     engines: {node: '>=22.13.0'}
@@ -8426,6 +8436,16 @@ packages:
       is-docker: 2.2.1
       is-wsl: 2.2.0
     dev: true
+
+  /openpgp@6.3.2:
+    resolution: {integrity: sha512-wcZTzHz41LV8Y48zH/JlD1JT8YdNmpWOuMAjQ/podvvCwsjBEU37K3znJh4UQcj3hksE5z9TzvhbUbwzsGvlLQ==}
+    engines: {node: '>= 18.0.0', typescript: '>= 5.0.0'}
+    peerDependencies:
+      '@openpgp/web-stream-tools': ~0.3.0
+    peerDependenciesMeta:
+      '@openpgp/web-stream-tools':
+        optional: true
+    dev: false
 
   /oxc-parser@0.127.0:
     resolution: {integrity: sha512-bkgD4qHlN7WxLdX8bLXdaU54TtQtAIg/ZBAfm0aje/mo3MRDo3P0hZSgr4U7O3xfX+fQmR5AP04JS/TGcZLcFA==}

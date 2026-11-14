@@ -40,7 +40,7 @@ export function SessionReports({message,inThread,reports,onOpen}:{
   message:ChatMessage; inThread:boolean; reports?:SessionReport[];
   onOpen:(thread:string,id:string,artifact?:Artifact)=>void;
 }) {
-  if (message.deleted_at) return null;
+  if (message.deleted_at || message.encrypted) return null;
   const links = new Map((inThread ? [] : message.agent_sessions ?? []).map(item => [item.id,item.title]));
   const detail = new Map<string,SessionReport>();
   for (const report of reports ?? []) {

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Button } from '@space/ui/primitives';
 import type { ChannelMemoryHeader, MemoryFact, SessionMemory, ThreadContextMessage, ThreadMemory } from '@space/contracts';
+import { subscribeUpdates } from '../../shared/realtime/live-updates.js';
 import { memoryApi } from './memory-api.js';
 import type { MemorySelection } from './MemoryGraph.js';
 
@@ -48,9 +49,15 @@ function NodeInspector({ channel, selection, onOpenThread, onOpenSession }: Prop
 
   useEffect(() => {
     const controller = new AbortController();
-    read(controller.signal).then(data => { if (!controller.signal.aborted) setDetail(toDetail(data)); })
-      .catch(reason => { if (!controller.signal.aborted) setError(reason instanceof Error ? reason.message.replaceAll('_', ' ') : 'Could not load memory'); });
-    return () => controller.abort();
+    const stop = subscribeUpdates('channel', channel, async () => {
+      try {
+        const data = await read(controller.signal);
+        if (!controller.signal.aborted) { setDetail(toDetail(data)); setError(''); }
+      } catch (reason) {
+        if (!controller.signal.aborted) { setDetail(undefined); setError(reason instanceof Error ? reason.message.replaceAll('_', ' ') : 'Could not load memory'); }
+      }
+    }, () => { controller.abort(); setDetail(undefined); setError('Memory is unavailable.'); });
+    return () => { controller.abort(); stop(); };
   }, [channel, id, selection.kind]);
 
   const title = selection.kind === 'thread' ? selection.node.summary : `${selection.node.agent ?? 'Agent'} · ${selection.node.title ?? ''}`;

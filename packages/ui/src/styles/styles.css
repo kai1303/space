@@ -552,6 +552,15 @@
 .sp-message-text p {
   margin: 0;
 }
+.sp-message-text [data-emoji-only="true"] {
+  font-size: 32px;
+  line-height: 38.4px;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .sp-message-text .sp-rich-content {
+    transition: font-size 160ms cubic-bezier(.2,0,0,1), line-height 160ms cubic-bezier(.2,0,0,1);
+  }
+}
 .sp-message-text code {
   background: var(--sp-surface-hover);
   border: 1px solid var(--sp-border);

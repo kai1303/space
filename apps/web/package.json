@@ -26,6 +26,7 @@
     "gsap": "^3.15.1",
     "livekit-client": "2.23.0",
     "motion": "^14.9.0",
+    "openpgp": "6.3.2",
     "pdfjs-dist": "^6.5.438",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",

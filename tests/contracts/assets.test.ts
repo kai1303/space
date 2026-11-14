@@ -47,3 +47,16 @@ test('channel file queries validate literal search, known filters and bounded st
   assert.equal(parse({ q: '', limit: '1' }).limit, 1);
   for (const input of [null, [], { unexpected: 'yes' }, { q: 'x'.repeat(256) }, { q: 2 }, { q: null }, { kind: null }, { sort: null }, { limit: null }, { q: 'bad\0' }, { q: ['x'] }, { kind: 'unsupported' }, { kind: ['image'] }, { sort: 'recent' }, { after: 'bad' }, { limit: 30 }, { limit: '0' }, { limit: '101' }, { limit: '01' }, { limit: '1.5' }, { limit: '1e2' }, { limit: ['1'] }]) assert.throws(() => parse(input));
 });
+
+test('agent PDF pages have valid physical numbers and bounded aggregate text', () => {
+  const file = {id:randomUUID(),name:'report.pdf',type:'application/pdf',size:20};
+  const page = {page:7,text:'result',truncated:false};
+  const content = {kind:'pdf',status:'readable',page_count:8,pages:[page]};
+  const parse = (c: object) => contracts.parseAgentInputFiles([{...file,content:c}]);
+  assert.deepEqual(parse(content), [{...file, content}]);
+  for (const pages of [[{...page,page:0}], [{...page,page:9}], [page,page],
+      [{...page,text:'a'.repeat(9000)},{...page,page:8,text:'a'.repeat(9000)}]]) {
+    assert.throws(() => parse({...content,pages}), {code:'invalid_asset_content'});
+  }
+  assert.throws(() => parse({...content,status:'no_text'}), {code:'invalid_asset_content'});
+});

@@ -161,12 +161,18 @@ test('members preview all Office formats, co-edit a shared document and reopen t
   // editor, plugin, cursor label, permission check on session open and saves are real.
   let finishDraft: ((result: { replacement: string; message: string }) => void) | undefined;
   let selectedText = '';
-  await page.exposeFunction('officeTestDraft', (_goal: string, selection: string) => {
+  let lastRequest: { goal: string; previousDraft?: string } | undefined;
+  await page.exposeFunction('officeTestDraft', (goal: string, selection: string, previousDraft?: string) => {
+    lastRequest = { goal, previousDraft };
     selectedText = selection;
     return new Promise(resolve => { finishDraft = resolve; });
   });
   await page.addInitScript(`if (window === window.top) window.spaceOffice = {
-    ask: (goal, text) => window.officeTestDraft(goal, text),
+    ask: (goal, text, key, draft) => window.officeTestDraft(goal, text, draft),
+    checkEditAccess: async key => {
+      const response = await fetch('/v1/assets/${assetId}/office-session?mode=edit');
+      if (!response.ok || (await response.json()).config.document.key !== key) throw new Error('Editing access changed.');
+    },
     openFile: async () => false,
     onClose: handler => {
       window.closeOfficeTestTab = () => handler(() => location.replace('about:blank'));
@@ -191,15 +197,32 @@ test('members preview all Office formats, co-edit a shared document and reopen t
   assert.ok(selectedText.trim());
   await overlay.click({position:{x:270,y:170}});
   finishDraft!({replacement:'ConflictMustNotApply',message:'Draft ready.'});
-  await expect(page.getByRole('textbox',{name:'Proposed replacement'})).toHaveValue('ConflictMustNotApply');
+  const card = page.getByRole('article', {name:'Runbook.docx'});
+  await expect(card.getByText('ConflictMustNotApply')).toBeVisible();
+  await card.getByRole('button', {name:'Apply edit'}).click();
+  await expect(page.getByText(/The selection changed/)).toBeVisible();
   const documentHtml = () => editorFrame.evaluate(() =>
     (window as unknown as {Asc:{editor:{pluginMethod_GetFileHTML():string}}}).Asc.editor.pluginMethod_GetFileHTML());
-  assert.ok(!(await documentHtml()).includes('ConflictMustNotApply'));
+  await expect(card.getByText('ConflictMustNotApply')).toBeVisible();
   finishDraft = undefined;
   await selectLine();
   await page.getByRole('button',{name:'Send',exact:true}).click();
   await expect.poll(()=>Boolean(finishDraft)).toBe(true);
+  finishDraft!({replacement:'FirstDraft',message:'Draft ready.'});
+  await expect(card.getByText('FirstDraft')).toBeVisible();
+  await expect(card.getByText(selectedText.trim(), {exact:true})).toBeVisible();
+  const original = selectedText;
+  await card.getByRole('button',{name:'Request changes'}).click();
+  await card.getByRole('textbox',{name:'Requested changes'}).fill('Make it shorter.');
+  finishDraft = undefined;
+  await card.getByRole('button',{name:'Revise draft'}).click();
+  await expect.poll(()=>Boolean(finishDraft)).toBe(true);
+  assert.equal(selectedText,original);
+  assert.deepEqual(lastRequest,{goal:'Make it shorter.',previousDraft:'FirstDraft'});
   finishDraft!({replacement:'SpaceAgentApplied',message:'Draft ready.'});
+  await expect(card.getByText('SpaceAgentApplied')).toBeVisible();
+  await expect(card.getByText(original.trim(), {exact:true})).toBeVisible();
+  await card.getByRole('button',{name:'Apply edit'}).click();
   const label = editorFrame.frameLocator('iframe[src*="/space-agent/index.html"]').getByText('Space AI',{exact:true});
   await expect(label).toBeVisible();
   await expect(page.getByText('Edited the selection.')).toBeVisible();

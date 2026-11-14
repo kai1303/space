@@ -6,7 +6,7 @@
 // lookup.message(workspace, id)            -> hydrated message with its embedding, or null when it is not in the source view
 // lookup.threadsOf(workspace, messageIds)  -> Map message -> { message, thread, channel, kind }
 // lookup.channelsOfThreads(workspace, ids) -> Map thread  -> { thread, channel, kind }
-export const TABLES = ['channels', 'messages', 'knowledge_notes', 'agent_sessions'];
+export const TABLES = ['channels', 'messages', 'knowledge_notes', 'agent_sessions', 'assets'];
 
 const arrayOf = value => Array.isArray(value) ? value.map(String) : String(value ?? '').replace(/^\{|\}$/g, '').split(',').filter(Boolean);
 const sql = (text, values) => ({ text, values });
@@ -82,6 +82,22 @@ async function planMessage({ op, row }, version, lookup) {
   return ops;
 }
 
+function planAttachment({ op, row }, version) {
+  const v = String(version);
+  if (op === 'delete') return [sql('DELETE FROM kb.m_attachments WHERE id=$1::text AND version<=$2::bigint', [row.id, v])];
+  return [
+    channelStub(row.channel_id, row.workspace_id),
+    threadStub(row.thread_id, row.channel_id, row.workspace_id),
+    sql(`INSERT INTO kb.m_attachments(id,workspace_id,channel_id,thread_id,message_id,name,type,size,version)
+         VALUES ($1,$2::uuid,$3,$4,$5,$6,$7,$8::integer,$9::bigint)
+         ON CONFLICT (id) DO UPDATE SET workspace_id=EXCLUDED.workspace_id,channel_id=EXCLUDED.channel_id,
+           thread_id=EXCLUDED.thread_id,message_id=EXCLUDED.message_id,name=EXCLUDED.name,
+           type=EXCLUDED.type,size=EXCLUDED.size,version=EXCLUDED.version
+         WHERE kb.m_attachments.version<EXCLUDED.version`,
+      [row.id, row.workspace_id, row.channel_id, row.thread_id, row.message_id, row.name, row.type, row.size, v]),
+  ];
+}
+
 async function planKnowledge({ op, row }, version, lookup) {
   const v = String(version);
   if (op === 'delete' || row.removed_at) return [sql('DELETE FROM kb.m_knowledge WHERE id=$1::text AND version<=$2::bigint', [row.id, v])];
@@ -126,6 +142,7 @@ async function planSession({ op, row }, version, lookup) {
 }
 
 export async function planChange(change, version, lookup) {
+  if (change.table === 'graph_source_attachments') return planAttachment(change, version);
   if (change.table === 'channels') return planChannel(change, version);
   if (change.table === 'messages') return planMessage(change, version, lookup);
   if (change.table === 'knowledge_notes') return planKnowledge(change, version, lookup);

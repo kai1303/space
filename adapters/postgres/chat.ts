@@ -1,9 +1,12 @@
+import {DmEncryptionStore,dmDevices} from './dm-encryption.js';
+import {encryptedMessageLabel,parseEncryptedDm,parseRichDocument} from '@space/contracts';
 import { ChannelWebhooks } from './channel-webhooks.js';
 import {ChannelPermissionStore,readChannelPermissions,requireChannelCapability,requireRemainingChannelManager} from './channel-permissions.js';
 import { requireFullWorkspaceMember } from './workspace-access.js';
 import { requireWorkspacePolicy } from './workspace-settings.js';
 import { NotificationStore } from './notifications.js';
 import { DirectMessageStore } from './direct-messages.js';
+import { syncSavedMemory } from './memory-sources.js';
 import { eraseMessageReferences } from './workspace-retention.js';
 import { sessionTransaction } from './session-concurrency.js';
 import { MentionStore } from './mentions.js';
@@ -19,8 +22,8 @@ import * as s from './schema.js';
 const notFound = () => new AppError(404, 'not_found');
 
 export class ChatStore {
-  readonly db; readonly webhooks; readonly permissions; readonly notifications; readonly mentions; readonly unread; readonly directMessages;
-  constructor(readonly pool: Pool) { this.db = database(pool); this.webhooks = new ChannelWebhooks(this.db); this.permissions = new ChannelPermissionStore(this.db); this.notifications = new NotificationStore(pool); this.directMessages = new DirectMessageStore(this.db); this.mentions = new MentionStore(pool); this.unread = new UnreadStore(pool); }
+  readonly db; readonly webhooks; readonly permissions; readonly notifications; readonly mentions; readonly unread; readonly directMessages; readonly encryption;
+  constructor(readonly pool: Pool) { this.db = database(pool); this.webhooks = new ChannelWebhooks(this.db); this.permissions = new ChannelPermissionStore(this.db); this.notifications = new NotificationStore(pool); this.directMessages = new DirectMessageStore(this.db); this.encryption=new DmEncryptionStore(this.db); this.mentions = new MentionStore(pool); this.unread = new UnreadStore(pool); }
   async channels(actor: string, workspace: string, query: unknown = {}, channelIds?: string[]) {
     const { after, limit } = parsePage(query);
     return this.db.transaction(async c => {
@@ -185,8 +188,10 @@ export class ChatStore {
     });
   }
   async send(actor: string, channelId: string, input: unknown, newMessageId?: string, workflow?: { name: string; workspace: string }): Promise<ChatMessage> {
-    const request = parseMessageInput(input);
-    const hash = createHash('sha256').update(JSON.stringify({ ...(workflow ? { workflow_name: workflow.name } : {}), channel_id: channelId, thread_id: request.thread_id, text: request.text, ...(request.document ? { document: request.document } : {}), ...(request.asset_ids?.length ? { asset_ids: request.asset_ids } : {}), ...(request.asset_descriptions ? { asset_descriptions: request.asset_descriptions } : {}) })).digest('hex');
+    const wire=input && typeof input==='object' && 'encrypted' in input ? record(input,['client_message_id','encrypted']) : undefined;
+    const encrypted=wire ? parseEncryptedDm(wire.encrypted) : undefined;
+    const request=parseMessageInput(wire ? {client_message_id:wire.client_message_id,text:encryptedMessageLabel,...(encrypted?.asset_ids?.length ? {asset_ids:encrypted.asset_ids} : {})} : input);
+    const hash = createHash('sha256').update(JSON.stringify({ ...(encrypted ? {encrypted} : {}), ...(workflow ? { workflow_name: workflow.name } : {}), channel_id: channelId, thread_id: request.thread_id, text: request.text, ...(request.document ? { document: request.document } : {}), ...(request.asset_ids?.length ? { asset_ids: request.asset_ids } : {}), ...(request.asset_descriptions ? { asset_descriptions: request.asset_descriptions } : {}) })).digest('hex');
     return sessionTransaction(this.db, async c => {
       const channel = await this.authorize(c, actor, channelId);
       if (workflow && channel.workspace_id !== workflow.workspace) throw notFound();
@@ -194,6 +199,13 @@ export class ChatStore {
       if (existing) {
         if (existing.request_hash !== hash) throw new AppError(409, 'idempotency_conflict');
         return this.message(c, existing.id, existing.channel_id);
+      }
+      if (Boolean(channel.encrypted_since)!==Boolean(encrypted)) throw new AppError(409,'dm_encryption_mode_changed');
+      if(encrypted){
+        const live=(await dmDevices(c,channelId)).filter(d=>!d.revoked);
+        if(channel.kind!=='direct'||workflow||!live.some(d=>d.id===encrypted.sender&&d.user_id===actor)
+          || ![channel.direct_user_low,channel.direct_user_high].every(user=>live.some(d=>d.user_id===user))
+          || live.length!==encrypted.recipients.length || live.some(d=>!encrypted.recipients.includes(d.id))) throw new AppError(409,'devices_changed');
       }
       // Both the send and cancellation check the other's identity in serializable
       // transactions. If both observe an absence, PostgreSQL retries one of them.
@@ -218,13 +230,13 @@ export class ChatStore {
       const id = newMessageId ?? randomUUID();
       const fileQuery = request.asset_ids?.length ? c.select().from(s.assets).where(inArray(s.assets.id, request.asset_ids)).orderBy(s.assets.id) : null;
       const files = fileQuery ? await fileQuery : [];
-      if (files.length !== (request.asset_ids?.length ?? 0) || files.some(file => file.channel_id !== channelId || file.uploader_id !== actor || file.status !== 'ready' || file.message_id || file.task_id || file.expires_at <= new Date())) throw new AppError(409, 'asset_unavailable');
+      if (files.length !== (request.asset_ids?.length ?? 0) || files.some(file => file.channel_id !== channelId || file.uploader_id !== actor || file.status !== 'ready' || file.encrypted !== Boolean(encrypted) || file.message_id || file.task_id || file.expires_at <= new Date())) throw new AppError(409, 'asset_unavailable');
       const attachments = (request.asset_ids ?? []).map(id => {
         const file = files.find(file => file.id === id)!;
         return { id: file.id, name: file.name, size: file.size, type: file.type, ...(request.asset_descriptions?.[id] ? { description: request.asset_descriptions[id] } : {}) };
       });
       await c.insert(s.messages).values({ id, workspace_id: channel.workspace_id, channel_id: channelId, thread_id: threadId,
-        workflow_name: workflow?.name, author_type: workflow ? 'workflow' : 'human', user_id: actor, client_message_id: request.client_message_id, request_hash: hash, text: prepared.document ? prepared.document.ops.map(op => op.insert).join('').trim() : request.text, document: prepared.document ?? null, attachments });
+        workflow_name: workflow?.name, author_type: workflow ? 'workflow' : 'human', user_id: actor, client_message_id: request.client_message_id, request_hash: hash, encrypted, text: prepared.document ? prepared.document.ops.map(op => op.insert).join('').trim() : request.text, document: prepared.document ?? null, attachments: encrypted ? [] : attachments });
       await this.mentions.notify(c, actor, channel, id, prepared.refs, !!request.thread_id);
       await this.notifications.notify(c, actor, channel, id, threadId, prepared.refs, !!request.thread_id);
       if (files.length) {
@@ -258,6 +270,46 @@ export class ChatStore {
     return sessionTransaction(this.db, async c => {
       const channel = await this.authorize(c, actor, channelId);
       return this.eraseMessage(c, actor, channel.workspace_id, channelId, uuid(messageId));
+    });
+  }
+
+  async editMessage(actor: string, channelId: string, messageId: string, input: unknown): Promise<ChatMessage> {
+    const fields = record(input, ['document', 'revision', 'broadcast_confirmed']);
+    if (typeof fields.revision !== 'string') throw new AppError(400, 'invalid_revision');
+    const revision = chatCursor(fields.revision);
+    const draft = parseRichDocument(fields.document);
+    return sessionTransaction(this.db, async c => {
+      const channel = await this.authorize(c, actor, channelId);
+      const current = await this.message(c, uuid(messageId), channelId);
+      if (current.author.kind !== 'human' || current.author.id !== actor || current.deleted_at) throw notFound();
+      if (channel.archived_at) throw new AppError(409, 'channel_archived');
+      if (channel.encrypted_since || current.encrypted) throw new AppError(409, 'dm_encryption_mode_changed');
+      const reply = current.thread_root_id !== current.id;
+      if (channel.kind !== 'direct') {
+        await requireChannelCapability(c, actor, channelId, reply ? 'reply' : 'post');
+        if (draft.ops.some(op => op.attributes?.mention?.kind === 'broadcast')) await requireChannelCapability(c, actor, channelId, 'broadcast');
+      } else if ((await c.execute(sql`SELECT 1 FROM workspace_members WHERE workspace_id=${channel.workspace_id}
+        AND user_id IN (${channel.direct_user_low},${channel.direct_user_high}) AND NOT active`)).rowCount) {
+        throw new AppError(409, 'direct_message_participant_inactive');
+      }
+      const prepared = await this.mentions.prepare(c, actor, channel, draft, reply, fields.broadcast_confirmed === true);
+      const document = prepared.document!;
+      const text = document.ops.map(op => op.insert).join('').trim();
+      if (!text && !current.attachments?.length) throw new AppError(400, 'invalid_text');
+      const body = JSON.stringify(document);
+      const target = sql`channel_id=${channelId} AND id=${messageId} AND retained_at IS NULL AND deleted_at IS NULL`;
+      if ((await c.execute(sql`SELECT 1 FROM messages WHERE ${target} AND document=${body}::jsonb AND text=${text}`)).rowCount) return current;
+      if ((current.reaction_sequence ?? '0') !== revision) throw new AppError(409, 'message_changed');
+      const sequence = (await c.execute<{sequence:string}>(sql`UPDATE channels SET event_sequence=event_sequence+1
+        WHERE id=${channelId} RETURNING event_sequence::text AS sequence`)).rows[0]!.sequence;
+      if (!(await c.execute(sql`UPDATE messages SET text=${text},document=${body}::jsonb,reaction_sequence=${sequence}::bigint
+        WHERE ${target} AND reaction_sequence=${revision}::bigint`)).rowCount) throw new AppError(409, 'message_changed');
+      await syncSavedMemory(c, channelId);
+      const updated = await this.message(c, messageId, channelId);
+      await c.execute(sql`INSERT INTO channel_events(workspace_id,channel_id,thread_id,sequence,type,payload)
+        VALUES(${channel.workspace_id},${channelId},${updated.thread_id},${sequence}::bigint,'message.updated',${JSON.stringify(updated)}::jsonb)`);
+      await c.execute(sql`INSERT INTO chat_delivery_outbox(workspace_id,channel_id,resource_scope) VALUES(${channel.workspace_id},${channelId},'message'),(${channel.workspace_id},${channelId},'metadata')`);
+      return updated;
     });
   }
 

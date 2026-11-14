@@ -414,9 +414,11 @@ the shared session key, so finish the current session before disabling sharing.
 Space Desktop users editing DOCX or ODT can select text and choose **Ask Space AI**.
 This uses the signed-in Codex CLI on that Mac. One short-lived MCP server receives
 only the selection for that request. Space checks the user's editing session before
-drafting and again before returning the result. The Office plugin compares the live
-selection with the original before applying an edit. If it moved or changed, the
-panel shows the proposal for review. The cursor label is local to the user's tab.
+drafting, before returning the result, and when the user chooses **Apply edit**.
+The agent reply shows the original passage and proposed replacement. **Request
+changes** revises the draft against that same passage. The Office plugin checks
+the live selection when applying. If it moved or changed, the draft stays visible
+and the user can start a new request. The cursor label is local to the user's tab.
 
 The Office Compose overlay mounts the Space plugin. When updating an existing
 installation, recreate the document server with that overlay after active editors
@@ -432,3 +434,25 @@ above and the `ASSET_STORAGE_*` variables. For editing tests, set `OFFICE_TEST_B
 `OFFICE_TEST_CALLBACK_HOST` to a private interface reachable from Document Server. The test
 opens two browser contexts, checks propagation, downloads their combined changes and reopens
 the saved file. CI does not run it.
+
+## Agent-session PDF attachments
+
+When someone attaches a verified PDF to a session turn, delivery preparation
+reads its sealed object after checking the task’s attachment IDs. It checks
+execution and installation access again after reading storage. The initial
+prompt contains text from the first two physical pages, or from one numbered
+page if the request specifies a page. Extracted text is quoted as attachment
+data. A citation such as `[Report, p. 7](/file/<asset-uuid>?page=7)` opens the
+authorized file viewer at that physical page.
+
+A turn accepts up to five files. Initial PDF extraction shares an eight-second
+budget across the turn, including storage reads. Each PDF contributes up to
+16,000 UTF-16 code units across its excerpted pages. A page carries its physical
+number and truncation flag. An unread attachment retains its ID for the paired
+connector’s `read_pdf_page` tool. Image-only pages return an explicit no-text
+result. The reader does not perform OCR.
+
+The server and worker use Poppler’s `pdfinfo` and `pdftotext` from the existing
+runtime image. Native development and PDF extraction tests require both commands
+on PATH. Each process permits two concurrent reads of sealed originals up to
+25 MiB each. Linux also applies process memory and CPU limits with `prlimit`.

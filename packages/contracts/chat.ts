@@ -6,6 +6,7 @@ import type { AgentResponse } from './agent-response.js';
 export interface MessageReaction { emoji: string; count: number; user_ids: string[] }
 export interface MessageAgentSession { id: string; title: string; agent_name: string }
 export interface ChatMessage {
+  encrypted?: import('./encrypted-dm.js').EncryptedDm;
   agent_sessions?: MessageAgentSession[];
   agent_session_id?: string | null;
   deleted_at?: string | null;
@@ -83,6 +84,7 @@ export type ChannelNotificationPreferences = {
   thread_replies: boolean | null;
 };
 export interface ChannelSummary {
+  encrypted_since?: string | null;
   notification_preferences?: ChannelNotificationPreferences;
   kind?: 'channel' | 'direct';
   id: string; workspace_id: string; name: string; private: boolean; joined: boolean;

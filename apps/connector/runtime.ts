@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { io } from 'socket.io-client';
-import { parseInvocation, parseAgentEvent, parseLocalProvider, localProviders, type LocalProvider, type AgentEvent, type InvocationRequest, uuid, text, record } from '@space/contracts';
+import { sidekickPageUrl, parseGoalAction, parseInvocation, parseAgentEvent, parseLocalProvider, localProviders, type LocalProvider, type AgentEvent, type InvocationRequest, uuid, text, record } from '@space/contracts';
 import { AgentSessionStopped, type InvokeAgent, type SteerHandler } from './agent-runtime.js';
 import {CODING_TURN_TIMEOUT_MS} from '@space/contracts';
 import {toolApprovalClient} from './tool-approvals.js';
@@ -36,7 +36,7 @@ function unauthorized(error: unknown): boolean {
   const value = error as { code?: unknown; message?: unknown; data?: { code?: unknown } };
   return [value.code, value.data?.code, value.message].some(item => typeof item === 'string' && /unauthorized|unauthenticated|revoked|invalid.token/i.test(item));
 }
-export function connectPlatform(connection: Connection, status: () => AuthStatus, onUnauthorized: () => void, invoke?: InvokeAgent) {
+export function connectPlatform(connection: Connection, status: () => AuthStatus, onUnauthorized: () => void, invoke?: InvokeAgent, models?: () => import('@space/contracts').AgentModel[] | undefined) {
   const origin = platformOrigin(connection.origin);
   const provider = parseLocalProvider(connection.provider);
   let lastMessage: string | undefined;
@@ -113,13 +113,15 @@ export function connectPlatform(connection: Connection, status: () => AuthStatus
   socket.on('agent.turn.steer',async(raw:unknown,ack:unknown)=>{
     if(typeof ack!=='function') return;
     try {
-      const body=record(raw,['session_id','execution_id','id','text']);
+      const body=record(raw,['session_id','execution_id','id','text','goal_action','browser_url']);
       const item=steering.get(uuid(body.execution_id)), id=uuid(body.id), message=text(body.text,4000);
       if(!item || item.session!==uuid(body.session_id) || !socket.connected || halted || closed){ack({error:'turn_not_running'});return;}
       let receipt=item.receipts.get(id);
       if(!receipt){
         if(item.receipts.size>=32){ack({error:'turn_not_running'});return;}
-        receipt=item.handler(id,message);item.receipts.set(id,receipt);
+        const prompt=body.browser_url===undefined ? message :
+          'Browser context (quoted data):\n'+JSON.stringify({browser_url:sidekickPageUrl(body.browser_url)})+'\n\n'+message;
+        receipt=item.handler(id,prompt,body.goal_action === undefined ? undefined : parseGoalAction(body.goal_action));item.receipts.set(id,receipt);
       }
       await receipt;ack({data:true});
     } catch {ack({error:'steer_unconfirmed'});}
@@ -243,13 +245,16 @@ export function connectPlatform(connection: Connection, status: () => AuthStatus
     logChange('Connector stopped.');
   };
   const rejected = () => { if (!closed) { logChange('Space rejected the pairing.'); close(); onUnauthorized(); } };
+  let publishedCatalog: ReturnType<NonNullable<typeof models>>;
   const publish = () => {
     if (!socket.connected || closed) return;
     const wasReady = readyToClaim;
     readyToClaim = false;
     const authStatus = halted ? 'error' : status();
     const revision = ++heartbeatRevision, currentGeneration = generation;
-    socket.timeout(8_000).emit('agent.heartbeat', { auth_status: authStatus }, (error: Error | null, ack?: { data?: { installation_id?: string }; error?: unknown }) => {
+    const catalog = authStatus === 'ready' ? models?.() : undefined;
+    if (authStatus !== 'ready') publishedCatalog = undefined;
+    socket.timeout(8_000).emit('agent.heartbeat', { auth_status: authStatus, ...(catalog && catalog !== publishedCatalog ? {model_catalog:catalog} : {}) }, (error: Error | null, ack?: { data?: { installation_id?: string }; error?: unknown }) => {
       if (closed || currentGeneration !== generation || revision !== heartbeatRevision) return;
       if (error) { logChange('Space did not confirm connector status.'); return; }
       if (ack?.error && unauthorized(ack.error)) { rejected(); return; }
@@ -258,6 +263,7 @@ export function connectPlatform(connection: Connection, status: () => AuthStatus
         logChange('Space did not confirm connector status.');
         return;
       }
+      publishedCatalog = catalog;
       logChange(halted ? 'Work interrupted. Restart the connector to accept new work.' : `Space confirmed provider status: ${authStatus}.`);
       if (authStatus === 'ready' && status() === 'ready' && !halted) {
         readyToClaim = true;
@@ -267,7 +273,7 @@ export function connectPlatform(connection: Connection, status: () => AuthStatus
     });
   };
   const heartbeat = setInterval(publish, 10_000);
-  socket.on('connect', () => { titleFailures=0; generation++; readyToClaim = false; reconnectDelay = 1_000; logChange('Connected to Space.'); publish(); });
+  socket.on('connect', () => { publishedCatalog=undefined; titleFailures=0; generation++; readyToClaim = false; reconnectDelay = 1_000; logChange('Connected to Space.'); publish(); });
   socket.on('disconnect', reason => {
     steering.clear();
     generation++; readyToClaim = false;

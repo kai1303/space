@@ -1,38 +1,67 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { WorkspaceAgentSession } from '@space/contracts';
 import { readWorkspaceQuery, useWorkspaceQueryCache } from '../../shared/realtime/workspace-query-cache.js';
 import { errorText } from '../../shared/api/error-text.js';
 import { invalidateUpdates, subscribeUpdates } from '../../shared/realtime/live-updates.js';
 
 type Page = {items: WorkspaceAgentSession[]; next_cursor: string | null};
-const empty = {items: [] as WorkspaceAgentSession[], next_cursor: null as string | null, revoked: false};
+const empty: Page = {items: [], next_cursor: null};
+function sessionPage(page: Page | undefined): Page {
+  return Array.isArray(page?.items) ? {items:page.items,next_cursor:page.next_cursor ?? null} : empty;
+}
+
 export function useAgentSessionList(workspace: string) {
-  const [pagination,setPagination]=useState({workspace,before:''});
-  const before=pagination.workspace===workspace?pagination.before:'';
-  const workspaceCache = useWorkspaceQueryCache(workspace);
-  const pageCache = before ? undefined : workspaceCache;
-  const key = `/workspaces/${workspace}/agent-sessions${before ? `?before=${before}` : ''}`;
-  const [state,setState]=useState({owner:workspaceCache,key:'',...empty,loading:true,error:''});
-  useEffect(()=>{
-    const controller = new AbortController();
-    let active=true;
-    const stop=subscribeUpdates('workspace',workspace,async()=>{
+  const cache = useWorkspaceQueryCache(workspace);
+  const key = `/workspaces/${workspace}/agent-sessions`;
+  const [state,setState] = useState({owner:cache,key:'',...empty,loading:true,error:'',revoked:false});
+  const append = useRef<() => void>(() => {});
+  useEffect(() => {
+    let active = true, pages = 1, running = false;
+    let current = sessionPage(cache?.peek<Page>(key));
+    let controller: AbortController;
+    function publish(loading: boolean, error = '', revoked = false) {
+      setState({owner:cache,key,...current,loading,error,revoked});
+    }
+    async function read(more: boolean) {
+      if (!active || (more && (running || !current.next_cursor))) return;
+      controller?.abort();
+      controller = new AbortController();
+      const {signal} = controller;
+      running = true;
+      if (more) pages++;
+      publish(true);
+      let cursor = more ? current.next_cursor : null;
+      const items = new Map((more ? current.items : []).map(item => [item.id,item]));
       try {
-        const page = await readWorkspaceQuery<Page>(pageCache, key, controller.signal);
-        if(active)setState({owner:workspaceCache,key,revoked:false,items:Array.isArray(page.items)?page.items:[],next_cursor:page.next_cursor??null,loading:false,error:''});
-      } catch(reason) {
-        if(active)setState({owner:workspaceCache,key,...empty,loading:false,error:errorText(reason)});
+        const count = more ? 1 : pages;
+        for (let pageNumber = 0; pageNumber < count; pageNumber++) {
+          const path = cursor ? key + '?before=' + encodeURIComponent(cursor) : key;
+          const page = sessionPage(await readWorkspaceQuery<Page>(cache,path,signal));
+          if (!active || signal.aborted) return;
+          for (const item of page.items) items.set(item.id,item);
+          cursor = page.next_cursor;
+          if (!cursor) break;
+        }
+        current = {items:[...items.values()],next_cursor:cursor};
+        publish(false);
+      } catch (reason) {
+        if (!active || signal.aborted) return;
+        // A refreshed window may contain rows whose channel access was revoked.
+        if (!more || ['unauthorized','forbidden','not_found'].includes((reason as Error).message)) current = empty;
+        if (more) pages--;
+        publish(false,errorText(reason));
+      } finally {
+        if (!signal.aborted) running = false;
       }
-    },()=>{active=false;controller.abort();setState({owner:workspaceCache,key,...empty,revoked:true,loading:false,error:'Agent sessions are unavailable.'});});
-    return()=>{active=false;controller.abort();stop();};
-  },[workspace,workspaceCache,pageCache,key]);
-  const matches = state.key === key && state.owner === workspaceCache;
-  const warm = !matches ? pageCache?.peek<Page>(key) : undefined;
-  const current = matches ? state : { ...empty, ...warm, loading: !warm, error: '' };
-  const {items, next_cursor, loading, error, revoked} = current;
-  return {items, next_cursor, loading, error, revoked, hasPrevious:!!before,
-    older:()=>{if(current.next_cursor)setPagination({workspace,before:current.next_cursor});},
-    first:()=>setPagination({workspace,before:''}),
-    refresh:()=>invalidateUpdates('workspace',workspace),
-  };
+    }
+    append.current = () => { void read(true); };
+    const stop = subscribeUpdates('workspace',workspace,() => read(false),() => {
+      active = false; controller?.abort(); current = empty;
+      publish(false,'Agent sessions are unavailable.',true);
+    });
+    return () => { active = false; controller?.abort(); stop(); };
+  },[cache,key,workspace]);
+  const warm = cache?.peek<Page>(key);
+  const current = state.owner === cache && state.key === key ? state : {...sessionPage(warm),loading:!warm,error:'',revoked:false};
+  return {...current, loadMore:() => append.current(), refresh:() => invalidateUpdates('workspace',workspace)};
 }

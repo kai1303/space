@@ -8,7 +8,7 @@ export function readComposerDrafts(viewer: string): ComposerDrafts {
     const value: unknown = JSON.parse(raw);
     if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
     return Object.fromEntries(Object.entries(value).slice(-100).flatMap(([key, document]) => {
-      if (!document || typeof document !== 'object' || !Array.isArray((document as RichDocument).ops)) return [];
+      if (key.startsWith('encrypted:') || !document || typeof document !== 'object' || !Array.isArray((document as RichDocument).ops)) return [];
       const normalized = normalizeDocument(document as RichDocument);
       return normalized.ops.some(op => op.insert.trim()) ? [[key, normalized]] : [];
     }));
@@ -16,7 +16,7 @@ export function readComposerDrafts(viewer: string): ComposerDrafts {
 }
 export function persistComposerDrafts(viewer: string, drafts: ComposerDrafts) {
   try {
-    const entries = Object.entries(drafts).filter(([, doc]) => doc.ops.some(op => op.insert.trim())).slice(-100);
+    const entries = Object.entries(drafts).filter(([key, doc]) => !key.startsWith('encrypted:') && doc.ops.some(op => op.insert.trim())).slice(-100);
     const serialized = JSON.stringify(Object.fromEntries(entries));
     if (serialized.length <= 500_000) localStorage.setItem(storageKey(viewer), serialized);
   } catch { /* In-memory drafts still work when browser storage is unavailable. */ }

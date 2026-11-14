@@ -6,6 +6,10 @@ import { useIsPresent } from 'motion/react';
 // Undefined means another component owns the address (or the view is loading).
 export const ConversationLocation = createContext<((path: string | null) => void) | null>(null);
 
+// A mounted conversation can resume its own history entries without rebuilding the workspace.
+export type RestoreConversation = (from: string, to: string) => boolean;
+export const ConversationHistory = createContext<{ current: RestoreConversation | null } | null>(null);
+
 export function useConversationLocation(channel: string | null | undefined, thread?: string) {
   usePublishedPath(channel ? conversationPath(channel, thread) : channel);
 }

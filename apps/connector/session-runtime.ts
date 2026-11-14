@@ -8,6 +8,7 @@ export async function sessionRuntime(create: (onExit:()=>void) => Promise<AgentR
   const exited=()=>{if(!closed && !healthy())onUnavailable();};
   spare=await create(exited);
   return {
+    listModels: () => (spare ?? [...sessions.values()].find(item => item.runtime.alive())?.runtime)?.listModels?.() ?? Promise.resolve([]),
     alive: () => !closed && healthy(),
     stop() { closed = true; spare?.stop(); for (const item of sessions.values()) item.runtime.stop(); sessions.clear(); },
     async invoke(request, emit, signal, controls) {

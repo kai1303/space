@@ -6,6 +6,12 @@ On macOS, [Space Desktop](../desktop/README.md) bundles the runner and can pair 
 
 For the standalone repository command, requirements are Node.js 24+, pnpm, and the selected provider CLI installed on `PATH`. Claude uses the installed `claude` executable. Codex is the default; Kiro requires `kiro-cli` with ACP v3 support.
 
+### Adding a local provider
+
+1. Add the provider ID, display name, CLI command, connector ID, run skill and stable definition UUID to [the provider catalog](../../packages/contracts/local-providers.json). Desktop, the pairing API and the session composer use this catalog.
+2. Register its factory in [provider-factory.ts](provider-factory.ts). CLI-authenticated providers can reuse `nativeProvider`. Implement the provider’s authentication and return an [AgentRuntime](agent-runtime.ts) for message execution. Report models and supported effort levels from the provider when available.
+3. Test pairing, reconnecting and a turn using the provider’s own settings. Features that grant additional access, such as project tools or outbound MCP, need explicit provider support.
+
 For Codex, from this repository:
 
 ```sh
@@ -52,7 +58,7 @@ Codex and Kiro can run concurrently in separate terminals. Codex keeps `~/.confi
 
 The adapter launches ACP v3, resolving the installed `kiro-cli-chat` companion when present so Kiro can run with its isolated HOME. It requires session loading and verifies that Kiro selected the generated `space-chat` profile before reporting readiness. Without `--project`, this profile disables tools, MCP, powers, resources and hooks. The client advertises no filesystem or terminal callbacks and rejects permission requests and unexpected tool events. Kiro’s own `fetch_cloud_config` status notifications are recognized as housekeeping, without authorizing model tools. Project access requires the local `--project` option described below. This is a tool restriction, not an OS filesystem jail. Session updates are bounded and coalesced while awaiting Space's acknowledgments. Stop waits for the outstanding setup request or prompt cancellation to settle before accepting another turn; uncertain transport failures require restarting the connector and do not replay inference.
 
-Kiro uses its own authentication and model defaults. Native shell tools and interactive approval require coding mode below. Model selection and provider-specific commands are not exposed in Space. See Kiro's [ACP v3 client guide](https://kiro.dev/docs/cli/v3/acp-migration/) and [agent profile reference](https://kiro.dev/docs/custom-agents/configuration-reference/).
+Space lists the models reported by the signed-in Kiro CLI. When a model is selected, Space checks Kiro’s active session configuration before sending the prompt. The current Kiro ACP catalog has no reasoning-effort setting. Native shell tools and interactive approval require coding mode below. See Kiro's [ACP v3 client guide](https://kiro.dev/docs/cli/v3/acp-migration/) and [agent profile reference](https://kiro.dev/docs/custom-agents/configuration-reference/).
 
 ## Claude
 
@@ -102,6 +108,8 @@ Coding mode enables the provider's native tools for editing files, running tests
 
 The provider CLIs must already be installed and signed in through their Space connector profiles. Git identity, repository access and any necessary local credential helper must be configured for the connector's execution environment. Space does not import desktop chats, copy Git credentials, or provide a folder picker in this release. A public session does not give its other participants authority to approve the computer owner's tools.
 
+Set `SPACE_PULL_REQUEST_URL` when starting a coding connector to offer a link to your project's pull request or branch comparison page after a turn produces changes. Use the HTTPS URL for the repository and branch selected for this connector. Participants open the link using their own Git hosting account and confirm any PR creation there. Space stores and shares the URL with session participants, so URLs with credentials, query strings, or fragments are rejected.
+
 ## Conversation permissions
 
 A connected agent inherits its owner's current access to conversations in its workspace. It can use its declared skills wherever the owner is a current member, including private channels and DMs the owner participates in. No separate channel enablement is needed. Losing membership, disabling the installation or revoking the connection prevents further authorized execution. Other users' requests still require the owner's approval.
@@ -127,5 +135,3 @@ The OAuth implementation follows OpenAI's [OSS sign-in flow](https://developers.
 Validation: `pnpm --filter @space/connector test` uses generated signing keys, synthetic OAuth/ACP responses and child processes, a real loopback callback and Socket.IO server, and temporary filesystem state. Kiro tests cover CLI onboarding, streaming, restart/resume, account isolation, readiness acknowledgments, cancellation during setup and prompts, and rejected tool/malformed/oversized responses. They never sign in to a real account or perform inference. Live authenticated Kiro inference, restart/resume, streaming Stop, and post-Stop recovery were verified locally on 2026-11-04; see [the E2E report](../../docs/real-kiro-e2e-qa.md) for evidence and the remaining browser-only channel setup gap.
 
 This implementation uses OpenAI's direct public-client flow for a local open-source connector. It does not use or require a client secret or partner API key. OpenAI's [OSS documentation](https://developers.openai.com/siwc/token-sharing-open-source) directs paid or remotely hosted apps to complete the [Sign in with ChatGPT interest form](https://openai.com/form/sign-in-with-chatgpt-interest/); this local flow does not establish approval for a hosted commercial service.
-
-Set `SPACE_PULL_REQUEST_URL` when starting a coding connector to offer a link to your project's pull request or branch comparison page after a turn produces changes. Use the HTTPS URL for the repository and branch selected for this connector. Participants open the link using their own Git hosting account and confirm any PR creation there. Space stores and shares the URL with session participants, so URLs with credentials, query strings, or fragments are rejected.

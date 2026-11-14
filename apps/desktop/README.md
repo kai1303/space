@@ -8,13 +8,15 @@ In a Mac browser, **Open Space Desktop** carries the workspace and selected prov
 
 ## Workspace panel
 
-Open the panel icon in the Space top bar and choose **Browser** or **Office editor**. Use **+** in the tab strip to open another tool. **⌘T** opens a browser tab directly. Websites and Office documents share the tab strip. Each tab shows its own controls.
+Open the panel icon in the Space top bar and choose **Manage plugins**. Select **Install** beside **Office editor** or **Web Browser**, then **Done**. Each bundled plugin activates independently for your signed-in account and Space server on this Mac. Use **+** to open an installed tool or manage plugins. Close the tabs for a plugin before choosing **Remove**. **⌘T** opens a browser tab, and opening an Office attachment opens its editor tab. On first use, either action offers **Install and open**. Websites and Office documents share the tab strip. Each tab shows its own controls.
 
 Double-click the workspace icon to hide the panel. Click it once to return to the same tab. Drag the divider to resize chat and tabs, or focus it and use the arrow keys. **⌘⇧B** cycles from split view to full view to hidden tabs, then back to split view. **⌘1** shows chat. Hiding the panel keeps tabs open and preserves the split width.
 
 Choose a workspace file in **Office editor**, then **Edit**. Opening an Office attachment from chat or Files also opens its tab in the right pane. Switching tabs keeps the document open for co-editing. Website cookies and local storage use a browser profile specific to the signed-in Space account and server.
 
-Choose **Ask Codex** on an open page, enter a task and select **Start task**. This uses the locally installed Codex CLI and its sign-in. Space sends the task, visible page text and control labels to Codex. It can follow links within the site, expand sections, switch tabs within a page, change select filters, fill search fields and scroll. **Take over**, switching browser tabs, returning to Space and closing the tab cancel control. Sign-in and payment fields require manual interaction.
+Choose **Ask my agent** on an open page to start a private Sidekick with your paired agent. If you have several paired agents, choose one on first use. Reopen it from the same tab to continue. Each message includes the current page address without query parameters or fragments. The agent can use only tools you personally granted to that installation.
+
+Choose **Control tab** on an open page, enter a task and select **Start task**. This uses the locally installed Codex CLI and its sign-in. Space sends the task, visible page text and control labels to Codex. It can follow links within the site, expand sections, switch tabs within a page, change select filters, fill search fields and scroll. **Take over**, switching browser tabs, returning to Space and closing the tab cancel control. Sign-in and payment fields require manual interaction.
 
 Run `pnpm --filter @space/desktop test:browser` for the two-launch Electron test. Set `SPACE_BROWSER_TEST_REAL_AGENT=1` to exercise the installed Codex CLI against the synthetic dashboard.
 

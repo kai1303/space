@@ -45,8 +45,8 @@ export class ScheduledMessageStore {
     const hash = createHash('sha256').update(JSON.stringify({ channel_id: channelId, thread_id: message.thread_id, text: message.text, document: message.document ?? null,
       asset_ids: message.asset_ids ?? [], asset_descriptions: message.asset_descriptions ?? null, send_at: request.send_at })).digest('hex');
     return sessionTransaction(this.db, async c => {
-      const channel = (await c.execute(sql`SELECT id,workspace_id,kind,archived_at FROM channels WHERE id=${uuid(channelId)}`)).rows[0] as
-        { id: string; workspace_id: string; kind: string; archived_at: Date | null } | undefined;
+      const channel = (await c.execute(sql`SELECT id,workspace_id,kind,archived_at,encrypted_since FROM channels WHERE id=${uuid(channelId)}`)).rows[0] as
+        { id: string; workspace_id: string; kind: string; encrypted_since: Date | null; archived_at: Date | null } | undefined;
       if (!channel || !await hasChannelAccess(c, actor, channel.workspace_id, channel.id)) throw notFound();
       // A retried request returns the stored schedule; a different request under the same id is a conflict.
       const existing = (await c.execute(sql`SELECT user_id,request_hash FROM scheduled_messages WHERE id=${request.id}`)).rows[0] as { user_id: string; request_hash: string } | undefined;
@@ -54,6 +54,7 @@ export class ScheduledMessageStore {
         if (existing.user_id !== actor || existing.request_hash !== hash) throw new AppError(409, 'idempotency_conflict');
         return dto((await this.one(c, request.id))!);
       }
+      if (channel.encrypted_since) throw new AppError(409,'encrypted_dm_text_only');
       if (channel.archived_at) throw new AppError(409, 'channel_archived');
       if (channel.kind !== 'direct') await requireChannelCapability(c, actor, channel.id, message.thread_id ? 'reply' : 'post');
       if (message.thread_id && !(await c.execute(sql`SELECT 1 FROM threads WHERE id=${message.thread_id} AND channel_id=${channel.id}`)).rows.length) throw notFound();
@@ -116,7 +117,8 @@ export class ScheduledMessageStore {
       const row = cancelled.rows[0] as { asset_ids: string[] } | undefined;
       if (!row) throw await this.missing(c, actor, id);
       if (row.asset_ids.length) await c.execute(sql`UPDATE assets SET expires_at=least(expires_at, clock_timestamp() + ${sql.raw(ASSET_GRACE)})
-        WHERE id = ANY(${uuids(row.asset_ids)}) AND message_id IS NULL`);
+        WHERE id = ANY(${uuids(row.asset_ids)}) AND message_id IS NULL
+          AND NOT EXISTS (SELECT 1 FROM composer_drafts d WHERE cardinality(d.asset_ids)>0 AND d.asset_ids @> ARRAY[assets.id])`);
       return dto((await this.one(c, id))!);
     });
   }

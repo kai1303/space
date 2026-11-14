@@ -10,6 +10,7 @@ import { NavigationIcon } from '@space/ui/navigation';
 import { motionTransition, surfaceMotion, useSidebarMotion } from '@space/ui/motion';
 import { BookOpen, DotsThree, Globe, SidebarSimple, List, Moon, Sun, X } from '@phosphor-icons/react';
 import { ChannelSearchHeaderContext, type ChannelSearchHeader } from '../../features/search/channel-search-header.js';
+import { BrowserSidekick } from '../../features/agents/BrowserSidekick.js';
 import { UserSettings } from '../../features/profile/UserProfile.js';
 import { SpaceLogo } from '../../shared/branding/SpaceLogo.js';
 import { WorkspaceSwitcher, type WorkspaceChoice } from './WorkspaceSwitcher.js';
@@ -185,7 +186,7 @@ export function ChatShell({ renderPreview, notificationDelivery, onNavigate, act
       <div className="chat-main-area" onClick={event => {
         setMoreOpen(false);
         if ((event.target as Element).closest('.sp-channel, .sp-sidebar-create, .sp-sidebar-compose, .sp-sidebar-utilities button')) setSidebarOpen(false);
-      }}><ConversationListContext.Provider value={phone ? openList : null}><ChannelSearchHeaderContext.Provider value={setChannelSearch}>{children}</ChannelSearchHeaderContext.Provider></ConversationListContext.Provider></div>
+      }}><ConversationListContext.Provider value={phone ? openList : null}><ChannelSearchHeaderContext.Provider value={setChannelSearch}>{children}{workspace && userId && window.spaceDesktop?.onBrowserSidekick && <BrowserSidekick key={workspace + ':' + userId} workspace={workspace} viewer={userId}/>}</ChannelSearchHeaderContext.Provider></ConversationListContext.Provider></div>
       <AnimatePresence>{sidebarOpen && <motion.button {...surfaceMotion(reduced, 'scrim')} key="sidebar-scrim" className="chat-sidebar-backdrop" aria-label="Close conversation navigation" onClick={() => { setSidebarOpen(false); menu.current?.querySelector('button')?.focus(); }}><X size={22} /></motion.button>}</AnimatePresence>
     </div>
   </div>;

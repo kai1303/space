@@ -23,7 +23,7 @@ const directory = await mkdtemp(join(tmpdir(), 'space-memory-api-'));
 const app = createApi(new PostgresStore(pool), { allowDevelopmentTokens: true, memory: { directory } });
 before(async () => { await admin.query(`CREATE SCHEMA ${schema}`); await migrate(pool); await app.ready(); });
 after(async () => { await app.close(); await pool.end(); await admin.query(`DROP SCHEMA ${schema} CASCADE`); await admin.end(); await rm(directory, { recursive: true, force: true }); });
-async function api(token: string, method: 'GET' | 'POST' | 'DELETE', path: string, body?: object, status = 200) {
+async function api(token: string, method: 'GET' | 'POST' | 'PATCH' | 'DELETE', path: string, body?: object, status = 200) {
   const response = await app.inject({ method, url: `/v1${path}`, headers: { authorization: `Bearer ${token}` }, ...(body ? { payload: body } : {}) });
   assert.equal(response.statusCode, status, `${path}: ${response.body}`);
   return response.json();
@@ -106,7 +106,7 @@ test('trusted custom providers can replace Markdown; disabled and unauthorized r
     async clear() { calls++; stored = { ...stored, content: '' }; },
   };
   const custom = createApi(new PostgresStore(pool), { allowDevelopmentTokens: true, memory: { directory, providers: [provider] } });
-  const call = (token: string, method: 'GET' | 'POST' | 'DELETE', suffix = '', payload?: object) => custom.inject({ method, url: `/v1${path}${suffix}`, headers: { authorization: `Bearer ${token}` }, ...(payload ? { payload } : {}) });
+  const call = (token: string, method: 'GET' | 'POST' | 'PATCH' | 'DELETE', suffix = '', payload?: object) => custom.inject({ method, url: `/v1${path}${suffix}`, headers: { authorization: `Bearer ${token}` }, ...(payload ? { payload } : {}) });
   try {
     assert.equal((await call(a.owner_token, 'POST', '/settings', { enabled: false, provider: 'custom' })).statusCode, 200);
     await call(a.owner_token, 'GET');
@@ -141,10 +141,11 @@ test('a document written by one API is visible to a replica with an independent 
 });
 
 test('legacy import preserves exact revisions, citations and cleared documents across retries', async () => {
-  const { workspace_id, channel_id } = await bootstrap(pool);
+  const { workspace_id, channel_id, owner_token } = await bootstrap(pool);
   const scope = { workspace_id, channel_id };
   const path = join(directory, workspace_id, channel_id);
-  const source = 'message:' + randomUUID();
+  const message = await api(owner_token, 'POST', `/channels/${channel_id}/messages`, {client_message_id: randomUUID(), text: 'Đã xong.'}, 201);
+  const source = 'message:' + message.id;
   const content = `# Decisions\n<!-- space-memory-source:${source} -->\n### Agreed\n\n> Đã xong.\n<!-- /space-memory-source -->\n`;
   await mkdir(path, { recursive: true });
   await writeFile(join(path, 'memory.md'), content);
@@ -205,4 +206,34 @@ test('saved source text cannot escape its Markdown section across CR and Unicode
   assert.deepEqual(await provider.ingest(scope, source), saved);
   assert.equal((await provider.search(scope, 'SECRET-TAIL')).length, 1);
   assert.equal((await provider.remove(scope, source.id)).content, '');
+});
+
+test('editing and deleting a cited message updates Memory and invalidates Knowledge through the chat API', async () => {
+  const seed = await bootstrap(pool), path = base(seed.channel_id), token = seed.owner_token;
+  const enabled = await api(token, 'POST', path + '/settings', {enabled: true});
+  await api(token, 'POST', path + '/knowledge', {enabled: true});
+  await api(token, 'POST', path + '/document', {content: 'Handwritten context.', revision: enabled.document.revision});
+  const channel = '/channels/' + seed.channel_id;
+  const original = await api(token, 'POST', channel + '/messages', {client_message_id: randomUUID(), text: 'Ship Friday'}, 201);
+  const saved = await api(token, 'POST', path + '/sources', {message_id: original.id});
+  const note = randomUUID();
+  await pool.query(`INSERT INTO knowledge_notes (id,workspace_id,channel_id,kind,title,content,evidence,producer_id,producer_name)
+    VALUES ($1,$2,$3,'decision','Launch','Ship Friday',ARRAY[$4::uuid],'agent','Codex')`, [note,seed.workspace_id,seed.channel_id,original.id]);
+  const visible = () => pool.query('SELECT content FROM knowledge_visible_notes($1,$2,$3,ARRAY[$4::uuid])', [seed.workspace_id,seed.owner_id,seed.channel_id,note]);
+  assert.equal((await visible()).rowCount, 1);
+  const edit = {document:{ops:[{insert:'Ship Monday\n'}]},revision:original.reaction_sequence};
+  await api(token, 'PATCH', channel + '/messages/' + original.id, edit);
+  const current = (await api(token, 'GET', path)).document;
+  assert.match(current.content, /Handwritten context/);
+  assert.match(current.content, /> Ship Monday/);
+  assert.doesNotMatch(current.content, /Friday/);
+  assert.deepEqual(current.sources, saved.sources);
+  assert.equal((await visible()).rowCount, 0);
+  await api(token, 'POST', path + '/document', {content:saved.content,revision:saved.revision}, 409);
+  await api(token, 'DELETE', channel + '/messages/' + original.id);
+  const removed = (await api(token, 'GET', path)).document;
+  assert.deepEqual(removed.sources, []);
+  assert.equal(removed.content.trim(), 'Handwritten context.');
+  assert.equal((await pool.query('SELECT content FROM channel_memory_documents WHERE channel_id=$1',[seed.channel_id])).rows[0].content,removed.content);
+  assert.equal((await visible()).rowCount, 0);
 });

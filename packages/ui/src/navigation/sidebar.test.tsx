@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { WorkspaceSidebar } from "./sidebar.js";
 
@@ -174,4 +174,185 @@ it("streams only changed session titles and exposes the full name during the rev
     expect(button.querySelector('.sp-channel-name')?.textContent).toBe('Revised [literal] title');
     expect(button.querySelector('.sp-agent-word')).toBeNull();
   } finally { vi.useRealTimers(); }
+});
+
+it('moves a dragged session relative to the drop row and exposes archive in its actions', async () => {
+  const move = vi.fn(), archive = vi.fn(), select = vi.fn();
+  render(<WorkspaceSidebar workspace="Team" selectedId="" width={240} onWidthChange={() => {}} onSelect={select}
+    channels={['First','Second'].map(name => ({id:name,name,agentName:'Codex',section:'sessions',
+      onMove:move,actions:[{label:'Archive session',select:archive}]}))}/>);
+  const source = screen.getByRole('button',{name:'First',exact:true}).closest('[draggable]')!;
+  const target = screen.getByRole('button',{name:'Second',exact:true}).closest('[draggable]')!;
+  const dataTransfer = {setData:vi.fn(),effectAllowed:'',dropEffect:''};
+  fireEvent.dragStart(source,{dataTransfer});
+  fireEvent.dragOver(target,{dataTransfer});
+  fireEvent.drop(target,{dataTransfer});
+  expect(move).toHaveBeenCalledWith('Second','after');
+  expect(screen.queryByRole('button',{name:'Actions for First'})).toBeNull();
+  screen.getByRole('button',{name:'First',exact:true}).focus();
+  await userEvent.keyboard('{Shift>}{F10}{/Shift}');
+  await userEvent.click(screen.getByRole('menuitem',{name:'Archive session'}));
+  expect(archive).toHaveBeenCalledOnce();
+  expect(select).not.toHaveBeenCalled();
+});
+
+it('previews a move across batches, cancels it, and commits only on drop', async () => {
+  const move = vi.fn(), names = ['A','B','C','D','E','F','G'];
+  render(<WorkspaceSidebar workspace="Team" selectedId="" width={240} onWidthChange={() => {}} onSelect={() => {}}
+    sessionBatchSize={5} channels={names.map(id => ({id,name:id,section:'sessions',onMove:move}))}/>);
+  const slots = names.map(name => screen.getByRole('button',{name,exact:true}).closest<HTMLElement>('[draggable]')!);
+  slots.forEach((slot,index) => vi.spyOn(slot,'getBoundingClientRect').mockReturnValue(new DOMRect(0,index*28,200,28)));
+  const dataTransfer = {setData:vi.fn(),effectAllowed:'',dropEffect:''};
+  const source = slots[1]!, target = slots[6]!;
+  const hover = () => {
+    const event = new MouseEvent('dragover',{clientY:192,bubbles:true,cancelable:true});
+    Object.defineProperty(event,'dataTransfer',{value:dataTransfer});
+    fireEvent(target,event);
+  };
+  fireEvent.dragStart(source,{dataTransfer});
+  hover();
+  const neighbor = slots[5]!.firstElementChild as HTMLElement;
+  await waitFor(() => expect(neighbor.style.transform).toContain('translateY(-28px)'));
+  expect(move).not.toHaveBeenCalled();
+  fireEvent.dragEnd(source);
+  await waitFor(() => expect(neighbor.style.transform).toBe('none'));
+  expect(move).not.toHaveBeenCalled();
+  fireEvent.dragStart(source,{dataTransfer});
+  hover();
+  const drop = new MouseEvent('drop',{clientY:192,bubbles:true,cancelable:true});
+  await act(async () => { fireEvent(target,drop); fireEvent.dragEnd(source); });
+  expect(move.mock.calls).toEqual([['G','after']]);
+});
+
+const sectionProps = {
+  workspace: 'Team', selectedId: 'dm', width: 260, onWidthChange: () => {}, onSelect: () => {},
+  customSections: [{ id: 'priority', name: 'Priority', collapsed: false }, { id: 'later', name: 'Later', collapsed: true }],
+};
+
+it('groups channels and DMs without duplicating a favorite or losing its selection, avatar, or unread count', async () => {
+  const props = {
+    ...sectionProps,
+    channels: [{ id: 'dm', name: 'Mila', section: 'starred' as const, defaultSection: 'direct' as const,
+      customSectionId: 'later', initials: 'MM', unread: 2, badgeCount: 2, onMoveToSection: vi.fn() }],
+  };
+  const toggle = vi.fn();
+  render(<WorkspaceSidebar {...props} onToggleSection={toggle}/>);
+  const later = screen.getByRole('button', { name: 'Later', exact: true });
+  expect(later.getAttribute('aria-expanded')).toBe('false');
+  expect(screen.queryByText('Mila')).toBeNull();
+  await userEvent.click(later);
+  expect(toggle).toHaveBeenCalledWith('later', false);
+  const input = screen.getByRole('searchbox');
+  await userEvent.type(input, 'mil');
+  expect(later.getAttribute('aria-expanded')).toBe('true');
+  expect(screen.queryByRole('button', { name: 'Priority' })).toBeNull();
+  const row = screen.getByRole('button', { name: /Mila/ });
+  expect(row.closest('section')?.getAttribute('aria-label')).toBe('Later');
+  expect(row.getAttribute('aria-current')).toBe('page');
+  expect(row.classList.contains('sp-channel--unread')).toBe(true);
+  expect(row.querySelector('.sp-sidebar-avatar')?.textContent).toContain('MM');
+  expect(screen.getByText('2')).toBeTruthy();
+  await userEvent.clear(input);
+  expect(later.getAttribute('aria-expanded')).toBe('false');
+  expect(toggle).toHaveBeenCalledTimes(1);
+});
+
+it('offers named section management and keyboard-accessible move destinations', async () => {
+  const move = vi.fn(), create = vi.fn(), rename = vi.fn(), remove = vi.fn();
+  render(<WorkspaceSidebar {...sectionProps} onCreateSection={create} onRenameSection={rename} onDeleteSection={remove}
+    channels={[{ id: 'general', name: 'general', section: 'channels', defaultSection: 'channels', onMoveToSection: move }]}/>);
+  const row = screen.getByRole('button', { name: 'general' });
+  row.focus();
+  await userEvent.keyboard('{Shift>}{F10}{/Shift}{ArrowRight}');
+  expect(document.activeElement).toBe(screen.getByRole('menuitemradio', { name: 'Channels' }));
+  expect(document.activeElement?.getAttribute('aria-checked')).toBe('true');
+  await userEvent.keyboard('{ArrowDown}{Enter}');
+  expect(move.mock.calls).toEqual([['priority']]);
+  fireEvent.contextMenu(row);
+  await userEvent.click(screen.getByRole('menuitem', { name: 'Move to section' }));
+  await userEvent.click(screen.getByRole('menuitem', { name: 'Create section…' }));
+  expect(screen.queryByRole('button', { name: 'Create section' })).toBeNull();
+  await userEvent.click(screen.getByRole('button', { name: 'Manage Channels' }));
+  await userEvent.click(screen.getByRole('menuitem', { name: 'Create section' }));
+  expect(create.mock.calls).toEqual([['general'], []]);
+  const manage = screen.getByRole('button', { name: 'Manage Priority' });
+  await userEvent.click(manage);
+  await userEvent.click(screen.getByRole('menuitem', { name: 'Rename section…' }));
+  expect(rename).toHaveBeenCalledWith('priority');
+  await userEvent.click(manage);
+  await userEvent.click(screen.getByRole('menuitem', { name: 'Delete section…' }));
+  expect(remove).toHaveBeenCalledWith('priority');
+});
+
+it('drops on an empty collapsed section and on a member of a populated section, then restores a favorite to Starred', () => {
+  const move = vi.fn();
+  const member = { id: 'other', name: 'Standup', section: 'channels' as const, customSectionId: 'priority' };
+  const row = { id: 'dm', name: 'Mila', section: 'starred' as const, defaultSection: 'direct' as const, onMoveToSection: move };
+  const renderSidebar = (customSectionId?: string) => <WorkspaceSidebar {...sectionProps} channels={[{ ...row, customSectionId }, member]} />;
+  const view = render(renderSidebar());
+  const transfer = { setData: vi.fn(), effectAllowed: '', dropEffect: '' };
+  function start() {
+    const source = screen.getByRole('button', { name: 'Mila' }).closest('[draggable]')!;
+    fireEvent.dragStart(source, { dataTransfer: transfer });
+    return source;
+  }
+  function drop(target: HTMLElement) {
+    fireEvent.dragOver(target, { dataTransfer: transfer });
+    expect(target.closest('section')?.getAttribute('data-drop-target')).toBe('true');
+    fireEvent.drop(target, { dataTransfer: transfer });
+  }
+  const later = screen.getByRole('button', { name: 'Later', exact: true });
+  fireEvent.drop(later, { dataTransfer: transfer });
+  const source = start();
+  fireEvent.dragOver(later, { dataTransfer: transfer });
+  fireEvent.dragEnd(source);
+  expect(move).not.toHaveBeenCalled();
+  start();
+  drop(later);
+  start();
+  drop(screen.getByRole('button', { name: 'Standup' }));
+  view.rerender(renderSidebar('priority'));
+  expect(screen.queryByRole('button', { name: 'Starred' })).toBeNull();
+  start();
+  drop(screen.getByRole('button', { name: 'Starred' }));
+  expect(move.mock.calls).toEqual([['later'], ['priority'], [null]]);
+});
+
+it('keeps session reordering separate from moving a conversation in Starred', () => {
+  const reorder = vi.fn(), assign = vi.fn();
+  render(<WorkspaceSidebar {...sectionProps} channels={[
+    { id: 'session:one', name: 'First', section: 'starred', agentName: 'Codex', onMove: reorder },
+    { id: 'dm', name: 'Mila', section: 'starred', defaultSection: 'direct', onMoveToSection: assign },
+  ]}/>);
+  const transfer = { setData: vi.fn(), effectAllowed: '', dropEffect: '' };
+  const session = screen.getByRole('button', {name:'First'}).closest('[draggable]')!;
+  fireEvent.dragStart(session, { dataTransfer: transfer });
+  fireEvent.drop(screen.getByRole('button', { name: 'Mila' }), { dataTransfer: transfer });
+  fireEvent.drop(screen.getByRole('button', { name: 'Later', exact: true }), { dataTransfer: transfer });
+  expect(reorder).not.toHaveBeenCalled();
+  expect(assign).not.toHaveBeenCalled();
+});
+
+it('keeps the destination list open while scrolling it and dismisses it when the sidebar scrolls', async () => {
+  const customSections = Array.from({ length: 40 }, (_, i) => ({ id: String(i), name: `Group ${i}`, collapsed: false }));
+  const move = vi.fn();
+  render(<WorkspaceSidebar {...sectionProps} customSections={customSections} channels={[
+    { id: 'dm', name: 'Mila', section: 'direct', defaultSection: 'direct', onMoveToSection: move },
+  ]}/>);
+  const row = screen.getByRole('button', { name: 'Mila' });
+  const open = () => {
+    fireEvent.contextMenu(row);
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Move to section' }));
+    return screen.getByRole('menu', { name: 'Move to section' });
+  };
+  const timeline = document.body.appendChild(document.createElement('div'));
+  fireEvent.scroll(timeline);
+  timeline.remove();
+  expect(open()).toBeTruthy();
+  fireEvent.scroll(open());
+  await userEvent.click(screen.getByRole('menuitemradio', { name: 'Group 39', exact: true }));
+  expect(move).toHaveBeenCalledWith('39');
+  open();
+  fireEvent.scroll(screen.getByRole('navigation', { name: 'Workspace conversations' }));
+  expect(screen.queryByRole('menu', { name: 'Move to section' })).toBeNull();
 });

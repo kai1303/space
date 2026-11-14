@@ -6,6 +6,7 @@ import './sidekick.css';
 
 export function SidekickContextSection({ context }: { context: SidekickContext }) {
   const titleId=useId();
+  if (context.browser_url) return <section className="sidekick-context-heading" aria-label="Browser context"><h3>Starting page</h3><span title={context.browser_url}>{context.browser_url}</span></section>;
   const source=context.channel_name==='Direct conversation'?context.channel_name:`#${context.channel_name.replace(/^#/,'')}`;
   return <section className="sidekick-context-section" aria-labelledby={titleId}>
     <header className="sidekick-context-heading"><h3 id={titleId}>Selected messages</h3><span>{source}</span></header>

@@ -1,4 +1,4 @@
-import { planChange } from './graph-plan.mjs';
+import { lsnToVersion, planChange } from './graph-plan.mjs';
 import { snapshotPages } from './graph-source.mjs';
 
 const SNAPSHOT_VERSION = 1n;
@@ -56,7 +56,7 @@ export async function publish(index, slot) {
 // A single transaction hides the stale marks and resets the publish watermark only after the full snapshot.
 export function rebuild(index, source, slot, position) {
   return inTransaction(index, async client => {
-    for (const table of ['m_channels', 'm_sessions', 'm_messages', 'm_knowledge']) {
+    for (const table of ['m_channels', 'm_sessions', 'm_messages', 'm_knowledge', 'm_attachments']) {
       await client.query(`UPDATE kb.${table} SET version=-1`);
     }
     await client.query('DELETE FROM kb.m_session_turns');
@@ -71,8 +71,9 @@ export function rebuild(index, source, slot, position) {
       if (rows.length < 200) break;
       cursor = rows.at(-1).id;
     }
-    for (const table of ['m_knowledge', 'm_sessions', 'm_channels']) await client.query(`DELETE FROM kb.${table} WHERE version=-1`);
+    for (const table of ['m_attachments', 'm_knowledge', 'm_sessions', 'm_channels']) await client.query(`DELETE FROM kb.${table} WHERE version=-1`);
     await client.query(`DELETE FROM kb.m_threads t WHERE NOT EXISTS (SELECT 1 FROM kb.m_messages m WHERE m.thread_id=t.id)
+      AND NOT EXISTS (SELECT 1 FROM kb.m_attachment_messages a WHERE a.thread_id=t.id)
       AND NOT EXISTS (SELECT 1 FROM kb.m_sessions s WHERE s.thread_id=t.id)
       AND NOT EXISTS (SELECT 1 FROM kb.m_knowledge_evidence e WHERE e.thread_id=t.id)`);
     await client.query('DELETE FROM kb.m_people p WHERE NOT EXISTS (SELECT 1 FROM kb.m_messages m WHERE m.author_id=p.id)');
@@ -131,6 +132,69 @@ export async function resyncChannel(index, source, lookup, channelId, version) {
     const keep = new Set(live.map(r => r.id));
     const gone = rows.filter(r => !keep.has(r.id)).map(r => ({ table: 'messages', op: 'delete', row: { id: r.id, channel_id: channelId } }));
     if (gone.length) await applyOps(index, await planAll(gone, version, lookup));
+    cursor = rows.at(-1).id;
+    if (rows.length < 200) break;
+  }
+}
+
+// A post can gain or lose files without qualifying for text indexing. Both its
+// current and previously projected file IDs must be reconciled in that case.
+export async function attachmentChanges(index, source, batch) {
+  const messages = new Map(), assets = new Map();
+  const touch = (id, lsn) => {
+    if (!assets.has(id) || lsnToVersion(lsn) > lsnToVersion(assets.get(id))) assets.set(id, lsn);
+  };
+  for (const { table, row, lsn } of batch) {
+    if (table === 'assets') touch(row.id, lsn);
+    if (table === 'messages') messages.set(row.id, { channel: row.channel_id, lsn });
+  }
+  if (messages.size) {
+    const ids = [...messages.keys()];
+    const [live, stored] = await Promise.all([
+      source.query(`SELECT a.id, a.message_id FROM graph_source_attachments a
+        JOIN unnest($1::uuid[], $2::uuid[]) AS m(channel_id,id) ON a.channel_id=m.channel_id AND a.message_id=m.id`,
+        [[...messages.values()].map(m => m.channel), ids]),
+      index.query('SELECT id,message_id FROM kb.m_attachments WHERE message_id=ANY($1::text[])', [ids]),
+    ]);
+    for (const a of [...live.rows, ...stored.rows]) touch(a.id, messages.get(a.message_id).lsn);
+  }
+  if (!assets.size) return [];
+  const { rows } = await source.query(
+    'SELECT id,workspace_id,channel_id,thread_id,message_id,name,type,size FROM graph_source_attachments WHERE id=ANY($1::uuid[])',
+    [[...assets.keys()]]);
+  const found = new Map(rows.map(row => [row.id, row]));
+  return [...assets].map(([id, lsn]) => ({ table: 'graph_source_attachments', lsn,
+    op: found.has(id) ? 'insert' : 'delete', row: found.get(id) ?? { id } }));
+}
+
+// Archiving or restoring a channel changes visibility for all its attachments.
+// Independent bounded pages are replayable until the switch's WAL is checkpointed.
+export async function resyncChannelAttachments(index, source, channelId, version) {
+  let after = null;
+  for (;;) {
+    const { rows } = await source.query(
+      `SELECT id,workspace_id,channel_id,thread_id,message_id,name,type,size FROM graph_source_attachments
+       WHERE channel_id=$1 AND ($2::uuid IS NULL OR id>$2) ORDER BY id LIMIT 200`, [channelId, after]);
+    if (!rows.length) break;
+    const ops = [];
+    for (const row of rows) ops.push(...await planChange({ table: 'graph_source_attachments', op: 'insert', row }, version));
+    await applyOps(index, ops);
+    after = rows.at(-1).id;
+    if (rows.length < 200) break;
+  }
+  let cursor = '';
+  for (;;) {
+    const { rows } = await index.query(
+      'SELECT id FROM kb.m_attachments WHERE channel_id=$1 AND id>$2 ORDER BY id LIMIT 200', [channelId, cursor]);
+    if (!rows.length) break;
+    const { rows: live } = await source.query(
+      'SELECT id FROM graph_source_attachments WHERE channel_id=$1 AND id=ANY($2::uuid[])', [channelId, rows.map(r => r.id)]);
+    const keep = new Set(live.map(r => r.id));
+    const gone = rows.filter(r => !keep.has(r.id)).map(r => r.id);
+    if (gone.length) await applyOps(index, [{
+      text: 'DELETE FROM kb.m_attachments WHERE channel_id=$1 AND id=ANY($2::text[]) AND version<=$3::bigint',
+      values: [channelId, gone, String(version)],
+    }]);
     cursor = rows.at(-1).id;
     if (rows.length < 200) break;
   }

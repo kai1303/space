@@ -10,6 +10,7 @@ function reveal(node) {
 const el = id => document.getElementById(id);
 const send = (action, arg) => window.browserBar.command(action, arg);
 let picking = false;
+let installed = [];
 let current, shownUrl, lastNotice, splitWidth, drag;
 const divider = el('divider');
 divider.onpointerdown = event => {
@@ -83,21 +84,50 @@ function renderTabs(tabs, active) {
 }
 function showTools(open) {
   picking = open;
+  if (!open) showPlugins(false);
   el('tools').hidden = !open;
   el('add-tool').setAttribute('aria-expanded', String(open));
 }
+function showPlugins(open) {
+  el('plugins').hidden = !open;
+  el('launch-tools').hidden = open;
+  el('tools-heading').hidden = open;
+}
+el('manage').onclick = () => {
+  showPlugins(true);
+  el('plugins').querySelector('[data-plugin]').focus();
+};
+el('plugins-done').onclick = () => {
+  showPlugins(false);
+  el('manage').focus();
+};
+for (const node of el('plugins').querySelectorAll('[data-plugin]')) {
+  const id = node.dataset.plugin;
+  node.onclick = () => send(installed.includes(id) ? 'uninstall' : 'install', id);
+}
 el('add-tool').onclick = () => {
   showTools(!picking);
-  if (picking) (el('new').disabled ? el('office') : el('new')).focus();
+  if (picking) el('launch-tools').querySelector('button:not([hidden]):enabled').focus();
 };
 document.addEventListener('keydown', event => {
-  if (event.key === 'Escape' && picking && current != null) {
+  if (event.key === 'Escape' && !el('plugins').hidden) {
+    el('plugins-done').click();
+  } else if (event.key === 'Escape' && picking && current != null) {
     showTools(false);
     el('add-tool').focus();
   }
 });
 window.browserBar.onState(state => {
+  installed = state.installed;
+  el('new').hidden = !installed.includes('browser');
+  el('office').hidden = !installed.includes('office');
+  for (const node of el('plugins').querySelectorAll('[data-plugin]')) {
+    const action = installed.includes(node.dataset.plugin) ? 'Remove' : 'Install';
+    node.textContent = action;
+    node.setAttribute('aria-label', action + ' ' + node.previousElementSibling.textContent);
+  }
   const empty = !state.tool;
+  el('tools-heading').textContent = installed.length ? 'Open a tool' : 'Workspace plugins';
   const toolsSlot = el(empty ? 'start-tools' : 'tool-slot');
   if (el('tools').parentElement !== toolsSlot) toolsSlot.append(el('tools'));
   el('workspace-start').hidden = !empty;
@@ -131,6 +161,7 @@ window.browserBar.onState(state => {
   divider.setAttribute('aria-valuetext', splitWidth + ' pixels');
   el('new').disabled = state.tabs.length >= state.maxTabs;
   el('back').disabled = !state.back; el('forward').disabled = !state.forward;
+  el('sidekick').hidden = state.controlling; el('sidekick').disabled = !state.url;
   el('ask').hidden = state.controlling; el('ask').disabled = !state.url;
   el('stop').hidden = !state.controlling;
   el('feedback').classList.toggle('controlling', state.controlling);
@@ -142,7 +173,7 @@ window.browserBar.onState(state => {
   el('dismiss').hidden = state.controlling;
 });
 window.browserBar.onAddressFocus(focusAddress);
-for (const action of ['space', 'layout', 'new', 'office', 'back', 'forward', 'reload', 'stop']) el(action).onclick = () => {
+for (const action of ['space', 'layout', 'new', 'office', 'back', 'forward', 'reload', 'stop', 'sidekick']) el(action).onclick = () => {
   if (current != null) showTools(false);
   send(action);
 };

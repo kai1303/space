@@ -150,6 +150,7 @@
     "@space/contracts": "workspace:^",
     "@yusufceng1z/ding-react": "0.0.4",
     "d3-force": "^3.0.0",
+    "linkifyjs": "^4.3.2",
     "motion": "^14.9.0",
     "quill": "2.0.3",
     "react-markdown": "^10.1.0",

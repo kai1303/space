@@ -22,7 +22,7 @@ Knowledge is split into four parts. Each gets its own spec, plan and build.
 | 3. Knowledge UI | Browse, edit and remove notes. Thread and file indexing toggles | No |
 | 4. Promotion rules | Anything beyond the turn-end `notes` list in this spec | No |
 
-Out of scope here: changing thread or Markdown indexing opt-in (still `knowledge_thread_channels` by SQL) and the 16,000-character connector limit.
+The notes design leaves thread and Markdown indexing independent of notes. Cross-channel decision search automatically indexes eligible discussions in active channels. Markdown attachment indexing remains operator-configured. The 16,000-character connector limit is outside this design.
 
 ## Decisions
 

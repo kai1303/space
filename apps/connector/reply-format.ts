@@ -1,0 +1,2 @@
+export const replyFormatInstructions = '\n\nWhen flagging a warning or error in your reply, use a Markdown blockquote starting with > [!WARNING] or > [!ERROR] on its own line. Put the explanation on the following quoted lines.'
+  + '\n\nTo present a few alternatives as browsable cards, use a Markdown blockquote. Start with > [!CAROUSEL] followed by a short group title, then a blank quoted line and one quoted bullet per option: > - **Card title** Description. Use up to 10 cards.';

@@ -1,10 +1,26 @@
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ComponentProps, type ReactNode } from "react";
 import { createPortal } from "react-dom";
+import { AnimatePresence, motion, useIsPresent, useReducedMotion } from "motion/react";
+import { motionTransition } from "../motion/motion.js";
 
-export type SidebarAction = { label: string; divider?: boolean; heading?: string; shortcut?: string; danger?: boolean; checked?: boolean } &
-  ({ select: () => void; items?: never } | { items: SidebarAction[]; select?: never });
+export type SidebarAction = { key?: string; label: string; divider?: boolean; heading?: string; shortcut?: string; danger?: boolean; checked?: boolean } &
+  ({ select: () => void; items?: never } | { items: SidebarAction[] | (() => SidebarAction[]); select?: never });
+
+function MenuSurface({ hasSubmenus, ...props }: ComponentProps<typeof motion.div> & { hasSubmenus: boolean }) {
+  const present = useIsPresent();
+  const reduced = useReducedMotion();
+  // A transformed parent would reposition its fixed submenus.
+  const closed = { opacity: 0, scale: reduced || hasSubmenus ? 1 : 0.96 };
+  return <motion.div {...props} role="menu" className="sp-menu-content sp-sidebar-context-menu"
+    inert={!present} aria-hidden={!present || undefined}
+    initial={reduced ? false : closed} animate={{ opacity: 1, scale: 1 }}
+    transition={motionTransition(reduced, 0.16)}
+    exit={{ ...closed, transition: motionTransition(reduced, 0.1) }} />;
+}
 
 export function SidebarRowMenu({ name, actions, children }: { name: string; actions: SidebarAction[]; children: ReactNode }) {
+  const reduced = useReducedMotion();
+  const entrance = { initial: reduced ? false as const : { opacity: 0 }, animate: { opacity: 1 }, transition: motionTransition(reduced) };
   const row = useRef<HTMLDivElement>(null);
   const panel = useRef<HTMLDivElement>(null);
   const [point, setPoint] = useState<{ x: number; y: number }>();
@@ -30,21 +46,29 @@ export function SidebarRowMenu({ name, actions, children }: { name: string; acti
     const menu = panel.current;
     if (!point || !menu) return;
     setSubmenu(undefined);
-    const bounds = menu.getBoundingClientRect();
-    menu.style.left = Math.max(8, Math.min(point.x, window.innerWidth - bounds.width - 8)) + "px";
-    menu.style.top = Math.max(8, Math.min(point.y, window.innerHeight - bounds.height - 8)) + "px";
+    const left = Math.max(8, Math.min(point.x, window.innerWidth - menu.offsetWidth - 8));
+    const top = Math.max(8, Math.min(point.y, window.innerHeight - menu.offsetHeight - 8));
+    menu.style.left = left + "px";
+    menu.style.top = top + "px";
+    menu.style.transformOrigin = `${point.x - left}px ${point.y - top}px`;
     menu.querySelector("button")?.focus({ preventScroll: true });
     const dismiss = (event: Event) => {
       if (!(event.target instanceof Node) || !menu.contains(event.target)) setPoint(undefined);
     };
+    const dismissOnScroll = (event: Event) => {
+      const target = event.target;
+      if (target === window || target === document || (target instanceof Element && target.contains(row.current))) {
+        setPoint(undefined);
+      }
+    };
     document.addEventListener("pointerdown", dismiss);
     document.addEventListener("focusin", dismiss);
-    window.addEventListener("scroll", dismiss, true);
+    window.addEventListener("scroll", dismissOnScroll, true);
     window.addEventListener("resize", dismiss);
     return () => {
       document.removeEventListener("pointerdown", dismiss);
       document.removeEventListener("focusin", dismiss);
-      window.removeEventListener("scroll", dismiss, true);
+      window.removeEventListener("scroll", dismissOnScroll, true);
       window.removeEventListener("resize", dismiss);
     };
   }, [point]);
@@ -55,7 +79,8 @@ export function SidebarRowMenu({ name, actions, children }: { name: string; acti
   }
   function entry(action: SidebarAction, nested = false) {
     const expanded = !nested && !!action.items && submenu === action.label;
-    return <span key={action.label} className="sp-menu-item-group"
+    const children = expanded ? (typeof action.items === 'function' ? action.items() : action.items) : undefined;
+    return <span key={action.key ?? action.label} className="sp-menu-item-group"
       onPointerEnter={nested ? undefined : event => { if (event.pointerType === 'mouse') setSubmenu(action.items ? action.label : undefined); }}>
       {action.divider && <hr role="separator"/>}
       {action.heading && <small className="sp-menu-group-title">{action.heading}</small>}
@@ -70,9 +95,9 @@ export function SidebarRowMenu({ name, actions, children }: { name: string; acti
           }
         }}>{action.label}{action.items && <span aria-hidden="true">›</span>}{action.checked && <span aria-hidden="true">✓</span>}
         {action.shortcut && <kbd>{action.shortcut}</kbd>}</button>
-      {expanded && <div ref={subpanel} className="sp-menu-content sp-sidebar-context-menu" role="menu" aria-label={action.label}>
-        {action.items?.map(item => entry(item, true))}
-      </div>}
+      {expanded && <motion.div {...entrance} ref={subpanel} className="sp-menu-content sp-sidebar-context-menu" role="menu" aria-label={action.label}>
+        {children?.map(item => entry(item, true))}
+      </motion.div>}
     </span>;
   }
   return <>
@@ -95,31 +120,33 @@ export function SidebarRowMenu({ name, actions, children }: { name: string; acti
       onClickCapture={event => { if (suppressClick.current) { event.stopPropagation(); suppressClick.current = false; } }}>
       {children}
     </div>
-    {point && createPortal(<div ref={panel} role="menu" aria-label={`Actions for ${name}`} className="sp-menu-content sp-sidebar-context-menu"
-      onKeyDown={event => {
-        const target = event.target as HTMLElement;
-        if (subpanel.current?.contains(target) && ["ArrowLeft","Escape"].includes(event.key)) {
-          event.preventDefault(); subpanel.current.parentElement?.querySelector("button")?.focus(); setSubmenu(undefined); return;
-        }
-        if (event.key === "Escape" || event.key === "Tab") {
-          if (event.key === "Escape") event.preventDefault();
-          close();
-          return;
-        }
-        const buttons = Array.from(target.closest('[role="menu"]')!.querySelectorAll<HTMLButtonElement>(":scope > span > button"));
-        const index = buttons.indexOf(document.activeElement as HTMLButtonElement);
-        let next: number;
-        switch (event.key) {
-          case "Home": next = 0; break;
-          case "End": next = buttons.length - 1; break;
-          case "ArrowDown": next = (index + 1) % buttons.length; break;
-          case "ArrowUp": next = (index + buttons.length - 1) % buttons.length; break;
-          default: return;
-        }
-        event.preventDefault();
-        buttons[next]?.focus();
-      }}>
-      {actions.map(action => entry(action))}
-    </div>, document.body)}
+    {typeof document !== "undefined" && createPortal(<AnimatePresence>
+      {point && <MenuSurface ref={panel} hasSubmenus={actions.some(action => !!action.items)} aria-label={`Actions for ${name}`}
+        onKeyDown={event => {
+          const target = event.target as HTMLElement;
+          if (subpanel.current?.contains(target) && ["ArrowLeft","Escape"].includes(event.key)) {
+            event.preventDefault(); subpanel.current.parentElement?.querySelector("button")?.focus(); setSubmenu(undefined); return;
+          }
+          if (event.key === "Escape" || event.key === "Tab") {
+            if (event.key === "Escape") event.preventDefault();
+            close();
+            return;
+          }
+          const buttons = Array.from(target.closest('[role="menu"]')!.querySelectorAll<HTMLButtonElement>(":scope > span > button"));
+          const index = buttons.indexOf(document.activeElement as HTMLButtonElement);
+          let next: number;
+          switch (event.key) {
+            case "Home": next = 0; break;
+            case "End": next = buttons.length - 1; break;
+            case "ArrowDown": next = (index + 1) % buttons.length; break;
+            case "ArrowUp": next = (index + buttons.length - 1) % buttons.length; break;
+            default: return;
+          }
+          event.preventDefault();
+          buttons[next]?.focus();
+        }}>
+        {actions.map(action => entry(action))}
+      </MenuSurface>}
+    </AnimatePresence>, document.body)}
   </>;
 }

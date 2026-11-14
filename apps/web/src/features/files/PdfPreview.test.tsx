@@ -39,6 +39,20 @@ it('starts PDF.js with an empty demand-driven transport and no eager content req
   expect(mocks.getDocument.mock.calls[0]![0]).toMatchObject({ length: size, disableAutoFetch: true, disableStream: true, rangeChunkSize: 65_536, isEvalSupported: false, stopAtErrors: true });
   expect(mocks.getDocument.mock.calls[0]![0]).not.toHaveProperty('data');
 });
+it('opens the cited page directly and preserves page navigation', async () => {
+  mocks.getDocument.mockReturnValue({ promise: Promise.resolve({ numPages: 8, getPage: mocks.getPage }), destroy: mocks.destroy });
+  render(<PdfPreview assetId="proposal" size={size} initialPage={7} />);
+  await screen.findByText('Page 7 of 8');
+  await waitFor(() => expect(mocks.getPage).toHaveBeenCalledWith(7));
+  expect(mocks.getPage).not.toHaveBeenCalledWith(1);
+  await userEvent.click(screen.getByRole('button', { name: 'Next page' }));
+  await screen.findByText('Page 8 of 8');
+});
+it('reports when a citation points past the end of a PDF', async () => {
+  render(<PdfPreview assetId="proposal" size={size} initialPage={7} />);
+  await screen.findByText('Page 7 is unavailable. This PDF has 3 pages.');
+  expect(mocks.getPage).not.toHaveBeenCalled();
+});
 it('requests authenticated same-origin ranges and delivers only validated bytes to PDF.js', async () => {
   render(<PdfPreview assetId="report/one" size={size} />);
   await screen.findByText('Page 1 of 3');

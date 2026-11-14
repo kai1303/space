@@ -6,9 +6,9 @@ import { getDocument, GlobalWorkerOptions, PDFDataRangeTransport, type PDFDocume
 import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 
 GlobalWorkerOptions.workerSrc = workerUrl;
-export function PdfPreview({ assetId, size }: { assetId: string; size: number }) {
+export function PdfPreview({ assetId, size, initialPage = 1 }: { assetId: string; size: number; initialPage?: number }) {
   const [pdf, setPdf] = useState<PDFDocumentProxy | null>(null);
-  const [page, setPage] = useState(1), [zoom, setZoom] = useState(1), [failed, setFailed] = useState(false), [rendering, setRendering] = useState(true);
+  const [page, setPage] = useState(initialPage), [zoom, setZoom] = useState(1), [failed, setFailed] = useState(false), [rendering, setRendering] = useState(true);
   const canvas = useRef<HTMLCanvasElement>(null);
   const stopLoading = useRef<(() => void) | null>(null);
   useEffect(() => {
@@ -25,7 +25,7 @@ export function PdfPreview({ assetId, size }: { assetId: string; size: number })
       stop();
     };
     stopLoading.current = stop;
-    setPdf(null); setFailed(false); setPage(1); setZoom(1); setRendering(true);
+    setPdf(null); setFailed(false); setPage(initialPage); setZoom(1); setRendering(true);
     const transport = new PDFDataRangeTransport(size, new Uint8Array(0), true);
     transport.abort = stop;
     transport.requestDataRange = (begin, end) => {
@@ -53,9 +53,9 @@ export function PdfPreview({ assetId, size }: { assetId: string; size: number })
       void loading.promise.then(document => { if (!controller.signal.aborted) setPdf(document); }).catch(fail);
     } catch { fail(); }
     return stop;
-  }, [assetId, size]);
+  }, [assetId, size, initialPage]);
   useEffect(() => {
-    if (!pdf) return;
+    if (!pdf || page > pdf.numPages) return;
     let active = true;
     let task: RenderTask | undefined;
     let cleanup: (() => void) | undefined;
@@ -81,6 +81,7 @@ export function PdfPreview({ assetId, size }: { assetId: string; size: number })
     return () => { active = false; task?.cancel(); cleanup?.(); };
   }, [pdf, page, zoom]);
   if (failed) return <p role="alert" className="asset-viewer-fallback">PDF preview unavailable. Download the original to open it.</p>;
+  if (pdf && page > pdf.numPages) return <p role="alert">Page {page} is unavailable. This PDF has {pdf.numPages} pages.</p>;
   return <div className="asset-pdf-preview">
     <div className="asset-pdf-tools" data-pdf-controls role="group" aria-label="PDF controls">
       <IconButton label="Previous page" disabled={!pdf || page <= 1} onClick={() => setPage(value => value - 1)}><ArrowLeft size={18} /></IconButton>

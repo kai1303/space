@@ -1,5 +1,5 @@
 import {createRef,StrictMode} from 'react';
-import {cleanup,fireEvent,render,screen} from '@testing-library/react';
+import {cleanup,fireEvent,render,screen,waitFor} from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import {afterEach,expect,it,vi} from 'vitest';
 import {MessageTimeline, type TimelineHandle} from './MessageTimeline.js';
@@ -7,7 +7,7 @@ import type {ChatEvent,MessagePage} from '@space/contracts';
 
 const mocks=vi.hoisted(()=>({scrollToEnd:vi.fn(),scrollToIndex:vi.fn(),scrollToOffset:vi.fn(),reduced:false}));
 vi.mock('motion/react',async original=>({...await original<typeof import('motion/react')>(),useReducedMotion:()=>mocks.reduced}));
-vi.mock('@tanstack/react-virtual',()=>({useVirtualizer:(options:any)=>({getVirtualItems:()=>Array.from({length:options.count},(_,index)=>({index,key:options.getItemKey(index),start:index*100})),getTotalSize:()=>options.count*100,scrollToEnd:mocks.scrollToEnd,scrollToIndex:mocks.scrollToIndex,scrollToOffset:mocks.scrollToOffset,measureElement:()=>{}})}));
+vi.mock('@tanstack/react-virtual',()=>({useVirtualizer:(options:any)=>({getVirtualItems:()=>Array.from({length:options.count},(_,index)=>({index,key:options.getItemKey(index),start:index*100})),getTotalSize:()=>options.count*100,getOffsetForIndex:(index:number)=>[index*100,'center'],scrollToEnd:mocks.scrollToEnd,scrollToIndex:mocks.scrollToIndex,scrollToOffset:mocks.scrollToOffset,measureElement:()=>{}})}));
 afterEach(()=>{cleanup();vi.clearAllMocks();vi.unstubAllGlobals();mocks.reduced=false;});
 
 it('reissues the initial latest scroll after a StrictMode effect remount',()=>{
@@ -73,6 +73,19 @@ it('scrolls an introductory section with the messages and still reveals the righ
  expect(context.compareDocumentPosition(message)&Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
  handle.current!.reveal('one');
  expect(mocks.scrollToIndex).toHaveBeenCalledWith(1,{align:'center'});
+});
+
+it.each([false,true])('moves to the linked message before focusing it, respecting reduced motion=%s',async reduced=>{
+ mocks.reduced=reduced;
+ const pinned=createRef<boolean>(),handle=createRef<TimelineHandle|null>();
+ const rows=['first','middle','last'].map(id=>({id,messageId:id}));
+ render(<MessageTimeline label="Messages" items={rows} page={null} loading={null} latestVersion={0} load={()=>{}} pinned={pinned} handle={handle} render={row=><p id={'chat-message-'+row.id} tabIndex={-1}>{row.id}</p>}/>);
+ const scroller=screen.getByLabelText('Messages'),offsets:number[]=[];
+ Object.defineProperties(scroller,{clientHeight:{value:100},scrollTop:{get:()=>offsets.at(-1)??0,set:(y:number)=>offsets.push(y)}});
+ handle.current!.reveal('last');
+ await waitFor(()=>expect(document.activeElement).toBe(screen.getByText('last')));
+ expect(offsets.some(y=>y>0 && y<200)).toBe(!reduced);
+ expect(mocks.scrollToIndex).toHaveBeenCalledWith(2,{align:'center'});
 });
 
 it('keeps the jump control mounted for its exit transition but removes it from interaction at the latest message',async()=>{

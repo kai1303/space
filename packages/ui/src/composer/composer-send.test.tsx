@@ -56,6 +56,25 @@ it('keeps the mounted composer visually stable during a quick send without allow
   expect(document.activeElement).toBe(editor);
   expect(container.querySelector('.sp-rich-composer')?.hasAttribute('aria-busy')).toBe(false);
 });
+it('keeps the editor and isolates drafts, files and late sends when the conversation changes', async () => {
+  let finish!: () => void;
+  const submitted = new Promise<void>(resolve => { finish = resolve; });
+  const firstSend = vi.fn(() => submitted), secondSend = vi.fn();
+  const firstFile = { id: 'a', name: 'first.txt', type: 'text/plain', size: 1, status: 'ready' as const };
+  const secondFile = { ...firstFile, id: 'b', name: 'second.txt' };
+  const { rerender } = render(<RichComposer conversationKey="a" channel="first" attachments={[firstFile]} onSend={firstSend}/>);
+  const editor = await screen.findByRole('textbox', { name: 'Message first' });
+  await userEvent.type(editor, 'First message{Enter}');
+  expect(firstSend).toHaveBeenCalledWith('First message', expect.anything(), [firstFile]);
+  rerender(<RichComposer conversationKey="b" channel="second" attachments={[secondFile]}
+    defaultValue={{ops:[{insert:'Second draft'}]}} onSend={secondSend}/>);
+  expect(await screen.findByRole('textbox', { name: 'Message second' })).toBe(editor);
+  await act(async () => { finish(); await submitted; });
+  expect(editor.textContent).toContain('Second draft');
+  fireEvent.keyDown(editor, { key: 'Enter' });
+  await waitFor(() => expect(secondSend).toHaveBeenCalledWith('Second draft', expect.anything(), [secondFile]));
+});
+
 it('preserves the draft and restores controls when sending fails', async () => {
   let fail!: (reason: Error) => void;
   const submitted = new Promise<void>((_, reject) => { fail = reject; });
@@ -155,6 +174,21 @@ it('can hide unavailable actions while preserving editing controls', async () =>
   expect(screen.queryByRole('button', { name: /Run shortcut/ })).toBeNull();
 });
 
+it('changes toolbar buttons without replacing the current draft', async () => {
+  const props = { channel: 'Team', onSend: vi.fn(), showUnavailableActions: false };
+  const view = render(<RichComposer {...props} audioClipsEnabled />);
+  const editor = await screen.findByRole('textbox', { name: 'Message Team' });
+  await userEvent.type(editor, 'Keep this draft');
+  expect(screen.getByRole('button', { name: 'Record audio clip' })).toBeTruthy();
+  view.rerender(<RichComposer {...props} formattingEnabled={false} emojiEnabled={false} />);
+  expect(screen.queryByRole('button', { name: 'Choose emoji' })).toBeNull();
+  expect(screen.queryByRole('button', { name: 'Show formatting' })).toBeNull();
+  expect(screen.queryByRole('toolbar', { name: 'Message formatting' })).toBeNull();
+  expect(screen.queryByRole('button', { name: 'Record audio clip' })).toBeNull();
+  expect(screen.getByRole('textbox')).toBe(editor);
+  expect(editor.textContent).toContain('Keep this draft');
+});
+
 it('updates conversation labels without replacing the editor or losing its current draft', async () => {
   const initial = { ops: [{ insert: 'Initial draft\n' }] };
   const view = render(<RichComposer channel="Before" placeholder="Message Before" defaultValue={initial} onSend={() => {}} />);
@@ -238,4 +272,116 @@ it.each(['channel', 'thread'] as const)('uses %s scope for broadcasts regardless
     expect(send.mock.calls[0]?.[3]).toEqual({broadcast_confirmed:true});
   }
   expect(send).toHaveBeenCalledOnce();
+});
+
+it('formats pasted URLs in the editor and submitted message without linking surrounding punctuation', async () => {
+  const send = vi.fn();
+  render(<RichComposer channel="general" onSend={send}/>);
+  const editor = await screen.findByRole('textbox', {name:'Message general'});
+  await userEvent.click(editor);
+  const url = 'https://github.com/modelcontextprotocol/typescript-sdk/pull/3115';
+  const text = 'Review ' + url + '.';
+  fireEvent.paste(editor, {clipboardData:{files:[], getData:(type:string)=>type === 'text/plain' ? text : ''}});
+  expect(editor.querySelector('a')?.getAttribute('href')).toBe(url);
+  fireEvent.keyDown(editor, {key:'Enter'});
+  await waitFor(()=>expect(send).toHaveBeenCalledOnce());
+  expect(send.mock.calls[0]![0]).toBe(text);
+  expect(send.mock.calls[0]![1].ops).toContainEqual({insert:url,attributes:{link:url}});
+});
+
+it('applies a live draft and its clear silently, moving the caret with edits before it', async () => {
+  const send = vi.fn(), change = vi.fn();
+  const composer = (value: string | null) => <RichComposer channel="live" conversationKey="live-selection"
+    draftValue={value === null ? null : { ops: [{ insert: value + '\n' }] }} onDraftChange={change} onSend={send} />;
+  const view = render(composer('hello world'));
+  const root = await screen.findByRole('textbox', { name: 'Message live' });
+  expect(root.textContent).toBe('hello world');
+  const {default: Quill} = await import('quill');
+  const q = Quill.find(root.parentElement!) as InstanceType<typeof Quill>;
+  act(() => { q.setSelection(6, 5); });
+  view.rerender(composer('hey hello world'));
+  expect(q.getSelection()).toMatchObject({index: 10, length: 5});
+  expect(q.getText()).toBe('hey hello world\n');
+  view.rerender(composer(null));
+  expect(q.getSelection()).toMatchObject({index: 0, length: 0});
+  expect(screen.getByRole('button', { name: 'Send now' })).toHaveProperty('disabled', true);
+  expect(change).not.toHaveBeenCalled();
+});
+
+it('remembers the local selection when a draft composer remounts', async () => {
+  const composer = () => <RichComposer channel="thread" conversationKey="thread:one:two"
+    draftValue={{ops: [{insert: 'A draft reply\n'}]}} onSend={vi.fn()} autoFocus />;
+  const view = render(composer());
+  const {default: Quill} = await import('quill');
+  const root = await screen.findByRole('textbox', {name: 'Message thread'});
+  act(() => { (Quill.find(root.parentElement!) as InstanceType<typeof Quill>).setSelection(2, 5); });
+  view.unmount();
+  render(composer());
+  const reopened = await screen.findByRole('textbox', {name: 'Message thread'});
+  expect((Quill.find(reopened.parentElement!) as InstanceType<typeof Quill>).getSelection()).toMatchObject({index: 2, length: 5});
+});
+
+it('applies the latest remote draft after a cancelled composition without stealing focus', async () => {
+  const change = vi.fn();
+  const composer = (value: string) => <><RichComposer channel="ime" conversationKey="ime"
+    draftValue={{ops:[{insert:value + '\n'}]}} onDraftChange={change} onSend={vi.fn()}/><input aria-label="Search"/></>;
+  const view = render(composer('original'));
+  const root = await screen.findByRole('textbox', {name: 'Message ime'});
+  fireEvent.compositionStart(root);
+  view.rerender(composer('first'));
+  view.rerender(composer('second'));
+  expect(root.textContent).toBe('original');
+  fireEvent.compositionEnd(root);
+  await waitFor(() => expect(root.textContent).toBe('second'));
+  await userEvent.click(screen.getByRole('textbox', {name:'Search'}));
+  view.rerender(composer('third'));
+  expect(document.activeElement).toBe(screen.getByRole('textbox', {name:'Search'}));
+  expect(change).not.toHaveBeenCalled();
+});
+
+it('retains an incoming draft when a previous send completes', async () => {
+  let finish!: () => void;
+  const pending = new Promise<void>(resolve => { finish = resolve; });
+  const change = vi.fn();
+  const composer = (value: string) => <RichComposer channel="busy" draftValue={{ops:[{insert:value + '\n'}]}}
+    onDraftChange={change} onSend={() => pending}/>;
+  const view = render(composer('send me'));
+  const root = await screen.findByRole('textbox', {name:'Message busy'});
+  fireEvent.keyDown(root, {key:'Enter'});
+  view.rerender(composer('next draft'));
+  await act(async () => { finish(); await pending; });
+  expect(root.textContent).toBe('next draft');
+  expect(change).not.toHaveBeenCalled();
+});
+
+it('restores a saved cursor on keyboard focus without taking focus on mount', async () => {
+  const composer = () => <RichComposer channel="resume" conversationKey="resume"
+    draftValue={{ops:[{insert:'continue here\n'}]}} onSend={vi.fn()} />;
+  const view = render(composer());
+  const {default: Quill} = await import('quill');
+  const first = await screen.findByRole('textbox', {name:'Message resume'});
+  act(() => { (Quill.find(first.parentElement!) as InstanceType<typeof Quill>).setSelection(4, 0); });
+  view.unmount();
+  render(composer());
+  const next = await screen.findByRole('textbox', {name:'Message resume'});
+  expect(document.activeElement).not.toBe(next);
+  await act(async () => { next.focus(); });
+  expect((Quill.find(next.parentElement!) as InstanceType<typeof Quill>).getSelection()?.index).toBe(4);
+});
+
+it('retains a committed local IME edit when another draft arrives during composition', async () => {
+  const change = vi.fn();
+  const composer = (value: string) => <RichComposer channel="compose" conversationKey="ime-commit"
+    draftValue={{ops:[{insert:value + '\n'}]}} onDraftChange={change} onSend={vi.fn()}/>;
+  const view = render(composer('before'));
+  const root = await screen.findByRole('textbox', {name:'Message compose'});
+  const node = root.querySelector('p')!.firstChild!;
+  fireEvent.compositionStart(root);
+  view.rerender(composer('remote'));
+  await act(async () => {
+    node.textContent = 'before 語';
+    fireEvent.compositionEnd(root);
+  });
+  await waitFor(() => expect(change).toHaveBeenLastCalledWith({ops:[{insert:'before 語\n'}]}));
+  expect(root.textContent).toBe('before 語');
 });

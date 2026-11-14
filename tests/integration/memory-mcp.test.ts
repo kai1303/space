@@ -23,7 +23,7 @@ const app = createApi(new PostgresStore(pool), { allowDevelopmentTokens: true, m
 let address: string;
 before(async () => { await admin.query(`CREATE SCHEMA ${schema}`); await migrate(pool); address = await app.listen({ host: '127.0.0.1', port: 0 }); });
 after(async () => { await app.close(); await pool.end(); await admin.query(`DROP SCHEMA ${schema} CASCADE`); await admin.end(); await rm(directory, { recursive: true, force: true }); });
-async function api(token: string, method: 'GET' | 'POST', path: string, payload?: object, expected = 200) {
+async function api(token: string, method: 'GET' | 'POST' | 'PATCH' | 'DELETE', path: string, payload?: object, expected = 200) {
   const response = await app.inject({ method, url: `/v1${path}`, headers: { authorization: `Bearer ${token}` }, ...(payload ? { payload } : {}) });
   assert.equal(response.statusCode, expected, response.body); return response.json();
 }
@@ -70,6 +70,26 @@ test('a real MCP agent reads context, saves extracted knowledge, searches, updat
     const forgotten = data(await client.callTool({ name: 'memory_forget', arguments: { source_id: `knowledge:${entry.id}` } }));
     assert.equal(forgotten.sources.length, 0);
     assert.doesNotMatch(forgotten.content, /Use PostgreSQL for transactional storage/);
+  } finally { await client.close(); }
+});
+
+test('changes to message evidence invalidate direct and dependent claims and allow a fresh citation', async () => {
+  const a = await fixture();
+  const messages = `/channels/${a.channel_id}/messages`;
+  const source = await api(a.owner_token, 'POST', messages, {client_message_id:randomUUID(), text:'Ship Friday'}, 201);
+  const grant = await api(a.owner_token, 'POST', `${a.path}/connections`, {name:'Planner', access:'write'}, 201);
+  const client = await connect(grant.token);
+  const remember = (args: object) => client.callTool({name:'memory_remember', arguments:{kind:'decision', ...args}});
+  try {
+    const id = randomUUID();
+    data(await remember({id, title:'Date', content:'Friday', message_ids:[source.id]}));
+    data(await remember({id:randomUUID(), title:'Announcement', content:'Announce Friday', source_ids:['knowledge:' + id]}));
+    await api(a.owner_token, 'PATCH', messages + '/' + source.id, {revision:source.reaction_sequence, document:{ops:[{insert:'Ship Monday'}]}});
+    assert.deepEqual(data(await client.callTool({name:'memory_read',arguments:{}})).sources, []);
+    const fresh = data(await remember({id:randomUUID(), title:'New date', content:'Monday', message_ids:[source.id]}));
+    assert.match(fresh.content, /Monday/);
+    await api(a.owner_token, 'DELETE', messages + '/' + source.id);
+    assert.deepEqual(data(await client.callTool({name:'memory_search',arguments:{query:'Monday'}})).items, []);
   } finally { await client.close(); }
 });
 
@@ -127,19 +147,28 @@ test('MCP uses the same selected custom provider as human memory routes', async 
   const a = await fixture();
   let reads = 0;
   const read = async () => { reads++; return { content: 'Knowledge in a user database', revision: 'a'.repeat(64), sources: [] }; };
-  const provider: MemoryProvider = { id: 'custom', name: 'User database', read, write: read, ingest: read, remove: read, search: async () => [{ text: 'Custom search', line: 1 }], clear: async () => {} };
+  const provider: MemoryProvider = { id: 'custom', name: 'User database', onMessageChanged: async () => {}, read, write: read, ingest: read, remove: read, search: async () => [{ text: 'Custom search', line: 1 }], clear: async () => {} };
   const custom = createApi(new PostgresStore(pool), { allowDevelopmentTokens: true, memory: { directory, providers: [provider] } });
   const customAddress = await custom.listen({ host: '127.0.0.1', port: 0 });
   let client: Client | undefined;
   try {
     const selected = await custom.inject({ method: 'POST', url: `/v1${a.path}/settings`, headers: { authorization: `Bearer ${a.owner_token}` }, payload: { enabled: true, provider: 'custom' } });
     assert.equal(selected.statusCode, 200);
-    const grant = await api(a.owner_token, 'POST', `${a.path}/connections`, { name: 'Custom provider agent', access: 'read' }, 201);
+    const grant = await api(a.owner_token, 'POST', `${a.path}/connections`, { name: 'Custom provider agent', access: 'contribute' }, 201);
     client = new Client({ name: 'custom-provider-test', version: '1.0.0' });
     await client.connect(new StreamableHTTPClientTransport(new URL(`${customAddress}/mcp/memory`), { requestInit: { headers: { Authorization: `Bearer ${grant.token}` } } }));
     assert.equal(data(await client.callTool({ name: 'memory_read', arguments: {} })).content, 'Knowledge in a user database');
     assert.equal(data(await client.callTool({ name: 'memory_search', arguments: { query: 'custom' } })).items[0].text, 'Custom search');
     assert.ok(reads >= 2);
+    const message = await api(a.owner_token, 'POST', `/channels/${a.channel_id}/messages`, {client_message_id: randomUUID(), text: 'A cited message'}, 201);
+    data(await client.callTool({ name: 'memory_remember', arguments: {id: randomUUID(), kind: 'fact',
+      title: 'Saved claim', content: 'An extracted fact', message_ids: [message.id]} }));
+    await api(a.owner_token, 'POST', `${a.path}/settings`, {enabled: false});
+    await api(a.owner_token, 'DELETE', `/channels/${a.channel_id}/messages/${message.id}`);
+    const {rows} = await pool.query(`SELECT aggregate_id,payload->>'type' AS type,has_quote
+      FROM event_outbox JOIN memory_provider_message_refs r ON r.message_id=(payload->>'message_id')::uuid
+      WHERE kind='memory.provider.changed' AND r.message_id=$1`, [message.id]);
+    assert.deepEqual(rows, [{aggregate_id: 'custom', type: 'deleted', has_quote: false}]);
   } finally { await client?.close(); await custom.close(); }
 });
 

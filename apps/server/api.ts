@@ -1,3 +1,6 @@
+import { registerPdfTool } from './pdf-tool.js';
+import { PDF_TOOL_PATH } from '@space/contracts';
+import { readPdfPages } from './pdf-text.js';
 import { registerWorkflowChat, workflowMessagePath, type WorkflowChatConfig } from './workflow-chat.js';
 import { registerRequestMetrics, type MonitoringListener } from './request-metrics.js';
 import { HuddleStore } from '@space/postgres/huddles';
@@ -12,10 +15,15 @@ import { SearchStore } from '@space/postgres/search';
 import { registerSearch } from './search.js';
 import type { TypesenseOptions } from './typesense.js';
 import { WorkspaceSettingsStore } from '@space/postgres/workspace-settings';
+import { SidebarSectionStore } from '@space/postgres/sidebar-sections';
+import { registerSidebarSectionRoutes } from './sidebar-sections.js';
+import { ComposerDraftStore } from '@space/postgres/composer-drafts';
+import { registerComposerDraftRoutes } from './composer-drafts.js';
 import { WorkspaceInvitationStore } from '@space/postgres/workspace-invitations';
 import { WorkspaceRetentionStore } from '@space/postgres/workspace-retention';
 import { registerWorkspaceSettingsRoutes } from './workspace-settings.js';
 import { registerWorkspaceInvitationRoutes } from './workspace-invitations.js';
+import { registerMemoryProviderChanges } from './memory-provider-changes.js';
 import { registerWorkspaceRetention } from './workspace-retention.js';
 import { registerInvitationEmailDelivery, type InvitationEmailConfig, type createInvitationMailer } from './invitation-email.js';
 import { WorkspaceHubStore } from '@space/postgres/workspace-hub';
@@ -85,7 +93,7 @@ export function createApi(store: PostgresStore, options: { workflowChat?: Workfl
     if (request.method === 'POST' && request.routeOptions.url === incomingWebhookPath) return;
     if ((request.method === 'POST' && request.routeOptions.url === OFFICE_CALLBACK) ||
         (request.method === 'GET' && request.routeOptions.url === OFFICE_CONTENT)) return;
-    if (request.routeOptions.url === MEMORY_MCP_PATH) return;
+    if (request.routeOptions.url === MEMORY_MCP_PATH || request.routeOptions.url === PDF_TOOL_PATH) return;
     if (request.routeOptions.url === HUDDLE_WEBHOOK) return;
     // This route authenticates a source-scoped token itself; it never grants actor access.
     if (request.routeOptions.url === TODO_SYNC_PATH || request.routeOptions.url === workflowMessagePath) return;
@@ -121,6 +129,8 @@ export function createApi(store: PostgresStore, options: { workflowChat?: Workfl
   app.setNotFoundHandler((_request, reply) => reply.code(404).send({ error: 'not_found' }));
   if (options.auth) registerAuthRoutes(app, options.auth);
   registerWorkspaceRoutes(app, new WorkspaceStore(store.pool));
+  registerSidebarSectionRoutes(app, new SidebarSectionStore(store.pool));
+  registerComposerDraftRoutes(app, new ComposerDraftStore(store.pool));
   registerWorkspaceSettingsRoutes(app, new WorkspaceSettingsStore(store.pool));
   const invitations = new WorkspaceInvitationStore(store.pool, {emailEncryptionKey:options.invitationEmail?.config.encryptionKey});
   registerWorkspaceInvitationRoutes(app, invitations);
@@ -176,7 +186,12 @@ export function createApi(store: PostgresStore, options: { workflowChat?: Workfl
   const connections = new AgentConnectionStore(store.pool, { connectors: options.pairedConnectors });
   registerAgentConnectionRoutes(app, connections);
   const { io, onOutbox, getEvents, work, health, invalidate } = registerRealtime(app, authenticate, chat, { ...options.realtime, receiptMetrics, ...(options.auth ? { allowedOrigins: [...options.auth.origins], strictOrigins: true } : {}) });
-  if (options.storage) store.attachmentImage = agentImageReader(options.storage);
+  if (options.storage) {
+    const uploads = options.storage;
+    store.attachmentImage = agentImageReader(uploads);
+    store.attachmentPdf = (key, size, page, count, budget) => readPdfPages(uploads, key, size, page, count, budget);
+  }
+  registerPdfTool(app, store);
   registerAssetRoutes(app, assets, options.storage, options.office, invalidate);
   const immediate = directTurns(app,io,store,invalidate);
   const sessions=new AgentSessionStore(store.pool,store);
@@ -193,6 +208,7 @@ export function createApi(store: PostgresStore, options: { workflowChat?: Workfl
   registerToolApprovals(app,io,new ToolApprovalStore(store.pool),connections,work,onOutbox,invalidate);
   registerSearch(app, new SearchStore(store.pool), getEvents, options.search);
   registerEventDeadlines(app, getEvents, store, assets, options.storage, scheduled, sessions);
+  registerMemoryProviderChanges(app, getEvents, memory, memoryProviders);
   registerWorkspaceRetention(app,getEvents,new WorkspaceRetentionStore(store.pool),options.storage);
   if(options.invitationEmail) registerInvitationEmailDelivery(app,getEvents,invitations,options.invitationEmail.mailer);
   return app;

@@ -1,4 +1,4 @@
-import { parseMention, mentionOperations, type MentionReference } from "@space/contracts";
+import { isEmojiOnlyText, parseMention, mentionOperations, type MentionReference } from "@space/contracts";
 import { emojiDocument } from "../emoji/emoji.js";
 import { Fragment, type ReactNode } from "react";
 import type { RichAttributes, RichDocument } from "@space/contracts";
@@ -72,7 +72,8 @@ export function normalizeDocument(
 export function documentText(document: RichDocument) {
   return document.ops.map((op) => op.insert).join("");
 }
-export function RichContent({ document, onMentionClick, viewerId }: { document: RichDocument; onMentionClick?: (mention: MentionReference) => void; viewerId?: string }) {
+export function RichContent({ document, text, onMentionClick, viewerId }: ({ document: RichDocument; text?: never } | { text: string; document?: never }) & { onMentionClick?: (mention: MentionReference) => void; viewerId?: string }) {
+  if (document === undefined) return <div className="sp-rich-content" data-emoji-only={isEmojiOnlyText(text) || undefined}>{text}</div>;
   const safe = emojiDocument(normalizeDocument(document));
   const active = new Set(mentionOperations(safe).map(item => item.index));
   const lines: { content: ReactNode[]; attributes: RichAttributes }[] = [];
@@ -147,5 +148,5 @@ export function RichContent({ document, onMentionClick, viewerId }: { document: 
         <p key={i}>{line.content.length ? line.content : <br />}</p>,
       );
   }
-  return <div className="sp-rich-content">{rendered}</div>;
+  return <div className="sp-rich-content" data-emoji-only={isEmojiOnlyText(documentText(safe)) || undefined}>{rendered}</div>;
 }

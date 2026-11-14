@@ -82,7 +82,7 @@ export function OfficePreview({ id, exit, onAccessLost, onTitle }: { id: string;
           <Users size={16} />Channel editing {session.channelEditing ? 'on' : 'off'}
         </Button>}
         {editing && window.spaceOffice?.ask && session.config.documentType === 'word' && session.config.document?.key &&
-          <OfficeAgent key={session.config.document.key} sessionKey={session.config.document.key} editorId={`office-${id}`} serverUrl={session.documentServerUrl} />}
+          <OfficeAgent title={session.config.document.title || 'Document edit'} key={session.config.document.key} sessionKey={session.config.document.key} editorId={`office-${id}`} serverUrl={session.documentServerUrl} />}
         <a className="sp-button sp-button--secondary sp-button--sm" href={base + '/download'}><DownloadSimple size={16}/>Download</a>
         {session.revision > 0 && <a href={base + '/download?original=1'}>Original upload</a>}
         {session.canEdit && !editing && <Button onClick={() => { setNotice(''); setEditing(true); }}><PencilSimple size={16} />Edit</Button>}

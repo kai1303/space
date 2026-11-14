@@ -105,7 +105,7 @@ export class AgentConnectionStore {
   }
   async connect(token: unknown) {
     const identity = await this.authenticate(token), connection_id = randomUUID();
-    const rows = await this.db.update(s.agentConnections).set({ connection_id, last_seen_at: new Date(), auth_status: 'required' })
+    const rows = await this.db.update(s.agentConnections).set({ connection_id, last_seen_at: new Date(), auth_status: 'required', model_catalog:null })
       .where(and(eq(s.agentConnections.installation_id, identity.id), eq(s.agentConnections.token_hash, hash(token as string)), isNull(s.agentConnections.revoked_at))).returning();
     if (!rows.length) throw unauthorized();
     return { ...identity, connection_id };
@@ -165,8 +165,8 @@ export class AgentConnectionStore {
     });
   }
   async heartbeat(token: unknown, connection: string, raw: unknown) {
-    const auth_status = parseAgentHeartbeat(raw), identity = await this.authenticate(token);
-    const rows = await this.db.update(s.agentConnections).set({ auth_status, last_seen_at: new Date() }).where(and(eq(s.agentConnections.installation_id, identity.id), eq(s.agentConnections.connection_id, connection), eq(s.agentConnections.token_hash, hash(token as string)), isNull(s.agentConnections.revoked_at))).returning({ id: s.agentConnections.installation_id });
+    const {auth_status,model_catalog} = parseAgentHeartbeat(raw), identity = await this.authenticate(token);
+    const rows = await this.db.update(s.agentConnections).set({ auth_status, model_catalog:auth_status === 'ready' ? model_catalog : null, last_seen_at: new Date() }).where(and(eq(s.agentConnections.installation_id, identity.id), eq(s.agentConnections.connection_id, connection), eq(s.agentConnections.token_hash, hash(token as string)), isNull(s.agentConnections.revoked_at))).returning({ id: s.agentConnections.installation_id });
     if (!rows.length) throw unauthorized();
     return { installation_id: identity.id };
   }

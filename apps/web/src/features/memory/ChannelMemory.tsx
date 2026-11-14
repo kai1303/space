@@ -1,3 +1,4 @@
+import { subscribeUpdates } from '../../shared/realtime/live-updates.js';
 import { sessionFetch } from '../../shared/api/session-fetch.js';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { Select, Badge, Button, Tabs, toast } from '@space/ui/primitives';
@@ -61,21 +62,35 @@ function MemoryView({ channel, name, message, onDirtyChange, onAccessLost, asTab
   }
   function accept(document: MemoryDocument, notice: string) {
     setData(previous => previous ? { ...previous, document } : previous); setDraft(document.content);
-    setNotice(notice); setMatches(null); setComparison(false); setConflict(false);
+    generation.current++; setNotice(notice); setMatches(null); setComparison(false); setConflict(false);
   }
+  const editorState = useRef({ dirty, revision: data?.document?.revision });
+  editorState.current = { dirty, revision: data?.document?.revision };
   useEffect(() => {
     active.current = true;
-    const version = ++generation.current;
-    void request<MemoryState>(path).then(result => {
-      if (active.current && generation.current === version) { setData(result); setProvider(result.provider); setDraft(result.document?.content ?? ''); }
-    }).catch(e => { if (active.current && generation.current === version) failure(e); });
-    return () => { active.current = false; generation.current++; };
-  }, [path]);
+    const stop = subscribeUpdates('channel', channel, async () => {
+      const version = generation.current;
+      try {
+        const result = await request<MemoryState>(path);
+        if (!active.current || version !== generation.current) return;
+        const changed = editorState.current.revision !== result.document?.revision;
+        if (changed) setMatches(null);
+        if (result.document && changed && editorState.current.dirty) {
+          failure(new Error('memory_conflict'));
+          return;
+        }
+        setData(result);
+        if (!editorState.current.dirty || !result.document) setDraft(result.document?.content ?? '');
+        setProvider(result.provider);
+      } catch (e) { if (active.current && version === generation.current) failure(e); }
+    }, code => { generation.current++; setData(undefined); setDraft(''); setMatches(null); failure(new Error(code)); });
+    return () => { stop(); active.current = false; generation.current++; };
+  }, [path, channel]);
   async function configure(enabled: boolean) {
     await run(async () => {
       const result = await request<MemoryState>(`${path}/settings`, { enabled, provider });
       if (!active.current) return;
-      setData(result); setProvider(result.provider); setDraft(result.document?.content ?? ''); setMatches(null); setUpload(undefined);
+      generation.current++; setData(result); setProvider(result.provider); setDraft(result.document?.content ?? ''); setMatches(null); setUpload(undefined);
       setMessageSaved(false); setConflict(false); setComparison(false); setConfirmDelete(false);
       setNotice(enabled ? 'Memory enabled for this channel.' : 'Memory disabled. Stored memory is retained.');
     });

@@ -4,14 +4,11 @@ import { promisify } from 'node:util';
 import { writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { once } from 'node:events';
-import { runConnector, claudeEnvironment, resolveClaudeCommand, kiroEnvironment } from './runtime.mjs';
+import { runConnector } from './runtime.mjs';
 
-async function login(provider, directory, signal) {
-  const claude = provider === 'claude';
-  const env = await (claude ? claudeEnvironment : kiroEnvironment)(directory);
-  const command = claude ? await resolveClaudeCommand() : 'kiro-cli';
+async function login({ command, args, env }, signal) {
   const result = once(process, 'message', { signal });
-  process.send({ type: 'login', command, args: claude ? ['auth', 'login'] : ['login'], env });
+  process.send({ type: 'login', command, args, env });
   const [message] = await result;
   if (message !== 'signed-in') throw new Error('Provider sign-in was cancelled or failed.');
 }

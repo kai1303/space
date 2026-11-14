@@ -1,5 +1,5 @@
 // Run with TEST_DATABASE_URL (Space test DB with wal_level=logical, role with REPLICATION),
-// THREAD_INDEX_URL (disposable index with schema, threads, markdown, memory-graph and memory-extract SQL applied) and
+// THREAD_INDEX_URL (disposable index with schema, threads, markdown, memory-graph, memory-extract and memory-attachments SQL applied) and
 // KNOWLEDGE_DATABASE_URL (knowledge DB reader role). Needs the local Ollama all-minilm:22m model.
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
@@ -10,6 +10,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { createPool, database } from '@space/postgres/database';
 import { migrate } from '@space/postgres/migrate';
 import { bootstrap } from '@space/postgres/bootstrap';
+import { AssetStore } from '@space/postgres/assets';
 import { ChatStore } from '@space/postgres/chat';
 import { listNoteTitles, saveNoteByTitle } from '@space/postgres/knowledge-notes';
 import { searchRelated } from './graph-related.mjs';
@@ -18,7 +19,7 @@ import { embed } from './graph-source.mjs';
 
 const schema = 'graph_test_' + randomUUID().replaceAll('-', '');
 const slot = ('space_graph_' + schema).slice(0, 63);
-const checkpoint = 'space_memory_v2:' + slot;
+const checkpoint = 'space_memory_v5:' + slot;
 const admin = createPool(process.env.TEST_DATABASE_URL), index = createPool(process.env.THREAD_INDEX_URL), reader = createPool(process.env.KNOWLEDGE_DATABASE_URL);
 const url = new URL(process.env.TEST_DATABASE_URL);
 url.searchParams.set('options', '-c search_path=' + schema);
@@ -62,12 +63,20 @@ try {
   await index.query('INSERT INTO kb.m_threads(id,workspace_id,channel_id,version) VALUES($1,$2,$3,1)', [oldPost.thread_id,seed.workspace_id,archived.id]);
   await index.query(`INSERT INTO kb.m_messages(id,workspace_id,thread_id,sequence,revision,created_at,memory,knowledge,body,embedding,version)
     VALUES($1,$2,$3,1,1,now(),true,false,'Archived evidence',$4,1)`, [oldPost.id,seed.workspace_id,oldPost.thread_id,JSON.stringify(Array(384).fill(0.25))]);
+  // The upgraded reader must also preserve file-only posts.
+  const files = await chat.createChannel(seed.owner_id, seed.workspace_id, {name:'attachment-graph',private:true});
+  const assets = new AssetStore(source);
+  const attachment = await assets.create(seed.owner_id, files.id, {name:'delivery-plan.pdf',type:'application/pdf',size:731});
+  await assets.complete(seed.owner_id, attachment.id, async () => ({kind:'pdf',mime:'application/pdf'}));
+  const shared = await chat.send(seed.owner_id, files.id, {client_message_id:randomUUID(),text:'',asset_ids:[attachment.id]});
+  const attachmentRow = async () => (await index.query('SELECT id,name,type,size,channel_id,thread_id,message_id FROM kb.m_attachments WHERE id=$1',[attachment.id])).rows[0];
+
   // Simulate an upgraded installation: the old graph previously published all source WAL.
   await admin.query(`CREATE PUBLICATION "${slot}" FOR TABLE "${schema}".channels`);
   const { rows: [legacy] } = await admin.query("SELECT lsn::text FROM pg_create_logical_replication_slot($1,'pgoutput')", [slot]);
   await index.query('INSERT INTO kb.graph_position(slot,lsn,published_lsn) VALUES($1,$2,$2)', [slot, legacy.lsn]);
-  // The preceding memory reader recorded a current checkpoint but retained an archived row.
-  const previous = 'space_memory:' + slot;
+  // The preceding reader published its v4 checkpoint when discussion search required a channel opt-in.
+  const previous = 'space_memory_v4:' + slot;
   await index.query('INSERT INTO kb.graph_position(slot,lsn,published_lsn) VALUES($1,$2,$2)', [previous, legacy.lsn]);
   const cleanupUrl = new URL(process.env.THREAD_INDEX_URL);
   const env = { ...process.env };
@@ -88,6 +97,7 @@ try {
   start();
   await until(() => awake(rootA.thread_id));
   await until(async () => (await count('m_messages')) === 3 && (await count('m_knowledge')) === 3);
+  assert.equal((await attachmentRow())?.message_id, shared.id, 'the upgrade backfills an existing file without a source event');
   assert.equal(await count('m_messages', `id='${oldPost.id}'`), 0, 'upgrade removes stale archived messages');
   assert.equal(await count('m_messages', 'embedding IS NOT NULL'), 3, 'every message has a vector');
   assert.deepEqual(await thread(rootA.thread_id), { reply_count: 1, root_message_id: rootA.id }, 'thread counts and root');
@@ -128,16 +138,29 @@ try {
   assert.equal(await count('m_messages', `id='${replyC.id}'`), 1);
   await until(async () => (await index.query('SELECT lsn=published_lsn AS same FROM kb.graph_position WHERE slot=$1', [checkpoint])).rows[0]?.same);
 
-  await park(rootB.thread_id);
-  await source.query('INSERT INTO knowledge_thread_channels(workspace_id,channel_id) VALUES($1,$2)', [seed.workspace_id, seed.channel_id]);   // thread search opt-in
-  await until(async () => (await count('m_messages', 'knowledge')) === 4);
-  await until(() => awake(rootB.thread_id));
   const [question] = await embed(['why are customers charged twice on retry']);
   const found = await searchThreads(reader, source, ctx(seed.owner_id), 'why are customers charged twice on retry', question, 3);
   assert.ok(found.some(h => h.ref.recordId === 'message/' + rootA.id), 'knowledge thread search reads the merged store');
   assert.deepEqual(await searchThreads(reader, source, ctx(randomUUID()), 'charged twice', question, 3), [], 'and keeps its own access check');
-  await source.query('DELETE FROM knowledge_thread_channels WHERE channel_id=$1', [seed.channel_id]);
-  await until(async () => (await count('m_messages', 'knowledge')) === 0);
+  assert.equal(await count('m_messages', 'knowledge'), 4);
+
+  await until(async () => (await attachmentRow())?.message_id === shared.id);
+  const node = await attachmentRow();
+  assert.equal(node.thread_id, shared.thread_id);
+  assert.equal(node.channel_id, files.id);
+  assert.equal(node.type, 'application/pdf');
+  assert.equal(Number(node.size), 731);
+  await stop();
+  await assets.editDetails(seed.owner_id, attachment.id, {previous_name:attachment.name,previous_description:'',name:'updated-plan.pdf',description:''});
+  start();
+  await until(async () => (await attachmentRow())?.name === 'updated-plan.pdf');
+  await source.query('UPDATE channels SET archived_at=now() WHERE id=$1',[files.id]);
+  await until(async () => !await attachmentRow());
+  await source.query('UPDATE channels SET archived_at=NULL WHERE id=$1',[files.id]);
+  await until(async () => (await attachmentRow())?.id === attachment.id);
+  await chat.deleteMessage(seed.owner_id, files.id, shared.id);
+  await until(async () => !await attachmentRow());
+  assert.equal(await thread(shared.thread_id), undefined, 'the last file removes an otherwise empty thread');
 
   // Fail a real graph transaction during reconciliation, then restart without another source event.
   async function interruptSwitch(enabled, partial) {
@@ -159,7 +182,7 @@ try {
     const client = await source.connect();
     try {
       await client.query('BEGIN');
-      await client.query('UPDATE channels SET memory_enabled=$2 WHERE id=$1', [seed.channel_id, enabled]);
+      await client.query('UPDATE channels SET archived_at=CASE WHEN $2 THEN NULL ELSE now() END WHERE id=$1', [seed.channel_id, enabled]);
       // Force the switch into a non-checkpointed 500-row chunk.
       if (partial) await client.query(`DO $$ BEGIN FOR i IN 1..500 LOOP
         UPDATE channels SET name=name WHERE id='${seed.channel_id}'; END LOOP; END $$`);
@@ -169,12 +192,12 @@ try {
     await index.query('DROP TRIGGER fail_resync ON kb.m_messages');
     await index.query('DROP FUNCTION kb.fail_resync()');
     if (!enabled) assert.equal(await count('m_messages'), 4, 'exactly one page committed before the interruption');
-    assert.equal((await index.query('SELECT memory_enabled FROM kb.m_channels WHERE id=$1', [seed.channel_id])).rows[0].memory_enabled, !enabled);
+    assert.equal((await index.query('SELECT archived FROM kb.m_channels WHERE id=$1', [seed.channel_id])).rows[0].archived, enabled);
     start();
   }
   await interruptSwitch(false, false);
   await until(async () => (await count('m_messages')) === 0);
-  assert.equal(await count('m_knowledge'), 3, 'knowledge stays while the memory switch is off');
+  assert.equal(await count('m_knowledge'), 3, 'knowledge notes survive archiving');
   await interruptSwitch(true, true);
   await until(async () => (await count('m_messages')) === 4);
 
@@ -199,7 +222,7 @@ try {
   await until(async () => (await index.query("SELECT published_lsn>'0/0' AS ready FROM kb.graph_position WHERE slot=$1", [checkpoint])).rows[0]?.ready);
   const ready = cleanup();
   assert.equal(ready.status, 0, ready.stderr);
-  console.log('PASS: legacy upgrade and cleanup, snapshot, search, CDC, extraction wakeups, interrupted channel switches, slot loss and fact preservation.');
+  console.log('PASS: legacy upgrade and cleanup, snapshot, search, automatic attachment indexing, offline rename, archive, restore, deletion, CDC, extraction wakeups, interrupted channel switches, slot loss and fact preservation.');
 } finally {
   await stop();
   for (let i = 0; i < 20; i++) {
@@ -210,7 +233,7 @@ try {
   await index.query("SELECT pgcontext.delete_points('kb_memory', ARRAY(SELECT id FROM kb.m_messages))").catch(() => {});
   await index.query('DELETE FROM kb.m_channels').catch(() => {});
   await index.query('DELETE FROM kb.m_people').catch(() => {});
-  await index.query('DELETE FROM kb.graph_position WHERE slot=ANY($1::text[])', [[slot, 'space_memory:' + slot, checkpoint]]).catch(() => {});
+  await index.query('DELETE FROM kb.graph_position WHERE slot=ANY($1::text[])', [[slot, 'space_memory_v4:' + slot, checkpoint]]).catch(() => {});
   await admin.query('DROP SCHEMA IF EXISTS ' + schema + ' CASCADE');
   await Promise.all([admin.end(), index.end(), reader.end(), source.end()]);
 }

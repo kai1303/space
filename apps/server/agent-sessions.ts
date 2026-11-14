@@ -1,9 +1,9 @@
 import { readSessionReports } from '@space/postgres/session-reports';
 import { expectedActor } from './expected-actor.js';
 import type { FastifyInstance } from 'fastify';
-import { sidekickPageUrl, AppError, record, text, uuid, type Task } from '@space/contracts';
+import { sidekickPageUrl, parseGoalAction, type GoalAction, AppError, record, text, uuid, type Task } from '@space/contracts';
 import type { AgentSessionStore } from '@space/postgres/agent-sessions';
-export function registerAgentSessionRoutes(app: FastifyInstance, sessions: AgentSessionStore, accepted?: (task:Task)=>Promise<void>, stopped?: (session:string)=>Promise<void>, steer?: (connection:string,input:{session_id:string;execution_id:string;id:string;text:string;browser_url?:string})=>Promise<void>) {
+export function registerAgentSessionRoutes(app: FastifyInstance, sessions: AgentSessionStore, accepted?: (task:Task)=>Promise<void>, stopped?: (session:string)=>Promise<void>, steer?: (connection:string,input:{session_id:string;execution_id:string;id:string;text:string;browser_url?:string;goal_action?:GoalAction})=>Promise<void>) {
   type Team = { Params: { sessionId: string } };
   type Reviewer = { Params: { sessionId: string; userId:string } };
   const team = '/v1/agent-sessions/:sessionId/team';
@@ -35,6 +35,7 @@ export function registerAgentSessionRoutes(app: FastifyInstance, sessions: Agent
   app.get<{ Params: { threadId: string } }>('/v1/threads/:threadId/agent-sessions', request => sessions.list(request.actorId, uuid(request.params.threadId)));
   app.post<{ Params: { threadId: string } }>('/v1/threads/:threadId/agent-sessions', async (request, reply) => reply.code(201).send(await sessions.create(request.actorId, uuid(request.params.threadId), request.body)));
   app.get<{ Params: { sessionId: string } }>('/v1/agent-sessions/:sessionId/location', request => sessions.location(request.actorId, uuid(request.params.sessionId)));
+  app.get<{ Params: { sessionId: string } }>('/v1/agent-sessions/:sessionId/models', request => sessions.models(request.actorId, uuid(request.params.sessionId)));
   app.patch<{ Params: { sessionId: string } }>('/v1/agent-sessions/:sessionId/sidebar', request =>
     sessions.updateSidebar(expectedActor(request), uuid(request.params.sessionId), request.body));
   app.patch<{ Params: { sessionId: string } }>('/v1/agent-sessions/:sessionId', request => sessions.rename(request.actorId, uuid(request.params.sessionId), request.body));
@@ -60,15 +61,17 @@ export function registerAgentSessionRoutes(app: FastifyInstance, sessions: Agent
     return {ok:true};
   });
   app.post<{Params:{sessionId:string}}>('/v1/agent-sessions/:sessionId/steer',async r=>{
-    const body=record(r.body,['execution_id','text','source_input_id','document','browser_url']);
+    const body=record(r.body,['execution_id','text','source_input_id','goal_action','document','browser_url']);
     const id=uuid(r.headers['idempotency-key']),session_id=uuid(r.params.sessionId),execution_id=uuid(body.execution_id),message=text(body.text,4000);
     if(!steer) throw new AppError(409,'steer_unsupported');
+    const goal_action=body.goal_action===undefined ? undefined : parseGoalAction(body.goal_action);
+    if (goal_action && body.source_input_id) throw new AppError(400,'invalid_goal_action');
     const browser_url=body.browser_url===undefined ? undefined : sidekickPageUrl(body.browser_url);
-    const receipt=await sessions.addInput(r.actorId,session_id,id,'steer',{text:message,document:body.document,browser_url},execution_id,body.source_input_id===undefined?undefined:uuid(body.source_input_id));
+    const receipt=await sessions.addInput(r.actorId,session_id,id,'steer',{text:message,goal_action,document:body.document,browser_url},execution_id,body.source_input_id===undefined?undefined:uuid(body.source_input_id));
     if(!receipt.connection) return {id,state:receipt.state};
     let state:'sent'|'blocked'|'uncertain'='sent';
     let detail:string|null=null;
-    try {await steer(receipt.connection,{id,session_id,execution_id,text:message,...(browser_url ? {browser_url} : {})});}
+    try {await steer(receipt.connection,{id,session_id,execution_id,text:message,goal_action,...(browser_url ? {browser_url} : {})});}
     catch(e){ state=e instanceof AppError && e.code==='turn_not_running'?'blocked':'uncertain';detail=state==='blocked'?'Turn is no longer accepting input.':'Delivery could not be confirmed.'; }
     await sessions.finishSteer(id,state,detail);
     return {id,state};

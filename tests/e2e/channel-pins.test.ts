@@ -1,4 +1,4 @@
-import {test} from 'node:test';
+import {test, type TestContext} from 'node:test';
 import assert from 'node:assert/strict';
 import {randomBytes,randomUUID} from 'node:crypto';
 import {spawn,type ChildProcess} from 'node:child_process';
@@ -18,7 +18,7 @@ import {createAuthentication} from '@space/server/auth';
 async function freePort():Promise<number>{const s=createServer();await new Promise<void>(r=>s.listen(0,'127.0.0.1',r));const port=(s.address() as {port:number}).port;await new Promise<void>((r,j)=>s.close(e=>e?j(e):r()));return port;}
 async function terminate(child:ChildProcess){if(child.exitCode!==null)return;await new Promise<void>(resolve=>{const timer=setTimeout(()=>{child.kill('SIGKILL');resolve();},5000);child.once('exit',()=>{clearTimeout(timer);resolve();});child.kill('SIGTERM');});}
 
-test('two members see channel pins, shares, and tab visibility without refreshing', {timeout:150_000}, async t=>{
+async function openWorkspace(t: TestContext) {
   const databaseUrl=process.env.TEST_DATABASE_URL;if(!databaseUrl)throw new Error('TEST_DATABASE_URL required');
   const schema=`pins_browser_${randomBytes(6).toString('hex')}`;
   const admin=new Pool({connectionString:databaseUrl});
@@ -58,10 +58,145 @@ test('two members see channel pins, shares, and tab visibility without refreshin
     await pool.query('INSERT INTO channel_members(workspace_id,channel_id,user_id) VALUES($1,$2,$3)',[seed.workspace_id,seed.channel_id,actor]);
     const page=await context.newPage();
     await page.goto(web+'/chat?workspace='+seed.workspace_id+'&channel='+seed.channel_id);
-    await expect(page.getByText('Shared release notes',{exact:true})).toBeVisible();
+    await expect(page.getByText('Shared release notes',{exact:true})).toBeVisible({ timeout: 15_000 });
     return page;
   }
   const alice=await openMember('alice'), bob=await openMember('bob');
+  return { alice, bob, pool, seed, web, chat, root };
+}
+
+test('private channel, thread and DM drafts follow their author between independent browsers', {timeout:150_000}, async t => {
+  const {alice, bob, seed, web} = await openWorkspace(t);
+  const context = await alice.context().browser()!.newContext({viewport:{width:1280,height:800}});
+  t.after(() => context.close());
+  await context.addCookies(await alice.context().cookies());
+  const second = await context.newPage();
+  const channelUrl = alice.url();
+  await second.goto(channelUrl);
+  const main = (page: typeof alice) => page.locator('#chat-messages .ql-editor[contenteditable=true]');
+  const thread = (page: typeof alice) => page.getByRole('region', {name:'Thread',exact:true}).locator('.ql-editor[contenteditable=true]');
+  await expect(main(second)).toBeVisible();
+  const channelDraft = 'Channel notes ' + randomUUID();
+  await main(alice).fill(channelDraft);
+  await expect(main(second)).toHaveText(channelDraft, {timeout:15000});
+  await expect(main(bob)).toHaveText('');
+  await second.reload();
+  await expect(main(second)).toHaveText(channelDraft, {timeout:15000});
+  for (const page of [alice, second]) {
+    const message = page.getByRole('article').filter({hasText:'Shared release notes'});
+    await message.hover();
+    await message.getByRole('button', {name:/^Reply to /}).click();
+    await expect(page.getByRole('region', {name:'Thread',exact:true}).getByRole('article').filter({hasText:'Shared release notes'})).toBeVisible();
+    await expect(thread(page)).toBeVisible();
+  }
+  const replyDraft = 'Reply notes ' + randomUUID();
+  const written = second.waitForResponse(response =>
+    response.request().method() === 'PUT' && decodeURIComponent(response.url()).includes('/composer-drafts/thread:'),
+    {timeout:15000});
+  await thread(second).click();
+  await thread(second).pressSequentially(replyDraft);
+  await expect(thread(second)).toHaveText(replyDraft);
+  const saved = await written;
+  assert.equal(saved.status(), 200, await saved.text());
+  await expect(thread(alice)).toHaveText(replyDraft, {timeout:15000});
+  await expect(main(alice)).toHaveText(channelDraft);
+  await alice.getByRole('button', {name:'Drafts & sent',exact:true}).click();
+  await expect(alice.getByRole('heading', {name:'Drafts & sent'})).toBeVisible();
+  const draftList = alice.getByRole('main').filter({has:alice.getByText(replyDraft,{exact:true})});
+  await expect(draftList.getByRole('button').filter({hasText:channelDraft})).toBeVisible();
+  await draftList.getByRole('button').filter({hasText:replyDraft}).click();
+  await expect(thread(alice)).toHaveText(replyDraft);
+  await expect(main(alice)).toHaveText(channelDraft);
+  await thread(alice).press('Enter');
+  await expect(thread(second)).toHaveText('', {timeout:15000});
+  await expect(second.getByRole('region', {name:'Thread',exact:true}).getByRole('article').filter({hasText:replyDraft})).toBeVisible();
+  await second.getByRole('button', {name:'Close thread',exact:true}).click();
+  await main(second).click();
+  await main(second).press('ControlOrMeta+a');
+  await main(second).press('Backspace');
+  await expect(main(second)).toHaveText('');
+  await expect(main(alice)).toHaveText('', {timeout:15000});
+  const peer = await (await bob.request.get(web + '/v1/me')).json();
+  const dm = await alice.request.post(web + '/v1/workspaces/' + seed.workspace_id + '/direct-messages', {
+    data:{user_id:peer.id},headers:{origin:web},
+  });
+  assert.ok(dm.ok());
+  const dmUrl = web + '/chat?workspace=' + seed.workspace_id + '&channel=' + (await dm.json()).id;
+  for (const page of [alice, second, bob]) {
+    await page.goto(dmUrl);
+    await expect(page.getByRole('button', {name:'More conversation actions'})).toBeVisible();
+    await expect(main(page)).toBeEditable();
+  }
+  const privateDraft = 'Personal DM notes ' + randomUUID();
+  await main(second).fill(privateDraft);
+  await expect(main(alice)).toHaveText(privateDraft, {timeout:15000});
+  await expect(main(bob)).toHaveText('');
+  const otherDrafts = await bob.request.get(web + '/v1/composer-drafts');
+  assert.ok(otherDrafts.ok());
+  assert.deepEqual((await otherDrafts.json()).items, []);
+  await alice.reload();
+  await expect(main(alice)).toHaveText(privateDraft, {timeout:15000});
+});
+
+test('personal sidebar sections move channels and DMs and sync only to the owner', {timeout:150_000}, async t => {
+  const { alice, bob, pool, seed, web } = await openWorkspace(t);
+  const channel = (await pool.query('SELECT name FROM channels WHERE id=$1', [seed.channel_id])).rows[0].name as string;
+  const bobProfile = await bob.request.get(web + '/v1/me');
+  assert.ok(bobProfile.ok());
+  const peer = await bobProfile.json();
+  const response = await alice.request.post(web + '/v1/workspaces/' + seed.workspace_id + '/direct-messages', {
+    data: { user_id: peer.id }, headers: { origin: web },
+  });
+  assert.ok(response.ok());
+  const dmName = (await response.json()).name as string;
+  const second = await alice.context().newPage();
+  try {
+    await second.goto(alice.url());
+    const list = alice.getByRole('navigation', { name: 'Workspace conversations' });
+    const group = (name: string) => list.getByRole('region', { name, exact: true });
+    const destination = 'Release planning';
+    await group('Channels').hover();
+    await group('Channels').getByRole('button', { name: 'Manage Channels' }).click();
+    await alice.getByRole('menuitem', { name: 'Create section' }).click();
+    const dialog = alice.getByRole('dialog', { name: 'Create section' });
+    await dialog.getByRole('button', { name: 'Team', exact: true }).click();
+    await dialog.getByRole('button', { name: 'Create', exact: true }).click();
+    await expect(group('Team')).toBeVisible();
+    await expect(group('Channels').getByRole('button', { name: channel, exact: true })).toBeVisible();
+
+    await alice.getByRole('button', { name: 'Organize conversation' }).click();
+    await alice.getByRole('menuitem', { name: 'Create new section' }).click();
+    await dialog.getByRole('textbox', { name: 'Section name', exact: true }).fill(destination);
+    await dialog.getByRole('button', { name: 'Choose section emoji' }).click();
+    const picker = dialog.getByRole('dialog', { name: 'Choose section emoji' });
+    await picker.getByRole('searchbox').fill('rocket');
+    await picker.getByRole('button', { name: '🚀 :rocket:', exact: true }).click();
+    await dialog.getByRole('button', { name: 'Create', exact: true }).click();
+    const custom = group(destination);
+    await expect(custom.getByRole('button', { name: channel, exact: true })).toBeVisible();
+    const heading = custom.getByRole('button', { name: destination, exact: true });
+    await heading.click();
+    await expect(heading).toHaveAttribute('aria-expanded', 'false');
+    await list.getByRole('button', { name: dmName, exact: true }).dragTo(heading);
+    const secondHeading = second.getByRole('button', { name: destination, exact: true });
+    await expect(secondHeading).toHaveAttribute('aria-expanded', 'false');
+    await heading.click();
+    const siblingGroup = second.getByRole('region', { name: destination, exact: true });
+    await expect(siblingGroup.getByRole('button', { name: dmName, exact: true })).toBeVisible();
+    await expect(bob.getByRole('button', { name: destination, exact: true })).toHaveCount(0);
+    await alice.reload();
+    await expect(alice.getByRole('button', { name: 'Move conversation from ' + destination })).toHaveText('🚀');
+    await expect(custom.getByRole('button', { name: channel, exact: true })).toBeVisible();
+    await expect(custom.getByRole('button', { name: dmName, exact: true })).toBeVisible();
+    await custom.getByRole('button', { name: channel, exact: true }).click({ button: 'right' });
+    await alice.getByRole('menuitem', { name: 'Move to section', exact: true }).hover();
+    await alice.getByRole('menuitemradio', { name: 'Channels', exact: true }).click();
+    await expect(group('Channels').getByRole('button', { name: channel, exact: true })).toBeVisible();
+  } finally { await second.close(); }
+});
+
+test('two members see channel pins, shares, and tab visibility without refreshing', {timeout:150_000}, async t=>{
+  const { alice, bob, pool, seed, web, chat, root } = await openWorkspace(t);
   await t.test('channel context menu handles copy, mute, settings, split view and leave confirmation', async () => {
     const name = (await pool.query('SELECT name FROM channels WHERE id=$1',[seed.channel_id])).rows[0].name;
     const row = alice.getByRole('navigation',{name:'Workspace conversations'}).getByRole('button',{name,exact:true});

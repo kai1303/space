@@ -293,7 +293,7 @@ export function registerRealtime(app: FastifyInstance, authenticate: (headers: I
       typing.set(key,{event,timer,peerKey});publishTyping(event,peerKey);return value;
     });
     handle('message.send', async input => {
-      const v = record(input, ['channel_id', 'client_message_id', 'text', 'thread_id', 'document', 'asset_ids', 'asset_descriptions', 'broadcast_confirmed', 'receipt_id', 'expected_actor']);
+      const v = record(input, ['channel_id', 'client_message_id', 'encrypted', 'text', 'thread_id', 'document', 'asset_ids', 'asset_descriptions', 'broadcast_confirmed', 'receipt_id', 'expected_actor']);
       const { channel_id, receipt_id, expected_actor, ...message } = v;
       if (expected_actor !== undefined && uuid(expected_actor) !== socket.data.actor) throw new AppError(409, 'actor_changed');
       const channel = uuid(channel_id);

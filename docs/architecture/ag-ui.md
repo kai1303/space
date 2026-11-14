@@ -48,7 +48,7 @@ Supported parent-run events:
 | `TEXT_MESSAGE_START/CONTENT/END` | Accumulate assistant Markdown by message ID |
 | `TOOL_CALL_START/ARGS/END/RESULT` | Display backend tool activity; END means arguments finished, RESULT means execution completed |
 | `STEP_STARTED/FINISHED` | Live progress label |
-| `CUSTOM` named `space.ui` | Upsert a card, table, alert, carousel, or document edit by component ID |
+| `CUSTOM` named `space.ui` | Upsert a card, table, data table, alert, carousel, or document edit by component ID |
 
 The official client expands text/tool chunk convenience events before mapping. Unknown custom events, raw events, reasoning, subagent output, shared-state payloads, and activity surfaces are not rendered. Space does not execute client-side tools. Pending tools at completion are marked interrupted. Interrupt/cancel outcomes fail visibly because resume and mid-run approvals are not implemented. Existing task-owner approval is distinct from those interactions. A truncated stream never counts as success.
 
@@ -62,6 +62,12 @@ Emit a standard CUSTOM event for each complete component. Reusing an ID replaces
 
 ```json
 {"type":"CUSTOM","name":"space.ui","value":{"id":"plans","type":"table","title":"Retention by plan","columns":["Plan","Retention"],"rows":[["Pro","98%"],["Starter","94%"]]}}
+```
+
+Use `data_table` for results readers can explore in a message. Supply 1–10 column labels and up to 100 rows, each with one value per column. Cells accept plain text (up to 1,000 characters) or finite JSON numbers. An empty row list is valid. Space sorts a column numerically if all its values are numbers and alphabetically otherwise. The filter matches text across all cells, ignoring case. Sorting and filtering are local to each reader. To update results, send the complete table with the same ID. A row update preserves the current view, and a change to the column labels or order resets it.
+
+```json
+{"type":"CUSTOM","name":"space.ui","value":{"id":"plans","type":"data_table","title":"Customers by plan","columns":["Plan","Customers"],"rows":[["Pro",180],["Starter",60]]}}
 ```
 
 A carousel groups one to ten options under a title. Each card has a unique ID within the carousel, a plain-text title, and a plain-text body. Keep card IDs stable when updating the group.
@@ -95,7 +101,7 @@ A document edit carries the two passages as plain text. The active Office editor
 
 Each passage is limited to 16,000 characters, subject to the event and response limits below.
 
-Cards accept only `id`, `type`, `title`, `body`. Tables accept only `id`, `type`, `title`, `columns`, `rows`; all cells are strings and each row must match the column count. No HTML, arbitrary component names, JavaScript, or action handlers are accepted. Markdown ignores HTML, permits HTTP/S/mailto links, and renders image alt text without loading remote images. Code fences use Space's existing CodeBlock; tools use ToolExecution.
+Cards accept only `id`, `type`, `title`, `body`. Static `table` blocks accept only `id`, `type`, `title`, `columns`, `rows`; all cells are strings and each row must match the column count. No HTML, arbitrary component names, JavaScript, or action handlers are accepted. Markdown ignores HTML, permits HTTP/S/mailto links, and renders image alt text without loading remote images. Code fences use Space's existing CodeBlock; tools use ToolExecution.
 
 Limits: 32,000 serialized characters per supported event, 16,000 combined assistant text characters, 30 messages, 30 tools, 20 components, and 64,000 serialized response characters. Tool arguments are limited to 8,000 characters, tool results to 16,000, cards to 8,000 body characters, tables to 10 columns and 100 rows. IDs are limited to 128 characters. Payload validation failures abort the stream; they cannot be swallowed into a successful run.
 

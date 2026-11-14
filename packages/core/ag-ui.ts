@@ -23,7 +23,8 @@ export class AgUiConnector implements AgentConnector {
       initialMessages: [{ id: request.execution_id, role: 'user', content: request.goal }],
       headers: { 'Idempotency-Key': request.execution_id, ...(this.config.token ? { Authorization: `Bearer ${this.config.token}` } : {}) },
     });
-    const response: AgentResponse = { messages: [], tools: [], components: [] };
+    const items: NonNullable<AgentResponse['items']> = [];
+    const response: AgentResponse = { messages: [], tools: [], components: [], items };
     let sequence = 0, started = false, terminal = false;
     let failure: unknown;
     let archiveOnSuccess = false;
@@ -68,6 +69,7 @@ export class AgUiConnector implements AgentConnector {
               case 'TEXT_MESSAGE_START':
                 if (event.role !== 'assistant') { ignoredMessages.add(event.messageId); return; }
                 if (response.messages.some(message => message.id === event.messageId)) throw new AppError(409, 'duplicate_response_id');
+                items.push({ type: 'message', id: event.messageId });
                 response.messages.push({ id: event.messageId, text: '', status: 'streaming' });
                 break;
               case 'TEXT_MESSAGE_CONTENT':
@@ -81,6 +83,7 @@ export class AgUiConnector implements AgentConnector {
               }
               case 'TOOL_CALL_START':
                 if (response.tools.some(tool => tool.id === event.toolCallId)) throw new AppError(409, 'duplicate_response_id');
+                items.push({ type: 'tool', id: event.toolCallId });
                 response.tools.push({ id: event.toolCallId, name: event.toolCallName, arguments: '', status: 'calling' });
                 break;
               case 'TOOL_CALL_ARGS':
@@ -111,8 +114,10 @@ export class AgUiConnector implements AgentConnector {
                 if (event.name !== 'space.ui') return;
                 const component = parseAgentComponent(event.value);
                 const index = response.components.findIndex(item => item.id === component.id);
-                if (index === -1) response.components.push(component);
-                else response.components[index] = component;
+                if (index === -1) {
+                  response.components.push(component);
+                  items.push({ type: 'component', id: component.id });
+                } else response.components[index] = component;
                 break;
               }
               case 'RUN_FINISHED': {

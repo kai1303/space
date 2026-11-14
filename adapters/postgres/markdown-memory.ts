@@ -1,13 +1,14 @@
 import { createHash } from 'node:crypto';
 import type { Pool, QueryResultRow } from 'pg';
 import { AppError, MAX_MEMORY_BYTES, memoryContent, memorySourceId, uuid, type MemoryDocument, type MemoryScope, type MemorySource } from '@space/contracts';
+import { database } from './database.js';
+import { sections, currentMemoryContent, quote } from './memory-sources.js';
 import type { MemoryProvider } from '@space/core/memory';
 
 const revision = (content: string) => createHash('sha256').update(content).digest('hex');
-const sections = (content: string) => [...content.matchAll(/^<!-- space-memory-source:((?:message|document|knowledge):[a-f0-9-]{36}) -->\n([\s\S]*?)^<!-- \/space-memory-source -->\n?/gm)];
 function document(content: string): MemoryDocument {
   return { content, revision: revision(content), sources: sections(content).map(match => {
-    const url = /^Source: \[View original\]\((\/chat\?[a-z0-9=&%-]+)\)$/m.exec(match[2]!);
+    const url = /^Source: \[View original\]\((\/chat\?[a-z0-9=&%-]+|\/c\/[A-Za-z0-9_-]{22}\/message\/[A-Za-z0-9_-]{22})\)$/m.exec(match[2]!);
     const fingerprint = /^Input fingerprint: ([a-f0-9]{64})$/m.exec(match[2]!)?.[1];
     return { id: match[1]!, title: /^### (.*)$/m.exec(match[2]!)?.[1] ?? 'Saved source', ...(url ? { url: url[1] } : {}), ...(fingerprint ? { fingerprint } : {}) };
   }) };
@@ -23,11 +24,17 @@ export class MarkdownMemoryProvider implements MemoryProvider {
     catch { throw new AppError(503, 'memory_storage_unavailable'); }
   }
 
-  async read(scope: MemoryScope): Promise<MemoryDocument> {
+  private async snapshot(scope: MemoryScope) {
     const { rows } = await this.query<{ content: string }>(
       'SELECT content FROM channel_memory_documents WHERE workspace_id=$1 AND channel_id=$2',
       [uuid(scope.workspace_id), uuid(scope.channel_id)]);
-    return document(rows[0]?.content ?? '');
+    const raw = rows[0]?.content ?? '';
+    const content = await currentMemoryContent(database(this.pool), raw, scope.channel_id);
+    return { raw, visible: document(content) };
+  }
+
+  async read(scope: MemoryScope): Promise<MemoryDocument> {
+    return (await this.snapshot(scope)).visible;
   }
 
   // A saved empty row also prevents a later import from resurrecting a cleared legacy document.
@@ -45,20 +52,20 @@ export class MarkdownMemoryProvider implements MemoryProvider {
   }
 
   async write(scope: MemoryScope, content: string, expectedRevision: string): Promise<MemoryDocument> {
-    const current = await this.read(scope);
-    if (current.revision !== expectedRevision || !await this.replace(scope, current.content, content)) {
+    const { raw, visible: current } = await this.snapshot(scope);
+    if (current.revision !== expectedRevision || !await this.replace(scope, raw, content)) {
       throw new AppError(409, 'memory_conflict');
     }
-    return document(content);
+    return this.read(scope);
   }
 
   // Source-level edits can rebase on a concurrent change. Full-document edits must keep their original revision.
   private async merge(scope: MemoryScope, edit: (current: MemoryDocument) => string): Promise<MemoryDocument> {
     for (let attempt = 0; attempt < 12; attempt++) {
-      const current = await this.read(scope);
+      const { raw, visible: current } = await this.snapshot(scope);
       const content = edit(current);
       if (content === current.content) return current;
-      if (await this.replace(scope, current.content, content)) return document(content);
+      if (await this.replace(scope, raw, content)) return this.read(scope);
     }
     throw new AppError(409, 'memory_conflict');
   }
@@ -72,8 +79,9 @@ export class MarkdownMemoryProvider implements MemoryProvider {
         return current.content;
       }
       const title = source.title.replace(/[\r\n\u0000-\u001f\u2028\u2029<>]/g, ' ').trim().slice(0, 500);
-      const quoted = source.text.split(/\r\n|[\r\n\u2028\u2029]/).map(line => `> ${line}`).join('\n');
-      return `${current.content}${current.content ? '\n\n' : ''}<!-- space-memory-source:${id} -->\n### ${title}\n${source.url ? `Source: [View original](${source.url})\n` : ''}${source.fingerprint ? `Input fingerprint: ${source.fingerprint}\n` : ''}\n${quoted}\n<!-- /space-memory-source -->\n`;
+      const quoted = quote(source.text);
+      const revisions = Object.entries(source.evidence_revisions ?? {}).map(([id, version]) => `<!-- Evidence revision: ${uuid(id)} ${version} -->\n`).join('');
+      return `${current.content}${current.content ? '\n\n' : ''}<!-- space-memory-source:${id} -->\n### ${title}\n${source.url ? `Source: [View original](${source.url})\n` : ''}${source.fingerprint ? `Input fingerprint: ${source.fingerprint}\n` : ''}\n${revisions}${quoted}\n<!-- /space-memory-source -->\n`;
     });
   }
   async remove(scope: MemoryScope, sourceId: string): Promise<MemoryDocument> {

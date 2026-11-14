@@ -1,7 +1,8 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
 if (process.isMainFrame) contextBridge.exposeInMainWorld('spaceOffice', {
-  ask: (goal, selection, key) => ipcRenderer.invoke('office-agent', goal, selection, key),
+  ask: (goal, selection, key, previousDraft) => ipcRenderer.invoke('office-agent', goal, selection, key, previousDraft),
+  checkEditAccess: key => ipcRenderer.invoke('office-check-edit', key),
   cancel: () => ipcRenderer.send('office-agent-cancel'),
   openFile: id => ipcRenderer.invoke('office-open-file', id),
   onClose: fn => {

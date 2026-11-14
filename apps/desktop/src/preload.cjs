@@ -1,6 +1,13 @@
 const { contextBridge, ipcRenderer } = require('electron');
 if (process.isMainFrame) contextBridge.exposeInMainWorld('spaceDesktop', {
   browserAccountChanged: id => ipcRenderer.send('space-browser-account', id),
+  onBrowserSidekick: fn => {
+    const handler = (_event, tab) => fn(tab);
+    ipcRenderer.on('space-browser-sidekick', handler);
+    return () => ipcRenderer.removeListener('space-browser-sidekick', handler);
+  },
+  browserSessionId: (tab, workspace) => ipcRenderer.invoke('space-browser-session', tab, workspace),
+  dismissBrowserSidekick: tab => ipcRenderer.send('space-browser-dismiss-sidekick', tab),
   onOfficePicker: fn => {
     const handler = () => fn();
     ipcRenderer.on('space-office-picker', handler);

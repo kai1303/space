@@ -1,6 +1,8 @@
+import {documentText,type RichDocument} from '@space/ui/rich-text';
+import type {MessageAttempt} from '../composer/message-sender.js';
 import {useState} from 'react';
 import {afterAll,afterEach,beforeAll,expect,it,vi} from 'vitest';
-import {act,cleanup,render,screen,waitFor,within} from '@testing-library/react';
+import {act,cleanup,fireEvent,render,screen,waitFor,within} from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import {AgentSessions} from './AgentSessions.js';
 const mocks=vi.hoisted(()=>({refresh:undefined as undefined|(()=>unknown),revoke:undefined as undefined|(()=>void)}));
@@ -19,6 +21,7 @@ const turn=(text:string)=>({task:{id:text,goal:text,workspace_id:'workspace',thr
 function setup(){
  let sessions=[session('one','Research'),session('two','Implementation')];
  const fetch=vi.fn(async(path:string,init?:RequestInit)=>({ok:true,json:async()=>{
+  if(path.endsWith('/models'))return [{id:'provider-default',label:'Connector default',efforts:['low','medium'],defaultEffort:'medium',isDefault:true},{id:'sdk-model-42',label:'Model 42',efforts:['low','medium','high','ultra'],defaultEffort:'low'}];
   if(path==='/v1/channels/channel/navigator')return {candidates:[{installation_id:'agent',skill:'codex.run',name:'Codex',persistent_sessions:true}]};
   if(path==='/v1/channels/channel/agents')return [];
   if(path==='/v1/threads/thread/agent-sessions'){
@@ -312,6 +315,23 @@ it('uses the DM header and timeline with a fixed composer and shared output tabs
  expect(document.activeElement).toBe(screen.getByRole('tab',{name:'Messages',exact:true}));
  expect(log.contains(editor)).toBe(false);
 });
+it.each(['claude','kiro'])('a %s model without reported effort levels sends only the selected provider model ID',async provider=>{
+ const fetch=setup(),original=fetch.getMockImplementation()!;
+ fetch.mockImplementation(async(path,init)=>{
+   if(path.endsWith('/models')) return {ok:true,json:async()=>[{id:'auto',label:'Auto',efforts:[],isDefault:true},{id:'sdk-fast',label:'Fast',efforts:[]}]};
+   if(path==='/v1/agent-sessions/one') return {ok:true,json:async()=>({session:{...session('one','Research'),skill:provider+'.run'},turns:[],next_cursor:null})};
+   return original(path,init);
+ });
+ render(<AgentSessions thread="thread" channel="channel" viewerId="user" initialSessionId="one" onAccessLost={()=>{}}/>);
+ await userEvent.click(await screen.findByRole('button',{name:'Choose model, Auto'}));
+ await userEvent.click(screen.getByRole('button',{name:'Select model, Auto'}));
+ await userEvent.click(screen.getByRole('button',{name:'Fast',exact:true}));
+ expect(screen.queryByRole('slider')).toBeNull();
+ const editor=screen.getByRole('textbox',{name:'Message agent session'});
+ await userEvent.click(editor);await userEvent.type(editor,'Hello{Enter}');
+ await waitFor(()=>expect(fetch.mock.calls.some(([path])=>path.endsWith('/messages'))).toBe(true));
+ expect(JSON.parse(String(fetch.mock.calls.find(([path])=>path.endsWith('/messages'))![1]?.body)).codex_settings).toEqual({model:'sdk-fast'});
+});
 it('renders and sends rich session requests through the shared thread composer',async()=>{
  const fetch=setup(),original=fetch.getMockImplementation()!;
  const document={ops:[{insert:'Formatted request',attributes:{bold:true}},{insert:'\n'}]};
@@ -321,9 +341,17 @@ it('renders and sends rich session requests through the shared thread composer',
  expect((await within(log).findByText('Formatted request')).tagName).toBe('STRONG');
  const editor=await screen.findByRole('textbox',{name:'Message agent session'});
  await userEvent.click(screen.getByRole('button',{name:'Bold',exact:true}));
+ await userEvent.click(screen.getByRole('button',{name:'Select model and effort, Connector default, Medium'}));
+ expect(screen.queryByText('Preview options')).toBeNull();
+ await userEvent.click(screen.getByRole('button',{name:'Select model, Connector default'}));
+ await userEvent.click(screen.getByRole('button',{name:'Model 42',exact:true}));
+ fireEvent.change(screen.getByRole('slider',{name:'Reasoning effort'}),{target:{value:'3'}});
+ expect(screen.getByRole('slider').parentElement?.querySelector('.agent-power-max-fill')).toBeTruthy();
+ await userEvent.click(editor);
  await userEvent.type(editor,'Next formatted request');await userEvent.keyboard('{Enter}');
  await waitFor(()=>expect(fetch.mock.calls.some(([path])=>path.endsWith('/messages'))).toBe(true));
  const body=JSON.parse(String(fetch.mock.calls.find(([path])=>path.endsWith('/messages'))![1]?.body));
+ expect(body.codex_settings).toEqual({model:'sdk-model-42',effort:'ultra'});
  expect(body.text).toBe('Next formatted request');
  expect(body.document.ops.some((op:any)=>op.insert.includes('Next formatted request')&&op.attributes?.bold)).toBe(true);
 });
@@ -361,6 +389,7 @@ it('selects persistent sessions by capability and includes the selected skill',a
 it('enables only the selected skill when starting a multi-skill session agent',async()=>{
  const fetch=setup(),original=fetch.getMockImplementation()!;let enabled=false;
  fetch.mockImplementation(async(path,init)=>{
+  if(path.endsWith('/models'))return [{id:'provider-default',label:'Connector default',efforts:['low','medium'],defaultEffort:'medium',isDefault:true},{id:'sdk-model-42',label:'Model 42',efforts:['low','medium','high','ultra'],defaultEffort:'low'}];
   if(path==='/v1/channels/channel/navigator')return {ok:true,json:async()=>({candidates:enabled?[{installation_id:'research',name:'Research',skill:'research.review',persistent_sessions:true}]:[]})};
   if(path==='/v1/channels/channel/agents')return {ok:true,json:async()=>[{id:'research',name:'Research',skills:['research.run','research.review'],granted_skills:enabled?['research.review']:[],enabled_in_channel:enabled,persistent_sessions:true}]};
   if(path==='/v1/agents/connections/research/channels/channel'){enabled=true;return {ok:true,json:async()=>({})};}
@@ -392,19 +421,34 @@ it('shows agent activity above the shared composer, reuses the tool timeline and
 });
 
 it('acknowledges a pending accepted send after the session page unmounts without restoring its draft',async()=>{
- setup();const original=vi.mocked(fetch).getMockImplementation()!;
- let finish!:(task:unknown)=>void;const pending=new Promise(resolve=>{finish=resolve;});
- vi.mocked(fetch).mockImplementation(async(...args)=>String(args[0]).endsWith('/messages')?{ok:true,json:async()=>pending} as Response:original(...args));
- const drafts:Record<string,any>={},attempt:any={};
- const props={thread:'thread',channel:'channel',viewerId:'user',initialSessionId:'one',onAccessLost:()=>{},drafts,attempt:()=>attempt};
- const view=render(<AgentSessions {...props}/>);
- await userEvent.type(await screen.findByRole('textbox',{name:'Message agent session'}),'Accepted while away');
+ const fetch=setup(), original=fetch.getMockImplementation()!;
+ const message='Accepted while away', key='session:channel:one';
+ const response=Promise.withResolvers<ReturnType<typeof turn>['task']>();
+ const accepted=Promise.withResolvers<void>();
+ fetch.mockImplementation((path,init)=>path==='/v1/agent-sessions/one/messages' && init?.method==='POST'
+  ? Promise.resolve({ok:true,json:()=>response.promise}) : original(path,init));
+ const drafts:Record<string,RichDocument>={},attempt:MessageAttempt={};
+ const props={thread:'thread',channel:'channel',viewerId:'user',initialSessionId:'one',onAccessLost:()=>{},
+  drafts,attempt:()=>attempt,onAccepted:()=>accepted.resolve()};
+ async function openSession() {
+  const view=render(<AgentSessions {...props}/>);
+  // Flush the session read before waiting for the composer's lazy Quill import.
+  await act(async()=>{});
+  await act(()=>vi.dynamicImportSettled());
+  return {view,editor:within(view.container).getByRole('textbox',{name:'Message agent session'})};
+ }
+ const {view,editor}=await openSession();
+ await userEvent.type(editor,message);
  await userEvent.click(screen.getByRole('button',{name:'Send now'}));
- expect(attempt.current).toBeTruthy();view.unmount();
- await act(async()=>{finish({...turn('Accepted while away').task,status:'queued'});await pending;});
- expect(drafts['session:channel:one']).toEqual({ops:[]});expect(attempt.current).toBeUndefined();
- render(<AgentSessions {...props}/>);
- expect((await screen.findByRole('textbox',{name:'Message agent session'})).textContent?.trim()).toBe('');
+ expect(attempt.current).toBeDefined();
+ expect(documentText(drafts[key]!).trimEnd()).toBe(message);
+ view.unmount();
+ response.resolve({...turn(message).task,status:'queued'});
+ await accepted.promise;
+ expect(drafts[key]).toEqual({ops:[]});
+ expect(attempt.current).toBeUndefined();
+ const reopened=await openSession();
+ expect(reopened.editor.textContent?.trim()).toBe('');
 });
 it('retains a failed send identity and draft across session page remounts',async()=>{
  setup();const original=vi.mocked(fetch).getMockImplementation()!;let failing=true;const keys:string[]=[];
@@ -433,10 +477,16 @@ it('clears a remounted composer when its previous pending send is accepted',asyn
   return visible?<AgentSessions thread="thread" channel="channel" viewerId="user" initialSessionId="one" onAccessLost={()=>{}} drafts={drafts} attempt={()=>attempt} acknowledged={acknowledged} onAccepted={(key,document)=>setAcknowledged(old=>({...old,[key]:document}))}/>:null;
  }
  const view=render(<Harness visible/>);
- await userEvent.type(await screen.findByRole('textbox',{name:'Message agent session'}),'Accepted after return');
+ async function readyEditor() {
+  await screen.findByText('Research prompt');
+  await act(async()=>{await vi.dynamicImportSettled();});
+  return screen.getByRole('textbox',{name:'Message agent session'});
+ }
+ await userEvent.type(await readyEditor(),'Accepted after return');
  await userEvent.click(screen.getByRole('button',{name:'Send now'}));
+ expect(vi.mocked(fetch).mock.calls.some(([path])=>String(path).endsWith('/one/messages'))).toBe(true);
  view.rerender(<Harness visible={false}/>);view.rerender(<Harness visible/>);
- const editor=await screen.findByRole('textbox',{name:'Message agent session'});
+ const editor=await readyEditor();
  expect(editor.textContent).toContain('Accepted after return');
  await act(async()=>{finish({...turn('Accepted after return').task,status:'queued'});await pending;});
  await waitFor(()=>expect(editor.textContent?.trim()).toBe(''));
@@ -504,6 +554,68 @@ it('keeps a rejected immediate-turn draft and uses a fresh attempt when the conn
  await waitFor(()=>expect(editor.textContent?.trim()).toBe(''));
  const attempts=fetch.mock.calls.filter(([path])=>path.endsWith('/messages'));expect(attempts).toHaveLength(2);
  expect(new Headers(attempts[0]![1]?.headers).get('idempotency-key')).not.toBe(new Headers(attempts[1]![1]?.headers).get('idempotency-key'));
+});
+
+it('sends the objective through the session composer and restores confirmed status after reopening',async()=>{
+ const fetch=setup(),original=fetch.getMockImplementation()!;
+ let goal: {objective:string;status:string}|null=null;
+ const sent:any[]=[];
+ fetch.mockImplementation(async(path,init)=>{
+  if(path==='/v1/agent-sessions/one/messages') {
+   const body=JSON.parse(String(init?.body));sent.push(body);
+   goal=body.goal_action.kind==='set'?{objective:body.goal_action.objective,status:'active'}:null;
+   return {ok:true,json:async()=>({id:'Research prompt'})};
+  }
+  if(path==='/v1/agent-sessions/one') return {ok:true,json:async()=>({session:session('one','Research'),turns:[turn('Research prompt')],next_cursor:null,session_goal:goal})};
+  return original(path,init);
+ });
+ const view=()=>render(<AgentSessions thread="thread" channel="channel" viewerId="user" onAccessLost={()=>{}} initialSessionId="one"/>);
+ const first=view();
+ await userEvent.click(await screen.findByRole('button',{name:'Add to message'}));
+ await userEvent.click(await screen.findByRole('menuitem',{name:'Set goal'}));
+ const editor=screen.getByRole('textbox',{name:'Message agent session'});
+ expect(document.activeElement).toBe(editor);
+ await userEvent.type(editor,'The checks pass');
+ await userEvent.click(screen.getByRole('button',{name:'Exit goal mode'}));
+ expect(document.activeElement).toBe(editor);
+ expect(editor.textContent?.trim()).toBe('The checks pass');
+ expect(screen.queryByRole('button',{name:'Exit goal mode'})).toBeNull();
+ expect(sent).toHaveLength(0);
+ await userEvent.click(screen.getByRole('button',{name:'Add to message'}));
+ await userEvent.click(await screen.findByRole('menuitem',{name:'Set goal'}));
+ await userEvent.click(screen.getByRole('button',{name:'Send now'}));
+ await screen.findByText('Pursuing goal');
+ expect(screen.queryByRole('button',{name:'Exit goal mode'})).toBeNull();
+ expect(sent[0]).toMatchObject({goal_action:{kind:'set',objective:'The checks pass'},codex_settings:{effort:'medium'}});
+ first.unmount();view();
+ await screen.findByText('The checks pass');
+ await userEvent.click(screen.getByRole('button',{name:'Clear goal'}));
+ await userEvent.click(await screen.findByRole('button',{name:'Add to message'}));
+ await screen.findByRole('menuitem',{name:'Set goal'});
+ expect(sent[1].goal_action).toEqual({kind:'clear'});
+});
+
+it('sends follow-ups in the same session with the current tab address',async()=>{
+ const fetch=setup(),props={thread:'thread',channel:'channel',viewerId:'user',initialSessionId:'one',onAccessLost:()=>{}};
+ const original=fetch.getMockImplementation()!,completed=[turn('Research prompt')];
+ fetch.mockImplementation(async(path,init)=>{
+   if(path.endsWith('/messages')){const next=turn(JSON.parse(String(init?.body)).text);completed.push(next);return {ok:true,json:async()=>next.task};}
+   if(path==='/v1/agent-sessions/one')return {ok:true,json:async()=>({session:session('one','Research'),turns:[...completed],next_cursor:null})};
+   return original(path,init);
+ });
+ const view=render(<AgentSessions {...props} browserPage="https://github.com/org/repo"/>);
+ const editor=await screen.findByRole('textbox',{name:'Message agent session'});
+ await userEvent.type(editor,'Summarize this');await userEvent.keyboard('{Enter}');
+ await waitFor(()=>expect(editor.textContent?.trim()).toBe(''));
+ await act(async()=>{await mocks.refresh?.();});
+ view.rerender(<AgentSessions {...props} browserPage="https://github.com/org/repo/pull/1"/>);
+ await userEvent.type(editor,'What changed?');await userEvent.keyboard('{Enter}');
+ const messages=()=>fetch.mock.calls.filter(([path])=>path==='/v1/agent-sessions/one/messages').map(([,init])=>JSON.parse(String(init?.body)));
+ await waitFor(()=>expect(messages()).toMatchObject([
+   {text:'Summarize this',browser_url:'https://github.com/org/repo'},
+   {text:'What changed?',browser_url:'https://github.com/org/repo/pull/1'},
+ ]));
+ for(const message of messages()) expect(message.document.ops.map((op:{insert:string})=>op.insert).join('').trim()).toBe(message.text);
 });
 
 it('submits the patch review to this session without consuming the conversation draft',async()=>{

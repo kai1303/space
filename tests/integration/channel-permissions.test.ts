@@ -9,6 +9,7 @@ import {bootstrap} from '@space/postgres/bootstrap';
 import {migrate} from '@space/postgres/migrate';
 import {PostgresStore} from '@space/postgres/store';
 import {ChatStore} from '@space/postgres/chat';
+import {AssetStore} from '@space/postgres/assets';
 import {WorkspaceStore} from '@space/postgres/workspace';
 import {registerChatRoutes} from '../../apps/server/dist/chat.js';
 const url=process.env.TEST_DATABASE_URL;
@@ -190,4 +191,98 @@ for(const action of ['join','create'] as const)test(`channel ${action} cannot re
    assert.equal((await pool.query('SELECT count(*)::int AS n FROM channel_members WHERE workspace_id=$1 AND user_id=$2',[a.workspace_id,a.collaborator_id])).rows[0].n,0);
    if(action==='create')assert.equal((await pool.query('SELECT count(*)::int AS n FROM channels WHERE workspace_id=$1 AND created_by=$2',[a.workspace_id,a.collaborator_id])).rows[0].n,0);
  }finally{unblock();await operation;await operationPool.end();}
+});
+
+test('decision search is always on and rechecks the requester and destination audience', async () => {
+  const a = await fixture();
+  const first = await chat.createChannel(a.owner_id, a.workspace_id, { name: 'pricing', private: true });
+  const second = await chat.createChannel(a.owner_id, a.workspace_id, { name: 'billing', private: false });
+  const self = await chat.directMessages.open(a.owner_id, a.workspace_id, { user_id: a.owner_id });
+  const decisions = await Promise.all([first, second].map(c => send(a.owner_token, c.id)));
+  const visible = async (destination: string, requester = a.owner_id) => (await pool.query(
+    'SELECT id FROM knowledge_visible_messages($1,$2,$3,$4::uuid[])',
+    [a.workspace_id, requester, destination, decisions.map(d => d.id)],
+  )).rows.map(r => r.id).sort();
+  assert.deepEqual(await visible(self.id), decisions.map(d => d.id).sort());
+  assert.deepEqual(await visible(a.channel_id), [decisions[1].id], 'private evidence cannot enter a public audience');
+  assert.deepEqual(await visible(self.id, a.collaborator_id), [], 'requester must belong to the destination');
+  const shared = await chat.directMessages.open(a.owner_id, a.workspace_id, { user_id: a.collaborator_id });
+  assert.deepEqual(await visible(shared.id), [decisions[1].id], 'every private destination viewer must be allowed in a private source');
+  await pool.query('UPDATE channels SET archived_at=now() WHERE id=$1', [first.id]);
+  assert.deepEqual(await visible(self.id), [decisions[1].id], 'archive takes effect without an index update');
+  await chat.deleteMessage(a.owner_id, second.id, decisions[1].id);
+  assert.deepEqual(await visible(self.id), []);
+});
+
+test('file search is always enabled and rechecks the requester and destination audience', async () => {
+  const a = await fixture(), other = await bootstrap(pool), assets = new AssetStore(pool);
+  const src = await chat.createChannel(a.owner_id, a.workspace_id, { name: 'finance', private: true });
+  const self = await chat.directMessages.open(a.owner_id, a.workspace_id, { user_id: a.owner_id });
+  const shared = await chat.directMessages.open(a.owner_id, a.workspace_id, { user_id: a.collaborator_id });
+  const pdf = await assets.create(a.owner_id, src.id, { name: 'Budget.pdf', type: 'application/pdf', size: 1024 });
+  await assets.complete(a.owner_id, pdf.id, async () => ({ kind: 'pdf', mime: 'application/pdf' }));
+  const msg = await send(a.owner_token, src.id, { text: '', asset_ids: [pdf.id] });
+  const expected = [{ id: pdf.id, workspace_id: a.workspace_id, channel_id: src.id, thread_id: msg.thread_id, message_id: msg.id,
+    name: 'Budget.pdf', type: 'application/pdf', size: 1024 }];
+  const visible = async (dest: string, actor = a.owner_id, workspace = a.workspace_id, ids = [pdf.id]) =>
+    (await pool.query('SELECT * FROM knowledge_visible_attachments($1,$2,$3,$4::uuid[])', [workspace, actor, dest, ids])).rows;
+  const state = await permissions(a.owner_token, src.id);
+  assert.ok(!('attachment_search' in state));
+  assert.ok(!('decision_search' in state));
+  await patch(a.owner_token, src.id, state.revision, { decision_search: false }, 400);
+  await patch(a.owner_token, src.id, state.revision, { attachment_search: false }, 400);
+  assert.deepEqual(await visible(self.id), expected, 'posted files are searchable with default channel settings');
+  assert.deepEqual(await visible(shared.id), [], 'every active private destination viewer needs source access');
+  assert.deepEqual(await visible(a.channel_id), [], 'private files stay out of public destinations');
+  assert.deepEqual(await visible(self.id, a.collaborator_id), [], 'requester must belong to destination');
+  assert.deepEqual(await visible(other.channel_id, other.owner_id, other.workspace_id), [], 'cross-workspace lookup');
+  assert.deepEqual(await visible(self.id, a.owner_id, a.workspace_id, Array(129).fill(pdf.id)), [], 'bounded candidate list');
+  await chat.addMember(a.owner_id, src.id, { user_id: a.collaborator_id });
+  assert.deepEqual(await visible(shared.id), expected);
+  await pool.query('UPDATE workspace_members SET active=false WHERE workspace_id=$1 AND user_id=$2', [a.workspace_id, a.collaborator_id]);
+  assert.deepEqual(await visible(shared.id, a.collaborator_id), [], 'revoked requester');
+});
+
+test('attachment graph source excludes unposted, unlisted, archived, erased, and direct-message files', async () => {
+  const a = await fixture(), assets = new AssetStore(pool);
+  const create = (channel: string, name: string) => assets.create(a.owner_id, channel, { name, type: 'application/octet-stream', size: 100 });
+  const seal = (id: string) => assets.complete(a.owner_id, id, async () => ({ kind: 'unsupported', reason: 'binary file' }));
+  const source = async () => (await pool.query('SELECT id FROM graph_source_attachments WHERE workspace_id=$1 ORDER BY id', [a.workspace_id])).rows.map(r => r.id);
+  const files = await Promise.all(['first.bin', 'second.bin', 'unposted.bin'].map(name => create(a.channel_id, name)));
+  for (const file of files) await seal(file.id);
+  assert.deepEqual(await source(), []);
+  const [one, two, unlisted] = files;
+  const first = await send(a.owner_token, a.channel_id, { asset_ids: [one!.id] });
+  const second = await send(a.owner_token, a.channel_id, { asset_ids: [two!.id], thread_id: first.thread_id });
+  await pool.query('UPDATE assets SET message_id=$2 WHERE id=$1', [unlisted!.id, first.id]);
+  assert.deepEqual(await source(), [one!.id, two!.id].sort(), 'binding alone does not share an unlisted file');
+  await pool.query('UPDATE channels SET archived_at=now() WHERE id=$1', [a.channel_id]);
+  assert.deepEqual(await source(), []);
+  await pool.query('UPDATE channels SET archived_at=NULL WHERE id=$1', [a.channel_id]);
+  const dm = await chat.directMessages.open(a.owner_id, a.workspace_id, { user_id: a.owner_id });
+  const privateFile = await create(dm.id, 'private.bin');
+  await seal(privateFile.id);
+  await send(a.owner_token, dm.id, { asset_ids: [privateFile.id] });
+  assert.deepEqual(await source(), [one!.id, two!.id].sort(), 'DM files cannot enter the graph even through an operator misconfiguration');
+  await call(a.owner_token, 'DELETE', `/channels/${a.channel_id}/messages/${second.id}`);
+  assert.deepEqual(await source(), [one!.id]);
+  await pool.query("UPDATE messages SET retained_at=now(),text='Message removed by workspace retention.',attachments='[]',document=NULL WHERE channel_id=$1 AND id=$2", [a.channel_id, first.id]);
+  assert.deepEqual(await source(), []);
+});
+
+test('file citations require current download access for every destination viewer even for a public source', async () => {
+  const a = await fixture(), assets = new AssetStore(pool);
+  const src = await chat.createChannel(a.owner_id, a.workspace_id, { name: 'reports', private: false });
+  const file = await assets.create(a.owner_id, src.id, { name: 'report.bin', type: 'application/octet-stream', size: 100 });
+  await assets.complete(a.owner_id, file.id, async () => ({ kind: 'unsupported', reason: 'binary file' }));
+  await send(a.owner_token, src.id, { asset_ids: [file.id] });
+  const visible = async () => (await pool.query('SELECT id FROM knowledge_visible_attachments($1,$2,$3,$4::uuid[])',
+    [a.workspace_id, a.owner_id, a.channel_id, [file.id]])).rows;
+  await assert.rejects(assets.download(a.collaborator_id, file.id), /not_found/);
+  assert.deepEqual(await visible(), [], 'public source is discoverable but a nonmember cannot download its file');
+  await chat.addMember(a.owner_id, src.id, { user_id: a.collaborator_id });
+  assert.equal((await assets.download(a.collaborator_id, file.id)).id, file.id);
+  assert.deepEqual(await visible(), [{ id: file.id }]);
+  await pool.query('DELETE FROM channel_members WHERE channel_id=$1 AND user_id=$2', [src.id, a.collaborator_id]);
+  assert.deepEqual(await visible(), [], 'membership revocation applies immediately');
 });

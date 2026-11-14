@@ -23,3 +23,6 @@
 .sidekick-selectable:hover{background:var(--sp-surface-hover)}
 .sidekick-selectable:has(>.sidekick-message-select[aria-pressed=true]){background:var(--sp-accent-soft);box-shadow:inset 3px 0 var(--sp-accent)}
 .sidekick-selectable .sp-message-actions{display:none}
+
+.chat-main-area:has(>.browser-sidekick)>:not(.browser-sidekick){display:none}
+.browser-sidekick{flex:1;min-height:0;display:flex;flex-direction:column;min-width:0;background:var(--sp-surface);overflow:hidden}
