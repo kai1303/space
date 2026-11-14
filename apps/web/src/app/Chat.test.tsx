@@ -221,8 +221,9 @@ it('keeps the channel draft and pending send when an Office file disappears whil
     await userEvent.type(editor, 'Keep this draft');
     await userEvent.click(screen.getByRole('tab', {name: 'Files & links'}));
     await userEvent.click(await screen.findByRole('button', {name: 'Preview Meeting.docx'}));
-    await vi.dynamicImportSettled();
-    await screen.findByText('No files shared yet');
+    // The preview request starts before React mounts the lazy Office viewer.
+    await waitFor(() => expect(missing).toBe(true), {timeout: 8_000});
+    await screen.findByText('No files shared yet', {}, {timeout: 3_000});
     expect(screen.queryByRole('dialog')).toBeNull();
     await userEvent.click(screen.getByRole('tab', {name: 'Messages'}));
     expect(screen.getByRole('textbox', {name: 'Message first'}).textContent).toContain('Keep this draft');
