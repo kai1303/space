@@ -17,6 +17,7 @@ export class EventBridge {
   private running?: Promise<void>;
   private directory?: string;
   private spool?: FileHandle;
+  private buffered: DomainEvent[] = [];
   private bytes = 0;
   private createdMessages?: number;
   get messagesCreated() { return this.createdMessages; }
@@ -63,25 +64,34 @@ export class EventBridge {
     if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(schema)) throw new Error('invalid CDC source schema');
     return { id: row.id, schema, kind: row.kind, aggregate_id: row.aggregate_id, data: row.payload, ...(row.available_at ? { available_at: new Date(row.available_at).toISOString() } : {}) };
   }
-  private async publish(event: DomainEvent): Promise<void> {
-    await this.bus.publish(event);
-    // Broker ACK is the durability boundary. Keyed cleanup can safely repeat after a crash.
-    try {
-      const removed = await this.pool.query(`DELETE FROM "${event.schema}".event_outbox WHERE id=$1`, [event.id]);
-      // A bootstrap/WAL replay or competing cleanup cannot delete the same event twice.
-      if (this.createdMessages !== undefined && removed.rowCount === 1 && event.kind === 'search.message' && event.data?.operation === 'INSERT') {
-        this.createdMessages++;
-      }
-    } catch (error) { if ((error as { code?: string }).code !== '42P01') throw error; }
-    if (event.kind === 'chat.changed' && typeof event.data.chat_delivery_id === 'string') {
-      try { await this.pool.query(`DELETE FROM "${event.schema}".chat_delivery_outbox WHERE id=$1`, [event.data.chat_delivery_id]); }
-      catch (error) { if ((error as { code?: string }).code !== '42P01') throw error; }
-    }
-  }
   private async publishBatch(events: DomainEvent[]): Promise<void> {
-    const outcomes = await Promise.allSettled(events.map(event => this.publish(event)));
+    const outcomes = await Promise.allSettled(events.map(event => this.bus.publish(event)));
     const failure = outcomes.find(outcome => outcome.status === 'rejected');
     if (failure?.status === 'rejected') throw failure.reason;
+
+    // A batch can contain multiple schemas when consuming a wildcard publication.
+    // Clean up only after broker ACKs. One commit per schema also keeps the
+    // legacy delivery hint and its event together across retries or crashes.
+    const bySchema = new Map<string, DomainEvent[]>();
+    for (const event of events) {
+      const batch = bySchema.get(event.schema);
+      if (batch) batch.push(event);
+      else bySchema.set(event.schema, [event]);
+    }
+    for (const [schema, batch] of bySchema) {
+      const hints = batch.flatMap(event => event.kind === 'chat.changed' && typeof event.data.chat_delivery_id === 'string'
+        ? [event.data.chat_delivery_id] : []);
+      try {
+        const result = await this.pool.query<{ inserted: number }>(`WITH removed AS (
+          DELETE FROM "${schema}".event_outbox WHERE id=ANY($1::uuid[]) RETURNING kind,payload
+        ), hints AS (
+          DELETE FROM "${schema}".chat_delivery_outbox WHERE id=ANY($2::bigint[])
+        )
+        SELECT count(*) FILTER (WHERE kind='search.message' AND payload->>'operation'='INSERT')::int AS inserted FROM removed`,
+          [batch.map(event => event.id), hints]);
+        if (this.createdMessages !== undefined) this.createdMessages += result.rows[0]!.inserted;
+      } catch (error) { if ((error as { code?: string }).code !== '42P01') throw error; }
+    }
   }
   private async bootstrap(): Promise<void> {
     // The slot exists before this finite snapshot, so writes racing the snapshot are in WAL.
@@ -105,13 +115,23 @@ export class EventBridge {
   }
   private async message(message: Pgoutput.Message): Promise<void> {
     if (message.tag === 'begin') {
-      await this.spool?.close(); this.spool = undefined; this.bytes = 0;
+      await this.spool?.close(); this.spool = undefined; this.bytes = 0; this.buffered = [];
     } else if (message.tag === 'insert' && (this.schema === '*' || message.relation.schema === this.schema) && message.relation.name === 'event_outbox') {
-      const line = JSON.stringify(this.event(message.new, message.relation.schema)) + '\n';
+      const event = this.event(message.new, message.relation.schema);
+      const line = JSON.stringify(event) + '\n';
       this.bytes += Buffer.byteLength(line);
       if (this.bytes > (this.options.maxTransactionBytes ?? 1024 ** 3)) throw new Error('CDC transaction exceeds bounded spool capacity');
-      this.spool ??= await open(join(this.directory!, 'transaction.ndjson'), 'w', 0o600);
-      await this.spool.write(line);
+      // WAL retains unacknowledged transactions. Small commits need no temporary file.
+      if (!this.spool && this.buffered.length < 16 && this.bytes <= 64 * 1024) {
+        this.buffered.push(event);
+      } else {
+        if (!this.spool) {
+          this.spool = await open(join(this.directory!, 'transaction.ndjson'), 'w', 0o600);
+          for (const pending of this.buffered) await this.spool.writeFile(JSON.stringify(pending) + '\n');
+          this.buffered = [];
+        }
+        await this.spool.writeFile(line);
+      }
     } else if (message.tag === 'commit') {
       if (this.spool) {
         await this.spool.close(); this.spool = undefined;
@@ -122,6 +142,9 @@ export class EventBridge {
           if (batch.length === 16) { await this.publishBatch(batch); batch = []; }
         }
         if (batch.length) await this.publishBatch(batch);
+      } else if (this.buffered.length) {
+        await this.publishBatch(this.buffered);
+        this.buffered = [];
       }
       if (message.commitEndLsn) { this.checkpoint = message.commitEndLsn; await this.replication!.acknowledge(this.checkpoint); }
     }

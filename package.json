@@ -33,6 +33,7 @@
     "workspace:owner": "turbo run workspace:owner --filter=@space/tools",
     "nats:prune": "pnpm --filter @space/tools build && pnpm --filter @space/tools nats:prune",
     "test:chat": "turbo run test:chat --filter=@space/tests",
+    "test:performance": "turbo run build --filter=@space/server... --filter=@space/event-service... --filter=@space/mcp-gateway... && cd tests && node --env-file-if-exists=../.env evaluation/operations/run.mjs",
     "test:auth": "turbo run test:auth --filter=@space/tests",
     "connector": "pnpm --filter @space/connector build && pnpm --filter @space/connector start",
     "test:assets": "turbo run test:assets --filter=@space/tests",

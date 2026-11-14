@@ -1,5 +1,5 @@
 import { useContext, useEffect, useId, useRef, useState } from 'react';
-import { Avatar, Button, Dialog, IconButton, Popover } from '@space/ui/primitives';
+import { Avatar, Button, Dialog, IconButton, Popover, Spinner } from '@space/ui/primitives';
 import { ArrowElbowDownLeft, CalendarBlank, CaretDown, Chats, Clock, Hash, LinkSimple, MagnifyingGlass, SlidersHorizontal, User, X } from '@phosphor-icons/react';
 import { request } from '../../shared/api/request.js';
 import { ChannelSearchHeaderContext } from './channel-search-header.js';
@@ -100,7 +100,7 @@ function SearchDialog({ workspace, channel, editRequest, onChannelSubmit, onClos
     if(!trimmed){input.current?.focus();return;}
     if(trimmed.length>500){setError('Keep your search under 500 characters.');return;}
     if (channel) { onChannelSubmit?.(); setEditing(false); setSelected(undefined); }
-    setDraft(trimmed === '*' && channel ? '' : trimmed);setQuery(trimmed);setCursor(undefined);setItems([]);setNext(null);setError('');setSearched(false);setAttempt(value=>value+1);
+    setBusy(true);setDraft(trimmed === '*' && channel ? '' : trimmed);setQuery(trimmed);setCursor(undefined);setItems([]);setNext(null);setError('');setSearched(false);setAttempt(value=>value+1);
     input.current?.focus();
   }
   function changeFilter(value:string){if(query && !(channel && editing))submit(value || '*');else setDraft(value);}
@@ -116,8 +116,8 @@ function SearchDialog({ workspace, channel, editRequest, onChannelSubmit, onClos
         {!channel && <h2><span>Results for:</span> {query}</h2>}
         <Filters query={query} channel={channel} onChange={changeFilter}/>
         <div className="message-search-summary"><span>Newest first</span>{searched&&!error&&<span>{items.length}{next ? '+' : ''} {items.length===1&&!next ? 'message' : 'messages'} shown</span>}</div>
-        <div className="message-search-results" aria-busy={busy}>
-          {busy&&<p role="status">Searching messages…</p>}
+        <div className="message-search-results">
+          {busy && !cursor && <p className="message-search-pending" role="status"><Spinner/>Searching messages…</p>}
           {error&&<div className="message-search-notice" role="alert"><p>{error}</p><Button size="sm" onClick={()=>setAttempt(value=>value+1)}>Retry search</Button></div>}
           {!busy&&!error&&searched&&!items.length&&<div className="message-search-empty"><MagnifyingGlass size={40}/><h3>No messages found</h3><p>Try a different keyword or remove a filter.</p></div>}
           {!!items.length&&<ul aria-label="Search results">{items.map(item=><li key={item.id}><button type="button" className="message-search-result" aria-current={channel && selected === item.id ? true : undefined} onClick={()=>{if (channel) setSelected(item.id); else onClose(); onSelect(item);}}>
@@ -127,7 +127,7 @@ function SearchDialog({ workspace, channel, editRequest, onChannelSubmit, onClos
               {item.is_reply&&<span className="message-search-thread"><Chats size={14}/>Thread reply<span> · Open conversation</span></span>}
             </span>
           </button></li>)}</ul>}
-          {next&&!error&&items.length<MAX_RESULTS&&<Button disabled={busy} onClick={()=>setCursor(next)}>Load more results</Button>}
+          {next&&!error&&items.length<MAX_RESULTS&&<Button loading={busy && Boolean(cursor)} onClick={()=>setCursor(next)}>{busy && cursor ? 'Loading more results…' : 'Load more results'}</Button>}
           {items.length>=MAX_RESULTS&&<p>Showing the first {MAX_RESULTS} results. Refine your search to find more.</p>}
         </div>
       </div>;

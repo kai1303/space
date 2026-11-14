@@ -46,3 +46,19 @@ it('rejects an expired custom pause locally and keeps a failed future pause edit
   await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('Couldn’t save'));
   expect(close).not.toHaveBeenCalled();
 });
+
+it('shows progress on the chosen duration and accepts it before status is known',async()=>{
+ let finish!: (response:Response)=>void;
+ vi.stubGlobal('fetch',vi.fn((_url:string,init?:RequestInit)=>new Promise<Response>(resolve=>{
+   if(init?.method==='PATCH')finish=resolve;
+ })));
+ const close=vi.fn();
+ render(<AccountNotificationMenu workspace="w" actor="actor" onClose={close}/>);
+ await userEvent.click(screen.getByRole('menuitem',{name:'Notifications'}));
+ expect(screen.getByText('Checking notification pause…')).toBeTruthy();
+ await userEvent.click(screen.getByRole('menuitem',{name:'15 minutes'}));
+ expect(screen.getByRole('menuitem',{name:'15 minutes'}).getAttribute('aria-busy')).toBe('true');
+ expect(screen.getByRole('menuitem',{name:'1 hour'}).hasAttribute('aria-busy')).toBe(false);
+ finish(Response.json({paused_until:new Date(Date.now()+900000).toISOString()}));
+ await waitFor(()=>expect(close).toHaveBeenCalledOnce());
+});

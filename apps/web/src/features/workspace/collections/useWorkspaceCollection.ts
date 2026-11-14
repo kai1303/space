@@ -94,5 +94,5 @@ export function useCollection(workspace: string, view: CollectionView, query = '
       }
     } finally { state.writing = false; if (state.active) setBusy(false); }
   }
-  return { items, cursor, loading, error, busy, writeError, revoked, change, refresh: () => load(), clearAndRefresh: () => { cache?.invalidate(`${base}/${view}`); setItems([]); setCursor(null); return load(); }, more: () => load(cursor ?? undefined), retry: () => load(retryAfter.current) };
+  return { items, cursor, loading, loadingMore: loading && !!retryAfter.current, error, busy, writeError, revoked, change, refresh: () => load(), clearAndRefresh: () => { cache?.invalidate(`${base}/${view}`); setItems([]); setCursor(null); return load(); }, more: () => load(cursor ?? undefined), retry: () => load(retryAfter.current) };
 }

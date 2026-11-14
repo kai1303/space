@@ -25,6 +25,9 @@ module.exports = {
     { name: '@electron-forge/maker-zip', platforms: ['darwin'] },
   ],
   hooks: {
+    prePackage: (config, platform) => {
+      if (platform === 'win32') config.packagerConfig.icon = join(__dirname, 'assets', 'space-icon.ico');
+    },
     generateAssets: () => Promise.all([
       require('./scripts/build-runner.cjs').buildRunner(),
       require('./scripts/build-browser-style.cjs').buildBrowserStyle(),

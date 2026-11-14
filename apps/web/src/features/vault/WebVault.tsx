@@ -1,13 +1,17 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import type { VaultMac, VaultChange, VaultItemDetails } from '@space/contracts';
-import { Button, Select, Tabs } from '@space/ui/primitives';
+import { Button, LoadingStatus, Select, Tabs } from '@space/ui/primitives';
 import { Desktop, Fingerprint, Key, Lock, Terminal } from '@phosphor-icons/react';
 import { request } from '../../shared/api/request.js';
 import {VaultItemEditor} from './VaultItemEditor.js';
 import {vaultItemRequest} from './vault-client.js';
 import './vault.css';
 
-export function WebVault({actor}: {actor: string}) {
+export function WebVault({actor}: {actor:string}) {
+  return <PersonalVault key={actor} actor={actor}/>;
+}
+
+function PersonalVault({actor}: {actor: string}) {
   useEffect(() => {
     document.title = 'Vault — Space';
     return () => { document.title = 'Space — Chat'; };
@@ -27,28 +31,39 @@ export function WebVault({actor}: {actor: string}) {
   const active = useRef<AbortController | null>(null);
   const mac = macs.find(m => m.id === selected);
   function clearItems() { setEditor(undefined); setItems(undefined); setMore(false); setSearch(''); setCategory('all'); }
+  function lock() {
+    active.current?.abort(); active.current=null;
+    setBusy(undefined); setLoading(false); setMessage(''); clearItems();
+  }
   async function refresh() {
     active.current?.abort();
     const controller = active.current = new AbortController();
-    setLoading(true); setMessage(''); clearItems();
+    setLoading(true); setMessage('');
     try {
       const paired = await request<VaultMac[]>('/me/vault/macs', undefined, undefined, 'POST', controller.signal, actor);
       const devices = !paired.length && desktop ? [{id: 'local', name: 'this Mac', online: true}] : paired;
       if (controller.signal.aborted) return;
       setMacs(devices);
       setSelected(previous => devices.some(d => d.id === previous) ? previous : (devices.find(d => d.online) ?? devices[0])?.id ?? '');
-    } catch { if (!controller.signal.aborted) { setMacs([]); setMessage('Could not load your paired Macs. Try refreshing.'); } }
+    } catch (reason) {
+      if (controller.signal.aborted) return;
+      if (reason instanceof Error && ['unauthorized','forbidden','not_found','actor_changed'].includes(reason.message)) {
+        setMacs([]); setSelected(''); clearItems();
+      }
+      setMessage('Could not load your paired Macs. Try refreshing.');
+    }
     finally { if (!controller.signal.aborted) setLoading(false); }
   }
   useEffect(() => {
     void refresh();
     const unsubscribe = desktop?.onVaultLocked?.(() => {
-      active.current?.abort(); clearItems(); setBusy(undefined); setMessage('');
+      lock();
     });
     return () => { active.current?.abort(); unsubscribe?.(); };
   }, [actor, desktop]);
   async function send(change?:VaultChange) {
     if (!mac?.online || busy || (change && !items)) return;
+    active.current?.abort(); setLoading(false);
     const controller = active.current = new AbortController();
     setBusy(change ? 'change' : 'list'); setMessage('');
     if (!change) clearItems();
@@ -87,13 +102,14 @@ export function WebVault({actor}: {actor: string}) {
   return <main id="chat-messages" tabIndex={-1} className="space-vault-page" aria-labelledby="vault-page-title">
     <header className="space-vault-header">
       <h1 id="vault-page-title"><Lock size={20} aria-hidden="true"/> Personal Vault</h1>
-      {items && <Button size="sm" onClick={() => { clearItems(); setMessage(''); }} disabled={!!busy}><Lock aria-hidden="true"/> Lock Vault</Button>}
+      {(items || busy === 'list') && <Button size="sm" onClick={lock}><Lock aria-hidden="true"/> Lock Vault</Button>}
     </header>
     <div className={'space-web-vault' + (items ? ' is-unlocked' : '')}>
-      {loading ? <p role="status">Finding paired Macs…</p> : macs.length ? <>
+      {!macs.length && loading && <LoadingStatus>Finding paired Macs…</LoadingStatus>}
+      {macs.length ? <>
         {macs.length > 1 && <div className="sp-field">
           <label htmlFor={macPickerId}><Desktop size={18} aria-hidden="true"/> Paired Mac</label>
-          <Select id={macPickerId} aria-label="Paired Mac" value={selected} disabled={!!busy || !!editor} onChange={event => { setSelected(event.target.value); clearItems(); setMessage(''); }}>
+          <Select id={macPickerId} aria-label="Paired Mac" value={selected} disabled={busy === 'change' || !!editor} onChange={event => { if (busy === 'list') lock(); setSelected(event.target.value); clearItems(); setMessage(''); }}>
             {macs.map(device => <option key={device.id} value={device.id}>{device.name}{device.online ? '' : ' · Offline'}</option>)}
           </Select>
         </div>}
@@ -105,7 +121,7 @@ export function WebVault({actor}: {actor: string}) {
           <p>Use Touch ID or your Mac password on <strong>{mac.name}</strong> to access your saved logins and API tokens.</p>
           <Button variant="primary" loading={busy === 'list'} onClick={() => void send()}>{busy ? 'Unlocking…' : 'Unlock Vault'}</Button>
         </section> : <p>{mac.name} is offline. Open Space Desktop on this Mac, then refresh.</p>)}
-      </> : !message && <p>Pair a local agent in Space Desktop on your Mac, then refresh to see it here.</p>}
+      </> : !loading && !message && <p>Pair a local agent in Space Desktop on your Mac, then refresh to see it here.</p>}
       {(busy || message) && <p role="status">{busy ? 'Waiting for approval on ' + mac?.name + '…' : message}</p>}
       {items && !editor && <section className="space-web-vault-list" aria-label="Vault items">
         <div className="space-vault-list-header"><h2>Items</h2><Button variant="primary" onClick={() => openEditor('new')}>Add item</Button></div>
@@ -119,8 +135,8 @@ export function WebVault({actor}: {actor: string}) {
         </button></li>)}</ul> : <p>{!items.length ? 'Your Vault is empty' : search ? 'No matching items' : 'No items in this category'}</p>}
         {more && <small>This Mac shared the first {items.length} items. Open Vault on your Mac to see the rest.</small>}
       </section>}
-      {!editor && !loading && !busy && !items && (!mac?.online || macs.length > 1 || message) &&
-        <div className="space-web-vault-actions"><Button variant="ghost" size="sm" onClick={() => void refresh()}>Refresh Macs</Button></div>}
+      {!editor && !busy && !items && (!loading || macs.length > 0) && (!mac?.online || macs.length > 1 || message || loading) &&
+        <div className="space-web-vault-actions"><Button variant="ghost" size="sm" loading={loading} onClick={() => void refresh()}>Refresh Macs</Button></div>}
     </div>
   </main>;
 }

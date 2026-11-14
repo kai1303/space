@@ -11,7 +11,7 @@ export type AssetDetails = {
   id: string; name: string; size: number; type: string; description: string; channel_id: string; thread_id: string | null;
   uploader: string; shared_at: string; can_edit: boolean;
 };
-export type AssetUpload = { asset: AssetAttachment; upload: { url: string; fields: Record<string, string> }; expires_at: string };
+export type AssetUpload = { asset: AssetAttachment; upload: { url: string; fields: Record<string, string>; put_url?: string }; expires_at: string };
 export type AssetPreview =
   | { kind: 'image'; mime: 'image/webp' | 'image/gif'; width: number; height: number }
   | { kind: 'office'; fileType: 'docx' | 'xlsx' | 'pptx' | 'odt' | 'ods' | 'odp' }

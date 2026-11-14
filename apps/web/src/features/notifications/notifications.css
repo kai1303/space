@@ -123,3 +123,5 @@
   .notification-toolbar .sp-button{margin-left:auto;width:36px;min-width:36px;padding:0;font-size:0;gap:0;justify-content:center}
   .notification-toolbar .sp-button svg{width:20px;height:20px}
 }
+
+.notification-preferences-pending { display: flex; align-items: center; gap: 8px; color: var(--sp-text-secondary); }

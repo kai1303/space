@@ -26,7 +26,7 @@ export function Chat() {
     window.addEventListener('space:session-expired', expired);
     return () => window.removeEventListener('space:session-expired', expired);
   }, [refetch]);
-  if (isPending) return location.pathname.startsWith('/c/') ? <ConversationLinkLoading /> : <AccessLoading />;
+  if (isPending) return location.pathname.startsWith('/c/') || location.pathname.startsWith('/s/') ? <ConversationLinkLoading /> : <AccessLoading />;
   if (error) return <AccessFrame screen="session-error" title="Let’s try that again."><p role="alert">Cannot check your session. Please try again.</p><Button onClick={() => void refetch()}>Try again</Button></AccessFrame>;
   if (!session) return <AuthScreen />;
   const review = /^\/review\/([\da-f-]{36})\/?$/i.exec(location.pathname);

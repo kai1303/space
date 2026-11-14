@@ -105,7 +105,9 @@ export function registerDirectTurns(socket:Socket,connections:AgentConnectionSto
         active.set(id,delivery);
         if(operation==='event'){
           if(JSON.stringify(input.event).length>80000)throw new AppError(400,'agent_event_too_large');
-          await tasks.acceptEvent(identity.id,parseAgentEvent(input.event),delivery,identity.connection_id);
+          const event = parseAgentEvent(input.event);
+          await tasks.acceptEvent(identity.id,event,delivery,identity.connection_id);
+          if (event.payload.transcript) { ack({data:true}); return; }
 
         }else if(operation==='finish'){
           if(!await tasks.executionTerminal(delivery.execution_id))throw new AppError(409,'missing_terminal_event');

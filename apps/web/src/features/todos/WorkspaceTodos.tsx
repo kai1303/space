@@ -1,7 +1,7 @@
 import { useWorkspaceQueryCache } from '../../shared/realtime/workspace-query-cache.js';
 import { useEffect, useRef, useState } from 'react';
 import type { HubTodo, Page } from '@space/contracts';
-import { Select, Button, Dialog, IconButton, Menu, Popover, toast } from '@space/ui/primitives';
+import { Select, Button, Dialog, IconButton, ListRowSkeleton, Menu, Popover, toast } from '@space/ui/primitives';
 import { RichComposer } from '@space/ui/composer';
 import { RichContent } from '@space/ui/rich-text';
 import { ArrowsDownUp, Bell, Broom, CaretDown, CheckCircle, DotsThree, FunnelSimple, X } from '@phosphor-icons/react';
@@ -22,6 +22,7 @@ function useTodos(workspace: string, filters: Filters, initialTodoId?: string) {
   const [items,setItems] = useState<HubTodo[]>([]), [cursor,setCursor] = useState<string|null>(null), [selected,setSelected] = useState<HubTodo>();
   const [loading,setLoading] = useState(true), [busy,setBusy] = useState(false), [error,setError] = useState(''), [revoked,setRevoked] = useState(false);
   const [selectionUnavailable,setSelectionUnavailable] = useState(false);
+  const [loadingMore,setLoadingMore] = useState(false);
   const state = useRef({active:true,revoked:false,writing:false,revision:0,pages:1,selectedId:initialTodoId,read:undefined as AbortController|undefined,write:undefined as AbortController|undefined});
   const base = `/workspaces/${encodeURIComponent(workspace)}/hub/todos`;
   const query = new URLSearchParams({status:filters.status,reminder:filters.reminder,sort:filters.sort,archived:String(filters.archived),limit:String(PAGE_SIZE)}).toString();
@@ -29,7 +30,7 @@ function useTodos(workspace: string, filters: Filters, initialTodoId?: string) {
   async function load(after?: string) {
     const s=state.current;if(!s.active || s.revoked || s.writing)return;
     s.read?.abort();const controller=new AbortController();s.read=controller;const revision=++s.revision;
-    setLoading(true);setError('');
+    setLoading(true);setLoadingMore(!!after);setError('');
     try {
       const incoming:HubTodo[]=[];let next=after, pages=0;
       do {
@@ -68,7 +69,7 @@ function useTodos(workspace: string, filters: Filters, initialTodoId?: string) {
     finally{s.writing=false;if(s.active)setBusy(false);}
   }
   function select(item?:HubTodo){if(item && (!state.current.active || state.current.revoked))return;state.current.selectedId=item?.id;setSelectionUnavailable(false);setSelected(item);}
-  return {items,cursor,selected,select,selectionUnavailable,loading,busy:busy||revoked,error,revoked,load,change};
+  return {items,cursor,selected,select,selectionUnavailable,loading,loadingMore:loading && loadingMore,busy:busy||revoked,error,revoked,load,change};
 }
 
 export function WorkspaceTodos({workspace,onOpen,archived=false,initialTodoId}:{workspace:string;onOpen:Open;archived?:boolean;initialTodoId?:string}) {
@@ -121,8 +122,8 @@ export function WorkspaceTodos({workspace,onOpen,archived=false,initialTodoId}:{
           <div className="todos-row-body"><button className="todos-row-title" disabled={data.busy} onClick={()=>{data.select(item);setCreating(false);setEditing(false);}}>{item.title}</button>{item.remind_at&&<small className={!item.completed&&Date.parse(item.remind_at)<now?'is-overdue':''}><Bell size={12}/>{item.reminder_fired_at&&!item.completed?'Reminder due · ':''}{displayDate(item.remind_at)}</small>}{item.message_id&&<small>From a message</small>}{item.external&&<small>From {item.external.name} · {item.external.external_id}</small>}</div>
           <Menu label={`Actions for ${item.title}`} trigger={<DotsThree size={22}/>} floating items={[{label:item.completed?'Mark in-progress':'Mark complete',onSelect:()=>void update(item,{completed:!item.completed})},{label:'Edit to-do',onSelect:()=>{data.select(item);setCreating(false);setEditing(true);}},{label:archived?'Move to To-dos':'Move to Saved',onSelect:()=>archived?void data.change(`/${item.id}`,{archived:false}):void remove(item,'archive')},{label:'Clear to-do',danger:true,onSelect:()=>void remove(item,'delete')}]}/>
         </li>)}</ul>
-        {data.loading&&<p className="todos-loading" role="status">Loading to-dos…</p>}
-        {!data.loading&&data.cursor&&<div className="todos-more">{data.items.length<MAX_ITEMS?<Button variant="secondary" disabled={data.busy} onClick={()=>void data.load(data.cursor!)}>Load more</Button>:<p>Showing 240 to-dos. Use filters to narrow your list.</p>}</div>}
+        {data.loading && !data.items.length && <ListRowSkeleton label="Loading to-dos…" />}
+        {data.cursor&&<div className="todos-more">{data.items.length<MAX_ITEMS?<Button variant="secondary" loading={data.loadingMore} disabled={data.busy} onClick={()=>void data.load(data.cursor!)}>Load more</Button>:<p>Showing 240 to-dos. Use filters to narrow your list.</p>}</div>}
       </div>
     </section>
     <aside ref={detailPane} className={`todos-detail-pane ${creating||current?'is-open':''}`} aria-label="To-do details">

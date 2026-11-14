@@ -3,7 +3,7 @@ import { Check, Copy } from "@phosphor-icons/react";
 import { IconButton } from "../primitives/primitives.js";
 import { highlightCode, languageName, type CodeToken } from "./syntax-highlight.js";
 
-async function copyCode(code: string, trigger: HTMLElement) {
+export async function copyCode(code: string, trigger: HTMLElement) {
   try {
     if (navigator.clipboard?.writeText) {
       await navigator.clipboard.writeText(code);

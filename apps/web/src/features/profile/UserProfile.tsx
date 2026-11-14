@@ -2,7 +2,7 @@ import { useMemberProfile } from './MemberProfile.js';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { AnimatePresence } from 'motion/react';
-import { Select, Avatar, Button, Dialog, IconButton, Popover, SidePanel, TextField } from '@space/ui/primitives';
+import { Select, Avatar, Button, Dialog, IconButton, Popover, SidePanel, Spinner, TextField } from '@space/ui/primitives';
 import { EmojiPicker } from '@space/ui/emoji';
 import { Clock, EnvelopeSimple, Phone, Plus, Smiley, X } from '@phosphor-icons/react';
 import { workspacePath, visibleStatus, type ProfileUpdate, type UserProfile, type UserStatus } from '@space/contracts';
@@ -23,7 +23,11 @@ const presets = [
 ];
 
 
-export function UserSettings({ user, userId, workspace, onNameChange, onOpenVault }: { onOpenVault?: () => void; workspace?: string; user: string; userId?: string; onNameChange?: (name: string) => void }) {
+type UserSettingsProps = { onOpenVault?: () => void; workspace?: string; user: string; userId?: string; onNameChange?: (name: string) => void };
+export function UserSettings(props: UserSettingsProps) {
+  return <AccountSettings key={props.userId} {...props}/>;
+}
+function AccountSettings({ user, userId, workspace, onNameChange, onOpenVault }: UserSettingsProps) {
   const profiles = useMemberProfile();
   useEffect(() => { if (profiles?.selected) setPanel(false); }, [profiles?.selected]);
   const [profile, setProfile] = useState<UserProfile>({ id: userId ?? '', display_name: user, full_name: '', title: '', name_pronunciation: '', phone: '', time_zone: 'UTC', image: null, email: null, status: null, presence: 'active' });
@@ -70,15 +74,19 @@ export function UserSettings({ user, userId, workspace, onNameChange, onOpenVaul
     finally { if (alive.current) setBusy(false); }
   }
   function open(next: 'profile' | 'status') { setError(''); if (next === 'profile') { profiles?.close(); setPanel(true); } else setEditor('status'); }
+  const profilePending = loading
+    ? <p role="status" className="space-account-loading"><Spinner/>Loading profile…</p>
+    : <Button size="sm" onClick={() => void load()}>Reload profile</Button>;
   return <div className={`space-user-settings ${panel ? 'is-profile-open' : ''}`} ref={root}>
-    <Popover label="Your account" panelLabel="Your account" role="menu" floating align="start" className="space-account-menu" panelClassName="space-account-popover" trigger={<ProfilePhoto profile={profile} small />}>
+    <Popover label="Your account" panelLabel="Your account" role="menu" floating align="start" className="space-account-menu" panelClassName="space-account-popover" trigger={<ProfilePhoto profile={profile} small showPresence={loaded} />}>
       {close => <>
-        <div className="space-account-heading"><ProfilePhoto profile={profile} small /><div><strong>{profile.display_name}</strong><span><Presence value={profile.presence} /> {profile.presence === 'away' ? 'Away' : 'Active'}</span></div></div>
-        {!loaded ? loading ? <p role="status" className="space-account-loading">Loading profile…</p> : <Button size="sm" onClick={() => void load()}>Reload profile</Button> : <>
+        <div className="space-account-heading"><ProfilePhoto profile={profile} small showPresence={loaded} /><div><strong>{loaded ? profile.display_name : user}</strong>{loaded && <span><Presence value={profile.presence} /> {profile.presence === 'away' ? 'Away' : 'Active'}</span>}</div></div>
+        {!loaded ? profilePending : <>
           <button role="menuitem" className="space-account-status" onClick={() => { close(); open('status'); }}><span aria-hidden="true">{status?.emoji || <Smiley size={20} />}</span><span>{status?.text || 'Update your status'}</span></button>
           {status && <button role="menuitem" disabled={busy} onClick={() => { close(); void save({ status: null }).catch(() => {}); }}>Clear status</button>}
           <button role="menuitem" disabled={busy} onClick={() => { close(); void save({ presence: profile.presence === 'active' ? 'away' : 'active' }).catch(() => {}); }}>Set yourself as {profile.presence === 'active' ? 'away' : 'active'}</button>
-          {workspace && <AccountNotificationMenu workspace={workspace} actor={profile.id} onClose={close}/>}
+        </>}
+          {workspace && profile.id && <AccountNotificationMenu workspace={workspace} actor={profile.id} onClose={close}/>}
           <hr /><button role="menuitem" onClick={() => { close(); open('profile'); }}>Profile</button>
           <a role="menuitem" href={workspace && workspacePath(workspace).startsWith('/w/') ? workspacePath(workspace) + '/vault' : '/vault'} onClick={event => {
             if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return;
@@ -86,8 +94,7 @@ export function UserSettings({ user, userId, workspace, onNameChange, onOpenVaul
             if (onOpenVault) { event.preventDefault(); onOpenVault(); }
           }}>Vault</a>
           {workspace && <button role="menuitem" onClick={() => { close(); setPreferences(true); }}>Preferences</button>}
-          <button role="menuitem" onClick={() => { close(); setConnections(true); }}>Connections</button>
-        </>}
+          {(userId || loaded) && <button role="menuitem" onClick={() => { close(); setConnections(true); }}>Connections</button>}
         <hr /><SignOutButton role="menuitem" />
       </>}
     </Popover>
@@ -95,6 +102,7 @@ export function UserSettings({ user, userId, workspace, onNameChange, onOpenVaul
     {createPortal(<AnimatePresence>{panel && <SidePanel key="profile" className="space-profile-panel" role="dialog" aria-label="Your profile">
       <header><strong>Profile</strong><button ref={closePanelButton} aria-label="Close profile" onClick={closePanel}><X size={20} /></button></header>
       <div className="space-profile-scroll">
+        {!loaded ? <><h2>{user}</h2>{profilePending}</> : <>
         <div className="space-profile-portrait"><ProfilePhoto profile={profile} /><Button size="sm" onClick={() => setEditor('profile')}>Edit photo</Button></div>
         <section><div className="space-profile-name"><h2>{profile.full_name || profile.display_name}</h2><button className="space-profile-link" aria-label="Edit profile" onClick={() => setEditor('profile')}>Edit</button></div>
           {profile.full_name && profile.full_name !== profile.display_name && <p className="space-profile-secondary">{profile.display_name}</p>}
@@ -109,6 +117,7 @@ export function UserSettings({ user, userId, workspace, onNameChange, onOpenVaul
           {profile.email && <div className="space-profile-row"><EnvelopeSimple size={20} /><div><small>Email address</small><a href={`mailto:${profile.email}`}>{profile.email}</a></div></div>}
           {profile.phone ? <div className="space-profile-row"><Phone size={20} /><div><small>Phone</small><span>{profile.phone}</span></div></div> : <button className="space-profile-link space-profile-add" onClick={() => setEditor('profile')}><Plus size={16} />Add phone</button>}
         </section>
+        </>}
         {error && !editor && <p role="alert" className="space-profile-error">{error}</p>}
       </div>
     </SidePanel>}</AnimatePresence>, document.body)}
@@ -120,10 +129,10 @@ export function UserSettings({ user, userId, workspace, onNameChange, onOpenVaul
 }
 
 function Presence({ value }: { value: UserProfile['presence'] }) { return <span className={`space-profile-presence ${value === 'away' ? 'is-away' : ''}`} aria-hidden="true" />; }
-function ProfilePhoto({ profile, small = false }: { profile: UserProfile; small?: boolean }) {
+function ProfilePhoto({ profile, small = false, showPresence = true }: { profile: UserProfile; small?: boolean; showPresence?: boolean }) {
   return <span className={`space-profile-photo ${small ? 'is-small' : ''}`}>
     {profile.image ? <img src={profile.image} alt={small ? profile.display_name : `Profile photo for ${profile.display_name}`} /> : <Avatar name={profile.display_name} initials={profile.display_name.slice(0, 2).toUpperCase()} tone="blue" size={small ? 'sm' : 'lg'} />}
-    {small && <Presence value={profile.presence} />}
+    {small && showPresence && <Presence value={profile.presence} />}
   </span>;
 }
 

@@ -32,8 +32,8 @@ export function registerAssetRoutes(app: FastifyInstance, assets: AssetStore, st
     record(r.body, []);
     const id = uuid(r.params.assetId);
     return assets.complete(expectedActor(r), id, async (from, to, size, name, encrypted) => {
-      await backend.finalize(from, to, size);
-      return encrypted ? {kind:'unsupported',reason:'Encrypted file'} : generateAssetPreview(backend, id, name, to, size);
+      const sealed = await backend.finalize(from, to, size);
+      return encrypted ? {kind:'unsupported',reason:'Encrypted file'} : generateAssetPreview(backend, id, name, to, size, sealed ?? undefined);
     });
   });
   let encryptedReads = 0;
@@ -110,16 +110,21 @@ export function registerAssetRoutes(app: FastifyInstance, assets: AssetStore, st
     await assets.shareOffice(r.actorId, uuid(r.params.assetId), enabled);
     return reply.code(204).send();
   });
-  app.get<{ Params: { assetId: string; revision: string } }>(OFFICE_CONTENT, async (r, reply) => {
+  app.route<{ Params: { assetId: string; revision: string } }>({ method: ['GET', 'HEAD'], url: OFFICE_CONTENT, handler: async (r, reply) => {
     if (!office?.callbackBase) throw new AppError(404, 'not_found');
     const payload = await officeRequest(office, r.headers.authorization, 'download');
     const id = uuid(r.params.assetId), revision = Number(r.params.revision);
     if (!Number.isSafeInteger(revision) || revision < 1 || revision > 2147483647 ||
         payload.url !== officeContentUrl(office, id, revision)) throw new AppError(403, 'invalid_office_request');
+    if (r.method === 'HEAD') {
+      const size = await assets.officeContentSize(id, revision);
+      if (size === undefined) throw new AppError(404, 'not_found');
+      return reply.type('application/octet-stream').header('content-length', size).send();
+    }
     const bytes = await assets.officeContent(id, revision);
     if (!bytes) throw new AppError(404, 'not_found');
     return reply.type('application/octet-stream').send(bytes);
-  });
+  } });
   let activeSaves = 0;
   app.post(OFFICE_CALLBACK, async (r, reply) => {
     if (!office?.callbackBase) throw new AppError(404, 'not_found');

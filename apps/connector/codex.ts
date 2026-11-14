@@ -1,12 +1,13 @@
+import { CodexTranscript, codexFrameLimit } from './codex-transcript.js';
 import { attachmentContext, attachmentImages } from './attachment-input.js';
-import { isReasoningEffort, parseModelCatalog, type AgentModel, parseSessionGoal, type SessionGoal, type GoalAction } from '@space/contracts';
+import { shellExecution, isReasoningEffort, parseModelCatalog, type AgentModel, parseSessionGoal, type SessionGoal, type GoalAction } from '@space/contracts';
 import { replyFormatInstructions } from './reply-format.js';
 import { memoryInstructions } from './memory-instructions.js';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { mkdtemp, mkdir, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, relative, sep } from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
 import { localSessionStore, type LocalSessionStorage } from './session-storage.js';
 import { CODING_TURN_TIMEOUT_MS, parseInvocation, parseAgentEvent, parseAgentResponse, type AgentEvent, type AgentText } from '@space/contracts';
@@ -15,19 +16,19 @@ import {sessionRuntime} from './session-runtime.js';
 import { serverPrompt, turnScopedRuntime, type TurnServer } from './outbound-tools.js';
 import { approveCoding, approveProject, readCodeContext, reviewInstructions, boundCodingMessages, codingInstructions } from './coding-tools.js';
 import { AgentProgress } from './agent-progress.js';
-import { projectForTurn } from './session-project.js';
+import { projectBinding, projectForTurn } from './session-project.js';
 import { projectMcp, projectServer, projectToolNames, resolveProject } from './project-tools.js';
-import { AgentSessionStopped, type InvokeAgent, type SpawnAgent } from './agent-runtime.js';
+import { AgentSessionStopped, type InvokeAgent, type SyncArchive, type SpawnAgent } from './agent-runtime.js';
 export { AgentSessionStopped } from './agent-runtime.js';
 export type { InvokeAgent as InvokeCodex, SpawnAgent as SpawnCodex } from './agent-runtime.js';
 type Message = { id?: string | number; method?: string; result?: any; error?: unknown; params?: any };
 
-async function startSingleCodex(accessToken: string, onExit: () => void, launch: SpawnAgent = spawn, storage?: LocalSessionStorage, selectedProject?: string, servers: TurnServer[] = [], startupSignal?: AbortSignal, enableGoals = false) {
+async function startSingleCodex(accessToken: string, onExit: () => void, launch: SpawnAgent = spawn, storage?: LocalSessionStorage, selectedProject?: string, servers: TurnServer[] = [], startupSignal?: AbortSignal, enableGoals = false, archiveStore?: Awaited<ReturnType<typeof localSessionStore>>) {
   const coding = storage?.coding === true;
   const project = await resolveProject(selectedProject ?? storage?.project);
   if (coding && !project) throw new Error('Coding requires --project.');
   if (storage && project) storage = { ...storage, project };
-  const sessions = storage ? await localSessionStore(storage) : undefined;
+  const sessions = archiveStore ?? (storage ? await localSessionStore(storage) : undefined);
   const directory = sessions?.directory ?? await mkdtemp(join(tmpdir(), 'space-codex-'));
   const home = sessions?.home ?? join(directory, 'home');
   const cwd = sessions?.cwd ?? join(directory, 'work');
@@ -89,9 +90,9 @@ async function startSingleCodex(accessToken: string, onExit: () => void, launch:
   child.stdin.on('error', fail);
   child.stdout.on('data', (chunk: Buffer) => {
     buffer += decoder.write(chunk);
-    if (buffer.length > 1_000_000) { fail(); stop(); return; }
     let newline: number;
     while ((newline = buffer.indexOf('\n')) !== -1) {
+      if (newline > codexFrameLimit) { stop(); return; }
       const line = buffer.slice(0, newline); buffer = buffer.slice(newline + 1);
       let message: Message;
       try { message = JSON.parse(line); if (!message || typeof message !== 'object') throw new Error(); }
@@ -109,6 +110,7 @@ async function startSingleCodex(accessToken: string, onExit: () => void, launch:
       } else if (message.method==='thread/name/updated') titleListener?.(message.params);
       else if (message.method) active?.notify(message);
     }
+    if (buffer.length > codexFrameLimit) stop();
   });
   const startupDeadline = setTimeout(stop, 15_000);
   startupSignal?.addEventListener('abort', stop, { once: true });
@@ -161,7 +163,7 @@ async function startSingleCodex(accessToken: string, onExit: () => void, launch:
     let completedTurn = false, finishTurn!: () => void;
     let turnFinished = new Promise<void>(resolve => { finishTurn = resolve; });
     let progress: NodeJS.Timeout | undefined, dirty = false, progressPending = false, settled = false;
-    const output = new AgentProgress(coding, undefined, coding && Boolean(request.persistent_session));
+    const output = new AgentProgress(coding || Boolean(request.persistent_session), undefined, coding && Boolean(request.persistent_session));
     const messages = new Map<string, AgentText>();
     let queue = Promise.resolve();
     const approvalLifetime = new AbortController();
@@ -169,6 +171,26 @@ async function startSingleCodex(accessToken: string, onExit: () => void, launch:
     const done = new Promise<void>((resolve, fail) => { finish = resolve; reject = error => { approvalLifetime.abort(error); fail(error); }; });
     // Notifications may arrive in the same stdout chunk as the turn/start response.
     const early: Message[] = [];
+    let queuedCharacters = 0;
+    const enqueue = (event:AgentEvent) => {
+      const size = JSON.stringify(event).length;
+      queuedCharacters += size;
+      if (queuedCharacters > 256000) child.stdout.pause();
+      queue = queue.then(async () => {
+        signal.throwIfAborted();
+        await emit(event);
+      }).finally(() => {
+        queuedCharacters -= size;
+        if (queuedCharacters < 128000 && child.stdout.isPaused()) child.stdout.resume();
+      });
+      void queue.catch(reject);
+      return queue;
+    };
+    const transcript = request.persistent_session ? new CodexTranscript(chunk => {
+      enqueue(parseAgentEvent({id:randomUUID(),schema_version:'1.0',execution_id:request.execution_id,
+        sequence:++sequence,type:'execution.progress',occurred_at:new Date().toISOString(),
+        payload:{text:'Recording session output',transcript:chunk}}));
+    },(value,final)=>output.visibleMessage(value,final)) : undefined;
     const publish = (type: AgentEvent['type'], text: string, complete = false, sessionReady = false, goalUpdate?: SessionGoal | null, sessionView?: AgentEvent['payload']['session_view']) => {
       const terminal = type === 'execution.completed' || type === 'execution.failed';
       let response;
@@ -177,11 +199,18 @@ async function startSingleCodex(accessToken: string, onExit: () => void, launch:
         if (type !== 'execution.failed') throw error;
         try { response = output.snapshot([], true); } catch { /* Invalid snapshots cannot hide the terminal failure. */ }
       }
-      const event = parseAgentEvent({ id: randomUUID(), schema_version: '1.0', execution_id: request.execution_id, sequence: ++sequence, type, occurred_at: new Date().toISOString(), payload: { ...(goalUpdate === undefined ? {} : {session_goal:goalUpdate}), text: output.visibleMessage(text, terminal) || (terminal ? 'Review updated.' : 'Working'), ...(sessionView ? {session_view:sessionView} : {}), ...(response ? { response } : {}), ...(sessionReady ? { session_ready: true } : {}) } });
-      queue = queue.then(async () => { signal.throwIfAborted(); await emit(event); });
-      void queue.catch(reject);
-      return queue;
+      let event = parseAgentEvent({ id: randomUUID(), schema_version: '1.0', execution_id: request.execution_id, sequence: ++sequence, type, occurred_at: new Date().toISOString(), payload: { ...(goalUpdate === undefined ? {} : {session_goal:goalUpdate}), text: output.visibleMessage(text, terminal) || (terminal ? 'Review updated.' : 'Working'), ...(sessionView ? {session_view:sessionView} : {}), ...(response ? { response } : {}), ...(sessionReady ? { session_ready: true } : {}) } });
+      // The live label duplicates the response. Keep it within the transport envelope
+      // even when a large reply contains many escapable characters.
+      if (transcript && JSON.stringify(event).length > 80000) event.payload.text = previewText(event.payload.text.slice(0,1000));
+      if (transcript && Buffer.byteLength(JSON.stringify(event)) > 125000 && event.payload.response) {
+        const preview = event.payload.response;
+        event = {...event,payload:{...event.payload,text:previewText(event.payload.text.slice(0,1000)),response:{...preview,tools:preview.tools.map(tool=>({...tool,arguments:'',result:undefined}))}}};
+      }
+      return enqueue(event);
     };
+    // Preserve hidden review/memory instructions for the existing terminal processing on ordinary replies.
+    const previewText = (raw:string) => raw.length <= 16000 ? raw : raw.slice(0,16000).replace(/[\uD800-\uDBFF]$/, '');
     const text = () => [...messages.values()].map(message => message.text).join('\n\n');
     const flush = () => {
       clearTimeout(progress); progress = undefined;
@@ -273,30 +302,48 @@ async function startSingleCodex(accessToken: string, onExit: () => void, launch:
       try {
         if (coding && (message.method === 'item/started' || message.method === 'item/completed') && ['commandExecution', 'fileChange'].includes(p.item?.type)) {
           const item = p.item, command = item.type === 'commandExecution';
-          const failed = ['failed', 'declined'].includes(item.status);
+          const failed = ['failed', 'declined', 'interrupted', 'cancelled'].includes(item.status);
+          const starting = message.method === 'item/started';
+          const prior = output.tools.get(item.id)?.shell;
+          const started = starting ? Date.now() : prior?.started_at_ms;
+          const shell = command ? shellExecution({
+            command:item.command ?? prior?.command, started_at_ms:started, exit_code:item.exitCode,
+            duration_ms:item.durationMs ?? (!starting && started !== undefined ? Math.max(0,Date.now()-started) : undefined),
+            outcome:starting ? undefined : item.status==='declined' ? 'declined'
+              : item.status==='failed' || (typeof item.exitCode==='number' && item.exitCode!==0) ? 'failed'
+              : failed ? 'stopped' : 'success',
+          }) : undefined;
           const args = command ? { command: item.command, cwd: item.cwd } : { changes: item.changes };
           const result = command ? item.aggregatedOutput : item.changes?.map((change: any) => change.diff ?? '').join('\n');
           if (!command && !failed && message.method === 'item/completed' && Array.isArray(item.changes)) for (const change of item.changes) output.change(change.path, change.diff);
-          output.tool(item.id, command ? 'shell' : 'apply_patch', args, message.method === 'item/started' ? 'running' : failed ? 'interrupted' : 'completed', result);
+          const { aggregatedOutput, changes, command: commandText, cwd, ...metadata } = item;
+          transcript?.tool(item.id, command ? 'shell' : 'apply_patch',args,message.method === 'item/started' ? 'running' : failed ? 'interrupted' : 'completed',result,metadata,shell);
+          output.tool(item.id, command ? 'shell' : 'apply_patch', args, message.method === 'item/started' ? 'running' : failed ? 'interrupted' : 'completed', result,shell);
           dirty = true; if (!progress) progress = setTimeout(flush, 100);
+        } else if (coding && message.method === 'item/fileChange/outputDelta') {
+          if (typeof p.delta === 'string') transcript?.delta(p.itemId,p.delta,'output');
         } else if (coding && message.method === 'item/commandExecution/outputDelta') {
+          if (typeof p.delta === 'string') transcript?.delta(p.itemId,p.delta);
           const previous = output.tools.get(p.itemId);
           if (previous && typeof p.delta === 'string') output.tool(previous.id, previous.name, previous.arguments, previous.status, ((previous.result ?? '') + p.delta).slice(-16000));
           dirty = true; if (!progress) progress = setTimeout(flush, 100);
         } else if ((message.method === 'item/started' || message.method === 'item/completed') && p.item?.type === 'mcpToolCall' && ((project && p.item.server === projectServer && projectToolNames.includes(p.item.tool)) || servers.some(s => s.name === p.item.server && s.tools.includes(p.item.tool)))) {
           const item = p.item;
           const failed = item.status === 'failed' || !!item.error;
+          const { arguments: input, result, ...metadata } = item;
+          transcript?.tool(item.id,item.tool,input,message.method === 'item/started' ? 'running' : failed ? 'interrupted' : 'completed',result ?? item.error,metadata);
           output.tool(item.id, item.tool, item.arguments, message.method === 'item/started' ? 'running' : failed ? 'interrupted' : 'completed', item.result ?? (failed ? 'Tool failed.' : undefined));
           dirty = true; if (!progress) progress = setTimeout(flush, 100);
         } else if ((message.method === 'item/started' && p.item?.type === 'reasoning') || message.method === 'item/reasoning/summaryTextDelta' || message.method === 'item/reasoning/textDelta') {
           if (output.activity !== 'thinking') { output.setActivity('thinking'); dirty = true; if (!progress) progress = setTimeout(flush, 100); }
         } else if (message.method === 'item/started' && p.item?.type === 'agentMessage') {
           if (typeof p.item.id !== 'string') throw new Error();
+          transcript?.message(p.item.id,'',true,false,p.item.phase);
           output.message(p.item.id);
           const current: AgentText = messages.get(p.item.id) ?? { id: p.item.id, text: '', status: 'streaming' };
           if (p.item.phase === 'commentary' || p.item.phase === 'final_answer') current.phase = p.item.phase;
           messages.set(p.item.id, current);
-          if (coding) boundCodingMessages(messages);
+          if (coding || transcript) boundCodingMessages(messages);
           output.setActivity('responding'); dirty = true; if (!progress) progress = setTimeout(flush, 100);
         } else if (message.method === 'item/started' && !['userMessage', 'agentMessage', 'reasoning', 'plan', ...(coding ? ['contextCompaction'] : [])].includes(p.item?.type)) {
           reject(new Error('Codex attempted an unsupported tool.'));
@@ -305,9 +352,10 @@ async function startSingleCodex(accessToken: string, onExit: () => void, launch:
           output.message(p.itemId);
           const current = messages.get(p.itemId) ?? { id: p.itemId, text: '', status: 'streaming' as const };
           output.setActivity('responding');
-          current.text += p.delta;
+          const full = transcript?.message(p.itemId,p.delta,true,false);
+          current.text = full === undefined ? current.text + p.delta : previewText(full);
           messages.set(p.itemId, current);
-          if (coding) boundCodingMessages(messages);
+          if (coding || transcript) boundCodingMessages(messages);
           if (messages.size > 30 || text().length > 16_000 || current.text.includes('\0')) throw new Error();
           dirty = true;
           if (!progress) progress = setTimeout(flush, 100);
@@ -315,8 +363,9 @@ async function startSingleCodex(accessToken: string, onExit: () => void, launch:
           if (typeof p.item.id !== 'string' || typeof p.item.text !== 'string') throw new Error();
           output.setActivity('responding');
           output.message(p.item.id);
-          messages.set(p.item.id, { id: p.item.id, text: p.item.text, status: 'complete', phase: p.item.phase ?? messages.get(p.item.id)?.phase });
-          if (coding) boundCodingMessages(messages);
+          transcript?.message(p.item.id,p.item.text,false,true,p.item.phase);
+          messages.set(p.item.id, { id: p.item.id, text: transcript ? previewText(p.item.text) : p.item.text, status: 'complete', phase: p.item.phase ?? messages.get(p.item.id)?.phase });
+          if (coding || transcript) boundCodingMessages(messages);
           parseAgentResponse({ messages: [...messages.values()], tools: [], components: [] });
           dirty = true;
           if (!progress) progress = setTimeout(flush, 100);
@@ -436,6 +485,7 @@ async function startSingleCodex(accessToken: string, onExit: () => void, launch:
       early.length = 0;
       await done;
       signal.throwIfAborted();
+      transcript?.flush();
       flush();
       await queue;
       settled = true;
@@ -463,7 +513,7 @@ async function startSingleCodex(accessToken: string, onExit: () => void, launch:
       // A failed in-flight turn cannot share a runtime with the next tool turn.
       if (live && !completedTurn && !sessionUnavailable) { fail(); stop(); }
       if (!signal.aborted) {
-        try { await queue; await publish('execution.failed', sessionUnavailable ? 'Saved Codex session is unavailable for this account and project. Open a new agent session.' : 'Codex could not complete this task. Restart the connector or retry the approved task.'); } catch { /* The platform will fail an unacknowledged run. */ }
+        try { transcript?.flush(); await queue; await publish('execution.failed', sessionUnavailable ? 'Saved Codex session is unavailable for this account and project. Open a new agent session.' : 'Codex could not complete this task. Restart the connector or retry the approved task.'); } catch { /* The platform will fail an unacknowledged run. */ }
       }
       throw new Error('Codex could not complete this task.');
     } finally {
@@ -472,13 +522,40 @@ async function startSingleCodex(accessToken: string, onExit: () => void, launch:
       if (taskDirectory && !project && !request.persistent_session) await rm(taskDirectory, { recursive: true, force: true });
     }
   };
-  return { stop, alive: () => live, invoke, listModels };
+  async function syncThread(threadId:string, desired:boolean|null) {
+    const {thread} = await rpc('thread/read', {threadId, includeTurns:false});
+    if (thread?.id !== threadId || typeof thread.path !== 'string') throw new Error('Unknown Codex thread.');
+    const root = relative(await realpath(home),await realpath(thread.path)).split(sep)[0];
+    if (root !== 'archived_sessions' && root !== 'sessions') throw new Error('Unknown Codex rollout location.');
+    const archived = root === 'archived_sessions';
+    if (desired !== null && desired !== archived) await rpc(desired ? 'thread/archive' : 'thread/unarchive', {threadId});
+    return {thread_id:threadId, archived:desired ?? archived};
+  }
+  return { stop, alive: () => live, invoke, listModels, syncThread };
 }
 
 export async function startCodex(accessToken: string, onExit: () => void, launch: SpawnAgent = spawn, storage?: LocalSessionStorage, selectedProject?: string) {
-  return sessionRuntime(exited => turnScopedRuntime(async (done, servers, signal, enableGoals, personalOnly, request) => {
+  const runtime = await sessionRuntime(exited => turnScopedRuntime(async (done, servers, signal, enableGoals, personalOnly, request) => {
     if (!storage && request?.persistent_session?.project_token) throw new Error('Project selection requires a paired connector.');
     const scoped = personalOnly && storage ? {...storage, project: undefined, coding: false} : storage && await projectForTurn(storage, request);
     return startSingleCodex(accessToken, done, launch, scoped, personalOnly || request?.persistent_session?.project_token ? undefined : selectedProject, servers, signal, enableGoals);
   }, exited, storage?.connection.origin, storage?.browserTurn), 4, onExit);
+  if (storage) {
+    const syncArchive:SyncArchive = async request => {
+      const scope = request.project_token ? {...storage, project:projectBinding(storage,request.session_id,request.project_token)[0], coding:true}
+        : request.personal ? {...storage, project:undefined, coding:false} : {...storage, project:selectedProject ?? storage.project};
+      const store = await localSessionStore(scope);
+      const mapping = await store.session(request.session_id,true).catch(error => {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+        return undefined;
+      });
+      if (!mapping?.threadId) return null;
+      if (request.thread_id && request.thread_id!==mapping.threadId) throw new Error('Codex thread mapping changed.');
+      const native = await startSingleCodex('',()=>{},launch,undefined,undefined,[],undefined,false,store);
+      try { return await native.syncThread(mapping.threadId,request.desired); }
+      finally { native.stop(); }
+    };
+    runtime.syncArchive = syncArchive;
+  }
+  return runtime;
 }

@@ -1,7 +1,8 @@
+import { motionTransition } from '@space/ui/motion';
 import {useContext,useEffect,useId,useRef,useState} from 'react';
 import {motion,useReducedMotion} from 'motion/react';
 import {Buildings,CaretDown,Check,EnvelopeSimple,Hash,Lock,MagnifyingGlass,User,Users,X} from '@phosphor-icons/react';
-import {Button,IconButton,Menu,Tabs} from '@space/ui/primitives';
+import {Button,IconButton,ListRowSkeleton,Menu,Tabs} from '@space/ui/primitives';
 import type {ChannelSummary,Page,WorkspaceDirectoryMember,WorkspaceInvitation} from '@space/contracts';
 import {request} from '../../../shared/api/request.js';
 import {subscribeUpdates} from '../../../shared/realtime/live-updates.js';
@@ -141,9 +142,9 @@ function DirectoryTab({workspace,viewer,onOpenChannel,onOpenMembers,onNewDirect,
           {invitations ? <><Filter label="Invitation type" value={inviteKind} options={[[ 'email','Email invitations'],['link','Invite links']]} onChange={setInviteKind}/><Button size="sm" onClick={()=>showManager(true)}>Manage invitations</Button></>
           :<span className="directory-sort"><Filter label="Sort" value={sort} options={[[ 'id','Default order'],['name','A to Z'],['name_desc','Z to A']]} onChange={setSort}/></span>}
         </div>
-        {!page && <p role="status">Loading {tab.toLowerCase()}…</p>}
+        {!page && <ListRowSkeleton label={`Loading ${tab.toLowerCase()}…`} />}
         {(page?.error||writeError) && <div role="alert" className="wd-error"><span>{invitations && ['invite forbidden','invitation forbidden'].includes(page?.error??'')?'Contact a workspace admin to manage invitations.':page?.error||writeError}</span>{page?.error&&<Button size="sm" onClick={retry}>Retry</Button>}</div>}
-        {page && !page.error && <motion.div initial={{opacity:reduced?1:0}} animate={{opacity:1}} transition={{duration:reduced?0:.13}}>
+        {page && !page.error && <motion.div initial={{opacity:reduced?1:0}} animate={{opacity:1}} transition={motionTransition(reduced)}>
           {(people||external) && !!peopleRows.length && <ul className="directory-people" aria-label="People results">{peopleRows.map(person=><li key={person.user_id}>
             <button aria-label={'View '+person.display_name+'’s profile'} onClick={()=>profiles?.open({kind:'user',id:person.user_id})}>
               {person.image?<img alt="" src={person.image}/>:<span className="directory-avatar" data-color={person.user_id.charCodeAt(0)%4}><User size="90%" weight="fill"/></span>}

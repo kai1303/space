@@ -79,3 +79,13 @@ it('applies sorting and guest filters through the directory API',async()=>{
  await userEvent.click(screen.getByRole('combobox',{name:'Filter guest access'})); await userEvent.click(await screen.findByRole('option', { name: 'Single-channel guests', exact: true }));
  await waitFor(()=>expect(api.request.mock.calls.some(call=>call[0].includes('sort=joined')&&call[0].includes('guest=single'))).toBe(true));
 });
+
+it('keeps the current page usable while the next member page is pending', async () => {
+  api.request.mockResolvedValueOnce({ items: [member], role: 'owner', next_cursor: 'more' })
+    .mockImplementation(() => new Promise(() => {}));
+  render(<WorkspaceAdministration {...props}/>);
+  await userEvent.click(await screen.findByRole('button', {name:'Next'}));
+  expect(screen.getByText('Loading member page…')).toBeTruthy();
+  await userEvent.click(screen.getByRole('button', {name:'Actions for Anna'}));
+  expect(screen.getByRole('menuitem', {name:'Change account type'})).toBeTruthy();
+});

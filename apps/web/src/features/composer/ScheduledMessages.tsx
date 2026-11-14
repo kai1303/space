@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Clock, PaperPlaneRight, PencilSimple, Trash, Warning } from '@phosphor-icons/react';
 import type { ScheduledMessage } from '@space/contracts';
-import { Button } from '@space/ui/primitives';
+import { Button, ListRowSkeleton, toast } from '@space/ui/primitives';
 import { RichContent } from '@space/ui/rich-text';
 import { scheduleError } from '@space/ui/composer';
 import { request } from '../../shared/api/request.js';
@@ -34,11 +34,12 @@ export function ScheduledMessages({ workspace, onOpen }: { workspace: string; on
     setBusy(id); setError('');
     try {
       const updated = await run();
+      if (updated.status === 'cancelled') toast.success('Scheduled message canceled');
       setItems(list => (list ?? []).flatMap(item => item.id !== id ? [item] : updated.status === 'cancelled' ? [] : [updated]));
     } catch (reason) { setError(errorText(reason)); setRevision(n => n + 1); }
     finally { setBusy(''); }
   }
-  if (!items) return <main id="chat-messages" tabIndex={-1} className="composer-drafts-body"><p role="status">Loading scheduled messages…</p></main>;
+  if (!items) return <main id="chat-messages" tabIndex={-1} className="composer-drafts-body"><ListRowSkeleton label="Loading scheduled messages…" /></main>;
   return <main id="chat-messages" tabIndex={-1} className="composer-drafts-body">
     {error && <p role="alert">{error}<Button onClick={() => setRevision(n => n + 1)}>Retry</Button></p>}
     {!items.length ? <div className="composer-drafts-empty"><Clock size={46} /><h2>No scheduled messages</h2><p>Choose “Schedule for later” beside Send to pick a time. Scheduled messages wait here until they go out.</p></div>

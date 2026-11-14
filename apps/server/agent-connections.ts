@@ -1,3 +1,4 @@
+import { registerCodexArchives } from './codex-archives.js';
 import { registerWebVault } from './web-vault.js';
 import type { EventBus } from '@space/events';
 import type { FastifyInstance } from 'fastify';
@@ -74,6 +75,7 @@ export function registerAgentConnections(app: FastifyInstance, io: Server, store
   agents.on('connection', socket => {
     registerDirectTurns(socket,store,tasks,work);
     const identity = socket.data.agent as Awaited<ReturnType<AgentConnectionStore['connect']>>;
+    if (identity.connector_id === 'codex.local') registerCodexArchives(socket,store,work,checks);
     if (socket.handshake.auth.vault_mac === true) void socket.join('vault:' + identity.connection_id);
     const delivery = registerLocalCodexTasks(socket, store, tasks, getEvents, work, identity.connector_id === 'codex.local');
     let checking = false, dirty = false;

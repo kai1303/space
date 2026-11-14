@@ -1,8 +1,9 @@
+import { shellExecution, type ShellExecution } from './shell-execution.js';
 import { AppError, record, text } from './validation.js';
 import { parseAgentMemoryUpdate, type AgentMemoryUpdate } from './memory-block.js';
 
 export type AgentText = { id: string; text: string; status: 'streaming' | 'complete'; phase?: 'commentary' | 'final_answer' };
-export type AgentTool = { id: string; name: string; arguments: string; result?: string; status: 'calling' | 'running' | 'completed' | 'interrupted' };
+export type AgentTool = { shell?: ShellExecution; id: string; name: string; arguments: string; result?: string; status: 'calling' | 'running' | 'completed' | 'interrupted' };
 export type DocumentEditBlock = { id: string; type: 'document_edit'; title: string; original: string; replacement: string };
 export type CarouselBlock = { id: string; type: 'carousel'; title: string; cards: { id: string; title: string; body: string }[] };
 export type DataTableBlock = { id: string; type: 'data_table'; title: string; columns: string[]; rows: (string | number)[][] };
@@ -181,9 +182,9 @@ export function parseAgentResponse(input: unknown): AgentResponse {
     return { id: text(m.id, 128), text: string(m.text, 16000), status: m.status, ...(m.phase === 'commentary' || m.phase === 'final_answer' ? { phase: m.phase } : {}) };
   }));
   const tools = unique(list(v.tools, 30, item => {
-    const t = record(item, ['id', 'name', 'arguments', 'result', 'status', 'duration_ms', 'arguments_characters', 'result_characters']);
+    const t = record(item, ['id', 'name', 'arguments', 'result', 'status', 'duration_ms', 'arguments_characters', 'result_characters','shell']);
     if (!['calling', 'running', 'completed', 'interrupted', 'failed'].includes(t.status as string)) throw new AppError(400, 'invalid_agent_response');
-    return { id: text(t.id, 128), name: text(t.name, 200), arguments: string(t.arguments, 8000),
+    return { ...(t.name==='shell' && t.shell ? {shell:shellExecution(t.shell)} : {}), id: text(t.id, 128), name: text(t.name, 200), arguments: string(t.arguments, 8000),
       status: (t.status === 'failed' ? 'interrupted' : t.status) as AgentTool['status'], ...(t.result === undefined ? {} : { result: string(t.result, 16000) }) };
   }));
   const components = unique(list(v.components, 20, parseAgentComponent));

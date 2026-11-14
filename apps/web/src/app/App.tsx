@@ -1,3 +1,4 @@
+import { LoadingStatus } from '@space/ui/primitives';
 import { parseAssetPagePath } from '@space/contracts';
 import { ConversationLinkLoading } from './shell/ConversationLinkLoading.js';
 import { lazy, Suspense } from 'react';
@@ -14,9 +15,9 @@ const AgentPreview = lazy(() => import('../gallery/AgentSessionPreview.js').then
 export function App() {
   const { pathname, hash, search } = window.location;
   const file = /^\/file\/([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})$/i.exec(pathname);
-  if (file) return <Suspense fallback={<p role="status">Opening file…</p>}><FileWindow id={file[1]!} initialPage={parseAssetPagePath(pathname + search)?.page} /></Suspense>;
+  if (file) return <Suspense fallback={<LoadingStatus>Opening file…</LoadingStatus>}><FileWindow id={file[1]!} initialPage={parseAssetPagePath(pathname + search)?.page} /></Suspense>;
   const office = /^\/office\/(library|file)\/([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})$/i.exec(pathname);
-  if (office) return <Suspense fallback={<p role="status">Opening Office editor…</p>}>
+  if (office) return <Suspense fallback={<LoadingStatus>Opening Office editor…</LoadingStatus>}>
     <OfficePanel library={office[1] === 'library'} id={office[2]!} />
   </Suspense>;
   const query = new URLSearchParams(search);
@@ -24,7 +25,7 @@ export function App() {
   const landingAnchor = ['', '#workspace', '#agents', '#connections', '#workflows', '#setup', '#toolkit', '#start', '#faq', '#launch-main'].includes(hash);
   const landing = pathname === '/' && !chatLink && landingAnchor;
   const chat = pathname === '/chat' || /^\/vault\/?$/.test(pathname) || pathname.startsWith('/c/') || pathname.startsWith('/s/') || /^\/review\/[a-f0-9-]{36}\/?$/i.test(pathname) || pathname.startsWith('/w/') || (pathname === '/' && chatLink);
-  return <Suspense fallback={pathname.startsWith('/c/') ? <ConversationLinkLoading /> : <p role="status" className="sp-sr-only">Loading Space…</p>}>
+  return <Suspense fallback={pathname.startsWith('/c/') || pathname.startsWith('/s/') ? <ConversationLinkLoading /> : <p role="status" className="sp-sr-only">Loading Space…</p>}>
     {pathname === '/preview/agent-session' ? <AgentPreview /> : landing ? <LaunchPage /> : chat ? <Chat /> : pathname === '/workspace' ? <Preview /> : <Gallery />}
   </Suspense>;
 }

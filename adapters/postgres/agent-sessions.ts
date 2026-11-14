@@ -1,5 +1,6 @@
+import { attachSessionMessageStates, changeSessionMessage, sessionReplies } from './session-message-actions.js';
+import { legacySessionTools } from './legacy-session-tools.js';
 import { readSessionResources } from './session-resources.js';
-import { sessionWorkStatus } from './session-work-status.js';
 import { discoverSessions } from './session-discovery.js';
 import { directTurnTarget, runTurn, type TurnPlan } from './direct-turn-admission.js';
 import { SessionTeamStore } from './session-team.js';
@@ -35,6 +36,55 @@ export class AgentSessionStore {
     const [session] = await c.select().from(s.agentSessions).where(eq(s.agentSessions.id, uuid(id)));
     if (!session || !await hasThreadAccess(c, actor, session.origin_thread_id)) throw notFound();
     return session;
+  }
+  changeMessage(actor:string,session:string,task:string,part:string,input:unknown) { return changeSessionMessage(this.db,actor,session,task,part,input); }
+  messageReplies(actor:string,session:string,task:string,part:string,query:unknown) { return sessionReplies(this.db,actor,session,task,part,query); }
+  async messagePins(actor:string,id:string,query:unknown) {
+    const v=record(query,['after']), after=v.after===undefined?undefined:uuid(v.after);
+    return this.db.transaction(async c=>{
+      const session=await this.visible(c,actor,id);
+      if(session.handoff_context && session.created_by!==actor)throw notFound();
+      const result=await c.execute<{id:string;task_id:string;part:'request'|'response';excerpt:string}>(sql`
+        SELECT m.id,t.id AS task_id,m.part,left(coalesce(m.edited_text,CASE WHEN m.part='request' THEN t.goal ELSE t.result END,'Agent response'),300) AS excerpt
+        FROM tasks t JOIN session_message_state m ON m.task_id=t.id
+        WHERE t.session_id=${id} AND m.pinned AND m.deleted_at IS NULL ${after?sql`AND m.id>${after}`:sql``}
+        ORDER BY m.id LIMIT 31`);
+      const items=result.rows.slice(0,30);
+      return {items,next:result.rows.length>30?items.at(-1)!.id:null};
+    },{isolationLevel:'repeatable read',accessMode:'read only'});
+  }
+  async transcript(actor: string, sessionId: string, taskId: string, query: unknown) {
+    const v = record(query, ['position', 'after','legacy']);
+    function cursor(value: unknown, fallback: number) {
+      if (value === undefined) return fallback;
+      if (typeof value !== 'string' || !/^\d{1,10}$/.test(value) || Number(value) > 2147483647) throw new AppError(400,'invalid_cursor');
+      return Number(value);
+    }
+    const position = cursor(v.position,-1), after = cursor(v.after,-1);
+    return this.db.transaction(async c => {
+      const session = await this.visible(c,actor,sessionId);
+      const [task] = await c.select().from(s.tasks).where(and(eq(s.tasks.id,taskId),eq(s.tasks.session_id,sessionId)));
+      if (!task || !task.active_execution_id) throw notFound();
+      if (v.legacy !== undefined) {
+        if (v.legacy !== '1' || !session.managed || task.skill !== 'codex.run') throw notFound();
+        return legacySessionTools(c,task.id,task.active_execution_id,position,after);
+      }
+      const scope = sql`installation_id=${task.installation_id} AND event->>'execution_id'=${task.active_execution_id}`;
+      const ordinal = sql`(event#>>'{payload,transcript,position}')::integer`;
+      const part = sql`(event#>>'{payload,transcript,part}')::integer`;
+      if (position >= 0) {
+        const page = await c.execute<{part:number;data:string;last:boolean}>(sql`SELECT ${part} AS part,event#>>'{payload,transcript,data}' AS data,
+          (event#>>'{payload,transcript,last}')::boolean AS last FROM agent_event_receipts WHERE ${scope}
+          AND event->'payload' ? 'transcript' AND ${ordinal}=${position} AND ${part}>${after} ORDER BY ${part} LIMIT 8`);
+        if (!page.rows.length) throw notFound();
+        return {chunks:page.rows};
+      }
+      const page = await c.execute<{position:number;id:string;kind:string;name:string;status:string|null;shell:unknown}>(sql`SELECT ${ordinal} AS position,
+        event#>>'{payload,transcript,id}' AS id,event#>>'{payload,transcript,kind}' AS kind,event#>>'{payload,transcript,name}' AS name, event#>>'{payload,transcript,status}' AS status, event#>'{payload,transcript,shell}' AS shell
+        FROM agent_event_receipts WHERE ${scope} AND event#>>'{payload,transcript,last}'='true' ${after<0 ? sql`` : sql`AND ${ordinal}<${after}`}
+        ORDER BY ${ordinal} DESC LIMIT 33`);
+      return {items:page.rows.slice(0,32).map(({status,shell,...item})=>({...item,...(status?{status}:{}),...(shell?{shell}:{})})),next:page.rows.length>32?page.rows[31]!.position:null};
+    }, {isolationLevel:'repeatable read',accessMode:'read only'});
   }
   async resources(actor: string, id: string, query: unknown) {
     return this.db.transaction(async c => {
@@ -103,7 +153,6 @@ export class AgentSessionStore {
       }
       const result = await c.execute<WorkspaceAgentSession & Record<string, unknown>>(sql`
         SELECT ${summaryColumns},EXISTS(SELECT 1 FROM tasks WHERE session_id=a.id AND status='running') AS working,
-          ${sessionWorkStatus(sql`a.id`,sql`a.state`)} AS status,
           t.channel_id,ch.archived_at IS NOT NULL AS channel_archived, idle.expires::text AS sidebar_expires_at,
           extract(epoch FROM (idle.expires - now()))*1000 AS expires_in_ms
         FROM agent_sessions a JOIN threads t ON t.id=a.origin_thread_id
@@ -136,6 +185,10 @@ export class AgentSessionStore {
         await c.execute(sql`INSERT INTO session_sidebar_preferences(workspace_id,user_id,session_id,archived)
           VALUES(${workspace},${actor},${id},${archive})
           ON CONFLICT(workspace_id,user_id,session_id) DO UPDATE SET archived=excluded.archived`);
+        await c.execute(sql`INSERT INTO codex_session_archives(session_id,desired)
+          SELECT ${id},${archive} FROM agent_installations
+          WHERE id=${session.installation_id} AND owner_id=${actor} AND connector_id='codex.local'
+          ON CONFLICT(session_id) DO UPDATE SET desired=excluded.desired, revision=gen_random_uuid()`);
       } else {
         const target = await this.visible(c,actor,targetId!);
         if (!target.managed || target.workspace_id !== workspace) throw notFound();
@@ -220,14 +273,20 @@ export class AgentSessionStore {
     });
   }
   async read(actor: string, id: string, query: unknown = {}): Promise<AgentSessionDetail> {
-    const v = record(query, ['before','after']), before = v.before === undefined ? undefined : uuid(v.before), after = v.after === undefined ? undefined : uuid(v.after);
-    if (before && after) throw new AppError(400, 'invalid_cursor');
-    const cursor = before ?? after;
+    const v = record(query, ['before','after','around']), around=v.around===undefined?undefined:uuid(v.around), before = v.before === undefined ? undefined : uuid(v.before), after = v.after === undefined ? undefined : uuid(v.after);
+    if ([before,after,around].filter(Boolean).length>1) throw new AppError(400, 'invalid_cursor');
+    const cursor = before ?? after ?? around;
     return this.db.transaction(async c => {
       const session = await this.visible(c, actor, id);
       if (cursor && !(await c.select({ id: s.tasks.id }).from(s.tasks).where(and(eq(s.tasks.id, cursor), eq(s.tasks.session_id, id)))).length) throw notFound();
-      const result = await c.execute<{ task: Task & { created_at: string }; requester_name: string; payload: Record<string, unknown> | null; response_payload: Record<string, unknown> | null } & Record<string, unknown>>(sql`
-        SELECT to_jsonb(t)||jsonb_build_object('request_document',coalesce(t.request_document,origin.document)) AS task,u.display_name AS requester_name,latest.payload,snapshot.payload AS response_payload
+      const result = await c.execute<{ task: Task & { created_at: string }; requester_name: string; response_at:string|null; payload: Record<string, unknown> | null; response_payload: Record<string, unknown> | null; transcript_version:number | null; has_legacy_tools:boolean } & Record<string, unknown>>(sql`
+        SELECT to_jsonb(t)||jsonb_build_object('request_document',coalesce(t.request_document,origin.document)) AS task,u.display_name AS requester_name,latest.payload,latest.occurred_at AS response_at,snapshot.payload AS response_payload,
+        (SELECT max((r.event->>'sequence')::integer) FROM agent_event_receipts r WHERE r.installation_id=t.installation_id
+          AND r.event->>'execution_id'=t.active_execution_id::text AND r.event#>>'{payload,transcript,last}'='true') AS transcript_version,
+        (${session.managed} AND t.skill='codex.run' AND t.status IN ('completed','failed') AND EXISTS (
+          SELECT 1 FROM task_events e WHERE e.correlation_id=t.id AND e.resource_id=t.active_execution_id
+            AND jsonb_array_length(e.payload#>'{response,tools}')>0
+        )) AS has_legacy_tools
         FROM tasks t JOIN users u ON u.id=t.requester_id
         -- Older routed tasks saved only text; recover markup only from their exact matching source message.
         LEFT JOIN LATERAL (
@@ -236,15 +295,19 @@ export class AgentSessionStore {
             AND m.workspace_id=t.workspace_id AND m.user_id=t.requester_id AND m.text=t.goal
           LIMIT 1
         ) origin ON true
-        LEFT JOIN LATERAL (SELECT payload FROM task_events WHERE correlation_id=t.id ORDER BY sequence DESC LIMIT 1) latest ON true
+        LEFT JOIN LATERAL (SELECT payload,occurred_at FROM task_events WHERE correlation_id=t.id ORDER BY sequence DESC LIMIT 1) latest ON true
         LEFT JOIN LATERAL (SELECT payload FROM task_events WHERE correlation_id=t.id AND payload ? 'response' ORDER BY sequence DESC LIMIT 1) snapshot ON true
-        WHERE t.session_id=${id} ${before ? sql`AND (t.created_at,t.id)<(SELECT created_at,id FROM tasks WHERE id=${before} AND session_id=${id})` : sql``}
+        WHERE t.session_id=${id} ${around?sql`AND (t.created_at,t.id)<=(SELECT created_at,id FROM tasks WHERE id=${around})`:sql``} ${before ? sql`AND (t.created_at,t.id)<(SELECT created_at,id FROM tasks WHERE id=${before} AND session_id=${id})` : sql``}
         ${after ? sql`AND (t.created_at,t.id)>(SELECT created_at,id FROM tasks WHERE id=${after} AND session_id=${id})` : sql``}
         ORDER BY t.created_at ${after ? sql`ASC` : sql`DESC`},t.id ${after ? sql`ASC` : sql`DESC`} LIMIT 21`);
+      const newerThanTarget = around && (await c.execute(sql`SELECT 1 FROM tasks WHERE session_id=${id}
+        AND (created_at,id)>(SELECT created_at,id FROM tasks WHERE id=${around}) LIMIT 1`)).rows.length>0;
       const rows = result.rows.slice(0, 20);
-      const turns: AgentSessionTurn[] = (after ? rows : rows.reverse()).map(row => ({ task: row.task, created_at: new Date(row.task.created_at).toISOString(), requester_name: row.requester_name,
+      const turns: AgentSessionTurn[] = (after ? rows : rows.reverse()).map(row => ({ task: row.task, created_at: new Date(row.task.created_at).toISOString(), requester_name: row.requester_name, ...(row.response_at ? {response_at:new Date(row.response_at).toISOString()} : {}),
+        ...(row.transcript_version ? {transcript_version:row.transcript_version} : row.has_legacy_tools ? {has_legacy_tools:true} : {}),
         ...(row.response_payload?.response ? { response: parseAgentResponse(row.response_payload.response) } : {}),
         detail: String(row.payload?.text ?? row.payload?.result ?? row.payload?.error ?? row.payload?.code ?? '') }));
+      await attachSessionMessageStates(c,actor,turns);
       const audience = await c.execute(sql`SELECT ch.name,ch.kind,ch.direct_user_low,ch.direct_user_high FROM threads th JOIN channels ch ON ch.id=th.channel_id WHERE th.id=${session.origin_thread_id}`);
       const origin=audience.rows[0];
       const audienceLabel=origin?.kind==='direct' ? origin.direct_user_low===origin.direct_user_high ? 'Private session: only you' : 'Participants in the source direct conversation' : `Members of #${origin?.name ?? 'the source channel'}`;
@@ -274,7 +337,7 @@ export class AgentSessionStore {
         SELECT id AS task_id, left(result,480) AS excerpt FROM (
           SELECT id,status,result FROM tasks WHERE session_id=${id} ORDER BY created_at DESC,id DESC LIMIT 1
         ) last_turn WHERE status='completed' AND nullif(trim(result),'') IS NOT NULL`)).rows[0] : undefined;
-      return { ...(finalSummary ? {final_summary:finalSummary} : {}), related_agents:related.rows, session_goal:session.session_goal, inputs:inputs.rows.filter(input => input.kind === 'queue'), audience:audienceLabel, tool_approvals:await sessionToolApprovals(c,id), ...(session.handoff_context ? {context:session.handoff_context} : {}), ...(session.managed ? { outputs: session.outputs } : {}), session: await this.summary(c, id), turns, next_cursor: (after || result.rows.length > 20) && turns.length ? turns[0]!.task.id : null, has_newer: after ? result.rows.length > 20 : !!before };
+      return { ...(finalSummary ? {final_summary:finalSummary} : {}), related_agents:related.rows, session_goal:session.session_goal, inputs:inputs.rows.filter(input => input.kind === 'queue'), audience:audienceLabel, tool_approvals:await sessionToolApprovals(c,id), ...(session.handoff_context ? {context:session.handoff_context} : {}), ...(session.managed ? { outputs: session.outputs } : {}), session: await this.summary(c, id), turns, next_cursor: (after || result.rows.length > 20) && turns.length ? turns[0]!.task.id : null, has_newer: after ? result.rows.length > 20 : !!before || !!newerThanTarget };
     }, { isolationLevel: 'repeatable read', accessMode: 'read only' });
   }
   async send(actor: string, id: string, raw: unknown, key: string): Promise<Task> {

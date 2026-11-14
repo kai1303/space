@@ -1,26 +1,12 @@
-import { useEffect, useLayoutEffect, useRef, useState, type ComponentProps, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { AnimatePresence, motion, useIsPresent, useReducedMotion } from "motion/react";
-import { motionTransition } from "../motion/motion.js";
+import { AnimatePresence } from "motion/react";
+import { PopoverSurface } from "../motion/popover-surface.js";
 
 export type SidebarAction = { key?: string; label: string; divider?: boolean; heading?: string; shortcut?: string; danger?: boolean; checked?: boolean } &
   ({ select: () => void; items?: never } | { items: SidebarAction[] | (() => SidebarAction[]); select?: never });
 
-function MenuSurface({ hasSubmenus, ...props }: ComponentProps<typeof motion.div> & { hasSubmenus: boolean }) {
-  const present = useIsPresent();
-  const reduced = useReducedMotion();
-  // A transformed parent would reposition its fixed submenus.
-  const closed = { opacity: 0, scale: reduced || hasSubmenus ? 1 : 0.96 };
-  return <motion.div {...props} role="menu" className="sp-menu-content sp-sidebar-context-menu"
-    inert={!present} aria-hidden={!present || undefined}
-    initial={reduced ? false : closed} animate={{ opacity: 1, scale: 1 }}
-    transition={motionTransition(reduced, 0.16)}
-    exit={{ ...closed, transition: motionTransition(reduced, 0.1) }} />;
-}
-
 export function SidebarRowMenu({ name, actions, children }: { name: string; actions: SidebarAction[]; children: ReactNode }) {
-  const reduced = useReducedMotion();
-  const entrance = { initial: reduced ? false as const : { opacity: 0 }, animate: { opacity: 1 }, transition: motionTransition(reduced) };
   const row = useRef<HTMLDivElement>(null);
   const panel = useRef<HTMLDivElement>(null);
   const [point, setPoint] = useState<{ x: number; y: number }>();
@@ -95,9 +81,13 @@ export function SidebarRowMenu({ name, actions, children }: { name: string; acti
           }
         }}>{action.label}{action.items && <span aria-hidden="true">›</span>}{action.checked && <span aria-hidden="true">✓</span>}
         {action.shortcut && <kbd>{action.shortcut}</kbd>}</button>
-      {expanded && <motion.div {...entrance} ref={subpanel} className="sp-menu-content sp-sidebar-context-menu" role="menu" aria-label={action.label}>
+      <AnimatePresence>{expanded && <PopoverSurface key={action.label} ref={node => {
+        if (!node) return;
+        subpanel.current = node;
+        return () => { if (subpanel.current === node) subpanel.current = null; };
+      }} className="sp-menu-content sp-sidebar-context-menu" role="menu" aria-label={action.label}>
         {children?.map(item => entry(item, true))}
-      </motion.div>}
+      </PopoverSurface>}</AnimatePresence>
     </span>;
   }
   return <>
@@ -121,7 +111,7 @@ export function SidebarRowMenu({ name, actions, children }: { name: string; acti
       {children}
     </div>
     {typeof document !== "undefined" && createPortal(<AnimatePresence>
-      {point && <MenuSurface ref={panel} hasSubmenus={actions.some(action => !!action.items)} aria-label={`Actions for ${name}`}
+      {point && <PopoverSurface role="menu" className="sp-menu-content sp-sidebar-context-menu" ref={panel} fadeOnly={actions.some(action => !!action.items)} aria-label={`Actions for ${name}`}
         onKeyDown={event => {
           const target = event.target as HTMLElement;
           if (subpanel.current?.contains(target) && ["ArrowLeft","Escape"].includes(event.key)) {
@@ -146,7 +136,7 @@ export function SidebarRowMenu({ name, actions, children }: { name: string; acti
           buttons[next]?.focus();
         }}>
         {actions.map(action => entry(action))}
-      </MenuSurface>}
+      </PopoverSurface>}
     </AnimatePresence>, document.body)}
   </>;
 }

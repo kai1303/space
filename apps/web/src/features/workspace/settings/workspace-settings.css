@@ -8,3 +8,5 @@
 .workspace-icon-placeholder { display: grid; place-items: center; background: #e8e2ed; color: #452b50; font-size: 28px; font-weight: 700; }
 .workspace-settings-actions { display: flex; gap: 8px; padding: 18px 0; position: sticky; bottom: 0; background: var(--sp-surface); border-top: 1px solid var(--sp-border); }
 .workspace-settings-row code { overflow-wrap: anywhere; }
+
+.workspace-settings-pending { display: flex; align-items: center; gap: 8px; color: var(--sp-text-secondary); }

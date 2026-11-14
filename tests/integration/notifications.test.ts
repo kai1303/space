@@ -283,7 +283,7 @@ test('concurrent cross-channel messages keep recipient order and claims do not p
   const retry=await app.inject(requests[index]!);assert.equal(retry.statusCode,201,retry.body);
  }
  const result=await activity(a);assert.equal(result.items.length,8);assert.equal(new Set(result.items.map((n:any)=>n.id)).size,8);
- const revision=()=>pool.query('SELECT resource,revision::text FROM resource_update_revisions ORDER BY resource');
+ const revision=()=>pool.query('SELECT resource,revision::text FROM resource_revision_totals ORDER BY resource');
  const before=(await revision()).rows;await claim(a,result.items[0].id);assert.deepEqual((await revision()).rows,before,'desktop claims must not feed another Activity invalidation');
 });
 

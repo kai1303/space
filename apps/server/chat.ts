@@ -88,7 +88,7 @@ export function registerChatRoutes(app: FastifyInstance, chat: ChatStore) {
     record(r.body, []);
     return chat.join(r.actorId, uuid(r.params.channelId));
   });
-  app.post<{ Params: { channelId: string } }>('/v1/channels/:channelId/members', async (r, reply) => reply.code(201).send(await chat.addMember(r.actorId, uuid(r.params.channelId), r.body)));
+  app.post<{ Params: { channelId: string } }>('/v1/channels/:channelId/members', async (r, reply) => reply.code(201).send(await chat.addMember(expectedActor(r), uuid(r.params.channelId), r.body)));
   app.delete<{ Params: { channelId: string; userId: string } }>('/v1/channels/:channelId/members/:userId', async (r, reply) => {
     await chat.removeMember(r.actorId, uuid(r.params.channelId), uuid(r.params.userId));
     return reply.code(204).send();

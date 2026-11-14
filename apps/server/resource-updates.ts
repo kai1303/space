@@ -47,6 +47,6 @@ export async function resourceRevision(chat: ChatStore, actor: string, subscript
   subscription.keys = [...keys, `actor:${actor}`];
   const revisionKeys = scope === 'sidebar-sections' ? subscription.keys : keys;
   const revisions = await chat.pool.query<{resource:string;revision:string}>(
-    'SELECT resource,revision::text FROM resource_update_revisions WHERE resource=ANY($1::text[]) ORDER BY resource',[revisionKeys]);
+    'SELECT resource,revision::text FROM resource_revision_totals WHERE resource=ANY($1::text[]) ORDER BY resource',[revisionKeys]);
   return JSON.stringify(revisions.rows);
 }

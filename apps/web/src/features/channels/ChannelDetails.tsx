@@ -1,6 +1,6 @@
 import { useMemberProfile } from '../profile/MemberProfile.js';
 import { useEffect, useId, useRef, useState, type FormEvent } from 'react';
-import { Avatar, Badge, Button, Dialog, Tabs, toast } from '@space/ui/primitives';
+import { Avatar, Badge, Button, Dialog, ListRowSkeleton, Skeleton, Tabs, toast } from '@space/ui/primitives';
 import { Archive, Copy, Hash, Lock, MagnifyingGlass, UserPlus } from '@phosphor-icons/react';
 import type { ChannelDetails as Details, ChannelMember, ChannelSummary, ChannelPermissionSnapshot, WorkspaceParticipant } from '@space/contracts';
 import { listAll, request } from '../../shared/api/request.js';
@@ -24,9 +24,12 @@ function DetailsDialog({ channel, viewer, initialTab = 'about', permissions, per
   const [agentPicker, setAgentPicker] = useState<'pick' | 'connect'>(), [agentRevision, setAgentRevision] = useState(0);
   const [permissionEditor, setPermissionEditor] = useState<{ section: PermissionSection; snapshot: ChannelPermissionSnapshot }>();
   const id = useId();
-  const [details, setDetails] = useState<Details>(), [members, setMembers] = useState<ChannelMember[]>([]);
+  const [details, setDetails] = useState<Details>(), [members, setMembers] = useState<ChannelMember[]>();
+  const [detailError, setDetailError] = useState(''), [memberError, setMemberError] = useState('');
+  const [attempt, setAttempt] = useState(0);
   const [tab, setTab] = useState(initialTab), [query, setQuery] = useState(''), [error, setError] = useState('');
   const [field, setField] = useState<Field>(), [adding, setAdding] = useState(false), [copied, setCopied] = useState(false);
+  const editRevision = useRef(0);
   const [confirmation, setConfirmation] = useState<'archive' | 'restore' | 'leave' | ChannelMember>();
   async function refresh() {
     const [detail, people] = await Promise.all([request<Details>(`/channels/${channel.id}`), listAll<ChannelMember>(`/channels/${channel.id}/members`)]);
@@ -35,38 +38,47 @@ function DetailsDialog({ channel, viewer, initialTab = 'about', permissions, per
   }
   useEffect(() => {
     let active = true;
-    void Promise.all([request<Details>(`/channels/${channel.id}`), listAll<ChannelMember>(`/channels/${channel.id}/members`)]).then(([detail, people]) => {
-      if (active) { setDetails(detail); setMembers(people); }
-    }).catch(e => { if (active) setError(errorText(e)); });
+    const revision = editRevision.current;
+    setDetailError(''); setMemberError('');
+    void request<Details>(`/channels/${channel.id}`).then(detail => {
+      if (active && revision === editRevision.current) setDetails(detail);
+    }).catch(reason => { if (active) setDetailError(errorText(reason)); });
+    void listAll<ChannelMember>(`/channels/${channel.id}/members`).then(people => {
+      if (active) setMembers(people);
+    }).catch(reason => { if (active) setMemberError(errorText(reason)); });
     return () => { active = false; };
-  }, [channel.id]);
+  }, [channel.id, attempt]);
   useEffect(() => { setDetails(previous => previous ? { ...previous, ...channel } : previous); }, [channel]);
-  function saved(detail: Details) { setDetails(detail); onChange(detail); }
+  function saved(detail: Details) { editRevision.current++; setDetails(detail); onChange(detail); }
   const current = details ?? channel, archived = Boolean(current.archived_at);
-  const loaded = details?.permissions;
+  const [savedPolicy, setSavedPolicy] = useState<ChannelPermissionSnapshot>();
+  const loaded = !details?.permissions || (savedPolicy && BigInt(savedPolicy.revision) > BigInt(details.permissions.revision))
+    ? savedPolicy : details.permissions;
   const policy = permissionsPending ? undefined
     : loaded && (!permissions || BigInt(loaded.revision) > BigInt(permissions.revision)) ? loaded : permissions ?? loaded;
   const can = (action: keyof ChannelPermissionSnapshot['capabilities']) => !permissionsPending && (policy?.capabilities[action] ?? details?.can_manage ?? false);
   const isManager = (member: ChannelMember) => policy ? policy.manager_ids.includes(member.id) : !!member.is_manager;
   const editable = can('edit_details') && !archived;
-  const filtered = members.filter(member => member.name.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
+  const filtered = (members ?? []).filter(member => member.name.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
+  const memberCount = current.member_count ?? members?.length;
+  const loadError = detailError || ((tab === 'members' || (tab === 'about' && policy)) && memberError);
   return <>
     <Dialog open title={`${current.private ? '🔒' : '#'} ${current.name}`} onClose={onClose}>
       <div className="space-channel-details">
-        <div className="space-channel-meta"><Badge>{current.private ? 'Private channel' : 'Public channel'}</Badge>{archived && <Badge><Archive size={13} /> Archived</Badge>}<span>{details ? `${details.member_count} ${details.member_count === 1 ? 'member' : 'members'}` : 'Loading…'}</span></div>
-        <Tabs label="Channel details" value={tab} onChange={setTab} items={[{ id: 'about', label: 'About', panelId: `${id}-about` }, { id: 'members', label: `Members${details ? ` ${details.member_count}` : ''}`, panelId: `${id}-members` }, { id: 'integrations', label: 'Agents & apps', panelId: `${id}-integrations` }, { id: 'tabs', label: 'Tabs', panelId: `${id}-tabs` }, { id: 'settings', label: 'Settings', panelId: `${id}-settings` }]} />
-        {error && <div className="space-channel-error" role="alert">{error} <Button size="sm" onClick={() => { setError(''); void refresh().catch(e => setError(errorText(e))); }}>Retry</Button></div>}
-        {!details && !error && <p className="space-channel-loading" role="status">Loading channel details…</p>}
-        {details && <div key={tab} id={`${id}-${tab}`} role="tabpanel" aria-label={tab === 'tabs' ? 'Tabs' : tab === 'members' ? 'Members' : tab === 'settings' ? 'Settings' : tab === 'integrations' ? 'Agents & apps' : 'About'} className={tab === 'members' ? 'space-channel-body space-channel-body--members' : 'space-channel-body'}>
+        <div className="space-channel-meta"><Badge>{current.private ? 'Private channel' : 'Public channel'}</Badge>{archived && <Badge><Archive size={13} /> Archived</Badge>}{memberCount != null && <span>{memberCount} {memberCount === 1 ? 'member' : 'members'}</span>}</div>
+        <Tabs label="Channel details" value={tab} onChange={setTab} items={[{ id: 'about', label: 'About', panelId: `${id}-about` }, { id: 'members', label: `Members${memberCount != null ? ` ${memberCount}` : ''}`, panelId: `${id}-members` }, { id: 'integrations', label: 'Agents & apps', panelId: `${id}-integrations` }, { id: 'tabs', label: 'Tabs', panelId: `${id}-tabs` }, { id: 'settings', label: 'Settings', panelId: `${id}-settings` }]} />
+        {loadError && <div className="space-channel-error" role="alert">{loadError} <Button size="sm" onClick={() => setAttempt(n => n + 1)}>Retry</Button></div>}
+        {error && <p className="space-channel-error" role="alert">{error}</p>}
+        <div key={tab} id={`${id}-${tab}`} role="tabpanel" aria-label={tab === 'tabs' ? 'Tabs' : tab === 'members' ? 'Members' : tab === 'settings' ? 'Settings' : tab === 'integrations' ? 'Agents & apps' : 'About'} className={tab === 'members' ? 'space-channel-body space-channel-body--members' : 'space-channel-body'}>
           {tab === 'tabs' && <ChannelTabManager channel={channel.id} actor={viewer} archived={archived}/>}
           {tab === 'about' && <>
             <div className="space-channel-card">
               {(['name', 'topic', 'description'] as const).map(key => <section key={key} aria-label={key === 'name' ? 'Channel name' : key === 'topic' ? 'Topic' : 'Description'}>
                 <div className="space-channel-field-heading"><h3>{key === 'name' ? 'Channel name' : key === 'topic' ? 'Topic' : 'Description'}</h3>{editable && <button className="space-channel-link" aria-label={`Edit channel ${key}`} onClick={() => setField(key)}>Edit</button>}</div>
-                <p className={!details[key] ? 'space-channel-muted' : undefined}>{key === 'name' && (details.private ? <Lock size={15} /> : <Hash size={15} />)}{details[key] || (key === 'topic' ? 'Add a topic' : 'Add a description')}</p>
+                <p className={!current[key] ? 'space-channel-muted' : undefined}>{key === 'name' && (current.private ? <Lock size={15} /> : <Hash size={15} />)}{current[key] || (key === 'topic' ? 'Add a topic' : 'Add a description')}</p>
               </section>)}
-              {policy && <section><div className="space-channel-field-heading"><h3>Managed by</h3>{can('manage') && !archived && <button className="space-channel-link" aria-label="Edit channel managers" onClick={() => setPermissionEditor({ section: 'managers', snapshot: policy })}>Edit</button>}</div><p>{members.filter(isManager).map(member => member.name).join(', ') || 'Workspace admins'}</p></section>}
-              <section><h3>Created by</h3><p>{details.creator_name ?? 'Workspace'} on {new Date(details.created_at).toLocaleDateString([], { month: 'long', day: 'numeric', year: 'numeric' })}</p></section>
+              {policy && <section><div className="space-channel-field-heading"><h3>Managed by</h3>{can('manage') && !archived && <button className="space-channel-link" disabled={!members} aria-label="Edit channel managers" onClick={() => setPermissionEditor({ section: 'managers', snapshot: policy })}>Edit</button>}</div><p>{members ? members.filter(isManager).map(member => member.name).join(', ') || 'Workspace admins' : !memberError && <Skeleton width={96}/>}</p></section>}
+              <section><h3>Created by</h3><p>{details ? <>{details.creator_name ?? 'Workspace'} on {new Date(details.created_at).toLocaleDateString([], { month: 'long', day: 'numeric', year: 'numeric' })}</> : !detailError && <span role="status"><span className="sp-sr-only">Loading creator…</span><Skeleton width={150}/></span>}</p></section>
               <button className="space-channel-action space-channel-danger" onClick={() => setConfirmation('leave')}>Leave channel</button>
             </div>
             <div className="space-channel-id"><span>Channel ID: {channel.id}</span><button aria-label="Copy channel ID" title="Copy channel ID" onClick={() => { void navigator.clipboard.writeText(channel.id).then(() => setCopied(true)).catch(() => setError('Could not copy. Select the channel ID to copy it manually.')); }}><Copy size={15} /></button><span role="status">{copied ? 'Copied' : ''}</span></div>
@@ -80,7 +92,8 @@ function DetailsDialog({ channel, viewer, initialTab = 'about', permissions, per
                 {can('remove') && !archived && member.id !== viewer && <button className="space-channel-link" aria-label={`Remove ${member.name} from channel`} onClick={() => setConfirmation(member)}>Remove</button>}
               </li>)}
             </ul>
-            {!filtered.length && <p className="space-channel-muted">No members match “{query}”.</p>}
+            {!members && !memberError && <ListRowSkeleton label="Loading members…"/>}
+            {members && !filtered.length && <p className="space-channel-muted">No members match “{query}”.</p>}
           </>}
           {tab === 'integrations' && (archived ? <p>This channel is archived.</p> : <>
             <ChannelAgents key={viewer} channel={channel.id} actor={viewer} revision={agentRevision} onAdd={() => setAgentPicker('pick')}/>
@@ -88,21 +101,21 @@ function DetailsDialog({ channel, viewer, initialTab = 'about', permissions, per
           </>)}
           {tab === 'settings' && <>
             <div className="space-channel-card">
-              {policy && <><section><div className="space-channel-field-heading"><h3>Posting permissions</h3>{can('manage') && !archived && <button className="space-channel-link" aria-label="Edit posting permissions" onClick={() => setPermissionEditor({ section: 'posting', snapshot: policy })}>Edit</button>}</div><p>{postingLabels[policy.posting]}</p><p className="space-channel-muted">{policy.allow_replies ? 'Threads are allowed.' : 'Only people who can post can reply.'} {policy.allow_broadcast ? 'Channel-wide mentions are allowed, subject to workspace settings.' : 'Channel-wide mentions are disabled.'}</p></section>
+              {policy && <><section><div className="space-channel-field-heading"><h3>Posting permissions</h3>{can('manage') && !archived && <button className="space-channel-link" disabled={!members} aria-label="Edit posting permissions" onClick={() => setPermissionEditor({ section: 'posting', snapshot: policy })}>Edit</button>}</div><p>{postingLabels[policy.posting]}</p><p className="space-channel-muted">{policy.allow_replies ? 'Threads are allowed.' : 'Only people who can post can reply.'} {policy.allow_broadcast ? 'Channel-wide mentions are allowed, subject to workspace settings.' : 'Channel-wide mentions are disabled.'}</p></section>
               <section><div className="space-channel-field-heading"><h3>Member permissions</h3>{can('manage') && !archived && <button className="space-channel-link" aria-label="Edit member permissions" onClick={() => setPermissionEditor({ section: 'actions', snapshot: policy })}>Edit</button>}</div><p>Choose who can invite and remove people, edit details, or archive this channel.</p></section></>}
-              <section><h3>Channel visibility</h3><p>{details.private ? 'Only invited members can find this channel and read its messages.' : 'Everyone in this workspace can find and join this channel.'}</p></section>
+              <section><h3>Channel visibility</h3><p>{current.private ? 'Only invited members can find this channel and read its messages.' : 'Everyone in this workspace can find and join this channel.'}</p></section>
               <section><h3>{archived ? 'Archived channel' : 'Archive channel'}</h3><p>{archived ? 'Message history is preserved. Restore this channel to send messages again.' : 'Archive this channel when it’s no longer needed. Its history will remain available to members.'}</p>{can('archive') && <Button onClick={() => setConfirmation(archived ? 'restore' : 'archive')}><Archive size={16} />{archived ? 'Restore channel' : 'Archive channel for everyone'}</Button>}</section></div>
-            {permissionsPending && <p className="space-channel-muted" role="status">Checking channel permissions…</p>}
+            {(permissionsPending || (!policy && !details && !detailError)) && <p className="space-channel-muted" role="status">Checking channel permissions…</p>}
           </>}
-        </div>}
+        </div>
       </div>
     </Dialog>
     {agentPicker === 'pick' && !archived && <ChannelAgentPicker key={viewer} channel={channel.id} name={current.name} actor={viewer} revision={agentRevision} onConnect={() => setAgentPicker('connect')} onClose={() => setAgentPicker(undefined)} onAdded={() => setAgentRevision(n => n + 1)}/>}
-    {agentPicker === 'connect' && details && !archived && <WorkspaceMembers open workspace={details.workspace_id} viewer={viewer}
+    {agentPicker === 'connect' && !archived && <WorkspaceMembers open workspace={current.workspace_id} viewer={viewer}
       onClose={() => { setAgentRevision(n => n + 1); setAgentPicker('pick'); }} returnOnPaired/>}
-    {permissionEditor && <ChannelPermissionEditor channel={channel.id} snapshot={permissionEditor.snapshot} members={members} section={permissionEditor.section} canEdit={can('manage') && !archived} onClose={() => setPermissionEditor(undefined)} onSaved={next => { setDetails(current => current ? { ...current, permissions: next } : current); }} />}
-    {field && details && <ChannelEditor field={field} details={details} onClose={() => setField(undefined)} onSaved={saved} />}
-    {adding && details && <AddPeople details={details} members={members} onClose={() => setAdding(false)} onAdded={async () => { const detail = await refresh(); onChange(detail); }} />}
+    {permissionEditor && <ChannelPermissionEditor channel={channel.id} snapshot={permissionEditor.snapshot} members={members ?? []} section={permissionEditor.section} canEdit={can('manage') && !archived} onClose={() => setPermissionEditor(undefined)} onSaved={setSavedPolicy} />}
+    {field && <ChannelEditor field={field} details={current} onClose={() => setField(undefined)} onSaved={saved} />}
+    {adding && can('invite') && !archived && <AddPeople details={current} members={members} memberError={memberError} retryMembers={() => setAttempt(n => n + 1)} onClose={() => setAdding(false)} onAdded={async () => { const detail = await refresh(); onChange(detail); }} />}
     {confirmation && <ChannelConfirmation
       title={confirmation === 'leave' ? `Leave #${current.name}?` : confirmation === 'restore' ? `Restore #${current.name}?` : confirmation === 'archive' ? `Archive #${current.name}?` : `Remove ${confirmation.name}?`}
       description={confirmation === 'leave' ? current.private ? 'You will need another member to invite you back to this private channel.' : 'You can rejoin this public channel at any time.' : confirmation === 'restore' ? 'Members will be able to send messages and replies again.' : confirmation === 'archive' ? 'Members can still read message history. New messages and replies will be disabled until this channel is restored.' : `${confirmation.name} will lose access to this channel. ${current.private ? 'They will need an invitation to return.' : 'They can rejoin this public channel.'}`}
@@ -133,7 +146,7 @@ function WebhookSettings({ channel }: { channel: string }) {
 function MemberAvatar({ member }: { member: ChannelMember }) {
   return member.image ? <img className="space-channel-avatar" src={member.image} alt={member.name} /> : <Avatar name={member.name} initials={member.name.slice(0, 2).toUpperCase()} size="md" presence={member.presence === 'active' ? 'online' : 'away'} />;
 }
-function ChannelEditor({ field, details, onClose, onSaved }: { field: Field; details: Details; onClose: () => void; onSaved: (detail: Details) => void }) {
+function ChannelEditor({ field, details, onClose, onSaved }: { field: Field; details: ChannelSummary; onClose: () => void; onSaved: (detail: Details) => void }) {
   const [value, setValue] = useState(details[field]), [open, setOpen] = useState(true), [busy, setBusy] = useState(false), [error, setError] = useState('');
   const title = field === 'name' ? 'Rename this channel' : field === 'topic' ? 'Edit topic' : 'Edit description';
   const max = field === 'name' ? 80 : field === 'topic' ? 250 : 2000;
@@ -151,30 +164,39 @@ function ChannelEditor({ field, details, onClose, onSaved }: { field: Field; det
     <footer><Button disabled={busy} onClick={() => setOpen(false)}>Cancel</Button><Button variant="primary" type="submit" loading={busy} disabled={value.trim() === details[field] || (field === 'name' && !value.trim())}>{field === 'name' ? 'Save Changes' : 'Save'}</Button></footer>
   </form></Dialog>;
 }
-function AddPeople({ details, members, onClose, onAdded }: { details: Details; members: ChannelMember[]; onClose: () => void; onAdded: () => Promise<void> }) {
-  const [people, setPeople] = useState<WorkspaceParticipant[]>([]), [loaded, setLoaded] = useState(false);
+function AddPeople({ details, members, memberError, retryMembers, onClose, onAdded }: { details: ChannelSummary; members?: ChannelMember[]; memberError: string; retryMembers: () => void; onClose: () => void; onAdded: () => Promise<void> }) {
+  const [people, setPeople] = useState<WorkspaceParticipant[]>();
+  const [peopleError, setPeopleError] = useState(''), [attempt, setAttempt] = useState(0);
   const [query, setQuery] = useState(''), [selected, setSelected] = useState(''), [busy, setBusy] = useState(false), [open, setOpen] = useState(true), [error, setError] = useState('');
   const form = useRef<HTMLFormElement>(null);
   useEffect(() => { form.current?.querySelector<HTMLElement>('input[type=search]')?.focus(); }, []);
   useEffect(() => {
     let active = true;
-    void listAll<WorkspaceParticipant>(`/workspaces/${details.workspace_id}/participants`).then(items => { if (active) { setPeople(items.filter(p => p.kind === 'human' && !members.some(m => m.id === p.id))); setLoaded(true); } }).catch(e => { if (active) setError(errorText(e)); });
+    setPeopleError('');
+    void listAll<WorkspaceParticipant>(`/workspaces/${details.workspace_id}/participants`)
+      .then(items => { if (active) setPeople(items); })
+      .catch(e => { if (active) setPeopleError(errorText(e)); });
     return () => { active = false; };
-  }, [details.workspace_id]);
+  }, [details.workspace_id, attempt]);
   async function add(event: FormEvent) {
-    event.preventDefault(); if (!selected || busy) return; setBusy(true); setError('');
+    event.preventDefault(); if (!canAdd || busy) return; setBusy(true); setError('');
     try { await request(`/channels/${details.id}/members`, { user_id: selected }); await onAdded(); setOpen(false); }
     catch (e) { setError(errorText(e)); } finally { setBusy(false); }
   }
-  const filtered = people.filter(p => p.name.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
+  const memberIds = new Set(members?.map(member => member.id));
+  const candidates = members && people?.filter(person => person.kind === 'human' && !memberIds.has(person.id));
+  const canAdd = candidates?.some(person => person.id === selected);
+  const filtered = candidates?.filter(p => p.name.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
   return <Dialog open={open} title={`Add people to #${details.name}`} onBeforeClose={() => !busy} onClose={onClose}><form ref={form} className="space-channel-editor space-channel-picker" onSubmit={add}>
     <label>Find workspace people<input type="search" autoFocus placeholder="Enter a name" value={query} onChange={e => setQuery(e.target.value)} /></label>
     <p className="space-channel-muted">Choose someone from your workspace.</p>
-    {!loaded && !error && <p role="status">Loading workspace people…</p>}
-    <div className="space-channel-candidates" role="radiogroup" aria-label="Workspace people">{filtered.map(person => <label key={person.id}><input type="radio" aria-label={person.name} name="channel-person" value={person.id} checked={selected === person.id} onChange={() => setSelected(person.id)} /><Avatar name={person.name} initials={person.name.slice(0, 2).toUpperCase()} size="sm" /><strong>{person.name}</strong></label>)}</div>
-    {loaded && !filtered.length && <p className="space-channel-muted">{people.length ? 'No people match your search.' : 'Everyone in this workspace is already in the channel.'}</p>}
+    {!candidates && !peopleError && !memberError && <ListRowSkeleton label="Loading workspace people…"/>}
+    {peopleError && <p role="alert">{peopleError} <Button onClick={() => setAttempt(n => n + 1)}>Retry</Button></p>}
+    {memberError && <p role="alert">{memberError} <Button onClick={retryMembers}>Retry</Button></p>}
+    <div className="space-channel-candidates" role="radiogroup" aria-label="Workspace people">{filtered?.map(person => <label key={person.id}><input type="radio" aria-label={person.name} name="channel-person" value={person.id} checked={selected === person.id} onChange={() => setSelected(person.id)} /><Avatar name={person.name} initials={person.name.slice(0, 2).toUpperCase()} size="sm" /><strong>{person.name}</strong></label>)}</div>
+    {filtered && !filtered.length && <p className="space-channel-muted">{candidates?.length ? 'No people match your search.' : 'Everyone in this workspace is already in the channel.'}</p>}
     {error && <p className="space-channel-error" role="alert">{error}</p>}
-    <footer><Button disabled={busy} onClick={() => setOpen(false)}>Cancel</Button><Button variant="primary" type="submit" loading={busy} disabled={!selected}>Add</Button></footer>
+    <footer><Button disabled={busy} onClick={() => setOpen(false)}>Cancel</Button><Button variant="primary" type="submit" loading={busy} disabled={!canAdd}>Add</Button></footer>
   </form></Dialog>;
 }
 export function ChannelConfirmation({ title, description, label, onClose, onConfirm, onDone }: { title: string; description: string; label: string; onClose: () => void; onConfirm: () => Promise<string>; onDone?: () => void }) {

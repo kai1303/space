@@ -1,5 +1,5 @@
 import { useState, useSyncExternalStore } from 'react';
-import { Tabs, Button, Dialog, IconButton, toast } from '@space/ui/primitives';
+import { Tabs, Button, Dialog, IconButton, toast, ListRowSkeleton } from '@space/ui/primitives';
 import { RichContent, type Attachment } from '@space/ui/rich-text';
 import { Clock, PaperPlaneRight, PencilSimple, Trash } from '@phosphor-icons/react';
 import type { ComposerDrafts as Drafts } from './composer-drafts.js';
@@ -123,7 +123,7 @@ export function ComposerDrafts({ workspace, drafts, files, locked, sync, onDisca
                 })}><PaperPlaneRight size={18}/></IconButton>}
               </>}
             </div>}
-          </li>)}</ul> : !sync.loaded && !sync.loadError ? <p role="status">Loading drafts…</p>
+          </li>)}</ul> : !sync.loaded && !sync.loadError ? <ListRowSkeleton label="Loading drafts…" />
             : sync.sending.size ? <p role="status" className="composer-drafts-hint">Updating drafts…</p> : !sync.loadError && <div className="composer-drafts-empty"><PencilSimple size={46}/><h2>Draft messages to send when you’re ready</h2>
               <p>Start a message in a channel, DM, or thread and pick it up here.</p><Button onClick={onNewMessage}>New message</Button></div>}
       </main>}

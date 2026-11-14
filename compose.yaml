@@ -1,7 +1,21 @@
 services:
   postgres:
     image: postgres:16-alpine
-    command: ["postgres", "-c", "wal_level=logical", "-c", "max_replication_slots=20", "-c", "max_wal_senders=20"]
+    command:
+      - postgres
+      - -c
+      - wal_level=logical
+      - -c
+      - max_replication_slots=20
+      - -c
+      - max_wal_senders=20
+      # Reduce write bursts on the shared local development volume.
+      - -c
+      - wal_compression=lz4
+      - -c
+      - wal_init_zero=off
+      - -c
+      - autovacuum_vacuum_cost_limit=50
     environment:
       POSTGRES_USER: workplace
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-local_demo_only}

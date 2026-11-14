@@ -4,6 +4,7 @@ import { CodexEffortSlider } from './CodexEffortSlider.js';
 import { useRef, useState, type ComponentProps, type ReactNode } from 'react';
 import { AnimatePresence, motion, useIsPresent, useReducedMotion } from 'motion/react';
 import { ArrowLeft, CaretDown, CaretRight, Check, Flag, Pause, PencilSimple, Play, X } from '@phosphor-icons/react';
+import { motionTransition } from '@space/ui/motion';
 import { ComposerSendError } from '@space/ui/composer';
 import { Button, Dialog, IconButton, Popover } from '@space/ui/primitives';
 import { ConversationComposer } from '../chat/ThreadConversation.js';
@@ -17,7 +18,7 @@ function GoalModeIndicator({disabled, onExit}: {disabled: boolean; onExit: () =>
   const hidden = {opacity:0, scale:reduced ? 1 : 0.94};
   return <MotionButton variant="ghost" size="sm" className="agent-goal-indicator" aria-label="Exit goal mode" title="Exit goal mode"
     initial={reduced ? false : hidden} animate={{opacity:1, scale:1}} exit={hidden}
-    transition={{duration:reduced ? 0 : 0.14, ease:'easeOut'}}
+    transition={motionTransition(reduced)}
     aria-hidden={!present || undefined} inert={!present} disabled={disabled} onClick={onExit}>
     <Flag size={14} aria-hidden="true"/><X size={14} aria-hidden="true"/>Goal
   </MotionButton>;
@@ -169,7 +170,7 @@ function ModelPickerPage({listing, children}: {listing:boolean; children:ReactNo
   return <motion.div className="agent-model-page" inert={!present} aria-hidden={!present || undefined}
     style={{position:present ? 'relative' : 'absolute', inset:present ? undefined : '0 0 auto'}}
     initial={reduced ? false : {opacity:0, x:offset}} animate={{opacity:1, x:0}}
-    exit={{opacity:0, x:reduced ? 0 : offset}} transition={{duration:reduced ? 0 : 0.14, ease:'easeOut'}}>
+    exit={{opacity:0, x:reduced ? 0 : offset}} transition={motionTransition(reduced)}>
     {children}
   </motion.div>;
 }

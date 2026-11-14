@@ -1,3 +1,5 @@
+import type { RichDocument } from './rich-text.js';
+import type { MentionOption } from './mentions.js';
 import type { AgentSessionOutputs, AgentSessionView } from './agent-response.js';
 
 export type SharedSessionOutput =
@@ -6,7 +8,7 @@ export type SharedSessionOutput =
   | { kind: 'change'; path: string; output: AgentSessionOutputs['changes'][number] }
   | { kind: 'preview'; path: ''; output: NonNullable<AgentSessionOutputs['preview']> };
 export interface SessionDiscussionMessage {
-  sequence: string; author: string; body: string; created_at: string;
+  sequence: string; author_id: string; author: string; body: string; document?: RichDocument | null; created_at: string;
 }
 export interface SessionTeamView {
   title: string; workspace_id: string; viewer_id: string; workspace_visible:boolean; can_manage: boolean; writable: boolean;
@@ -15,3 +17,8 @@ export interface SessionTeamView {
   messages: SessionDiscussionMessage[];
   before: string | null;
 }
+
+export type SessionMentionOption = MentionOption & {
+  can_invite_reviewer: boolean;
+  invite_channel: string | null;
+};

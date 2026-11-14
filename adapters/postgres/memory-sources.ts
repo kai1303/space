@@ -1,4 +1,5 @@
 import { sql } from 'drizzle-orm';
+import { SessionConflict } from './session-concurrency.js';
 import type { DbSession } from './database.js';
 import { isMessagePath, parseConversationPath, MAX_MEMORY_BYTES, MAX_MEMORY_CHARS } from '@space/contracts';
 
@@ -90,10 +91,13 @@ export async function currentMemoryContent(c: DbSession, raw: string, channel: s
 }
 
 // Normal chat edits and retention also remove stale managed content from storage.
-// The surrounding serializable transaction retries concurrent document writes.
+// Recompute against the winning content if an independent memory edit commits first.
 export async function syncSavedMemory(c: DbSession, channel: string) {
   const row = (await c.execute<{content: string}>(sql`SELECT content FROM channel_memory_documents WHERE channel_id=${channel}`)).rows[0];
   if (!row) return;
   const content = await currentMemoryContent(c, row.content, channel);
-  if (content !== row.content) await c.execute(sql`UPDATE channel_memory_documents SET content=${content} WHERE channel_id=${channel}`);
+  if (content === row.content) return;
+  const changed = await c.execute(sql`UPDATE channel_memory_documents SET content=${content}
+    WHERE channel_id=${channel} AND content=${row.content}`);
+  if (!changed.rowCount) throw new SessionConflict();
 }

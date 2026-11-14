@@ -224,3 +224,23 @@ it('can close after access is revoked during an in-flight mutation', async () =>
   await act(async () => { finish({ ok: true, status: 200, json: async () => base }); });
   expect(screen.queryByRole('heading', { name: 'GitHub personal' })).toBeNull();
 });
+
+it('keeps the editor usable and shows each personal section as its own request finishes', async () => {
+  let finishHistory!: (value: Response) => void;
+  vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+    if (url.endsWith('/connection-calls')) return new Promise<Response>(resolve => { finishHistory = resolve; });
+    if (url.endsWith('/connection-agents')) return new Promise<Response>(() => {});
+    return Response.json({ items: [base] });
+  }));
+  render(<Connections userId="user" onClose={() => {}}/>);
+  await screen.findByRole('heading', { name: base.name });
+  await userEvent.click(connection().getByRole('button', { name: 'Agent access' }));
+  expect(screen.getByText('Loading agents…')).toBeTruthy();
+  expect(screen.getByText('Loading recent tool calls…')).toBeTruthy();
+  expect(screen.queryByText('No tool calls yet.')).toBeNull();
+  await userEvent.click(screen.getByRole('button', { name: 'Add connection' }));
+  await userEvent.type(screen.getByLabelText('Connection name'), 'Draft');
+  await act(async () => finishHistory(Response.json({ items: [] })));
+  expect(screen.getByText('No tool calls yet.')).toBeTruthy();
+  expect(screen.getByLabelText('Connection name')).toHaveProperty('value', 'Draft');
+});

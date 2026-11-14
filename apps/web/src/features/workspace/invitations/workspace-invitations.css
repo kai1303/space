@@ -5,3 +5,5 @@
 
 .sp-dialog:has(> .invitation-form){width:min(560px,calc(100vw - 32px));max-width:560px}
 .invitation-form p{margin:0;line-height:1.5}.invitation-form fieldset{min-width:0}.invitation-form input:not([type=checkbox]){width:100%;min-width:0;box-sizing:border-box}.invitation-form .invitation-channel-list label{flex-direction:row;justify-content:flex-start;font-weight:400}.invitation-channel-list input[type=checkbox]{width:auto;flex:none}
+
+.invitation-pending { display: flex; align-items: center; gap: 8px; color: var(--sp-text-secondary); }

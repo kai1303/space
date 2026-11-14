@@ -92,7 +92,7 @@ export function createApi(store: PostgresStore, options: { workflowChat?: Workfl
     if (['/healthz','/readyz'].includes(request.routeOptions.url ?? '') && request.method === 'GET') return;
     if (request.method === 'POST' && request.routeOptions.url === incomingWebhookPath) return;
     if ((request.method === 'POST' && request.routeOptions.url === OFFICE_CALLBACK) ||
-        (request.method === 'GET' && request.routeOptions.url === OFFICE_CONTENT)) return;
+        ((request.method === 'GET' || request.method === 'HEAD') && request.routeOptions.url === OFFICE_CONTENT)) return;
     if (request.routeOptions.url === MEMORY_MCP_PATH || request.routeOptions.url === PDF_TOOL_PATH) return;
     if (request.routeOptions.url === HUDDLE_WEBHOOK) return;
     // This route authenticates a source-scoped token itself; it never grants actor access.

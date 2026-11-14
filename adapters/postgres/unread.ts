@@ -1,9 +1,8 @@
-import { sessionTransaction } from './session-concurrency.js';
 import type { Pool } from 'pg';
 import { sql } from 'drizzle-orm';
 import { AppError, chatCursor, record, uuid, type WorkspaceUnread } from '@space/contracts';
-import { database, type DbSession } from './database.js';
-import { hasChannelAccess, lockWorkspace, requireWorkspaceAccess } from './access.js';
+import { database } from './database.js';
+import { hasChannelAccess, requireWorkspaceAccess } from './access.js';
 
 export class UnreadStore {
   readonly db;
@@ -44,24 +43,21 @@ export class UnreadStore {
     const v = record(input, ['sequence']);
     if (v.sequence === undefined) throw new AppError(400, 'invalid_cursor');
     const sequence = chatCursor(v.sequence);
-    const direct = await this.db.execute<{ kind: string }>(sql`SELECT kind FROM channels WHERE id=${channel}`);
-    const work = async (c: DbSession) => {
+    return this.db.transaction(async c => {
       const ref = await c.execute<{ workspace_id: string }>(sql`SELECT workspace_id FROM channels WHERE id=${channel}`);
       if (!ref.rows[0]) throw new AppError(404, 'not_found');
       const workspace = ref.rows[0].workspace_id;
-      if (direct.rows[0]?.kind !== 'direct') {
-        await lockWorkspace(c, workspace);
-        await c.execute(sql`SELECT id FROM channels WHERE id=${channel} FOR UPDATE`);
-      }
       if (!await hasChannelAccess(c, actor, workspace, channel)) throw new AppError(404, 'not_found');
       if (sequence !== '0' && !(await c.execute(sql`SELECT id FROM messages WHERE workspace_id=${workspace} AND channel_id=${channel} AND (sequence=${sequence}::bigint OR channel_broadcast_sequence=${sequence}::bigint)`)).rows.length) {
         throw new AppError(400, 'invalid_read_sequence');
       }
+      // Cursors only advance. Concurrent updates recheck the bound on this
+      // user's row, and removing membership cascades to the cursor itself.
       await c.execute(sql`UPDATE channel_reads SET last_read_sequence=${sequence}::bigint
         WHERE channel_id=${channel} AND user_id=${actor} AND last_read_sequence<${sequence}::bigint`);
       const result = await c.execute<{ last_read_sequence: string }>(sql`SELECT last_read_sequence::text FROM channel_reads WHERE channel_id=${channel} AND user_id=${actor}`);
-      return result.rows[0]!;
-    };
-    return direct.rows[0]?.kind === 'direct' ? sessionTransaction(this.db, work) : this.db.transaction(work);
+      if (!result.rows[0]) throw new AppError(404, 'not_found');
+      return result.rows[0];
+    });
   }
 }

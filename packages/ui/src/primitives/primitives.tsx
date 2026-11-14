@@ -11,6 +11,7 @@ import {
 import { createPortal } from "react-dom";
 import { Check, CaretDown, X } from "@phosphor-icons/react";
 import { AnimatePresence, motion, useAnimate, useIsPresent, useReducedMotion } from "motion/react";
+import { PopoverSurface } from "../motion/popover-surface.js";
 import { registerToastDialog } from "./toast.js";
 import { motionTransition, surfaceMotion } from "../motion/motion.js";
 
@@ -19,6 +20,10 @@ export function Spinner() {
   return <motion.span className="sp-spinner" aria-hidden="true"
     animate={{ rotate: reduced ? 0 : 360 }}
     transition={reduced ? { duration: 0 } : { duration: 0.7, ease: "linear", repeat: Infinity }} />;
+}
+
+export function LoadingStatus({ children, className = "" }: { children: ReactNode; className?: string }) {
+  return <span role="status" className={`sp-loading-status ${className}`}><Spinner />{children}</span>;
 }
 
 export type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
@@ -284,27 +289,28 @@ export function Tabs({
     </div>
   );
 }
-export function Menu({ label, items, trigger, className = "", menuLabel = label, floating = false, align = "end" }: {
+export function Menu({ label, items, trigger, className = "", menuLabel = label, floating = false, align = "end", beside = false }: {
   label: string;
   trigger?: ReactNode;
   className?: string;
   menuLabel?: string;
   floating?: boolean;
+  beside?: boolean;
   align?: "start" | "end";
-  items: { label: string; icon?: ReactNode; onSelect: () => void; danger?: boolean; separatorBefore?: boolean }[];
+  items: { label: string; icon?: ReactNode; shortcut?: string; shortcutLabel?: string; onSelect: () => void; danger?: boolean; separatorBefore?: boolean }[];
 }) {
   return <Popover label={label} panelLabel={menuLabel} role="menu" className={`sp-menu ${className}`}
     panelClassName={`sp-menu-content ${className ? `${className}-content` : ""}`}
-    triggerClassName="sp-button sp-button--secondary sp-button--md" floating={floating} align={align}
+    triggerClassName="sp-button sp-button--secondary sp-button--md" floating={floating} align={align} beside={beside}
     trigger={trigger ?? <>{label}<CaretDown size={14} /></>}>
     {close => items.map(item => <span key={item.label} className="sp-menu-item-group">
       {item.separatorBefore && <hr role="separator" />}
-      <button type="button" role="menuitem" className={item.danger ? "sp-menu-danger" : ""} onClick={() => { item.onSelect(); close(); }}>{item.icon}{item.label}</button>
+      <button type="button" role="menuitem" data-shortcut={item.shortcut} className={item.danger ? "sp-menu-danger" : ""} onClick={() => { item.onSelect(); close(); }}>{item.icon}{item.label}{item.shortcutLabel && <kbd aria-hidden="true">{item.shortcutLabel}</kbd>}</button>
     </span>)}
   </Popover>;
 }
 
-export function Popover({ label, trigger, children, className = "", panelClassName = "", triggerClassName, panelLabel = label, role, floating = false, align = "end", disabled = false }: {
+export function Popover({ label, trigger, children, className = "", panelClassName = "", triggerClassName, panelLabel = label, role, floating = false, align = "end", beside = false, disabled = false }: {
   label: string;
   trigger: ReactNode;
   children: (close: (restoreFocus?: boolean) => void) => ReactNode;
@@ -314,6 +320,7 @@ export function Popover({ label, trigger, children, className = "", panelClassNa
   panelLabel?: string;
   role?: "menu";
   floating?: boolean;
+  beside?: boolean;
   align?: "start" | "end";
   disabled?: boolean;
 }) {
@@ -322,7 +329,6 @@ export function Popover({ label, trigger, children, className = "", panelClassNa
   const id = useId();
   const [open, setOpen] = useState(false);
   const [expanded, setExpanded] = useState(false);
-  const reduced = useReducedMotion();
   function show() { if (!disabled) { setExpanded(true); setOpen(true); } }
   const [position, setPosition] = useState({ top: 0, left: 0 });
   function close(restoreFocus = false) {
@@ -347,6 +353,10 @@ export function Popover({ label, trigger, children, className = "", panelClassNa
       if (!anchor || !menu) return;
       // Animation scales the visual bounds; anchor against stable layout dimensions.
       const width = panel.current!.offsetWidth || menu.width, height = panel.current!.offsetHeight || menu.height;
+      if (beside && anchor.left - width >= 12) {
+        setPosition({left: anchor.left - width - 4, top: Math.max(8, Math.min(anchor.top, window.innerHeight - height - 8))});
+        return;
+      }
       const top = anchor.bottom + height + 6 > window.innerHeight ? anchor.top - height - 6 : anchor.bottom + 6;
       setPosition({
         left: Math.max(8, Math.min(align === "start" ? anchor.left : anchor.right - width, window.innerWidth - width - 8)),
@@ -360,13 +370,19 @@ export function Popover({ label, trigger, children, className = "", panelClassNa
     window.addEventListener("resize", place);
     window.addEventListener("scroll", place, true);
     return () => { observer?.disconnect(); window.removeEventListener("resize", place); window.removeEventListener("scroll", place, true); };
-  }, [open, floating, align]);
+  }, [open, floating, align, beside]);
   function navigate(event: React.KeyboardEvent) {
     if (disabled || event.defaultPrevented) return;
     if (event.key === "Escape") { if (open) { event.preventDefault(); event.stopPropagation(); close(true); } return; }
     if (event.key === "Tab") { if (open && role === "menu") { event.stopPropagation(); close(true); } return; }
     if ((event.target as HTMLElement).closest('input,textarea,select,[contenteditable=true]')) return;
     if (role !== "menu" && event.target !== ref.current?.querySelector('summary')) return;
+    if (open && role === "menu" && !event.altKey) {
+      const chord = [event.metaKey || event.ctrlKey ? "mod" : "", event.shiftKey ? "shift" : "", event.key.toLowerCase()].filter(Boolean).join("+");
+      const match = [...(panel.current?.querySelectorAll<HTMLButtonElement>("button[data-shortcut]") ?? [])]
+        .find(button => button.dataset.shortcut === chord);
+      if (match) { event.preventDefault(); event.stopPropagation(); match.click(); return; }
+    }
     if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
     event.preventDefault(); event.stopPropagation();
     show();
@@ -378,10 +394,10 @@ export function Popover({ label, trigger, children, className = "", panelClassNa
     });
   }
   const content = <AnimatePresence onExitComplete={() => setExpanded(false)}>
-    {open && <PopoverPanel key={id} panelRef={panel} id={id} role={role} aria-label={panelLabel} className={panelClassName} data-floating={floating || undefined}
-      style={{ ...(floating ? { position: "fixed", ...position, right: "auto", bottom: "auto", zIndex: 100 } : {}), transformOrigin: "center" }} onKeyDown={navigate} {...surfaceMotion(reduced)}>
+    {open && <PopoverSurface key={id} data-sp-popover-panel ref={panel} id={id} role={role} aria-label={panelLabel} className={panelClassName} data-floating={floating || undefined}
+      style={{ ...(floating ? { position: "fixed", ...position, right: "auto", bottom: "auto", zIndex: 100 } : {}), transformOrigin: "center" }} onKeyDown={navigate}>
       {children((restoreFocus = true) => close(restoreFocus))}
-    </PopoverPanel>}
+    </PopoverSurface>}
   </AnimatePresence>;
   return (
     <details
@@ -397,11 +413,6 @@ export function Popover({ label, trigger, children, className = "", panelClassNa
     </details>
   );
 }
-function PopoverPanel({ panelRef, ...props }: React.ComponentProps<typeof motion.div> & { panelRef: React.Ref<HTMLDivElement> }) {
-  const present = useIsPresent();
-  return <motion.div {...props} data-sp-popover-panel ref={panelRef} inert={!present} aria-hidden={!present || undefined} />;
-}
-
 export function SidePanel({ children, className, role, hidden, ref, "aria-label": label }: {
   ref?: React.Ref<HTMLElement>;
   children: ReactNode;
@@ -460,7 +471,10 @@ export function Dialog({
     let active = true;
     const visible = open && !closing;
     const entering = visible && !dialog.open;
-    if (entering) dialog.showModal();
+    if (entering) {
+      dialog.showModal();
+      dialog.querySelector<HTMLElement>('[data-dialog-initial-focus]')?.focus({preventScroll:true});
+    }
     if (!dialog.open) return;
     const preset = surfaceMotion(reduced, "modal");
     const animation = animate(dialog, {
@@ -533,6 +547,18 @@ export function Skeleton({
     />
   );
 }
+export function ListRowSkeleton({ label }: { label: string }) {
+  return <div className="sp-list-row-skeleton" role="status">
+    <span className="sp-sr-only">{label}</span>
+    {["64%", "48%", "56%"].map(width => (
+      <div className="sp-list-row-placeholder" key={width} aria-hidden="true">
+        <Skeleton width={18} height={18} />
+        <Skeleton width={width} height={10} />
+      </div>
+    ))}
+  </div>;
+}
+
 export function ChannelItem({
   name,
   nameContent,

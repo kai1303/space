@@ -1,6 +1,6 @@
 import {DirectoryCreateChannel} from './create-channel-context.js';
 import { ConversationMain } from '../chat/ConversationFrame.js';
-import { sessionWorkStatusLabels, sessionPath, conversationPath } from '@space/contracts';
+import { sessionPath, conversationPath } from '@space/contracts';
 import { ConversationHistory, usePublishedPath } from '../../shared/ui/conversation-location.js';
 import { ChannelNotificationEditor } from './ChannelNotificationEditor.js';
 import { ChannelConfirmation } from './ChannelDetails.js';
@@ -20,11 +20,11 @@ import { useWorkspaceUnread } from '../notifications/useWorkspaceUnread.js';
 import { useContext, useLayoutEffect, useEffect, useRef, useState, type CSSProperties, type FormEvent, type ReactNode } from 'react';
 import { motion, useReducedMotion } from 'motion/react';
 import type { DirectMessageSummary, AgentSessionReference, ChannelNotificationPreferences } from '@space/contracts';
-import { Button, Dialog, toast } from '@space/ui/primitives';
+import { Button, Dialog, ListRowSkeleton, toast } from '@space/ui/primitives';
 import { WorkspaceSidebar } from '@space/ui/navigation';
 import { motionTransition } from '@space/ui/motion';
 import { type RichDocument } from '@space/ui/rich-text';
-import { Archive, Headphones, WarningCircle, CaretDown, Hash, Lock, Plus } from '@phosphor-icons/react';
+import { Headphones, CaretDown, Hash, Lock, Plus } from '@phosphor-icons/react';
 import { listAll, request } from '../../shared/api/request.js';
 import type { ChannelSummary as Channel } from '@space/contracts';
 import type { Workspace } from '../workspace/workspace-types.js';
@@ -100,11 +100,11 @@ export function WorkspaceChannels({ codeChannelView, onOpenOrigin, onReturnDirec
   const sessionRows = [
     ...starredSessions.conversations.flatMap(item => item.session ? [{
       id:item.id, title:item.name, thread:item.session.origin_thread_id, agentName:item.session.agent_name, codeChannel:item.session.code_channel,
-      section:'starred' as const, working:item.working, status:item.status, canRename:item.can_rename,
+      section:'starred' as const, working:item.working, canRename:item.can_rename,
     }] : []),
     ...visibleSessions.map(item => ({
       id:item.id, title:item.title, thread:item.origin_thread_id, agentName:item.agent_name, codeChannel:item.code_channel,
-      section:'sessions' as const, working:item.working, status:item.status, canRename:item.created_by===profile.id || item.owner_id===profile.id,
+      section:'sessions' as const, working:item.working, canRename:item.created_by===profile.id || item.owner_id===profile.id,
     })),
   ];
   function sessionActions(item: typeof sessionRows[number]) {
@@ -155,7 +155,12 @@ export function WorkspaceChannels({ codeChannelView, onOpenOrigin, onReturnDirec
     const openSplit = () => setSplitId(c.id);
     return { onSplit:conversationPath(c.id) && window.self === window.top ? openSplit : undefined, actions:channelMenu(item, starred.ids.includes(c.id), {
       split:openSplit, dialog:kind => kind === 'details' ? setDetailsId(c.id) : setMenuDialog({id:c.id,kind}),
-      copy:value => { void navigator.clipboard.writeText(value).catch(reportMenuError); },
+      copy:async (value, confirmation) => {
+        try {
+          await navigator.clipboard.writeText(value);
+          toast.success(confirmation);
+        } catch (reason) { reportMenuError(reason); }
+      },
       star:() => { void starred.toggle(c.id, {...c,kind:'channel'}).catch(reportMenuError); },
       save:patch => { void savePreferences(c.id,patch).catch(reportMenuError); },
     }) };
@@ -418,11 +423,7 @@ export function WorkspaceChannels({ codeChannelView, onOpenOrigin, onReturnDirec
             private:c.private, ...badges(c.id), section:'channels' as const, ...(c.joined && sectionProps(c.id, 'channels')),
           })),
           ...sessionRows.map(item => ({ id:`session:${item.id}`, name:item.title, ...sessionActions(item), agentName:item.agentName, codeChannel:item.codeChannel,
-            typing:item.working || item.status === 'active', section:item.section,
-            statusIcon:item.status === 'needs_attention' || item.status === 'archived'
-              ? <span className={`session-row-status session-row-status--${item.status}`} role="img" aria-label={sessionWorkStatusLabels[item.status]} title={sessionWorkStatusLabels[item.status]}>
-                {item.status==='needs_attention'?<WarningCircle size={17}/>:<Archive size={17}/>}
-              </span> : undefined, onRename:item.canRename ? () => setRenameId(item.id) : undefined })),
+            typing:item.working, section:item.section, onRename:item.canRename ? () => setRenameId(item.id) : undefined })),
           ...directs.items.filter(dm => !starred.ids.includes(dm.id)).map(dm => ({
             id:dm.id, name:dm.name, typing:typing.has(dm.id), section:'direct' as const,
             ...sectionProps(dm.id, 'direct'), ...directAvatar(dm.id), statusIcon:huddleIcon(dm.id), unread:unreadById.get(dm.id)?.unread_count ?? 0,
@@ -432,11 +433,14 @@ export function WorkspaceChannels({ codeChannelView, onOpenOrigin, onReturnDirec
               ...sectionProps(item.channel_id, 'direct'), unread:unreadById.get(item.channel_id)?.unread_count ?? 0 })),
         ]} selectedId={shortcut ? '' : agentSession ? `session:${agentSession.id}` : homeDirect?.id ?? selected}
         onSelect={id => { origin.current = null; onContentClose(); const session = sessions.items.find(item => `session:${item.id}` === id) ?? starredSessions.conversations.find(item=>`session:${item.id}`===id)?.session; if (session) { updateView(view => ({...view,agentSession:session})); onSearchClose(); return; } closeSession(); if (directById.has(id) || assignmentByChannel.get(id)?.kind === 'direct' || starred.conversations.some(c => c.id === id && c.kind === 'direct')) { const dm = directById.get(id); if (dm) { updateView(view => ({ ...view, direct: dm })); onVisit(dm); onSearchClose(); } else onDirectMessage(id); return; } updateView(view => ({ ...view, selected: id, direct: undefined })); onVisit(channels.find(channel => channel.id === id)); setComposeRequest(0); onSearchClose(); }} onCreateChannel={() => setCreateOpen(true)}
-        sectionFooters={{channels:channels.some(c => hiddenChannel(c.id)) && <button className="sp-sidebar-section-toggle" onClick={() => setShowMuted(!showMuted)}>{showMuted ? 'Hide muted channels' : 'Show muted channels'}</button>,starred:<>
+        sectionFooters={{channels:<>
+          {!loaded && !error && <ListRowSkeleton label="Loading conversations…" />}
+          {channels.some(c => hiddenChannel(c.id)) && <button className="sp-sidebar-section-toggle" onClick={() => setShowMuted(!showMuted)}>{showMuted ? 'Hide muted channels' : 'Show muted channels'}</button>}
+        </>,starred:<>
           {starredSessions.next&&<Button size="sm" onClick={starredSessions.loadMore}>More starred sessions</Button>}
           {starredSessions.hasPrevious&&<Button size="sm" onClick={starredSessions.first}>First starred sessions</Button>}
         </>,sessions:<>
-          {sessions.loading && !sessions.items.length && <p className="agent-session-sidebar-notice" role="status">Loading sessions…</p>}
+          {sessions.loading && !sessions.items.length && <ListRowSkeleton label="Loading sessions…" />}
           {sidebarError && <p className="agent-session-sidebar-notice" role="alert">{sidebarError}</p>}
           {sessions.error && <p className="agent-session-sidebar-notice" role="alert">{sessions.error} {!sessions.revoked && <Button size="sm" onClick={()=>void sessions.refresh()}>Retry sessions</Button>}</p>}
           {(hiddenCount > 0 || sessions.next_cursor) && <div className="agent-session-disclosure">
@@ -446,7 +450,6 @@ export function WorkspaceChannels({ codeChannelView, onOpenOrigin, onReturnDirec
           </div>}
         </>}}
         footer={starred.next ? <Button size="sm" onClick={starred.loadMore}>More starred conversations</Button> : starred.hasPrevious ? <Button size="sm" onClick={starred.first}>First starred conversations</Button> : false} />
-      {!loaded && !error && <p className="sp-sr-only" role="status">Loading conversations…</p>}
       {personal.error && <p className="chat-sidebar-loading" role="alert">Sidebar sections: {personal.error}</p>}
       {unread.error && <p className="chat-sidebar-loading" role="status">{unread.error}</p>}
       {error && channel?.joined && <p role="alert">{error}</p>}

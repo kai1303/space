@@ -39,3 +39,27 @@ it('reopens the tab session, follows navigation, and ignores a different signed-
     '/agent-sessions/session','/workspaces/work/sidekick-agents?paired=true','/workspaces/work/sidekick-sessions','/agent-sessions/session',
   ]);
 });
+
+it('distinguishes looking up a tab session, finding agents, and starting the chosen session', async()=>{
+  let notify!:(event:{tab:string;page:string;actor:string})=>void;
+  const dismiss=vi.fn();
+  vi.stubGlobal('spaceDesktop',{onBrowserSidekick:(fn:typeof notify)=>{notify=fn;return ()=>{};},browserSessionId:async()=>'session',dismissBrowserSidekick:dismiss});
+  let missing!:(reason:Error)=>void, agents!:(value:unknown)=>void;
+  let signal:AbortSignal | undefined;
+  vi.mocked(request).mockImplementation(async(path,_body,_key,_method,requestSignal)=>{
+    if(path==='/agent-sessions/session')return new Promise((_resolve,reject)=>{missing=reject;});
+    if(path.includes('paired=true'))return new Promise(resolve=>{agents=resolve;});
+    signal=requestSignal;
+    return new Promise(()=>{});
+  });
+  render(<BrowserSidekick workspace="work" viewer="me"/>);
+  await act(async()=>notify({tab:'tab',actor:'me',page:'https://example.com/page'}));
+  expect(screen.getByText('Checking for a private session…')).toBeTruthy();
+  await act(async()=>missing(new Error('not_found')));
+  expect(screen.getByText('Finding paired agents…')).toBeTruthy();
+  await act(async()=>agents([{id:'agent',name:'My agent',capabilities:{skills:['review']}}]));
+  expect(screen.getByRole('button',{name:'Starting private session…'}).getAttribute('aria-busy')).toBe('true');
+  await act(async()=>screen.getByRole('button',{name:'Close'}).click());
+  expect(signal?.aborted).toBe(true);
+  expect(dismiss).toHaveBeenCalledWith('tab');
+});

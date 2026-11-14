@@ -64,10 +64,24 @@ export class NotificationStore {
   async notify(c: DbSession, actor: string, channel: Channel, message: string, thread: string, refs: MentionReference[], reply: boolean, alsoInChannel = false) {
     const followsDirectThread = channel.kind === 'direct' && channel.direct_user_low !== channel.direct_user_high;
     const followers = [actor, ...refs.filter(ref => ref.kind === 'user').map(ref => ref.id)];
-    await c.execute(sql`INSERT INTO notification_subscriptions(thread_id,user_id)
+    const follow = sql`INSERT INTO notification_subscriptions(thread_id,user_id)
       SELECT ${thread},wm.user_id FROM workspace_members wm JOIN channel_members cm ON cm.workspace_id=wm.workspace_id AND cm.user_id=wm.user_id AND cm.channel_id=${channel.id}
       WHERE wm.workspace_id=${channel.workspace_id} AND wm.active AND wm.user_id=ANY(${sql.param(followers)}::uuid[])
-      ON CONFLICT DO NOTHING`);
+      ON CONFLICT DO NOTHING`;
+    if (channel.kind === 'channel' && !reply && !refs.length) {
+      // For a plain root, only members who requested every post receive a notification.
+      await c.execute(sql`WITH subscribed AS (${follow})
+        INSERT INTO notifications(workspace_id,channel_id,message_id,user_id,actor_id,kind,silent)
+        SELECT cm.workspace_id,cm.channel_id,${message},cm.user_id,${actor},'channel_message',
+          coalesce(p.paused_until>now(),false) OR coalesce(cm.muted_until>now(),false)
+        FROM channel_members cm JOIN workspace_members wm
+          ON wm.workspace_id=cm.workspace_id AND wm.user_id=cm.user_id AND wm.active
+        LEFT JOIN mention_preferences p ON p.user_id=cm.user_id
+        WHERE cm.workspace_id=${channel.workspace_id} AND cm.channel_id=${channel.id} AND cm.user_id<>${actor}
+          AND coalesce(cm.notification_mode,p.mode)='all' ORDER BY cm.user_id ON CONFLICT DO NOTHING`);
+      return;
+    }
+    await c.execute(follow);
     await c.execute(sql`INSERT INTO notifications(workspace_id,channel_id,message_id,user_id,actor_id,kind,silent)
       SELECT ${channel.workspace_id},${channel.id},${message},recipient.user_id,${actor},recipient.kind,
         NOT recipient.joined OR coalesce(p.paused_until>now(),false) OR coalesce(recipient.muted_until>now(),false) OR coalesce(recipient.notification_mode,p.mode,'mentions')='none' OR (recipient.kind='thread_reply' AND NOT coalesce(recipient.notify_thread_replies,recipient.follow_every_thread OR coalesce(p.thread_replies,true)))
@@ -84,16 +98,6 @@ export class NotificationStore {
             OR (${!reply || alsoInChannel} AND (${channel.kind === 'direct'} OR coalesce(cm.notification_mode,p.mode)='all')))))
       ) recipient LEFT JOIN mention_preferences p ON p.user_id=recipient.user_id
       ORDER BY recipient.user_id ON CONFLICT DO NOTHING`);
-  }
-
-  async reaction(c: DbSession, actor: string, channel: Channel, message: string, emoji: string) {
-    await c.execute(sql`INSERT INTO notifications(workspace_id,channel_id,message_id,user_id,actor_id,kind,emoji,silent)
-      SELECT ${channel.workspace_id},${channel.id},m.id,m.user_id,${actor},'reaction',${emoji},coalesce(p.paused_until>now(),false) OR coalesce(cm.muted_until>now(),false) OR coalesce(cm.notification_mode,p.mode,'mentions')='none'
-      FROM messages m JOIN workspace_members wm ON wm.workspace_id=m.workspace_id AND wm.user_id=m.user_id AND wm.active
-      JOIN channel_members cm ON cm.channel_id=m.channel_id AND cm.user_id=m.user_id
-      LEFT JOIN mention_preferences p ON p.user_id=m.user_id
-      WHERE m.channel_id=${channel.id} AND m.id=${message} AND m.author_type='human' AND m.user_id<>${actor}
-      ON CONFLICT DO NOTHING`);
   }
 
   async activity(actor: string, workspace: string, input: unknown = {}): Promise<NotificationActivity> {

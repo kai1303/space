@@ -26,3 +26,7 @@
 
 /* Huddles uses Motion for transitions and keeps native focus feedback immediate. */
 :where(.huddles-page,.huddle-panel,.huddle-header-button,.huddle-notice,.huddle-invitation,dialog:has(.huddle-prejoin,.huddle-picker)) .sp-button{transition:none}
+
+.huddle-directory-status { display: flex; align-items: center; gap: 8px; color: var(--sp-text-secondary); }
+
+.huddle-picker-options > .sp-loading-status { padding: 6px 12px; }

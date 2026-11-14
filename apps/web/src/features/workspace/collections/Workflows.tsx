@@ -1,12 +1,13 @@
 import { useRef, useState, type FormEvent } from 'react';
-import { Button, Dialog, IconButton } from '@space/ui/primitives';
+import { Select, Button, Dialog, IconButton, Spinner } from '@space/ui/primitives';
 import { CaretDown, Check, FileText, Headset, PencilSimple, TreeStructure, X } from '@phosphor-icons/react';
 import type { PublishedHelpWorkflow, WorkspaceWorkflow } from '@space/contracts';
 import { request } from '../../../shared/api/request.js';
 
 type Form = { kind: 'setup' } | {kind:'edit';workflow:PublishedHelpWorkflow} | { kind: 'request'; workflow: PublishedHelpWorkflow };
 
-export function Workflows({ workspace, viewer, templates, published, managed, templatesTab, newWorkflow, onCloseNew, onPublished, onOpenChannel, more, loadMore }: {
+export function Workflows({ workspace, viewer, templates, published, managed, loading, failed, templatesTab, newWorkflow, onCloseNew, onPublished, onOpenChannel, more, loadMore }: {
+  loading: boolean; failed: boolean;
   viewer:string; templatesTab:boolean; newWorkflow:boolean; onCloseNew:()=>void;
   workspace: string; templates: WorkspaceWorkflow[]; published: PublishedHelpWorkflow[]; managed: boolean;
   onPublished: () => void; onOpenChannel: (id: string) => void; more: boolean; loadMore?: () => void;
@@ -45,12 +46,13 @@ export function Workflows({ workspace, viewer, templates, published, managed, te
     </>}
     {!templatesTab && <section aria-label={managed ? 'Workflows managed by you' : 'Published workflows'} className="wf-gallery">
       <h2>{managed ? 'Workflows managed by you' : 'Published workflows'}</h2>
-      {published.length ? <ul className="wf-list">{published.map(item => <li key={item.id}>
+      {loading && <p role="status" className="wf-pending"><Spinner/>Loading workflows…</p>}
+      {!loading && !failed && (published.length ? <ul className="wf-list">{published.map(item => <li key={item.id}>
         <TreeStructure size={20}/><div><strong>{item.name}</strong><small>Published</small></div>
         {managed && item.settings && <IconButton label={`Edit ${item.name}`} onClick={() => setForm({kind:'edit',workflow:item})}><PencilSimple size={18}/></IconButton>}
         <Button size="sm" onClick={() => { setStarted(null); setForm({kind:'request',workflow:item}); }}>Start request</Button>
-      </li>)}</ul> : <p>{managed ? 'Workflows you publish will appear here.' : 'Set up a template to publish the first workflow.'}</p>}
-      {loadMore && <Button size="sm" loading={more} onClick={loadMore}>Load more workflows</Button>}
+      </li>)}</ul> : <p>{managed ? 'Workflows you publish will appear here.' : 'Set up a template to publish the first workflow.'}</p>)}
+      {!failed && loadMore && <Button size="sm" loading={more} onClick={loadMore}>Load more workflows</Button>}
     </section>}
     {(preview || newWorkflow) && <Dialog open title="IT Help Request" onClose={closePreview}>
       <div className="wf-preview"><h3>Workflow steps</h3><ol>
@@ -58,11 +60,13 @@ export function Workflows({ workspace, viewer, templates, published, managed, te
         <li>Post the request in the channel for that urgency.</li>
         <li>Wait for someone to claim it, then send the requester a confirmation DM.</li>
       </ol>
-      {!routes.length && <p>{template ? 'Join a configured request channel to set up this template.' : 'Connect the workflow service to publish this template.'}</p>}
-      <Button variant="primary" disabled={!routes.length} onClick={() => {closePreview(); setForm({kind:'setup'});}}>Set up</Button></div>
+      {loading && <p role="status" className="wf-pending"><Spinner/>Loading setup channels…</p>}
+      {failed && <p role="alert">Could not load setup channels.</p>}
+      {!loading && !failed && !routes.length && <p>{template ? 'Join a configured request channel to set up this template.' : 'Connect the workflow service to publish this template.'}</p>}
+      <Button variant="primary" disabled={loading || failed || !routes.length} onClick={() => {closePreview(); setForm({kind:'setup'});}}>Set up</Button></div>
     </Dialog>}
     {started && <div className="wf-receipt" role="status">Request started. <Button size="sm" onClick={() => onOpenChannel(started.channel_id)}>Open request channel</Button></div>}
-    {form && <WorkflowForm workspace={workspace} form={form} routes={routes} onClose={() => setForm(null)}
+    {form && !failed && <WorkflowForm workspace={workspace} form={form} routes={routes} onClose={() => setForm(null)}
       onPublished={() => {setForm(null); onPublished();}} onStarted={result => {setForm(null); setStarted(result);}}/>}
   </>;
 }
@@ -108,11 +112,11 @@ function WorkflowForm({ workspace, form, routes, onClose, onPublished, onStarted
     <form className="wf-form" onSubmit={submit}><fieldset disabled={busy}>
       {setup ? <>
         <label>Workflow name<input required maxLength={80} value={name} onChange={e=>setName(e.target.value)}/></label>
-        <label>Normal requests<select required value={available(normal) ? normal : ''} onChange={e=>setNormal(e.target.value)}>{!available(normal) && <option value="">Choose a channel</option>}{options}</select></label>
-        <label>Urgent requests<select required value={available(urgent) ? urgent : ''} onChange={e=>setUrgent(e.target.value)}>{!available(urgent) && <option value="">Choose a channel</option>}{options}</select></label>
+        <label>Normal requests<Select aria-label="Normal requests" required value={available(normal) ? normal : ''} onChange={e=>setNormal(e.target.value)}>{!available(normal) && <option value="">Choose a channel</option>}{options}</Select></label>
+        <label>Urgent requests<Select aria-label="Urgent requests" required value={available(urgent) ? urgent : ''} onChange={e=>setUrgent(e.target.value)}>{!available(urgent) && <option value="">Choose a channel</option>}{options}</Select></label>
         <p>When someone claims a request, the requester receives a confirmation DM.</p>
       </> : <>
-        <label>Urgency<select value={urgency} onChange={e=>setUrgency(e.target.value)}><option value="normal">Normal</option><option value="urgent">Urgent</option></select></label>
+        <label>Urgency<Select aria-label="Urgency" value={urgency} onChange={e=>setUrgency(e.target.value)}><option value="normal">Normal</option><option value="urgent">Urgent</option></Select></label>
         <label>What do you need help with?<textarea required maxLength={4000} rows={4} value={description} onChange={e=>setDescription(e.target.value)}/></label>
       </>}
       {error && <p role="alert">{error}</p>}

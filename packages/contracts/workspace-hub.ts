@@ -3,6 +3,7 @@ import { AppError, record, text, uuid } from './validation.js';
 import type { ChatMessage } from './chat.js';
 
 export interface HubMessage {
+  session_id?:string; task_id?:string; part?:'request'|'response';
   id: string; channel_id: string; channel_name: string; thread_id: string;
   text: string; author_name: string; created_at: string; reply_count: number;
   saved_at?: string;

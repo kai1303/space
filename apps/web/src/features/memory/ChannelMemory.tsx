@@ -1,7 +1,7 @@
 import { subscribeUpdates } from '../../shared/realtime/live-updates.js';
 import { sessionFetch } from '../../shared/api/session-fetch.js';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
-import { Select, Badge, Button, Tabs, toast } from '@space/ui/primitives';
+import { Select, Badge, Button, Tabs, toast, Skeleton } from '@space/ui/primitives';
 import { Reveal } from '@space/ui/motion';
 import { MAX_MEMORY_CHARS, MAX_MEMORY_IMPORT_BYTES, type ChannelMemory as MemoryState, type MemoryDocument, type MemoryMatch } from '@space/contracts';
 import { request } from '../../shared/api/request.js';
@@ -24,9 +24,13 @@ export function ChannelMemory(props: Props) {
 }
 function MemoryView({ channel, name, message, onDirtyChange, onAccessLost, asTab, onOpenThread, onOpenSession }: Props) {
   const [data, setData] = useState<MemoryState>(), [draft, setDraft] = useState('');
-  const [busy, setBusy] = useState(false), [error, setError] = useState(''), [notice, setNotice] = useState('');
+  const [action, setAction] = useState<'save' | 'configure' | 'other' | null>(null), [error, setError] = useState(''), [notice, setNotice] = useState('');
+  const busy = action !== null;
   const [provider, setProvider] = useState('markdown'), [conflict, setConflict] = useState(false), [comparison, setComparison] = useState(false);
   const [query, setQuery] = useState(''), [matches, setMatches] = useState<MemoryMatch[] | null>(null);
+  const [searching, setSearching] = useState(false);
+  const searchRequest = useRef<AbortController | null>(null);
+  useEffect(() => () => searchRequest.current?.abort(), []);
   const [upload, setUpload] = useState<{ source_id: string; name: string; content: string }>(), [messageSaved, setMessageSaved] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   // Saving a message is a Notes action, so that entry opens on Notes.
@@ -47,22 +51,22 @@ function MemoryView({ channel, name, message, onDirtyChange, onAccessLost, asTab
   function failure(e: unknown) {
     const code = e instanceof Error ? e.message : 'Unable to update memory';
     if (['unauthorized', 'not_found', 'memory_disabled'].includes(code)) {
-      setData(undefined); setDraft(''); setUpload(undefined); setMatches(null); setComparison(false); setConflict(false);
+      clearSearch(); setData(undefined); setDraft(''); setUpload(undefined); setComparison(false); setConflict(false);
     }
     if (code === 'memory_conflict') {
       setConflict(true); setError('Memory changed. Your draft is kept. Load the latest version, merge your changes, and save again.');
     } else setError(code.replaceAll('_', ' '));
   }
-  async function run(work: () => Promise<void>) {
+  async function run(work: () => Promise<void>, action: 'save' | 'configure' | 'other' = 'other') {
     if (pending.current) return;
-    pending.current = true; setBusy(true); setError(''); setNotice('');
+    pending.current = true; setAction(action); setError(''); setNotice('');
     try { await work(); }
     catch (e) { if (active.current) failure(e); }
-    finally { pending.current = false; if (active.current) setBusy(false); }
+    finally { pending.current = false; if (active.current) setAction(null); }
   }
   function accept(document: MemoryDocument, notice: string) {
     setData(previous => previous ? { ...previous, document } : previous); setDraft(document.content);
-    generation.current++; setNotice(notice); setMatches(null); setComparison(false); setConflict(false);
+    generation.current++; clearSearch(); setNotice(notice); setComparison(false); setConflict(false);
   }
   const editorState = useRef({ dirty, revision: data?.document?.revision });
   editorState.current = { dirty, revision: data?.document?.revision };
@@ -74,7 +78,7 @@ function MemoryView({ channel, name, message, onDirtyChange, onAccessLost, asTab
         const result = await request<MemoryState>(path);
         if (!active.current || version !== generation.current) return;
         const changed = editorState.current.revision !== result.document?.revision;
-        if (changed) setMatches(null);
+        if (changed) clearSearch();
         if (result.document && changed && editorState.current.dirty) {
           failure(new Error('memory_conflict'));
           return;
@@ -83,17 +87,17 @@ function MemoryView({ channel, name, message, onDirtyChange, onAccessLost, asTab
         if (!editorState.current.dirty || !result.document) setDraft(result.document?.content ?? '');
         setProvider(result.provider);
       } catch (e) { if (active.current && version === generation.current) failure(e); }
-    }, code => { generation.current++; setData(undefined); setDraft(''); setMatches(null); failure(new Error(code)); });
+    }, code => { generation.current++; clearSearch(); setData(undefined); setDraft(''); failure(new Error(code)); });
     return () => { stop(); active.current = false; generation.current++; };
   }, [path, channel]);
   async function configure(enabled: boolean) {
     await run(async () => {
       const result = await request<MemoryState>(`${path}/settings`, { enabled, provider });
       if (!active.current) return;
-      generation.current++; setData(result); setProvider(result.provider); setDraft(result.document?.content ?? ''); setMatches(null); setUpload(undefined);
+      generation.current++; clearSearch(); setData(result); setProvider(result.provider); setDraft(result.document?.content ?? ''); setUpload(undefined);
       setMessageSaved(false); setConflict(false); setComparison(false); setConfirmDelete(false);
       setNotice(enabled ? 'Memory enabled for this channel.' : 'Memory disabled. Stored memory is retained.');
-    });
+    }, 'configure');
   }
   async function chooseFile(file: File | undefined) {
     if (!file || pending.current) return;
@@ -105,6 +109,26 @@ function MemoryView({ channel, name, message, onDirtyChange, onAccessLost, asTab
       if (active.current) setUpload({ source_id: crypto.randomUUID(), name: file.name, content });
     });
   }
+  function clearSearch() {
+    searchRequest.current?.abort();
+    setSearching(false);
+    setMatches(null);
+  }
+  async function search(event: FormEvent) {
+    event.preventDefault();
+    if (!query.trim() || searching) return;
+    const controller = new AbortController();
+    searchRequest.current = controller;
+    setSearching(true);
+    try {
+      const result = await request<{ items: MemoryMatch[] }>(`${path}/search?q=${encodeURIComponent(query)}`, undefined, undefined, 'POST', controller.signal);
+      if (!controller.signal.aborted) setMatches(result.items);
+    } catch (error) {
+      if (!controller.signal.aborted) failure(error);
+    } finally {
+      if (!controller.signal.aborted) setSearching(false);
+    }
+  }
   function exportMemory() {
     const url = URL.createObjectURL(new Blob([data!.document!.content], { type: 'text/markdown;charset=utf-8' }));
     const link = document.createElement('a'); link.href = url; link.download = `${channel}-memory.md`; link.click();
@@ -114,7 +138,7 @@ function MemoryView({ channel, name, message, onDirtyChange, onAccessLost, asTab
   const openThread = onOpenThread, openSession = onOpenSession;
   return <section id={asTab ? 'channel-memory' : undefined} role={asTab ? 'tabpanel' : 'region'} className="channel-memory-page" aria-label={`Memory in #${name}`}>
     <header className="channel-memory-page-header"><h2>Memory in #{name}</h2><p>Shared knowledge for this channel, with links to its sources.</p></header>
-    <Tabs label="Memory views" value={view} onChange={id => setView(id as 'graph' | 'notes')} items={[
+    <Tabs label="Memory views" value={view} onChange={id => { setSelection(undefined); setView(id as 'graph' | 'notes'); }} items={[
       { id: 'graph', label: 'Graph', panelId: `memory-${channel}-graph` },
       { id: 'notes', label: 'Notes', panelId: `memory-${channel}-notes` },
     ]} />
@@ -126,7 +150,13 @@ function MemoryView({ channel, name, message, onDirtyChange, onAccessLost, asTab
     <div className="channel-memory">
       {error && <div role="alert" className="channel-memory-error">{error}</div>}
       {notice && <p role="status">{notice}</p>}
-      {!data && !error && <p role="status">Loading channel memory…</p>}
+      {!data && !error && <>
+        {message && <section className="channel-memory-selection" aria-label="Selected message"><strong>Save this conversation to memory</strong><blockquote>{message.text || 'Message with attachments'}</blockquote></section>}
+        <div className="channel-memory-document-placeholder" role="status">
+          <span className="sp-sr-only">Loading channel memory…</span>
+          <Skeleton width="38%" /><Skeleton width="86%" height={10} /><Skeleton width="72%" height={10} /><Skeleton width="55%" height={10} />
+        </div>
+      </>}
       {!data && error && <Button onClick={() => void run(async () => {
         const result = await request<MemoryState>(path);
         if (active.current) { setData(result); setProvider(result.provider); setDraft(result.document?.content ?? ''); }
@@ -140,7 +170,7 @@ function MemoryView({ channel, name, message, onDirtyChange, onAccessLost, asTab
             {data.providers.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
           </Select></label>
           <div className="channel-memory-actions">
-            {!data.enabled ? <Button variant="primary" loading={busy} onClick={() => void configure(true)}>Enable memory</Button>
+            {!data.enabled ? <Button variant="primary" disabled={busy} loading={action === 'configure'} onClick={() => void configure(true)}>Enable memory</Button>
               : <><Button disabled={busy || dirty} onClick={() => void configure(false)}>Disable memory</Button>{provider !== data.provider && <Button variant="primary" disabled={busy || dirty} onClick={() => void configure(true)}>Use selected provider</Button>}</>}
           </div>
           <KnowledgeSwitch path={path} enabled={data.knowledge_enabled} onChange={result => {
@@ -156,15 +186,15 @@ function MemoryView({ channel, name, message, onDirtyChange, onAccessLost, asTab
           <form className="channel-memory-editor" onSubmit={(event: FormEvent) => { event.preventDefault(); void run(async () => {
             const document = await request<MemoryDocument>(`${path}/document`, { content: draft, revision: data.document!.revision });
             if (active.current) accept(document, 'Memory saved.');
-          }); }}>
+          }, 'save'); }}>
             <label>Channel memory Markdown<textarea value={draft} maxLength={MAX_MEMORY_CHARS} disabled={busy} spellCheck={false} onChange={event => setDraft(event.target.value)} placeholder={'# Channel knowledge\n\n## Decisions\n\n## Facts\n\n## Procedures'} /></label>
-            <div className="channel-memory-actions"><Button type="submit" variant="primary" loading={busy} disabled={!dirty || conflict}>Save changes</Button><Button disabled={busy} onClick={exportMemory}>Export Markdown</Button><small>{draft.length.toLocaleString()} / {MAX_MEMORY_CHARS.toLocaleString()} characters{dirty ? ' · Unsaved changes' : ''}</small></div>
+            <div className="channel-memory-actions"><Button type="submit" variant="primary" loading={action === 'save'} disabled={busy || !dirty || conflict}>Save changes</Button><Button onClick={exportMemory}>Export Markdown</Button><small>{draft.length.toLocaleString()} / {MAX_MEMORY_CHARS.toLocaleString()} characters{dirty ? ' · Unsaved changes' : ''}</small></div>
           </form>
           {conflict && <Button disabled={busy} onClick={() => void run(async () => {
             const result = await request<MemoryState>(path);
             if (active.current) {
               setData(result); setComparison(Boolean(result.enabled)); setConflict(false);
-              if (!result.enabled) { setDraft(''); setUpload(undefined); setMatches(null); }
+              if (!result.enabled) { clearSearch(); setDraft(''); setUpload(undefined); }
               else setNotice('Latest version loaded below. Merge it into your draft before saving.');
             }
           })}>Load latest for comparison</Button>}
@@ -180,10 +210,12 @@ function MemoryView({ channel, name, message, onDirtyChange, onAccessLost, asTab
             const document = await requestDelete<MemoryDocument>(`${path}/sources/${encodeURIComponent(source.id)}`);
             if (active.current) accept(document, 'Source removed from memory.');
           })}>Remove</Button></li>)}</ul></section>}
-          <form className="channel-memory-search" onSubmit={event => { event.preventDefault(); void run(async () => {
-            const result = await request<{ items: MemoryMatch[] }>(`${path}/search?q=${encodeURIComponent(query)}`);
-            if (active.current) setMatches(result.items);
-          }); }}><label>Search saved memory<input value={query} maxLength={200} disabled={busy} onChange={event => { setQuery(event.target.value); setMatches(null); }} /></label><Button type="submit" disabled={busy || !query.trim()}>Search memory</Button></form>
+          <form className="channel-memory-search" onSubmit={search}>
+            <label>Search saved memory<input value={query} maxLength={200} onChange={event => {
+              setQuery(event.target.value); clearSearch();
+            }} /></label>
+            <Button type="submit" loading={searching} disabled={!query.trim()}>Search memory</Button>
+          </form>
           {matches && <div className="channel-memory-matches" role="status">{matches.length ? matches.map(match => <p key={match.line}><small>Line {match.line}</small> {match.text}</p>) : <p>No matching saved memory.</p>}</div>}
         </>}
         {data.can_manage && <MemoryConnections key={channel} channel={channel} enabled={data.enabled} />}
@@ -191,7 +223,7 @@ function MemoryView({ channel, name, message, onDirtyChange, onAccessLost, asTab
           await requestDelete(path);
           if (!active.current) return;
           toast.success('Stored channel memory deleted');
-          setConfirmDelete(false); setUpload(undefined); setMatches(null); setMessageSaved(false);
+          clearSearch(); setConfirmDelete(false); setUpload(undefined); setMessageSaved(false);
           if (data.enabled) {
             const result = await request<MemoryState>(path);
             if (active.current) { setData(result); setDraft(result.document?.content ?? ''); }

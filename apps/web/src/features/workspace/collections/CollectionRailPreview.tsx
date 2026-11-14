@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import type { HubFile, HubTodo } from '@space/contracts';
 import { DotsThreeVertical, File, Medal, Star } from '@phosphor-icons/react';
-import { Popover } from '@space/ui/primitives';
+import { ListRowSkeleton, Popover } from '@space/ui/primitives';
 import { useCollection } from './useWorkspaceCollection.js';
 import './collection-rail-preview.css';
 
@@ -31,7 +31,7 @@ function Preview({ view, workspace, onOpen, onOpenDestination }: Props) {
       {files && <button type="button" aria-pressed={starred} disabled={disabled} className="collection-peek-filter" onClick={() => setStarred(value => !value)}><Star size={14} aria-hidden="true" weight={starred ? 'fill' : 'regular'}/>Starred</button>}
     </header>
     <div className="collection-peek-results" aria-busy={data.loading}>
-      {data.loading && empty && <p className="rail-peek-empty" role="status">Loading {title.toLowerCase()}…</p>}
+      {data.loading && empty && <ListRowSkeleton label={`Loading ${title.toLowerCase()}…`}/>}
       {data.error && <div className="rail-peek-empty" role="alert">{data.error} {!data.revoked && <button type="button" onClick={() => void data.retry()}>Retry</button>}</div>}
       {data.writeError && <p role="alert" className="rail-peek-empty">{data.writeError}</p>}
       {!data.loading && !data.error && empty && <div className="rail-peek-empty collection-peek-empty">{files

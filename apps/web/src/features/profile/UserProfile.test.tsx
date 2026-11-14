@@ -127,3 +127,15 @@ it('keeps the searchable emoji picker inside the native status dialog', async ()
   await userEvent.click(screen.getByRole('button',{name:'Save',exact:true}));
   await waitFor(() => expect(fetcher.mock.calls.some(([,options]) => options?.method === 'PATCH' && JSON.parse(options.body as string).status?.emoji === '🚀')).toBe(true));
 });
+
+it('opens the profile while presence and editable fields are still unknown', async () => {
+  vi.stubGlobal('fetch', vi.fn(() => new Promise(() => {})));
+  render(<UserSettings user="Kai" userId="user" workspace="space"/>);
+  await userEvent.click(screen.getByRole('button', {name:'Your account'}));
+  expect(screen.queryByText('Active')).toBeNull();
+  expect(screen.getByRole('menuitem', {name:'Preferences'})).toBeTruthy();
+  await userEvent.click(screen.getByRole('menuitem', {name:'Profile'}));
+  const panel = within(screen.getByRole('dialog', {name:'Your profile'}));
+  expect(panel.getByText('Loading profile…')).toBeTruthy();
+  expect(panel.queryByRole('button', {name:'Edit profile'})).toBeNull();
+});

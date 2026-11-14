@@ -79,3 +79,14 @@ it('continues Tab navigation after the menu trigger', async () => {
   await userEvent.tab();
   expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Next control' }));
 });
+
+it('runs a message shortcut only while its menu is open', async () => {
+  const edit = vi.fn();
+  render(<Message author="Kai" initials="KA" time="12:00" actions={{edit}}>Draft</Message>);
+  await userEvent.keyboard('e');
+  expect(edit).not.toHaveBeenCalled();
+  await userEvent.click(screen.getByLabelText('More actions'));
+  await userEvent.keyboard('e');
+  expect(edit).toHaveBeenCalledOnce();
+  expect(screen.queryByRole('menu')).toBeNull();
+});

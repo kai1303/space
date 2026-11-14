@@ -308,6 +308,8 @@
   background: var(--sp-border);
   margin: 0 7px;
 }
+.sp-composer-action-icon { display:grid; pointer-events:none; }
+.sp-composer-action-icon > span { grid-area:1 / 1; display:grid; place-items:center; }
 .sp-send-rich.sp-button {
   margin-left: auto;
   width: 34px;

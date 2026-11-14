@@ -1,6 +1,6 @@
 import { subscribeUpdates } from '../../../shared/realtime/live-updates.js';
 import { useEffect, useRef, useState } from 'react';
-import { Avatar, Button, Dialog, Select } from '@space/ui/primitives';
+import { Avatar, Button, Dialog, ListRowSkeleton, Select, toast } from '@space/ui/primitives';
 import { ArrowLeft, ArrowRight, CheckCircle, Cloud, Copy, Desktop, Plug, ShieldCheck } from '@phosphor-icons/react';
 import { type PairedConnector, type AgentPairing, type AgentPairingStatus, type WorkspaceParticipant } from '@space/contracts';
 import { listAll, request } from '../../../shared/api/request.js';
@@ -15,32 +15,58 @@ function MemberDialog({ returnOnPaired, initialConnector, agent, workspace, view
   const [connector, setConnector] = useState(initialConnector ?? 'codex.local'), [connectors, setConnectors] = useState<PairedConnector[]>([]);
   const [connectionType, setConnectionType] = useState<'local' | 'cloud' | 'endpoint'>();
   const [members, setMembers] = useState<WorkspaceParticipant[]>([]), [loaded, setLoaded] = useState(false);
+  const [providersReady, setProvidersReady] = useState(false);
+  const [readErrors, setReadErrors] = useState<Partial<Record<'providers' | 'members' | 'pairing', string>>>({});
+  const [revoked, setRevoked] = useState(false);
   const [pairing, setPairing] = useState<AgentPairing>(), [pairStatus, setPairStatus] = useState<AgentPairingStatus>();
   const [busy, setBusy] = useState(false), [error, setError] = useState(''), [copied, setCopied] = useState(false);
   const active = useRef(true), pending = useRef<AgentPairing | undefined>(undefined);
   const status = useRef<AgentPairingStatus | undefined>(undefined);
+  const generation = useRef(0);
+  function loseAccess(code: string) {
+    generation.current++;
+    pending.current = undefined; status.current = undefined;
+    setMembers([]); setConnectors([]); setPairing(undefined); setPairStatus(undefined);
+    setReadErrors({}); setRevoked(true); setError(errorText(new Error(code)));
+  }
   async function refresh() {
-    const [items, registered] = await Promise.all([listAll<WorkspaceParticipant>(`/workspaces/${workspace}/participants`), request<PairedConnector[]>('/agents/connectors')]);
-    if (!Array.isArray(registered)) throw new Error('Unable to load connectors');
-    if (active.current) { setConnectors(registered); setConnector(current => registered.some(entry => entry.id === current) ? current : registered[0]?.id ?? ''); }
-    if (active.current) { setMembers(items); setLoaded(true); }
-    const current = pending.current;
-    if (current) {
-      const value = await request<AgentPairingStatus>(`/agent-pairings/${current.id}`);
-      if (active.current && pending.current?.id === current.id) { status.current = value; setPairStatus(value); }
+    const attempt = ++generation.current;
+    const current = () => active.current && attempt === generation.current;
+    setReadErrors({});
+    async function read<T>(section: keyof typeof readErrors, result: Promise<T>, apply: (value: T) => void) {
+      try {
+        const value = await result;
+        if (current()) apply(value);
+      } catch (reason) {
+        if (!current()) return;
+        if (section === 'members' && reason instanceof Error && ['unauthorized', 'not_found', 'forbidden'].includes(reason.message)) {
+          loseAccess(reason.message);
+          return;
+        }
+        setReadErrors(previous => ({ ...previous, [section]: errorText(reason) }));
+      }
     }
+    const pair = pending.current;
+    await Promise.all([
+      read('members', listAll<WorkspaceParticipant>(`/workspaces/${workspace}/participants`), items => {
+        setRevoked(false); setMembers(items); setLoaded(true);
+      }),
+      read('providers', request<PairedConnector[]>('/agents/connectors'), registered => {
+        if (!Array.isArray(registered)) throw new Error('Unable to load connectors');
+        setConnectors(registered); setProvidersReady(true);
+        setConnector(current => registered.some(entry => entry.id === current) ? current : registered[0]?.id ?? '');
+      }),
+      pair && read('pairing', request<AgentPairingStatus>(`/agent-pairings/${pair.id}`), value => {
+        if (pending.current?.id === pair.id) { status.current = value; setPairStatus(value); }
+      }),
+    ]);
   }
   useEffect(() => {
     active.current = true;
-    const update = async () => {
-      try { await refresh(); }
-      catch (e) { if (active.current) { setError(errorText(e)); if (e instanceof Error && ['unauthorized', 'not_found'].includes(e.message)) { setMembers([]); setPairing(undefined); pending.current = undefined; return; } } }
-    };
-    const stop = subscribeUpdates('workspace', workspace, update, code => {
-      active.current = false; pending.current = undefined; status.current = undefined;
-      setMembers([]); setPairing(undefined); setPairStatus(undefined); setLoaded(true); setError(errorText(new Error(code)));
+    const stop = subscribeUpdates('workspace', workspace, refresh, code => {
+      active.current = false; loseAccess(code);
     });
-    return () => { active.current = false; stop(); };
+    return () => { active.current = false; generation.current++; stop(); };
   }, [workspace]);
   useEffect(() => {
     if (!pairing || ['claimed', 'expired', 'cancelled'].includes(pairStatus?.status ?? '')) return;
@@ -55,7 +81,7 @@ function MemberDialog({ returnOnPaired, initialConnector, agent, workspace, view
   const desktop = window.spaceDesktop;
   const macBrowser = !desktop && /Mac/.test(navigator.platform) && navigator.maxTouchPoints <= 1;
   async function createPairing() {
-    if (!selected || busy) return;
+    if (!selected || busy || revoked) return;
     setBusy(true); setError('');
     try {
       const value = await request<AgentPairing>(`/workspaces/${workspace}/agent-pairings`, { connector_id: selected.id });
@@ -85,11 +111,12 @@ function MemberDialog({ returnOnPaired, initialConnector, agent, workspace, view
     } catch (e) { if (active.current) setError(errorText(e)); }
     finally { if (active.current) setBusy(false); }
   }
-  async function revoke(id: string) {
+  async function revoke({id, name}: WorkspaceParticipant) {
     setBusy(true); setError('');
     try {
       await request(`/agents/connections/${id}/revoke`, {});
       if (active.current) {
+        toast.success(`Disconnected ${name}`);
         if (status.current?.installation_id === id) {
           pending.current = undefined; status.current = undefined; setPairing(undefined); setPairStatus(undefined);
         }
@@ -124,7 +151,7 @@ function MemberDialog({ returnOnPaired, initialConnector, agent, workspace, view
   const copy = (value: string) => { void navigator.clipboard.writeText(value).then(() => setCopied(true)).catch(() => setError('Select the code and copy it manually.')); };
   return <Dialog open title={agent ? 'Agent connection' : 'Connect an agent'} description={agent ? 'Manage this agent’s connection to your workspace.' : 'Bring your own agent into your team’s conversations.'} onClose={close}>
     <div className="space-members space-agent-dialog">
-      {error && <div role="alert" className="space-members-error">{error}<Button size="sm" variant="ghost" onClick={() => { setError(''); void refresh().catch(e => setError(errorText(e))); }}>Retry</Button></div>}
+      {(error || Object.keys(readErrors).length > 0) && <div role="alert" className="space-members-error">{error || Object.values(readErrors).join(' · ')}{active.current && <Button size="sm" variant="ghost" onClick={() => { setError(''); void refresh(); }}>Retry</Button>}</div>}
       {!agent && !pairing && <section className="space-agent-setup" aria-label="Agent setup">
         <div className="space-agent-fields">
           <label className="space-agent-field"><span>Connection type</span>
@@ -134,7 +161,7 @@ function MemberDialog({ returnOnPaired, initialConnector, agent, workspace, view
           </label>
           {mode !== 'endpoint' && <label className="space-agent-field"><span>Agent provider</span>
             <Select aria-label="Agent provider" disabled={busy || !selected} value={selected?.id ?? ''} onChange={event => setConnector(event.target.value)}>
-              {available.length ? available.map(entry => <option key={entry.id} value={entry.id}>{entry.name}</option>) : <option value="">{loaded ? 'No providers available' : 'Loading providers…'}</option>}
+              {available.length ? available.map(entry => <option key={entry.id} value={entry.id}>{entry.name}</option>) : <option value="">{readErrors.providers || revoked ? 'Providers unavailable' : providersReady ? 'No providers available' : 'Loading providers…'}</option>}
             </Select>
           </label>}
         </div>
@@ -142,8 +169,8 @@ function MemberDialog({ returnOnPaired, initialConnector, agent, workspace, view
           : selected ? <>
             <div className="space-agent-explainer"><span className="space-agent-method-icon">{mode === 'local' ? <Desktop size={24}/> : <Cloud size={24}/>}</span><div><h3>{mode === 'local' ? 'Runs on your computer' : 'Runs in your cloud environment'}</h3><p>{mode === 'local' ? 'Connect your agent, sign in on your computer, and keep the runner open while you work.' : 'Pair a registered runner on your server or container. It connects securely to Space and sends results back to your conversations.'}</p></div></div>
             {macBrowser && selected.provider && <MacRunnerLinks workspace={workspace} provider={selected.provider}/>}
-            <div className="space-agent-setup-action"><span className="space-members-hint">{desktop && selected.provider ? 'Your provider CLI must be installed on this Mac.' : 'You’ll get a code to pair your runner.'}</span><Button variant="primary" loading={busy} disabled={!loaded} onClick={() => void createPairing()}>{mode === 'local' ? desktop ? 'Connect on this Mac' : macBrowser ? 'Use the CLI' : `Connect Local ${selected.name}` : `Connect ${selected.name}`}<ArrowRight size={17}/></Button></div>
-          </> : loaded && <div className="space-agent-explainer"><span className="space-agent-method-icon">{type.icon}</span><div><h3>{mode === 'cloud' ? 'No cloud connectors configured' : 'No local connectors configured'}</h3><p>{mode === 'cloud' ? 'Ask your Space operator to register your cloud runner. It will appear here when it is available.' : 'Ask your Space operator to enable a local provider.'}</p></div></div>}
+            <div className="space-agent-setup-action"><span className="space-members-hint">{desktop && selected.provider ? 'Your provider CLI must be installed on this Mac.' : 'You’ll get a code to pair your runner.'}</span><Button variant="primary" loading={busy} disabled={revoked} onClick={() => void createPairing()}>{mode === 'local' ? desktop ? 'Connect on this Mac' : macBrowser ? 'Use the CLI' : `Connect Local ${selected.name}` : `Connect ${selected.name}`}<ArrowRight size={17}/></Button></div>
+          </> : providersReady && !readErrors.providers && !revoked && <div className="space-agent-explainer"><span className="space-agent-method-icon">{type.icon}</span><div><h3>{mode === 'cloud' ? 'No cloud connectors configured' : 'No local connectors configured'}</h3><p>{mode === 'cloud' ? 'Ask your Space operator to register your cloud runner. It will appear here when it is available.' : 'Ask your Space operator to enable a local provider.'}</p></div></div>}
       </section>}
       {pairing && <section className="space-pairing" aria-label={`Connect ${name}`}>
         {pairStatus?.status === 'claimed' ? <>
@@ -159,11 +186,11 @@ function MemberDialog({ returnOnPaired, initialConnector, agent, workspace, view
           <div className="space-pairing-footer"><Button size="sm" variant="ghost" disabled={busy} onClick={() => void cancel()}><ArrowLeft size={16}/>Cancel pairing</Button><span>Expires at {new Date(pairing.expires_at).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}</span></div>
         </>}
       </section>}
-      {!loaded && !error && <p role="status">Loading connections…</p>}
+      {!loaded && !readErrors.members && !revoked && (!pairing || pairStatus?.status === 'claimed') && <ListRowSkeleton label="Loading connections…"/>}
       {loaded && (!pairing || pairStatus?.status === 'claimed') && agents.length > 0 && <section className="space-agent-connections" aria-label="Connected agents"><h3>{agent ? 'Connection status' : 'In this workspace'}<span>{agents.length}</span></h3><ul className="space-member-list">{agents.map(member => <li key={member.id}>
         <Avatar name={member.name} initials={member.name.slice(0, 2).toUpperCase()} size="sm" tone="purple"/>
         <div className="space-member-details"><strong>{member.name}</strong><small><span className={`space-agent-status-dot space-agent-status-dot--${member.status ?? 'offline'}`}/>{statusText[member.status ?? 'offline']}{member.owner_id === viewer ? ' · Owned by you' : ''}</small></div>
-        {member.owner_id === viewer && <Button size="sm" variant="ghost" aria-label={`Disconnect ${member.name}`} disabled={busy} onClick={() => void revoke(member.id)}>Disconnect</Button>}
+        {member.owner_id === viewer && <Button size="sm" variant="ghost" aria-label={`Disconnect ${member.name}`} disabled={busy} onClick={() => void revoke(member)}>Disconnect</Button>}
       </li>)}</ul></section>}
       <div className="space-agent-permissions"><ShieldCheck size={18}/><p>A paired agent inherits your access to conversations. Channel memory requires a separate grant.</p></div>
     </div>

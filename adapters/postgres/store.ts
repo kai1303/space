@@ -423,6 +423,11 @@ export class PostgresStore implements DeliveryStore {
       if (task.status !== next) assertTransition(task.status, next);
       await c.insert(s.agentEventReceipts).values({ installation_id: installationId, event_id: event.id, event });
       const changedExecution = await c.update(s.executions).set({ status: next, last_sequence: event.sequence }).where(and(eq(s.executions.id, event.execution_id), eq(s.executions.last_sequence, execution.last_sequence), eq(s.executions.status, execution.status))).returning({ id: s.executions.id });
+      if (event.payload.transcript) {
+        if (!optimistic || task.skill !== 'codex.run') throw new AppError(400, 'invalid_transcript_event');
+        if (!changedExecution.length) throw new SessionConflict();
+        return;
+      }
       const changedTask = await c.update(s.tasks).set({ status: next, result: next === 'completed' ? event.payload.text : null, revision: sql`${s.tasks.revision}+1`, updated_at: now }).where(and(eq(s.tasks.id, task.id), eq(s.tasks.revision, task.revision))).returning({ id: s.tasks.id });
       if (!changedExecution.length || !changedTask.length) throw new SessionConflict();
       if (event.type === 'execution.started') traceTurn(c, task.id, 'execution', 'started');

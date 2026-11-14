@@ -2,12 +2,12 @@ import { sessionTransaction } from './session-concurrency.js';
 import { randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import type { Pool } from 'pg';
-import { and, asc, desc, eq, gt, isNotNull, isNull, lt, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, getTableColumns, isNotNull, isNull, lt, or, sql } from 'drizzle-orm';
 import { AppError, parseAssetName, parseAssetInput, parseAssetDescriptions, record, type AssetDetails, parseAssetListQuery, uuid, type AssetAttachment, type AssetPreview, type ChannelFile, type Page } from '@space/contracts';
 import { database, type DbSession } from './database.js';
 import { readChannelPermissions } from './channel-permissions.js';
 import { hasChannelAccess, lockWorkspace } from './access.js';
-import { assets, channels, messages, users } from './schema.js';
+import { assets, channelMembers, channels, messages, users, workspaceMembers } from './schema.js';
 
 type Asset = typeof assets.$inferSelect;
 const notFound = () => new AppError(404, 'not_found');
@@ -82,9 +82,19 @@ export class AssetStore {
       return row!;
     });
   }
+  private async memberAsset(c: DbSession, actor: string, id: string): Promise<Asset> {
+    const [row] = await c.select(getTableColumns(assets)).from(assets)
+      .innerJoin(channelMembers, and(eq(channelMembers.workspace_id, assets.workspace_id),
+        eq(channelMembers.channel_id, assets.channel_id), eq(channelMembers.user_id, uuid(actor))))
+      .innerJoin(workspaceMembers, and(eq(workspaceMembers.workspace_id, channelMembers.workspace_id),
+        eq(workspaceMembers.user_id, channelMembers.user_id), eq(workspaceMembers.active, true)))
+      .where(eq(assets.id, uuid(id)));
+    if (!row) throw notFound();
+    return row;
+  }
   private async owned(c: DbSession, actor: string, id: string): Promise<Asset> {
-    const [row] = await c.select().from(assets).where(eq(assets.id, uuid(id)));
-    if (!row || row.uploader_id !== actor || !await hasChannelAccess(c, actor, row.workspace_id, row.channel_id)) throw notFound();
+    const row = await this.memberAsset(c, actor, id);
+    if (row.uploader_id !== actor) throw notFound();
     return row;
   }
   private available() { return or(isNull(assets.processing_token), sql`${assets.processing_until} <= now()`); }
@@ -145,20 +155,17 @@ export class AssetStore {
     });
     return result!;
   }
-  async download(actor: string, id: string): Promise<Asset> {
-    return this.db.transaction(async c => {
-      const [row] = await c.select().from(assets).where(eq(assets.id, uuid(id)));
-      await this.assertAccess(c, actor, row);
-      return row!;
-    });
+  download(actor: string, id: string): Promise<Asset> {
+    return this.readableAsset(this.db, actor, id);
   }
-  private async assertAccess(c: DbSession, actor: string, row: Asset | undefined) {
-    if (!row || row.status !== 'ready' || !await hasChannelAccess(c, actor, row.workspace_id, row.channel_id)) throw notFound();
+  private async readableAsset(c: DbSession, actor: string, id: string): Promise<Asset> {
+    const row = await this.memberAsset(c, actor, id);
+    if (row.status !== 'ready') throw notFound();
     if (!row.message_id && !row.task_id && (row.uploader_id !== actor || (!row.queue_input_id && row.expires_at <= new Date()))) throw notFound();
+    return row;
   }
   private async readDetails(c: DbSession, actor: string, id: string): Promise<AssetDetails> {
-    const [row] = await c.select().from(assets).where(eq(assets.id, id));
-    await this.assertAccess(c, actor, row);
+    await this.readableAsset(c, actor, id);
     const detail = await c.execute<AssetDetails>(sql`
       SELECT a.id, a.name, a.size, a.type, a.channel_id, m.thread_id, u.display_name AS uploader,
         to_json(coalesce(m.created_at,a.created_at)) #>> '{}' AS shared_at,
@@ -203,20 +210,19 @@ export class AssetStore {
     });
   }
   private async officeAccess(c: DbSession, actor: string, id: string) {
-    const [row] = await c.select().from(assets).where(eq(assets.id, uuid(id)));
-    await this.assertAccess(c, actor, row);
+    const row = await this.readableAsset(c, actor, id);
     const state = (await c.execute<{ revision: number; edit_epoch: number; channel_editing: boolean }>(sql`
       SELECT revision, edit_epoch, channel_editing FROM office_edits WHERE asset_id=${id}`)).rows[0];
-    const owner = row!.uploader_id === actor;
+    const owner = row.uploader_id === actor;
     const channelEditing = state?.channel_editing ?? false;
     let canWrite = false;
-    if (row!.message_id && row!.preview?.kind === 'office') {
-      const [channel] = await c.select({ kind: channels.kind }).from(channels).where(eq(channels.id, row!.channel_id));
+    if (row.message_id && row.preview?.kind === 'office') {
+      const [channel] = await c.select({ kind: channels.kind }).from(channels).where(eq(channels.id, row.channel_id));
       if (channel?.kind === 'channel') {
-        canWrite = (await readChannelPermissions(c, actor, row!.channel_id)).capabilities.post;
+        canWrite = (await readChannelPermissions(c, actor, row.channel_id)).capabilities.post;
       }
     }
-    return { row: row!, revision: state?.revision ?? 0, epoch: state?.edit_epoch ?? 0, channelEditing,
+    return { row, revision: state?.revision ?? 0, epoch: state?.edit_epoch ?? 0, channelEditing,
       canShare: owner && canWrite, canEdit: canWrite && (owner || channelEditing) };
   }
   officeAccessFor(actor: string, id: string) {
@@ -243,6 +249,12 @@ export class AssetStore {
         WHERE office_edits.revision=${revision}`);
     });
   }
+  async officeContentSize(id: string, revision: number): Promise<number | undefined> {
+    const result = await this.pool.query<{size: number}>(
+      'SELECT octet_length(content) AS size FROM office_edits WHERE asset_id=$1 AND revision=$2 AND revision>0',
+      [uuid(id), revision]);
+    return result.rows[0]?.size;
+  }
   async officeContent(id: string, revision?: number): Promise<Buffer | undefined> {
     const result = await this.pool.query<{ content: Buffer }>(
       'SELECT content FROM office_edits WHERE asset_id=$1 AND revision>0 AND ($2::integer IS NULL OR revision=$2)',
@@ -253,8 +265,8 @@ export class AssetStore {
     const current = await this.download(actor, id);
     if (current.encrypted) return {kind:'unsupported',reason:'Encrypted file'};
     if (current.preview) return current.preview;
-    const result = await this.processing(id, async (row, token) => {
-      await this.assertAccess(this.db, actor, row);
+    const result = await this.processing(id, async (_claimed, token) => {
+      const row = await this.download(actor, id);
       if (row.preview) return row.preview;
       const preview = await generate(row);
       await this.download(actor, id);
@@ -268,8 +280,8 @@ export class AssetStore {
     const current = await this.download(actor, id);
     if (current.preview?.kind !== 'pdf') throw new AppError(415, 'preview_unavailable');
     if (current.preview.thumbnail !== undefined) return current.preview.thumbnail;
-    const result = await this.processing(id, async (row, token) => {
-      await this.assertAccess(this.db, actor, row);
+    const result = await this.processing(id, async (_claimed, token) => {
+      const row = await this.download(actor, id);
       if (row.preview?.kind !== 'pdf') throw new AppError(415, 'preview_unavailable');
       if (row.preview.thumbnail !== undefined) return row.preview.thumbnail;
       const thumbnail = await generate(row);

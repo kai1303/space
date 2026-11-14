@@ -1,6 +1,6 @@
 import { subscribeUpdates } from '../../shared/realtime/live-updates.js';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { Select, Button, Dialog } from '@space/ui/primitives';
+import { Select, Button, Dialog, LoadingStatus, Skeleton } from '@space/ui/primitives';
 import type { NavigatorCandidate, NavigatorRule, NavigationDecision } from '@space/contracts';
 import { request } from '../../shared/api/request.js';
 import './navigator.css';
@@ -16,21 +16,30 @@ export function agentMention(candidate:NavigatorCandidate,catalog:NavigatorCandi
 type Observation={id:string;thread_id:string;decision:{action:string;reason:string;targetSessionId?:string;delivery_error?:string};created_at:string};
 const observationActions:Record<string,string>={suggest:'Suggestion',continue:'Follow-up',stop:'Stop',ignore:'No action',clarify:'Clarification',escalate:'Deeper review'};
 function NavigatorObservations({channel}:{channel:string}) {
- const [items,setItems]=useState<Observation[]>([]),[error,setError]=useState(''),[loading,setLoading]=useState(true),[refresh,setRefresh]=useState(0);
+ const [items,setItems]=useState<Observation[]>(),[error,setError]=useState(''),[loading,setLoading]=useState(true),[refresh,setRefresh]=useState(0);
  useEffect(()=>{
-  let active=true;
+  const controller=new AbortController();
   setLoading(true);setError('');
-  void request<Observation[]>(`/channels/${channel}/navigator/observations`).then(value=>{if(active)setItems(value);}).catch(e=>{if(active)setError(errorText(e));}).finally(()=>{if(active)setLoading(false);});
-  return()=>{active=false;};
+  void request<Observation[]>(`/channels/${channel}/navigator/observations`,undefined,undefined,'POST',controller.signal)
+   .then(value=>{if(!controller.signal.aborted)setItems(value);})
+   .catch(e=>{
+    if(controller.signal.aborted)return;
+    if(e instanceof Error && ['forbidden','unauthorized','not_found','actor_changed'].includes(e.message))setItems(undefined);
+    setError(errorText(e));
+   }).finally(()=>{if(!controller.signal.aborted)setLoading(false);});
+  return()=>controller.abort();
  },[channel,refresh]);
  return <section aria-label="Navigator observations" className="navigator-settings">
   <h3>Recent observations</h3>
   <p>Review the latest 20 recorded decisions.</p>
-  <Button size="sm" variant="ghost" disabled={loading} onClick={()=>setRefresh(value=>value+1)}>Refresh observations</Button>
+  <Button size="sm" variant="ghost" loading={loading && !!items} disabled={loading} onClick={()=>setRefresh(value=>value+1)}>Refresh observations</Button>
   {error&&<p role="alert">Unable to load observations: {error}</p>}
-  {loading&&<p role="status">Loading observations…</p>}
-  {!loading&&!error&&!items.length&&<p>No observations yet.</p>}
-  {items.map(item=><article className="navigator-suggestion" key={item.id}>
+  {loading&&!items&&<div className="navigator-suggestion" role="status">
+   <span className="sp-sr-only">Loading observations…</span>
+   <Skeleton width="30%" height={14}/><Skeleton width="82%" height={12}/><Skeleton width="45%" height={10}/>
+  </div>}
+  {!error&&items?.length===0&&<p>No observations yet.</p>}
+  {items?.map(item=><article className="navigator-suggestion" key={item.id}>
    <strong>{observationActions[item.decision.action]??item.decision.action.replaceAll('_',' ')}</strong>
    <p>{item.decision.reason}</p>
    <time dateTime={item.created_at}>{new Date(item.created_at).toLocaleString()}</time>
@@ -40,21 +49,33 @@ function NavigatorObservations({channel}:{channel:string}) {
 }
 export function NavigatorSettings({channel,onCandidates,renderTrigger}:{renderTrigger?:(open:()=>void)=>ReactNode;channel:string;onCandidates:(candidates:NavigatorCandidate[])=>void}) {
  const [open,setOpen]=useState(false),[config,setConfig]=useState<Configuration&{channel:string}>(),[settings,setSettings]=useState<Settings>(),[ruleText,setRuleText]=useState(''),[error,setError]=useState(''),[busy,setBusy]=useState(false);
+ const [loadAttempt,retryLoad]=useState(0);
+ const draft=useRef({settings,ruleText});
+ draft.current={settings,ruleText};
  const saveScope=useRef<object|undefined>(undefined);
  const canManage=config?.channel===channel&&config.can_manage;
  useEffect(()=>{
   saveScope.current={};setBusy(false);
   return()=>{saveScope.current=undefined;};
  },[channel,open]);
- useEffect(()=>{let active=true;setConfig(undefined);setSettings(undefined);setError('');onCandidates([]);void request<Configuration>(`/channels/${channel}/navigator`).then(value=>{if(active){setConfig({...value,channel});setSettings({...value.settings,execution_mode:value.settings.execution_mode??'suggest'});setRuleText(value.settings.rules.map(r=>`${r.skill}: ${r.keywords.join(', ')}`).join('\n'));onCandidates(value.candidates);}}).catch(e=>{if(active)setError(errorText(e));});return()=>{active=false;};},[channel,onCandidates]);
+ useEffect(()=>{
+  const controller=new AbortController();
+  setConfig(undefined);setSettings(undefined);setError('');onCandidates([]);
+  void request<Configuration>(`/channels/${channel}/navigator`,undefined,undefined,'POST',controller.signal).then(value=>{
+   if(controller.signal.aborted)return;
+   setConfig({...value,channel});setSettings({...value.settings,execution_mode:value.settings.execution_mode??'suggest'});
+   setRuleText(value.settings.rules.map(r=>`${r.skill}: ${r.keywords.join(', ')}`).join('\n'));onCandidates(value.candidates);
+  }).catch(e=>{if(!controller.signal.aborted)setError(errorText(e));});
+  return()=>controller.abort();
+ },[channel,onCandidates,loadAttempt]);
  async function save(){
   if(!settings||!canManage||busy)return;
-  const scope=saveScope.current;
+  const scope=saveScope.current, submitted=draft.current;
   setBusy(true);setError('');
   try{
    const rules=ruleText.split('\n').filter(line=>line.trim()).map(line=>{const colon=line.indexOf(':');if(colon<1)throw new Error('Use skill: keyword, keyword for each rule');return {skill:line.slice(0,colon).trim(),keywords:line.slice(colon+1).split(',').map(k=>k.trim()).filter(Boolean)};});
    const saved=await request<Settings>(`/channels/${channel}/navigator`,{...settings,rules},undefined,'PATCH');
-   if(saveScope.current===scope){setSettings(saved);setOpen(false);}
+   if(saveScope.current===scope && draft.current.settings===submitted.settings && draft.current.ruleText===submitted.ruleText){setSettings(saved);setOpen(false);}
   }catch(e){if(saveScope.current===scope)setError(errorText(e));}
   finally{if(saveScope.current===scope)setBusy(false);}
  }
@@ -62,9 +83,9 @@ export function NavigatorSettings({channel,onCandidates,renderTrigger}:{renderTr
   {renderTrigger ? renderTrigger(() => setOpen(true)) : <button aria-label="Navigator settings" onClick={()=>setOpen(true)}>Navigator</button>}
   <Dialog open={open} onClose={()=>setOpen(false)} title="Navigator">
    <div className="navigator-settings">
-    {error&&<p role="alert">{error}</p>}
-    {settings?<>
+    {error&&<p role="alert">{error} {!settings&&<Button size="sm" onClick={()=>retryLoad(n=>n+1)}>Retry settings</Button>}</p>}
      <p>Mentions go directly to agents. Navigator can suggest help for other conversations.</p>
+    {settings && config?.channel===channel?<>
      <label>Navigation mode<Select aria-label="Navigation mode" disabled={!canManage} value={settings.mode} onChange={e=>setSettings({...settings,mode:e.target.value as Settings['mode']})}><option value="off">Off · direct mentions only</option><option value="rules">Rules only · no model calls</option><option value="semantic">Rules + optional model providers</option></Select></label>
      {settings.mode==='semantic'&&<p>Conversation text may be sent to the model providers configured by your operator. Without a configured provider, rules continue to work.</p>}
      <label>Action mode<Select aria-label="Action mode" disabled={!canManage} value={settings.execution_mode??'suggest'} onChange={e=>setSettings({...settings,execution_mode:e.target.value as Settings['execution_mode']})}><option value="suggest">Suggest and route follow-ups</option><option value="observe">Observe</option></Select></label>
@@ -75,7 +96,7 @@ export function NavigatorSettings({channel,onCandidates,renderTrigger}:{renderTr
      <label>Suggestion cooldown in seconds<input type="number" min="0" max="86400" disabled={!canManage} value={settings.cooldown_seconds} onChange={e=>setSettings({...settings,cooldown_seconds:Number(e.target.value)})} /></label>
      {canManage?<Button loading={busy} onClick={()=>void save()}>Save Navigator settings</Button>:<p>A channel manager can change these settings.</p>}
      {open&&canManage&&<NavigatorObservations key={channel} channel={channel} />}
-    </>:!error&&<p role="status">Loading Navigator…</p>}
+    </>:!error&&<LoadingStatus>Loading channel settings…</LoadingStatus>}
    </div>
   </Dialog>
  </>;

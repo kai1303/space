@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { AgentSessionDetail, SidekickAgent, SidekickSession } from '@space/contracts';
-import { Button, Select } from '@space/ui/primitives';
+import { Button, Select, LoadingStatus } from '@space/ui/primitives';
 import { request } from '../../shared/api/request.js';
 import { Connections } from '../connections/Connections.js';
 import { AgentSessions } from './AgentSessions.js';
@@ -17,13 +17,13 @@ export function BrowserSidekick({ workspace, viewer }: { workspace: string; view
     if (site.actor === viewer) setSetup(site);
   }), [viewer]);
   if (setup?.actor === viewer) return <Connections key={viewer} userId={viewer} suggested={setup} onClose={() => setSetup(undefined)} />;
-  if (!tab) return null;
+  if (!tab || tab.actor !== viewer) return null;
   function close() {
     if (tab) window.spaceDesktop?.dismissBrowserSidekick?.(tab.tab);
     setTab(null);
   }
   return <section aria-label="Private browser session" className="browser-sidekick">
-    <BrowserDiscussion key={tab.tab} tab={tab} workspace={workspace} viewer={viewer} close={close}/>
+    <BrowserDiscussion key={workspace + ':' + viewer + ':' + tab.tab} tab={tab} workspace={workspace} viewer={viewer} close={close}/>
   </section>;
 }
 
@@ -33,15 +33,16 @@ function BrowserDiscussion({ tab, workspace, viewer, close }: {tab: BrowserTab; 
   const [choice, setChoice] = useState('');
   const [error, setError] = useState('');
   const [retry, setRetry] = useState(0);
-  const [busy, setBusy] = useState(true);
+  const [pending, setPending] = useState<'session' | 'agents' | 'start' | null>('session');
   const [start, setStart] = useState('');
   const initialPage = useRef(tab.page).current;
   useEffect(() => {
     const controller = new AbortController();
     const signal = controller.signal;
     async function open() {
-      setBusy(true); setError('');
+      setPending('session'); setError('');
       const id = await window.spaceDesktop?.browserSessionId?.(tab.tab, workspace);
+      if (signal.aborted) return;
       if (!id) throw new Error('Reopen Ask my agent from the browser tab.');
       try {
         const detail = await request<AgentSessionDetail>(`/agent-sessions/${id}`, undefined, undefined, 'POST', signal, viewer);
@@ -52,6 +53,8 @@ function BrowserDiscussion({ tab, workspace, viewer, close }: {tab: BrowserTab; 
       } catch (reason) {
         if (!(reason instanceof Error && reason.message === 'not_found')) throw reason;
       }
+      if (signal.aborted) return;
+      setPending('agents');
       const agents = await request<SidekickAgent[]>(`/workspaces/${workspace}/sidekick-agents?paired=true`, undefined, undefined, 'POST', signal, viewer);
       const available = agents.flatMap(agent => agent.capabilities.skills.map(skill => ({
         id: agent.id, skill, label: agent.capabilities.skills.length === 1 ? agent.name : agent.name + ' · ' + skill,
@@ -60,6 +63,8 @@ function BrowserDiscussion({ tab, workspace, viewer, close }: {tab: BrowserTab; 
       setOptions(available);
       const picked = available.length === 1 ? available[0] : available.find(a => a.id + '|' + a.skill === start);
       if (!picked) return;
+      setChoice(picked.id + '|' + picked.skill);
+      setPending('start');
       const created = await request<SidekickSession>(`/workspaces/${workspace}/sidekick-sessions`, {
         installation_id: picked.id, skill: picked.skill, client_session_id: id, source: { browser_url: initialPage },
       }, undefined, 'POST', signal, viewer);
@@ -67,7 +72,7 @@ function BrowserDiscussion({ tab, workspace, viewer, close }: {tab: BrowserTab; 
     }
     void open().catch(reason => {
       if (!signal.aborted) setError(reason instanceof Error ? reason.message.replaceAll('_', ' ') : 'Could not open your browser session.');
-    }).finally(() => { if (!signal.aborted) setBusy(false); });
+    }).finally(() => { if (!signal.aborted) setPending(null); });
     return () => controller.abort();
   }, [workspace, viewer, tab.tab, initialPage, start, retry]);
 
@@ -75,13 +80,23 @@ function BrowserDiscussion({ tab, workspace, viewer, close }: {tab: BrowserTab; 
     channel={session.channel_id} viewerId={viewer} browserPage={tab.page} onAccessLost={close} onClose={close}/>;
   return <div className="sidekick-content">
     <h3>Ask my agent</h3>
-    {busy ? <p role="status">Opening your private session…</p> : error ? <p role="alert">{error} <Button onClick={() => setRetry(n => n + 1)}>Retry</Button></p>
-      : options.length ? <form onSubmit={event => { event.preventDefault(); setStart(choice); }}>
-        <label>Paired agent<Select aria-label="Paired agent" required value={choice} onChange={event => setChoice(event.target.value)}>
-          <option value="" disabled>Select your agent</option>
-          {options.map(a => <option key={a.id + '|' + a.skill} value={a.id + '|' + a.skill}>{a.label}</option>)}
-        </Select></label><Button type="submit" disabled={!choice}>Start private session</Button>
-      </form> : <p>Pair an agent in Apps &amp; agents to ask about this tab. <Button onClick={() => setRetry(n => n + 1)}>Refresh</Button></p>}
+    {URL.canParse(initialPage) && /^https?:/.test(initialPage) && <p>{new URL(initialPage).host}</p>}
+    {pending === 'session' && <LoadingStatus>Checking for a private session…</LoadingStatus>}
+    {pending === 'agents' && <LoadingStatus>Finding paired agents…</LoadingStatus>}
+    {error && <p role="alert">{error} <Button onClick={() => setRetry(n => n + 1)}>Retry</Button></p>}
+    {options.length > 0 && <form onSubmit={event => {
+      event.preventDefault();
+      if (!pending && choice) {
+        if (choice === start) setRetry(n => n + 1);
+        else setStart(choice);
+      }
+    }}>
+      <label>Paired agent<Select aria-label="Paired agent" required disabled={!!pending} value={choice} onChange={event => setChoice(event.target.value)}>
+        <option value="" disabled>Select your agent</option>
+        {options.map(a => <option key={a.id + '|' + a.skill} value={a.id + '|' + a.skill}>{a.label}</option>)}
+      </Select></label><Button type="submit" disabled={!!pending || !choice} loading={pending === 'start'}>{pending === 'start' ? 'Starting private session…' : 'Start private session'}</Button>
+    </form>}
+    {!options.length && !pending && !error && <p>Pair an agent in Apps &amp; agents to ask about this tab. <Button onClick={() => setRetry(n => n + 1)}>Refresh</Button></p>}
     <Button variant="ghost" onClick={close}>Close</Button>
   </div>;
 }

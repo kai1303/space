@@ -2,7 +2,7 @@ import { subscribeUpdates } from '../../shared/realtime/live-updates.js';
 import { Fragment, useEffect, useId, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { patchLines, usePatchReview, type SubmitReview } from './PatchReview.js';
 import type { Task, TaskStatus, AgentSessionOutputs } from '@space/contracts';
-import { Badge, Button, IconButton, SidePanel, Tabs, type Tone } from '@space/ui/primitives';
+import { Badge, Button, IconButton, SidePanel, Tabs, type Tone, LoadingStatus } from '@space/ui/primitives';
 import { CodeBlock } from '@space/ui/rich-text';
 import { ArrowClockwise, ArrowSquareOut, Clock, Code, Desktop, DownloadSimple, FileCode, Files, GitBranch, Globe, Lightning, X } from '@phosphor-icons/react';
 import { request } from '../../shared/api/request.js';
@@ -205,6 +205,6 @@ function ConnectedWorkspace({ taskId, channelName, revision, onClose, onAccessLo
     window.addEventListener('space:session-expired', expired);
     return () => { active = false; stop(); window.removeEventListener('space:session-expired', expired); };
   }, [taskId, retry, revision]);
-  if (!data) return <SidePanel className="agent-workspace" role="region" aria-label="Agent workspace"><header className="agent-workspace-header"><h2>Agent workspace</h2><button ref={loadingClose} type="button" className="agent-workspace-close" aria-label="Close agent workspace" onClick={onClose}><X size={20} /></button></header><div className="agent-workspace-loading">{error ? <><p role="alert">{error}</p><Button onClick={() => setRetry(value => value + 1)}>Retry</Button></> : <p role="status">Loading task workspace…</p>}</div></SidePanel>;
+  if (!data) return <SidePanel className="agent-workspace" role="region" aria-label="Agent workspace"><header className="agent-workspace-header"><h2>Agent workspace</h2><button ref={loadingClose} type="button" className="agent-workspace-close" aria-label="Close agent workspace" onClick={onClose}><X size={20} /></button></header><div className="agent-workspace-loading">{error ? <><p role="alert">{error}</p><Button onClick={() => setRetry(value => value + 1)}>Retry</Button></> : <LoadingStatus>Loading task workspace…</LoadingStatus>}</div></SidePanel>;
   return <AgentWorkspaceView task={data.task} channelName={channelName} onClose={onClose} refreshing={refreshing} error={error} onRefresh={() => setRetry(value => value + 1)} />;
 }

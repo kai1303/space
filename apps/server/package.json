@@ -87,6 +87,7 @@
     "nodemailer": "^10.3.1",
     "sharp": "^0.35.5",
     "socket.io": "^4.8.4",
+    "strtok3": "^10.7.0",
     "zod": "^4.2.0"
   },
   "devDependencies": {

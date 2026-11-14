@@ -1,7 +1,7 @@
 import {webcrypto} from 'node:crypto';
 import {CompactEncrypt, compactDecrypt, exportSPKI, generateKeyPair, importSPKI} from 'jose';
 import {beforeEach, afterEach, expect, it, vi} from 'vitest';
-import {cleanup, render, screen} from '@testing-library/react';
+import {cleanup, render, screen, waitFor} from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import {WebVault} from './WebVault.js';
 import {request} from '../../shared/api/request.js';
@@ -164,4 +164,27 @@ it('edits a selected login and removes it only after confirming deletion on the 
   await click('Delete…'); await click('Delete item'); await screen.findByText('The request was cancelled on your Mac.');
   await click('Delete item'); await screen.findByText('Your Vault is empty');
   expect(local.mock.calls[3][1]).toMatchObject({operation:'delete',id:login.id,version:updated.version});
+});
+
+it('keeps device selection usable during discovery refresh and ignores an old unlock after switching Macs',async()=>{
+ let approve!: (value:unknown)=>void;
+ vi.mocked(request).mockResolvedValueOnce([mac,{...mac,id:'b',name:'Other Mac'}])
+   .mockImplementationOnce(()=>new Promise(()=>{}))
+   .mockImplementationOnce(()=>new Promise(resolve=>{approve=resolve;}));
+ render(<WebVault actor="kai"/>);
+ await screen.findByRole('combobox',{name:'Paired Mac'});
+ await userEvent.click(screen.getByRole('button',{name:'Refresh Macs'}));
+ expect(screen.getByRole('button',{name:'Refresh Macs'}).getAttribute('aria-busy')).toBe('true');
+ const refreshSignal=vi.mocked(request).mock.lastCall![4]!;
+ await userEvent.click(screen.getByRole('button',{name:'Unlock Vault'}));
+ await waitFor(()=>expect(approve).toBeTypeOf('function'));
+ expect(refreshSignal.aborted).toBe(true);
+ const approvalSignal=vi.mocked(request).mock.lastCall![4]!;
+ await userEvent.click(screen.getByRole('combobox',{name:'Paired Mac'}));
+ await userEvent.click(screen.getByRole('option',{name:'Other Mac'}));
+ expect(approvalSignal.aborted).toBe(true);
+ approve({status:'cancelled'});
+ await screen.findByRole('button',{name:'Unlock Vault'});
+ expect(screen.queryByText('The request was cancelled on your Mac.')).toBeNull();
+ expect(screen.queryByRole('region',{name:'Vault items'})).toBeNull();
 });

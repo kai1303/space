@@ -1,3 +1,4 @@
+import {conversationPath} from '@space/contracts';
 import {test, type TestContext} from 'node:test';
 import assert from 'node:assert/strict';
 import {createHash,createHmac,randomBytes,randomUUID} from 'node:crypto';
@@ -383,6 +384,40 @@ test('personal sidebar sections move channels and DMs and sync only to the owner
     await alice.getByRole('menuitemradio', { name: 'Channels', exact: true }).click();
     await expect(group('Channels').getByRole('button', { name: channel, exact: true })).toBeVisible();
   } finally { await second.close(); }
+});
+
+test('channel copy actions confirm the clipboard write', {timeout:120_000}, async t=>{
+  const {alice, pool, seed, web}=await openWorkspace(t);
+  const {name}=(await pool.query('SELECT name FROM channels WHERE id=$1',[seed.channel_id])).rows[0];
+  const row=alice.getByRole('navigation',{name:'Workspace conversations'}).getByRole('button',{name,exact:true});
+  await alice.context().grantPermissions(['clipboard-read','clipboard-write'],{origin:web});
+  const channelUrl=new URL(conversationPath(seed.channel_id)!,web);
+  const huddleUrl=new URL(channelUrl); huddleUrl.searchParams.set('huddle','1');
+  for (const [action,confirmation,value] of [
+    ['Copy name','Channel name copied',name],
+    ['Copy link','Channel link copied',channelUrl.href],
+    ['Copy huddle link','Huddle link copied',huddleUrl.href],
+  ] as const) {
+    await row.click({button:'right'});
+    const menu=alice.getByRole('menu',{name:'Actions for '+name});
+    await menu.getByRole('menuitem',{name:'Copy',exact:true}).hover();
+    await menu.getByRole('menuitem',{name:action,exact:true}).click();
+    await expect(alice.getByText(confirmation,{exact:true}).last()).toBeVisible();
+    assert.equal(await alice.evaluate(()=>navigator.clipboard.readText()),value);
+  }
+});
+
+test('undo restores the last channel pin after the Pins tab disappears', {timeout:120_000}, async t=>{
+  const {alice,seed,root,chat}=await openWorkspace(t);
+  await chat.setChannelPin(seed.owner_id,seed.channel_id,root.id,true);
+  const pins=alice.getByRole('tab',{name:'Pins'});
+  await pins.click();
+  await alice.getByRole('button',{name:'Pinned message actions'}).click();
+  await alice.getByRole('menuitem',{name:'Unpin from channel'}).click();
+  await expect(pins).toHaveCount(0);
+  await alice.getByRole('button',{name:'Undo',exact:true}).click();
+  await pins.click();
+  await expect(alice.getByRole('region',{name:'Pinned messages'}).getByText('Shared release notes')).toBeVisible();
 });
 
 test('two members see channel pins, shares, and tab visibility without refreshing', {timeout:150_000}, async t=>{

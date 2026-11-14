@@ -125,3 +125,21 @@ test('storage errors stay retryable instead of being persisted as unsupported pr
   await assert.rejects(fixture(bytes, { async read() { throw error; } }).run(), error);
   await assert.rejects(fixture(bytes, { async write() { throw error; } }).run(), error);
 });
+
+test('large sealed files retain full content detection with bounded range reads', async () => {
+  const bytes = Buffer.alloc(2 * 1024 * 1024, 48);
+  const reads = [];
+  const storage = { async read(_key, _limit, range) {
+    reads.push(range);
+    return range ? bytes.subarray(range.start, range.end + 1) : bytes;
+  }};
+  assert.equal((await fixture(bytes, storage).run()).kind, 'unsupported');
+  assert.ok(reads.length > 0 && reads.every(r => r && r.end - r.start < 65536));
+  bytes[bytes.length - 1] = 0xff;
+  assert.equal((await fixture(bytes, storage).run('notes.txt')).kind, 'unsupported');
+  assert.equal(reads.at(-1), undefined, 'full UTF-8 validation includes the last byte');
+  Buffer.from('%PDF-1.7\n').copy(bytes);
+  assert.equal((await fixture(bytes, storage).run('notes.bin')).kind, 'pdf');
+  const error = new Error('storage unavailable');
+  await assert.rejects(fixture(bytes, {async read() { throw error; }}).run(), error);
+});

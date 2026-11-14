@@ -4,3 +4,5 @@ export { AgentResponse, AgentMarkdown, AgentProfileLinkContext, AgentMessageLink
 export { TicketCard, Alert, ToolExecution } from "./work-items.js";
 export type { TicketStatus, TicketPriority, ToolTimelinePoint, ToolTimelineStep } from "./work-items.js";
 export { SessionTitle } from './streamed-words.js';
+export { FileToolDetails } from './FileToolDetails.js';
+export { ShellExecutionRow, ShellExecutionDetails } from './shell-execution.js';

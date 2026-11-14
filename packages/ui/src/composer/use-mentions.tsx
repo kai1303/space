@@ -1,7 +1,8 @@
 import { Megaphone, Robot } from '@phosphor-icons/react';
 import { useEffect, useId, useRef, useState, type ReactNode, type RefObject } from 'react';
-import { AnimatePresence, motion, useIsPresent, useReducedMotion } from 'motion/react';
-import { motionTransition, surfaceMotion } from '../motion/motion.js';
+import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
+import { PopoverSurface } from '../motion/popover-surface.js';
+import { motionTransition } from '../motion/motion.js';
 import type Quill from 'quill';
 import type { MentionOption } from '@space/contracts';
 export type FindMentions = (query: string) => Promise<{ items: MentionOption[]; member_count: number }>;
@@ -10,16 +11,15 @@ type Match = { start: number; length: number; query: string; items: MentionOptio
 function MentionPopover({ id, match, reduced, children }: {
   id: string; match: Match; reduced: boolean | null; children: ReactNode;
 }) {
-  const present = useIsPresent();
-  return <motion.div id={id} className="sp-mention-suggestions" role="listbox"
-    aria-label="Mention suggestions" aria-busy={match.pending} aria-hidden={!present || undefined} inert={!present}
-    layout={!reduced} layoutDependency={match.items} {...surfaceMotion(reduced)}
+  return <PopoverSurface id={id} className="sp-mention-suggestions" role="listbox"
+    aria-label="Mention suggestions" aria-busy={match.pending}
+    layout={!reduced} layoutDependency={match.items}
     style={{ originX: 0, originY: 1 }}>
     {children}
-  </motion.div>;
+  </PopoverSurface>;
 }
 
-export function useMentions(editor: RefObject<Quill|null>, ready: boolean, channel: string, find?: FindMentions, editorVersion = 0) {
+export function useMentions(editor: RefObject<Quill|null>, ready: boolean, channel: string, find?: FindMentions, editorVersion = 0, outsideLabel = 'Not in channel') {
   const reduced = useReducedMotion();
   const [match,setMatch]=useState<Match|null>(null),[memberCount,setMemberCount]=useState(0);
   const current=useRef(match),finder=useRef(find),epoch=useRef(0),timer=useRef<ReturnType<typeof setTimeout>|undefined>(undefined);
@@ -97,7 +97,7 @@ export function useMentions(editor: RefObject<Quill|null>, ready: boolean, chann
       <span className="sp-mention-avatar" data-mention-kind={option.kind} aria-hidden="true">{option.image?<img src={option.image} alt=""/>:option.kind==='broadcast'?<Megaphone size={16}/>:option.kind==='agent'?<Robot size={16}/>:option.label.slice(0,2).toUpperCase()}</span>
       <span className="sp-mention-label"><strong>{option.kind==='broadcast'?'@':''}{option.label}</strong>{option.kind==='agent'&&<span className="sp-mention-agent-label">Agent</span>}</span>
       <small className="sp-mention-detail">{option.kind==='user'?`${option.detail||'Member'}${match.items.filter(item => item.kind === option.kind && item.label === option.label).length > 1 ? ` · ${option.id.slice(-8)}` : ''}`:option.kind==='agent'&&option.detail==='Agent'?'':option.detail}</small>
-      {option.joined===false&&<small className="sp-mention-membership">Not in channel</small>}
+      {option.joined===false&&<small className="sp-mention-membership">{outsideLabel}</small>}
       <kbd className="sp-mention-select-hint" aria-hidden="true">Enter</kbd>
     </motion.button>)}
     </motion.div>

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { conversationPath, HUB_FILE_KINDS, type HubFile, type Page, type WorkspaceParticipant, type ChannelSummary } from '@space/contracts';
-import { Tabs, Select, Button, Dialog, IconButton, Menu, MultiSelectMenu, pendingToast, toast } from '@space/ui/primitives';
+import { Tabs, Select, Button, Dialog, IconButton, ListRowSkeleton, Menu, MultiSelectMenu, pendingToast, toast } from '@space/ui/primitives';
 import { NavigationIcon } from '@space/ui/navigation';
 import { DotsThreeVertical, DownloadSimple, File, FileCode, FilePdf, ImageSquare, MagnifyingGlass, MusicNote, SlidersHorizontal, Star, VideoCamera, X } from '@phosphor-icons/react';
 import { AssetViewer } from './AssetAttachments.js';
@@ -114,8 +114,8 @@ function FileResults({ workspace, onOpen, query, filtered, starred, clear, onRev
         </div>
       </li>)}</ul>
     </div>
-    {data.loading && <p className="files-status" role="status">Loading files…</p>}
-    {!data.loading && !data.error && data.cursor && <div className="files-more">{files.length < MAX_ITEMS ? <Button size="sm" disabled={data.busy} onClick={() => void data.more()}>Load more</Button> : <p>Showing {MAX_ITEMS} files. Search or filter to find more.</p>}</div>}
+    {data.loading && !files.length && <ListRowSkeleton label="Loading files…" />}
+    {!data.error && data.cursor && <div className="files-more">{files.length < MAX_ITEMS ? <Button size="sm" loading={data.loadingMore} disabled={data.busy} onClick={() => void data.more()}>Load more</Button> : <p>Showing {MAX_ITEMS} files. Search or filter to find more.</p>}</div>}
     {preview && files.some(file => file.id === preview) && <AssetViewer assets={previewFiles.map(file => ({ id: file.id, name: file.filename, size: file.byte_size, type: file.content_type, description: file.description }))} selectedId={preview} onSelect={setPreview} onClose={closePreview} onAccessLost={() => { setPreview(null); setDetails(null); void data.clearAndRefresh(); }} previews={Object.fromEntries(files.map(file => [file.id,{ kind: (['image','pdf','text','audio','video','unsupported'].includes(file.preview_kind) ? file.preview_kind : 'file') as 'image'|'pdf'|'text'|'audio'|'video'|'unsupported'|'file' }]))} />}
     {current && <Dialog open title="File details" onClose={() => setDetails(null)}><div className="files-detail"><FileThumbnail file={current} /><h3>{current.filename}</h3><dl><dt>Shared by</dt><dd>{current.uploader_name}</dd><dt>Conversation</dt><dd>{current.channel_name}</dd><dt>Shared</dt><dd>{date(current.created_at)}</dd><dt>Type</dt><dd>{current.content_type}</dd><dt>Size</dt><dd>{new Intl.NumberFormat().format(current.byte_size)} bytes</dd></dl><div><Button size="sm" onClick={() => { setDetails(null); show(current); }}>Open file</Button><Button size="sm" onClick={() => onOpen({ channel_id: current.channel_id, message_id: current.message_id })}>View message</Button><a href={assetUrl(current.id,'download')}>Download</a></div></div></Dialog>}
   </>;

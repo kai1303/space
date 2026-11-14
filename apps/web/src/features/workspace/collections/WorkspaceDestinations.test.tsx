@@ -481,3 +481,19 @@ it.each(['people', 'channels', 'knowledge'])('installs a workspace knowledge sou
     url: kind !== 'knowledge' ? 'space:' + kind : 'https://kb.example/mcp', auth_type: 'none',
   }, undefined, 'POST', undefined, undefined);
 });
+
+it('lets users choose a Spacebot agent while channel choices are pending', async () => {
+  let finish!: (value: unknown) => void;
+  api.request.mockImplementation(async (path: string) => path.includes('/channels?')
+    ? new Promise(resolve => { finish = resolve; })
+    : response(path));
+  render(<WorkspaceDestinations view="spacebot" {...props}/>);
+  await userEvent.click(await screen.findByRole('button', { name: /Kai’s Codex/ }));
+  expect(screen.getByText('Loading channels…')).toBeTruthy();
+  expect(screen.queryByText(/No active channels/)).toBeNull();
+  await userEvent.click(screen.getByRole('button', { name: /Explore agents/ }));
+  expect(props.onOpenAgents).toHaveBeenCalledOnce();
+  await act(async () => finish({ items: channels, next_cursor: null }));
+  expect(screen.getByRole('combobox', { name: 'Channel' })).toBeTruthy();
+  expect(screen.queryByText('Loading channels…')).toBeNull();
+});

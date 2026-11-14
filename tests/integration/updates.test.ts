@@ -9,6 +9,7 @@ import { migrate } from '@space/postgres/migrate';
 import { PostgresStore } from '@space/postgres/store';
 import { ChatStore } from '@space/postgres/chat';
 import { createApi } from '@space/server/api';
+import { EventBridge } from '@space/event-service/bridge';
 import { RedisSocketAdapter } from '@space/redis';
 
 const url = process.env.TEST_DATABASE_URL;
@@ -18,9 +19,24 @@ const admin = new Pool({ connectionString: url });
 const pool = new Pool({ connectionString: url, options: `-c search_path=${schema}` });
 const adapter = new RedisSocketAdapter(process.env.TEST_REDIS_URL,schema);
 const app = createApi(new PostgresStore(pool), { allowDevelopmentTokens: true, realtime: { adapter, } });
+const bridge = new EventBridge({ databaseUrl: url, natsUrl: process.env.TEST_NATS_URL ?? 'nats://127.0.0.1:54222', schema });
 let address: string;
-before(async () => { await adapter.connect(); await admin.query(`CREATE SCHEMA ${schema}`); await migrate(pool); address = await app.listen({ host: '127.0.0.1', port: 0 }); });
-after(async () => { await app.close(); await pool.end(); await admin.query(`DROP SCHEMA ${schema} CASCADE`); await admin.end(); });
+before(async () => {
+  await adapter.connect();
+  await admin.query(`CREATE SCHEMA ${schema}`);
+  await migrate(pool);
+  await bridge.start();
+  address = await app.listen({ host: '127.0.0.1', port: 0 });
+});
+after(async () => {
+  await app.close(); await bridge.close(); await pool.end();
+  for (let attempt=0; ; attempt++) {
+    try { await admin.query('SELECT pg_drop_replication_slot(slot_name) FROM pg_replication_slots WHERE slot_name=$1',[bridge.slot]); break; }
+    catch (e) { if ((e as {code?:string}).code!=='55006' || attempt>=6) throw e; await delay(50 * 2 ** attempt); }
+  }
+  await admin.query(`DROP PUBLICATION IF EXISTS "${bridge.publication}"`);
+  await admin.query(`DROP SCHEMA ${schema} CASCADE`); await admin.end();
+});
 async function connect(token: string, base=address) {
  const socket = io(base, { transports: ['websocket'], auth: { token }, reconnection: false });
  await new Promise<void>((resolve,reject) => { socket.once('connect',resolve); socket.once('connect_error',reject); });
@@ -339,7 +355,7 @@ test('idle resource subscribers do not periodically query revision state', async
   await socket.timeout(1000).emitWithAck('updates.subscribe',{scope:'channel',id:a.channel_id});
   await first;await delay(120);
   let reads=0;
-  pool.query=(function(...args:any[]){if(String(args[0]).includes('resource_update_revisions'))reads++;return (original as any).apply(pool,args);}) as typeof pool.query;
+  pool.query=(function(...args:any[]){if(String(args[0]).includes('resource_revision_totals'))reads++;return (original as any).apply(pool,args);}) as typeof pool.query;
   await delay(220);
   assert.equal(reads,0,'idle streams must wait for committed events instead of reconciliation timers');
  } finally {pool.query=original;socket.disconnect();}

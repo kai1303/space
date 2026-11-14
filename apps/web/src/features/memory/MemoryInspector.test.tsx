@@ -53,3 +53,12 @@ it('shows the error when memory cannot load', async () => {
   render(<MemoryInspector channel={ch} selection={{ kind: 'thread', node }} />);
   expect(await screen.findByRole('alert')).toBeTruthy();
 });
+
+it('opens the selected thread while its messages are still loading', () => {
+  vi.stubGlobal('fetch', vi.fn(() => new Promise(() => {})));
+  const open = vi.fn();
+  render(<MemoryInspector channel={ch} selection={{ kind: 'thread', node }} onOpenThread={open} />);
+  expect(screen.getByText('Loading memory details…')).toBeTruthy();
+  screen.getByRole('button', { name: /Open thread/ }).click();
+  expect(open).toHaveBeenCalledWith(th);
+});

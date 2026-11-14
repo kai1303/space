@@ -67,3 +67,19 @@ it('opens only the latest selection when an earlier session creation completes l
  expect(calls).toHaveLength(2);
  expect(JSON.parse(String(calls[1]![1]?.body))).toMatchObject({source:next});
 });
+
+it('keeps discussion creation and existing discussions available while older history loads', async()=>{
+  const existing={id:'previous',title:'Earlier discussion',agent_name:'My Codex',turn_count:2};
+  let finish!:(value:Response)=>void;
+  vi.stubGlobal('fetch',vi.fn(async(path:string)=>path.includes('before=') ? new Promise<Response>(resolve=>{finish=resolve;})
+    : Response.json(path.endsWith('sidekick-agents') ? [agent,{...agent,id:'second',name:'Second'}] : {items:[existing],next_cursor:'page-2'})));
+  render(<Sidekick workspace="workspace" viewerId="me" source={source} onClose={()=>{}}/>);
+  const older=await screen.findByRole('button',{name:'Load older discussions'});
+  await userEvent.click(older);
+  expect(older.getAttribute('aria-busy')).toBe('true');
+  expect((screen.getByRole('button',{name:'Start private discussion'}) as HTMLButtonElement).disabled).toBe(false);
+  expect((screen.getByRole('button',{name:/Earlier discussion/}) as HTMLButtonElement).disabled).toBe(false);
+  await act(async()=>finish(Response.json({items:[existing,{...existing,id:'older',title:'Older discussion'}],next_cursor:null})));
+  expect(screen.getAllByRole('button',{name:/Earlier discussion/})).toHaveLength(1);
+  expect(screen.getByRole('button',{name:/Older discussion/})).toBeTruthy();
+});

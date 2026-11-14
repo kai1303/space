@@ -1,7 +1,7 @@
 import { EncryptedAttachments } from './EncryptedAttachments.js';
 import type { EncryptedFile } from './file-crypto.js';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Button, Dialog } from '@space/ui/primitives';
+import { Button, Dialog, LoadingStatus } from '@space/ui/primitives';
 import { RichContent } from '@space/ui/rich-text';
 import type { ChatMessage, DirectMessageSummary, DmEncryption, RichDocument } from '@space/contracts';
 import { request } from '../../../shared/api/request.js';
@@ -21,12 +21,14 @@ export function useDmEncryption(dm: DirectMessageSummary | undefined, actor: str
     stale?: boolean;
   }>();
   const [failure, setFailure] = useState(''),
+    [checking, setChecking] = useState(false),
     [busy, setBusy] = useState(false),
     generation = useRef(0);
   const path = '/channels/' + channel + '/encryption';
   const refresh = useCallback(async () => {
     if (!channel) return;
     const epoch = ++generation.current;
+    setChecking(true);
     try {
       const [remote, saved] = await Promise.all([
         request<DmEncryption>(path, undefined, undefined, 'POST', undefined, actor),
@@ -60,6 +62,8 @@ export function useDmEncryption(dm: DirectMessageSummary | undefined, actor: str
         setFailure(e instanceof Error ? e.message : 'Encryption status unavailable.');
         setSnapshot((previous) => (previous?.scope === scope ? { ...previous, stale: true } : undefined));
       }
+    } finally {
+      if (epoch === generation.current) setChecking(false);
     }
   }, [actor, channel, path, scope]);
   useEffect(() => {
@@ -199,6 +203,7 @@ export function useDmEncryption(dm: DirectMessageSummary | undefined, actor: str
     complete,
     busy,
     failure,
+    checking,
     loading: !!dm && (!state || !!state.stale),
     change,
     refresh,
@@ -224,7 +229,7 @@ export function EncryptionSettings({
   useEffect(() => {
     let live = true;
     setCodeError('');
-    if (!complete || !local || !enrolled) setCode('');
+    setCode('');
     if (complete && local && enrolled)
       void import('./crypto.js')
         .then((c) =>
@@ -253,17 +258,17 @@ export function EncryptionSettings({
   return (
     <section className="dm-encryption-settings">
       <h3>End-to-end encryption</h3>
+      {dm.encrypted_since && control.loading && <p>Encrypted messages are enabled for this conversation.</p>}
       {failure && (
         <p role="alert">
           {failure}{' '}
-          <Button size="sm" onClick={control.refresh}>
+          <Button size="sm" loading={control.checking} onClick={control.refresh}>
             Refresh
           </Button>
         </p>
       )}
-      {control.loading ? (
-        <p>Checking encryption status…</p>
-      ) : (
+      {control.loading && control.checking && !failure && <LoadingStatus>Checking device status…</LoadingStatus>}
+      {!control.loading && (
         <>
           {!enrolled && (
             <>
@@ -320,7 +325,7 @@ export function EncryptionSettings({
                 registered devices in this DM.
               </p>
               {codeError && <p role="alert">{codeError}</p>}
-              <code>{code.match(/.{1,8}/g)?.join(' ')}</code>
+              {code ? <code>{code.match(/.{1,8}/g)?.join(' ')}</code> : !codeError && <LoadingStatus>Checking verification code…</LoadingStatus>}
               {(!enabled || local?.trust?.code !== code) && (
                 <>
                   <label>
@@ -420,7 +425,7 @@ export function EncryptedSearch({
 }) {
   const [query, setQuery] = useState(''),
     [results, setResults] = useState<{ id: string; text: string }[]>([]);
-  const [busy, setBusy] = useState(false),
+  const [pending, setPending] = useState<'search' | 'older' | null>(null),
     [error, setError] = useState(''),
     [finished, setFinished] = useState(false);
   const abort = useRef<AbortController | null>(null);
@@ -430,10 +435,11 @@ export function EncryptedSearch({
     abort.current?.abort();
     const controller = new AbortController();
     abort.current = controller;
-    setBusy(true);
+    setPending(next ? 'older' : 'search');
     setError('');
     if (!next) {
       older.current = undefined;
+      setFinished(false);
       setResults([]);
     }
     try {
@@ -485,12 +491,12 @@ export function EncryptedSearch({
     } catch {
       if (!controller.signal.aborted) setError('Could not search this conversation.');
     } finally {
-      if (!controller.signal.aborted) setBusy(false);
+      if (!controller.signal.aborted) setPending(null);
     }
   }
   return (
     <Dialog open title="Search this conversation on this device" onClose={onClose}>
-      <form
+      <form className="dm-encrypted-search"
         onSubmit={(e) => {
           e.preventDefault();
           void search(false);
@@ -506,20 +512,21 @@ export function EncryptedSearch({
             onChange={(e) => {
               abort.current?.abort();
               setQuery(e.target.value);
+              setError('');
               older.current = undefined;
-              setBusy(false);
+              setPending(null);
               setResults([]);
               setFinished(false);
             }}
           />
         </label>
-        <Button disabled={busy || !query.trim()} type="submit">
+        <Button disabled={!query.trim()} loading={pending === 'search'} type="submit">
           Search
         </Button>
       </form>
       {error && <p role="alert">{error}</p>}
-      {busy && <p role="status">Searching…</p>}
-      {finished && !busy && !results.length && <p>No matches in the messages searched.</p>}
+      {pending && <span className="sp-sr-only" role="status">{pending === 'older' ? 'Searching older messages…' : 'Searching…'}</span>}
+      {finished && !pending && !error && !results.length && <p>No matches in the messages searched.</p>}
       <ul>
         {results.map((m) => (
           <li key={m.id}>
@@ -530,7 +537,7 @@ export function EncryptedSearch({
         ))}
       </ul>
       {older.current && results.length < 100 && (
-        <Button disabled={busy} onClick={() => void search(true)}>
+        <Button loading={pending === 'older'} onClick={() => void search(true)}>
           Search older messages
         </Button>
       )}

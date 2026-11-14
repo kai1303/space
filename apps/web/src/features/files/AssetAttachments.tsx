@@ -5,7 +5,7 @@ import { FileDetailsForm } from './FileDetailsForm.js';
 import { sessionFetch } from '../../shared/api/session-fetch.js';
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { conversationPath, type AssetAttachment, type AssetDetails, type AssetPreview } from '@space/contracts';
-import { Button, Dialog, IconButton, ImageStage, Menu } from '@space/ui/primitives';
+import { Button, Dialog, IconButton, ImageStage, Menu, LoadingStatus } from '@space/ui/primitives';
 import { AgentMarkdown } from '@space/ui/agents';
 import { CodeBlock } from '@space/ui/rich-text';
 import { ArrowLeft, ArrowRight, ArrowSquareOut, ChatCircle, CloudArrowDown, DotsThree, DownloadSimple, Eye, File, FileCode, FileDoc, FilePdf, FilePpt, FileXls, PencilSimple, MusicNote, SidebarSimple, VideoCamera } from '@phosphor-icons/react';
@@ -171,7 +171,7 @@ function DesktopOffice({ id, close, children }: { id: string; close: () => void;
     }).catch(() => { if (active) setFallback(true); });
     return () => { active = false; };
   }, [id]);
-  return fallback ? children : <p role="status">Opening in the side panel…</p>;
+  return fallback ? children : <LoadingStatus>Opening in the side panel…</LoadingStatus>;
 }
 function ViewerContent({ asset, state, exit, close, onAccessLost, actions, initialPage }: {
   initialPage?: number;
@@ -180,15 +180,15 @@ function ViewerContent({ asset, state, exit, close, onAccessLost, actions, initi
 }) {
   const { preview, failed, fail } = state;
   if (failed || preview?.kind === 'unsupported') return <div className="asset-viewer-fallback"><File size={56} /><p role="status">Preview unavailable</p><p>Download the original to open this file.</p></div>;
-  if (!preview) return <p className="asset-viewer-loading" role="status">Loading preview…</p>;
+  if (!preview) return <LoadingStatus className="asset-viewer-loading">Loading preview…</LoadingStatus>;
   const kindLabel = { image: 'Image', pdf: 'PDF', text: 'Text', office: 'Office document', audio: 'Audio', video: 'Video' }[preview.kind];
   let content;
   if (preview.kind === 'image') return <><span className="sp-sr-only">{kindLabel} · {preview.mime}</span><ImageStage src={assetUrl(asset.id, 'original-image')} alt={asset.description || asset.name} onClose={close} onError={fail} actions={actions} /></>;
   else if (preview.kind === 'office') {
-    const office = <Suspense fallback={<p role="status">Opening document…</p>}><OfficePreview id={asset.id} exit={exit} onAccessLost={onAccessLost} /></Suspense>;
+    const office = <Suspense fallback={<LoadingStatus>Opening document…</LoadingStatus>}><OfficePreview id={asset.id} exit={exit} onAccessLost={onAccessLost} /></Suspense>;
     return window.spaceDesktop?.openOffice ? <DesktopOffice id={asset.id} close={close}>{office}</DesktopOffice> : office;
   }
-  else if (preview.kind === 'pdf') content = <Suspense fallback={<p role="status">Loading PDF viewer…</p>}><PdfPreview assetId={asset.id} size={asset.size} initialPage={initialPage} /></Suspense>;
+  else if (preview.kind === 'pdf') content = <Suspense fallback={<LoadingStatus>Loading PDF viewer…</LoadingStatus>}><PdfPreview assetId={asset.id} size={asset.size} initialPage={initialPage} /></Suspense>;
   else if (preview.kind === 'text') content = <TextPreview preview={preview} />;
   else content = <div className="asset-media-preview"><NativeMedia asset={asset} kind={preview.kind} onError={fail} /></div>;
   return <><p className="asset-preview-type">{kindLabel}{'mime' in preview ? ` · ${preview.mime}` : ''}</p>{content}</>;

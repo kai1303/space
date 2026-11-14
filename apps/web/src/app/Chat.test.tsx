@@ -445,10 +445,10 @@ it.each(['Home', 'DMs'])('keeps the conversation layout while a shared self DM o
   window.history.replaceState({ spaceView: destination }, '', '/c/VQ6EAOKbQdSnFkRmVUQAAA');
   mocks.authPending = true;
   const view = render(<Chat />);
-  const expectConversationFrame = () => {
+  const expectConversationFrame = (loadingHistory = false) => {
     expect(view.container.querySelector('.chat-app .chat-channel-header')).toBeTruthy();
     expect(view.container.querySelector('.chat-compose')).toBeTruthy();
-    expect(view.container.querySelector('.chat-conversation-skeleton')).toBeNull();
+    expect(!!view.container.querySelector('.chat-conversation-skeleton')).toBe(loadingHistory);
   };
   expectConversationFrame();
   mocks.authPending = false;
@@ -460,12 +460,14 @@ it.each(['Home', 'DMs'])('keeps the conversation layout while a shared self DM o
   expect(screen.queryByText('A conversation starts here')).toBeNull();
   expectConversationFrame();
   await act(async () => finishMetadata(destination === 'Home' ? { items: [], next_cursor: null } : dm));
-  await screen.findByRole('status', { name: 'Loading messages' });
-  expectConversationFrame();
+  const loading = await screen.findByRole('status', { name: 'Loading messages' });
+  expect(loading.classList.contains('sp-sr-only')).toBe(true);
+  expectConversationFrame(true);
   expect(screen.queryByText('Your space for notes, links, and files.')).toBeNull();
   const composer = screen.getByRole('textbox', { name: 'Message Kai (you)' });
   await act(async () => finishHistory(messagePage()));
   await screen.findByText('Your space for notes, links, and files.');
+  expectConversationFrame();
   expect(screen.getByRole('textbox', { name: 'Message Kai (you)' })).toBe(composer);
 });
 
@@ -976,13 +978,16 @@ it('reveals the initialized thread composer with its history without replacing t
   await act(async()=>{latestChatSocket().receive('chat.events',{channel_id:'first',cursor:'1000',events:[{channel_id:'first',thread_id:'thread',sequence:'1000',occurred_at:root.created_at,type:'task.event',payload:{task_id:'loading-task',type:'task.proposed',owner_id:'user',actor_id:'user',installation_id:'agent',data:{goal:'Thread activity before history'}}}]},vi.fn());});
   await userEvent.click(screen.getByRole('button',{name:'Reply to Kai'}));
   const thread=screen.getByRole('region',{name:'Thread',exact:true});
-  await within(thread).findByText('Loading thread…');
+  const loading = await within(thread).findByRole('status', { name: 'Loading thread' });
+  expect(loading.classList.contains('sp-sr-only')).toBe(true);
+  expect(thread.querySelector('.chat-conversation-skeleton')).toBeTruthy();
   expect(within(thread).queryByText('Thread activity before history')).toBeNull();
   await waitFor(()=>expect(thread.querySelector('.chat-compose [role="textbox"]')).not.toBeNull());
   const editor=thread.querySelector('.chat-compose [role="textbox"]');
   expect(within(thread).queryByRole('textbox',{name:'Message thread'})).toBeNull();
   await act(async()=>{finish(messagePage([root]));});
   expect(await within(thread).findByRole('textbox',{name:'Message thread'})).toBe(editor);
+  expect(thread.querySelector('.chat-conversation-skeleton')).toBeNull();
   expect(within(thread).getByText('Thread activity before history')).toBeTruthy();
 });
 it.each([0,1,7])('places the thread composer after its replies and shows the saved reply count: %s',async count=>{

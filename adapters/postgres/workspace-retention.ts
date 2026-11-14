@@ -1,6 +1,6 @@
 import type { Pool } from 'pg';
 import { sql } from 'drizzle-orm';
-import { uuid } from '@space/contracts';
+import { AppError, uuid } from '@space/contracts';
 import { database, type DbSession } from './database.js';
 import { syncSavedMemory } from './memory-sources.js';
 import { sessionTransaction } from './session-concurrency.js';
@@ -12,16 +12,21 @@ const versionOf = (value: unknown): string => {
 };
 export async function eraseMessageReferences(c: DbSession, workspace: string, channel: string, message: string) {
   await syncSavedMemory(c, channel);
-  const assets=await c.execute<{id:string;staging_key:string;object_key:string}>(sql`DELETE FROM assets WHERE workspace_id=${workspace} AND channel_id=${channel} AND message_id=${message} RETURNING id,staging_key,object_key`);
+  // Remove independent references in one round trip while the message write is in progress.
+  const source = sql`workspace_id=${workspace} AND channel_id=${channel} AND message_id=${message}`;
+  const assets=await c.execute<{id:string;staging_key:string;object_key:string;busy:boolean}>(sql`WITH
+    reactions AS (DELETE FROM message_reactions WHERE channel_id=${channel} AND message_id=${message}),
+    activity AS (DELETE FROM notifications WHERE ${source}),
+    mentions AS (DELETE FROM mention_notifications WHERE ${source}),
+    saved AS (DELETE FROM hub_saved_messages WHERE ${source})
+    DELETE FROM assets WHERE ${source}
+    RETURNING id,staging_key,object_key,coalesce(processing_until>clock_timestamp(),false) AS busy`);
+  if (assets.rows.some(asset => asset.busy)) throw new AppError(409, 'asset_processing_busy');
   for (const asset of assets.rows) {
     const keys=JSON.stringify([asset.staging_key,asset.object_key,`previews/${asset.id}/display.webp`,`previews/${asset.id}/thumbnail.webp`]);
     await c.execute(sql`INSERT INTO retention_asset_deletions(id,object_keys) VALUES(${asset.id},${keys}::jsonb) ON CONFLICT DO NOTHING`);
     await c.execute(sql`INSERT INTO event_outbox(kind,aggregate_id,payload) VALUES('retention.asset_delete',${asset.id},jsonb_build_object('asset_id',${asset.id}::text))`);
   }
-  await c.execute(sql`DELETE FROM message_reactions WHERE channel_id=${channel} AND message_id=${message}`);
-  await c.execute(sql`DELETE FROM notifications WHERE workspace_id=${workspace} AND channel_id=${channel} AND message_id=${message}`);
-  await c.execute(sql`DELETE FROM mention_notifications WHERE workspace_id=${workspace} AND channel_id=${channel} AND message_id=${message}`);
-  await c.execute(sql`DELETE FROM hub_saved_messages WHERE workspace_id=${workspace} AND channel_id=${channel} AND message_id=${message}`);
 }
 
 export class WorkspaceRetentionStore {

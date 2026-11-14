@@ -58,7 +58,6 @@ import { request } from '../../shared/api/request.js';
 import type { ChannelSummary as Channel } from '@space/contracts';
 import type { Profile } from '../profile/profile-types.js';
 import { errorText } from '../../shared/api/error-text.js';
-import { ConversationLoadingStatus } from './ConversationLoading.js';
 import { ConversationSkeleton } from './ConversationSkeleton.js';
 import { ThreadHistory } from './ThreadHistory.js';
 import { ThreadComposer } from '../composer/ThreadComposer.js';
@@ -537,10 +536,6 @@ export function ChannelRoom({ onOpenCodeChannel, threadOnly, viewState, draftRev
   const backToAnswer = sourceId && roomPath === window.location.pathname && window.history.state?.spaceAnswerPath
     ? () => window.history.back() : undefined;
   const showDirectIntro = !!direct && ready && historyLoaded && history.page?.has_older === false;
-  const loadingMessages = direct ? <ConversationLoadingStatus label="Loading messages" /> : <>
-    <p className="sp-sr-only" role="status" aria-label="Loading messages">Loading messages…</p>
-    <ConversationSkeleton />
-  </>;
   const introduction = direct ? <ConversationIntroduction title={ready ? channel.name : status === 'Disconnected' ? 'This conversation is unavailable' : `Opening ${channel.name}`} icon={<Avatar name={channel.name} initials={channel.name.slice(0, 2).toUpperCase()} image={(direct.participants.find(person => person.id !== profile.id) ?? direct.participants[0])?.image} size="lg" tone="blue" />}>{ready ? direct.participants.length === 1 ? 'Your space for notes, links, and files.' : `This is the beginning of your conversation with ${channel.name}.` : status === 'Disconnected' ? 'Your access may have changed. Select another conversation to continue.' : 'Getting your conversation ready…'}</ConversationIntroduction> : <div className="chat-channel-welcome"><div className="chat-empty-icon"><Hash size={38}/></div><h2>{ready ? `This is the beginning of #${channel.name}` : status === 'Disconnected' ? 'This conversation is unavailable' : `Opening #${channel.name}`}</h2><p>{ready ? 'A shared space for your team’s ideas, questions, and progress. Send the first message.' : status === 'Disconnected' ? 'Your access may have changed. Select another conversation to continue.' : 'Getting your conversation ready…'}</p></div>;
   function navigation(openNavigator?: () => void) {
     const order = !direct && openNavigator ? tabs.order.filter(tabs.visible) : [];
@@ -598,7 +593,7 @@ export function ChannelRoom({ onOpenCodeChannel, threadOnly, viewState, draftRev
           }, false, arrivals.has(row.id), unread ? undefined : previous, 'entry' in row, 'message' in row && row.streaming)}
       </>;
     }}>
-      {!historyLoaded && status !== 'Disconnected' ? loadingMessages : !rows.length && !showDirectIntro && introduction}
+      {!historyLoaded && status !== 'Disconnected' ? <ConversationSkeleton /> : !rows.length && !showDirectIntro && introduction}
     </MessageTimeline>{!direct&&!thread&&!sessionOpen&&!channel.archived_at&&status!=='Disconnected'&&<NavigatorSuggestions channel={channel.id} onThread={openThread} />}{channel.archived_at ? <div className="chat-channel-archived"><strong>This channel is archived</strong>Its messages are available to read.<br /><Button size="sm" onClick={() => showDetails('settings')}>View channel settings</Button></div> : status !== 'Disconnected' && <ConversationComposer primary onEditReady={editDraftKey === uploadKey && !draftUnavailable && !channel.archived_at ? onMentionOpened : undefined} inactive={draftUnavailable} conversationKey={draftRevision ? `${uploadKey}:${draftRevision}` : uploadKey}
       controls={{
         audioClipsEnabled: !direct,

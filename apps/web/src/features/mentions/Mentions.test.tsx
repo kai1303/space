@@ -38,3 +38,23 @@ it('handles malformed activity responses without crashing the workspace',async()
  await userEvent.click(screen.getByRole('button',{name:'Mentions'}));
  expect((await screen.findByRole('alert')).textContent).toContain('Invalid mention activity response');
 });
+
+it('lets a preference change finish while an older page is pending',async()=>{
+ let finish!: (response:Response)=>void;
+ const config={broadcast_permission:'all',paused_until:null,can_manage:false};
+ vi.stubGlobal('fetch',vi.fn(async(path:string,init?:RequestInit)=>{
+   if(path.includes('/mentions?before='))return new Promise<Response>(resolve=>{finish=resolve;});
+   if(path.endsWith('/mention-settings'))return Response.json(init?.method==='PATCH'?{...config,...JSON.parse(String(init.body))}:config);
+   return Response.json({items:[item],next_cursor:'older',unread_count:1});
+ }));
+ render(<MentionInbox workspace="w" onOpen={()=>{}}/>);
+ await userEvent.click(await screen.findByRole('button',{name:'Mentions (1 unread)'}));
+ await userEvent.click(await screen.findByRole('button',{name:'Load older mentions'}));
+ expect(screen.getByText(item.text)).toBeTruthy();
+ expect(screen.getByRole('button',{name:'Load older mentions'}).getAttribute('aria-busy')).toBe('true');
+ await userEvent.click(screen.getByRole('button',{name:'Pause for 1 hour'}));
+ expect(await screen.findByRole('button',{name:'Resume notifications'})).toHaveProperty('disabled',false);
+ finish(Response.json({items:[item,{...item,id:'2',text:'Earlier mention'}],next_cursor:null,unread_count:1}));
+ expect(await screen.findByText('Earlier mention')).toBeTruthy();
+ expect(screen.getAllByText(item.text)).toHaveLength(1);
+});

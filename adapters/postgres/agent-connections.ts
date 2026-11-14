@@ -129,6 +129,51 @@ export class AgentConnectionStore {
     if (!rows.length) throw unauthorized();
     return { ...identity, connection_id };
   }
+  async archivePage(installation:string, connection:string, after:string|null, pending:boolean, session:string|null, thread:string|null) {
+    const result = await this.db.execute<{session_id:string;project_token:string|null;personal:boolean;desired:boolean|null;revision:string|null;native_thread_id:string|null}>(sql`
+      SELECT a.id AS session_id,a.project_token,coalesce(a.handoff_context ? 'browser_url',false) AS personal,
+        sync.desired,sync.revision,sync.native_thread_id
+      FROM agent_sessions a JOIN agent_installations i ON i.id=a.installation_id
+      JOIN agent_connections ac ON ac.installation_id=i.id
+      JOIN workspace_members w ON w.workspace_id=i.workspace_id AND w.user_id=i.owner_id AND w.active
+      JOIN threads t ON t.id=a.origin_thread_id JOIN channel_members m ON m.channel_id=t.channel_id AND m.user_id=i.owner_id
+      LEFT JOIN codex_session_archives sync ON sync.session_id=a.id
+      WHERE a.managed AND i.id=${installation} AND i.enabled AND i.connector_id='codex.local'
+        AND ac.connection_id=${connection} AND ac.revoked_at IS NULL
+        ${pending ? sql`AND sync.desired IS NOT NULL` : sql``}
+        ${after ? sql`AND a.id>${after}` : sql``}
+        ${session ? sql`AND a.id=${session}` : sql``}
+        ${thread ? sql`AND sync.native_thread_id=${thread}` : sql``}
+      ORDER BY a.id LIMIT 16`);
+    return result.rows;
+  }
+  async recordArchive(installation:string,connection:string,session:string,revision:string|null,thread:string,archived:boolean) {
+    // Commit the observation only for the same pairing, thread and outstanding Space intent.
+    return sessionTransaction(this.db,async c=>{
+      const applied = await c.execute<{workspace_id:string;owner_id:string}>(sql`WITH target AS (
+        SELECT a.id,i.workspace_id,i.owner_id FROM agent_sessions a JOIN agent_installations i ON i.id=a.installation_id
+        JOIN agent_connections ac ON ac.installation_id=i.id
+        JOIN workspace_members w ON w.workspace_id=i.workspace_id AND w.user_id=i.owner_id AND w.active
+        JOIN threads t ON t.id=a.origin_thread_id JOIN channel_members m ON m.channel_id=t.channel_id AND m.user_id=i.owner_id
+        WHERE a.id=${session} AND a.managed AND i.id=${installation} AND i.enabled AND i.connector_id='codex.local'
+          AND ac.connection_id=${connection} AND ac.revoked_at IS NULL
+      ), synced AS (
+        INSERT INTO codex_session_archives(session_id,native_thread_id) SELECT id,${thread} FROM target
+        ON CONFLICT(session_id) DO UPDATE SET desired=NULL, native_thread_id=excluded.native_thread_id
+        WHERE codex_session_archives.revision=${revision}::uuid
+          AND (codex_session_archives.native_thread_id IS NULL OR codex_session_archives.native_thread_id=excluded.native_thread_id)
+          AND (codex_session_archives.desired IS NULL OR codex_session_archives.desired=${archived})
+        RETURNING session_id)
+      SELECT target.workspace_id,target.owner_id FROM target JOIN synced ON synced.session_id=target.id`);
+      const scope=applied.rows[0];
+      if (!scope) return;
+      await c.execute(sql`INSERT INTO session_sidebar_preferences(workspace_id,user_id,session_id,archived)
+        SELECT ${scope.workspace_id}::uuid,${scope.owner_id}::uuid,${session}::uuid,${archived}::boolean
+        WHERE ${archived} OR EXISTS(SELECT 1 FROM session_sidebar_preferences WHERE session_id=${session} AND user_id=${scope.owner_id} AND archived)
+        ON CONFLICT(workspace_id,user_id,session_id) DO UPDATE SET archived=excluded.archived
+        WHERE session_sidebar_preferences.archived IS DISTINCT FROM excluded.archived`);
+    });
+  }
   async authenticateConnection(token: unknown, connection: string) {
     const identity = await this.authenticate(token);
     const [row] = await this.db.select().from(s.agentConnections).where(and(eq(s.agentConnections.installation_id, identity.id), eq(s.agentConnections.connection_id, connection)));

@@ -1,5 +1,5 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { DirectMessages, DirectMessagesPeek, NewDirectMessage } from './DirectMessages.js';
 const mocks = vi.hoisted(() => ({ refresh: undefined as undefined | (() => unknown), counts: [{ channel_id: 'dm', unread_count: 2, latest_sequence: '2', last_read_sequence: '0' }] }));
@@ -120,4 +120,23 @@ it('previews recent DMs, filters server-side and navigates only when a row is ch
   const signal = vi.mocked(fetch).mock.calls.at(-1)?.[1]?.signal;
   view.unmount();
   expect(signal?.aborted).toBe(true);
+});
+
+it('keeps matching recipients usable and ignores an abandoned conversation open', async () => {
+  let finishOpen!: (value: unknown) => void;
+  fetcher((path, options) => options?.method === 'POST' ? new Promise(resolve => { finishOpen = resolve; })
+    : path.includes('q=&') ? { items: [peer, { ...peer, id: 'other', name: 'Sam' }] } : new Promise(() => {}));
+  const onOpen = vi.fn();
+  render(<NewDirectMessage workspace="workspace" viewer="user" onOpen={onOpen} onClose={() => {}} />);
+  await screen.findByRole('button', { name: /Sam Designer/ });
+  const input = screen.getByRole('searchbox', { name: 'To' });
+  fireEvent.change(input, { target: { value: 'Al' } });
+  expect(screen.getByText('Finding people…')).toBeTruthy();
+  expect(screen.queryByRole('button', { name: /Sam Designer/ })).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: /Alex Designer/ }));
+  expect(screen.getByText('Opening conversation…')).toBeTruthy();
+  fireEvent.change(input, { target: { value: 'Sam' } });
+  await act(async () => finishOpen(dm));
+  expect(onOpen).not.toHaveBeenCalled();
+  expect(screen.getByRole('button', { name: /Sam Designer/ })).toBeTruthy();
 });

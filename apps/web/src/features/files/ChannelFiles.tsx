@@ -1,7 +1,7 @@
 import { sessionFetch } from '../../shared/api/session-fetch.js';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { ChannelFile, Page } from '@space/contracts';
-import { Select, Button, IconButton, SidePanel } from '@space/ui/primitives';
+import { Select, Button, IconButton, ListRowSkeleton, SidePanel, Spinner } from '@space/ui/primitives';
 import { ArrowClockwise, File, FileCode, FilePdf, MusicNote, VideoCamera, X } from '@phosphor-icons/react';
 import { AssetViewer } from './AssetAttachments.js';
 import './channel-files.css';
@@ -27,7 +27,10 @@ function ChannelFilesPanel({ direct, channel, name, revision, deletions, onClose
   const [refresh, setRefresh] = useState(0);
   const [items, setItems] = useState<ChannelFile[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [pending, setPending] = useState<'results' | 'refresh' | 'more' | null>('results');
+  const loadedFilters = useRef<string | undefined>(undefined);
+  const retryCursor = useRef<string | undefined>(undefined);
+  const loading = pending !== null;
   const [error, setError] = useState('');
   const [selected, setSelected] = useState<string | null>(null);
   const [appliedRevision, setAppliedRevision] = useState(revision);
@@ -56,7 +59,7 @@ function ChannelFilesPanel({ direct, channel, name, revision, deletions, onClose
     if (!deletions) return;
     deletions.current = ids => {
       // An open viewer defers the list refresh; discard any older pagination response.
-      if (selected) { request.current?.abort(); setLoading(false); }
+      if (selected) { request.current?.abort(); setPending(null); }
       if (items.some(file => file.id === selected && ids.has(file.message_id))) setSelected(null);
       setItems(current => current.filter(file => !ids.has(file.message_id)));
     };
@@ -64,8 +67,10 @@ function ChannelFilesPanel({ direct, channel, name, revision, deletions, onClose
   }, [deletions, items, selected]);
 
   function expireSession() {
+    loadedFilters.current = undefined;
+    retryCursor.current = undefined;
     request.current?.abort();
-    setItems([]); setCursor(null); setSelected(null); setLoading(false);
+    setItems([]); setCursor(null); setSelected(null); setPending(null);
     setError('Your session has expired.');
   }
   useEffect(() => {
@@ -76,13 +81,19 @@ function ChannelFilesPanel({ direct, channel, name, revision, deletions, onClose
     request.current?.abort();
     const controller = new AbortController();
     request.current = controller;
-    setLoading(true); setError('');
-    if (!after) { setItems([]); setCursor(null); setSelected(null); }
     const params = new URLSearchParams({ q: query, kind, sort, limit: '24' });
+    const filters = params.toString();
+    retryCursor.current = after;
+    const sameFilters = loadedFilters.current === filters;
+    setPending(after ? 'more' : sameFilters ? 'refresh' : 'results');
+    setError('');
+    if (!sameFilters) { loadedFilters.current = undefined; setItems([]); setCursor(null); setSelected(null); }
     if (after) params.set('after', after);
     void sessionFetch(`/v1/channels/${encodeURIComponent(channel)}/assets?${params}`, { credentials: 'same-origin', signal: controller.signal }).then(async response => {
       if (controller.signal.aborted) return;
       if ([401, 403, 404].includes(response.status)) {
+        loadedFilters.current = undefined;
+        retryCursor.current = undefined;
         setItems([]); setCursor(null); setSelected(null);
         if (response.status === 401) window.dispatchEvent(new Event('space:session-expired'));
         else accessLost.current?.();
@@ -93,10 +104,11 @@ function ChannelFilesPanel({ direct, channel, name, revision, deletions, onClose
       if (controller.signal.aborted) return;
       if (!Array.isArray(page.items)) throw new Error('Could not load files. Try again.');
       setItems(previous => [...new Map([...(after ? previous : []), ...page.items].map(file => [file.id, file])).values()]);
+      loadedFilters.current = filters;
       setCursor(page.next_cursor);
     }).catch((cause: unknown) => {
       if (!controller.signal.aborted) setError(cause instanceof Error ? cause.message : 'Could not load files. Try again.');
-    }).finally(() => { if (!controller.signal.aborted) setLoading(false); });
+    }).finally(() => { if (!controller.signal.aborted) setPending(null); });
   }
   useLayoutEffect(() => {
     load();
@@ -104,6 +116,7 @@ function ChannelFilesPanel({ direct, channel, name, revision, deletions, onClose
   }, [channel, query, kind, sort, appliedRevision, refresh]);
   function handlePreviewAccessLoss(status: number) {
     if (status === 401) { expireSession(); return; }
+    loadedFilters.current = undefined;
     // A file can disappear while its channel is still accessible. The list checks membership.
     load();
     searchInput.current?.focus();
@@ -117,20 +130,20 @@ function ChannelFilesPanel({ direct, channel, name, revision, deletions, onClose
       <div className="channel-files-filters">
         <label>File type<Select aria-label="File type" value={kind} onChange={event => setKind(event.target.value)}>{kinds.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</Select></label>
         <label>Sort files<Select aria-label="Sort files" value={sort} onChange={event => setSort(event.target.value)}><option value="newest">Newest shared</option><option value="oldest">Oldest shared</option></Select></label>
-        <IconButton label="Refresh files" disabled={loading} onClick={() => setRefresh(value => value + 1)}><ArrowClockwise size={20} /></IconButton>
+        <IconButton label="Refresh files" onClick={() => setRefresh(value => value + 1)}>{pending === 'refresh' ? <Spinner/> : <ArrowClockwise size={20}/>}</IconButton>
       </div>
     </div>
-    <div className="channel-files-body" aria-busy={loading}>
-      {error && <div className="channel-files-state"><p role="alert">{error}</p><Button variant="secondary" onClick={() => load(items.length ? cursor ?? undefined : undefined)}>Retry</Button></div>}
-      {!error && !loading && !items.length && <div className="channel-files-state"><File size={40} aria-hidden="true" /><h3>{filtered ? 'No files match your filters' : 'No files shared yet'}</h3><p>{filtered ? 'Try a different filename or file type.' : 'Files shared in this channel and its threads will appear here.'}</p></div>}
+    <div className="channel-files-body">
+      {error && <div className="channel-files-state"><p role="alert">{error}</p><Button variant="secondary" onClick={() => load(retryCursor.current)}>Retry</Button></div>}
+      {!error && pending !== 'results' && !items.length && <div className="channel-files-state"><File size={40} aria-hidden="true" /><h3>{filtered ? 'No files match your filters' : 'No files shared yet'}</h3><p>{filtered ? 'Try a different filename or file type.' : 'Files shared in this channel and its threads will appear here.'}</p></div>}
       {!!items.length && <ul className="channel-files-list">{items.map(file => <li key={file.id} className="channel-file-row">
         <FileThumbnail file={file} />
         <div className="channel-file-info"><span className="channel-file-name" title={file.name}>{file.name}</span><span className="channel-file-detail">{Math.max(1, Math.round(file.size / 1024))} KB · {file.uploader.name}</span><time dateTime={file.shared_at}>{new Date(file.shared_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}</time>
           <div className="channel-file-actions"><button type="button" aria-label={`Preview ${file.name}`} onClick={event => { opener.current = event.currentTarget; setSelected(file.id); }}>Preview</button><a href={assetUrl(file.id, 'download')} aria-label={`Download ${file.name}`}>Download</a><button type="button" aria-label={`View message for ${file.name}`} onClick={() => onMessage(file.message_id)}>View message</button></div>
         </div>
       </li>)}</ul>}
-      {loading && <p className="channel-files-loading" role="status">Loading files…</p>}
-      {!loading && !error && cursor && <div className="channel-files-more"><Button variant="secondary" onClick={() => load(cursor)}>Load more</Button></div>}
+      {pending === 'results' && <ListRowSkeleton label="Loading files…"/>}
+      {!error && cursor && <div className="channel-files-more"><Button variant="secondary" disabled={loading} loading={pending === 'more'} onClick={() => load(cursor)}>{pending === 'more' ? 'Loading more files…' : 'Load more'}</Button></div>}
     </div>
     {selected && <AssetViewer channelLabel={direct ? name : `#${name}`} assets={items} selectedId={selected} onSelect={setSelected} onClose={closeViewer} onAccessLost={handlePreviewAccessLoss} previews={Object.fromEntries(items.map(file => [file.id, { kind: file.preview_kind }]))} />}
   </SidePanel>;

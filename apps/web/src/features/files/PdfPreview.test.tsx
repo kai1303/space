@@ -199,3 +199,17 @@ it('handles a rejected PDF.js destroy operation during cleanup', async () => {
   await act(async () => { view.unmount(); });
   expect(mocks.destroy).toHaveBeenCalledTimes(1);
 });
+
+it('keeps the displayed PDF page visible until its zoom replacement finishes', async () => {
+  const view = render(<PdfPreview assetId="report" size={size}/>);
+  const previous = await screen.findByLabelText('PDF page 1');
+  let finish!: () => void;
+  mocks.render.mockImplementationOnce(() => ({promise:new Promise<void>(resolve=>{finish=resolve;}),cancel:mocks.cancel}));
+  await userEvent.click(screen.getByRole('button',{name:'Zoom in'}));
+  expect(await screen.findByText('Rendering page 1…')).toBeTruthy();
+  expect(previous.parentElement?.hidden).toBe(false);
+  expect(screen.getByRole('button',{name:'Next page'})).toHaveProperty('disabled',false);
+  await act(async()=>finish());
+  expect(screen.queryByText('Rendering page 1…')).toBeNull();
+  expect(view.container.querySelector('canvas')).not.toBe(previous);
+});

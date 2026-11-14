@@ -21,3 +21,16 @@ it('expired invitations never offer acceptance',async()=>{
  api.request.mockRejectedValue(new Error('invitation_unavailable'));render(<InviteAcceptance token="expired" onAccepted={()=>{}}/>);
  expect((await screen.findByRole('alert')).textContent).toContain('expired');expect(screen.queryByRole('button',{name:'Accept invitation'})).toBeNull();
 });
+
+it('keeps the invitation details and back navigation available while rechecking email verification', async () => {
+ api.request.mockResolvedValueOnce({...preview,email_verified:false}).mockImplementationOnce(()=>new Promise(()=>{}));
+ const back=vi.fn();
+ render(<InviteAcceptance token="token" onAccepted={()=>{}} onCancel={back}/>);
+ const recheck=await screen.findByRole('button',{name:'I’ve verified my email'});
+ await userEvent.click(recheck);
+ expect(screen.getByText('Join Design')).toBeTruthy();
+ expect(recheck).toHaveProperty('disabled',true);
+ expect(screen.queryByText('Loading invitation…')).toBeNull();
+ await userEvent.click(screen.getByRole('button',{name:'Back to workspaces'}));
+ expect(back).toHaveBeenCalledOnce();
+});

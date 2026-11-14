@@ -64,3 +64,21 @@ it('explains what to do when no channel is joined', () => {
   render(<WorkspaceMemory channels={[channel(3, 'secret', false)]} onOpenChannel={() => {}} />);
   expect(screen.getByRole('heading', { name: 'No channel memory to show' })).toBeTruthy();
 });
+
+it('keeps channels usable while their threads arrive independently', async () => {
+  let finish!: (value: ReturnType<typeof response>) => void;
+  vi.stubGlobal('fetch', vi.fn((path: string) => path.includes(uuid(2))
+    ? new Promise(resolve => { finish = resolve; })
+    : Promise.resolve(response({ nodes: [thread(11, 1)], next_cursor: null }))));
+  const open = vi.fn();
+  render(<WorkspaceMemory channels={[channel(1, 'general'), channel(2, 'design')]} onOpenChannel={open}/>);
+  await screen.findByRole('button', { name: 'Thread 11, thread' });
+  expect(screen.getByRole('status').textContent).toContain('Loading workspace memory');
+  fireEvent.click(screen.getByRole('button', { name: '#design, channel' }));
+  expect(screen.getByText('Loading channel memory…')).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: 'Open channel' }));
+  expect(open).toHaveBeenCalledWith(uuid(2));
+  finish(response({ nodes: [thread(21, 2)], next_cursor: null }));
+  await screen.findByRole('button', { name: 'Thread 21, thread' });
+  expect(screen.getByRole('status').textContent).toContain('2 channels · 2 threads');
+});

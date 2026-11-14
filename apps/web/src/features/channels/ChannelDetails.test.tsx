@@ -1,9 +1,13 @@
 import { afterEach, beforeAll, expect, it, vi } from 'vitest';
-import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import { toast } from '@space/ui/primitives';
 import userEvent from '@testing-library/user-event';
 import { ChannelDetails } from './ChannelDetails.js';
 import type { ChannelDetails as Details } from '@space/contracts';
+
+vi.mock('../../shared/realtime/socket-session.js', () => ({
+  acquireRealtime: () => ({ socket: { connected: false }, on: vi.fn(), connect: vi.fn(), release: vi.fn() }),
+}));
 
 const channel: Details = { id: 'channel', workspace_id: 'workspace', name: 'product', private: false, joined: true, topic: 'Milestone', description: '', archived_at: null, created_by: 'owner', created_at: '2026-11-03T00:00:00Z', creator_name: 'Owner', can_manage: true, member_count: 1 };
 const members = [{ id: 'owner', name: 'Owner', title: '', image: null, presence: 'active' }];
@@ -214,4 +218,159 @@ it('shows inherited and teammate agents once and returns from connection setup t
   await user.click(within(setup).getByRole('button',{name:'Close dialog'}));
   const refreshed = within(await screen.findByRole('dialog',{name:'Add agents & apps'}));
   expect(await refreshed.findByText('New agent')).toBeTruthy();
+});
+
+it('shows known channel fields and searchable members while details are pending', async () => {
+  vi.stubGlobal('fetch', vi.fn((url: string) => url.includes('/members?')
+    ? Promise.resolve({ ok: true, json: async () => ({ items: members, next_cursor: null }) })
+    : new Promise(() => {})));
+  render(<ChannelDetails {...props}/>);
+  expect(screen.getByText('Milestone')).toBeTruthy();
+  expect(screen.getByText('Loading creator…')).toBeTruthy();
+  await userEvent.click(screen.getByRole('tab', { name: 'Members 1' }));
+  await userEvent.type(screen.getByRole('searchbox'), 'own');
+  expect(await screen.findByRole('button', { name: 'View Owner’s profile' })).toBeTruthy();
+});
+
+it('accepts a people search while membership loads and excludes existing members when it arrives', async () => {
+  let finishMembers!: (value: Response) => void;
+  vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+    if (url.includes('/members?')) return new Promise<Response>(resolve => { finishMembers = resolve; });
+    if (url.includes('/participants?')) return Response.json({ items: [
+      { id: 'owner', kind: 'human', name: 'Team owner' }, { id: 'other', kind: 'human', name: 'Team member' },
+    ] });
+    return Response.json(channel);
+  }));
+  render(<ChannelDetails {...props} initialTab="members"/>);
+  await userEvent.click(await screen.findByRole('button', { name: 'Add people' }));
+  const picker = within(screen.getByRole('dialog', { name: 'Add people to #product' }));
+  await userEvent.type(picker.getByRole('searchbox'), 'team');
+  expect(picker.getByText('Loading workspace people…')).toBeTruthy();
+  expect(picker.queryByRole('radio')).toBeNull();
+  await act(async () => finishMembers(Response.json({ items: members })));
+  expect(picker.getByRole('searchbox')).toHaveProperty('value', 'team');
+  expect(picker.getAllByRole('radio')).toHaveLength(1);
+  await userEvent.click(picker.getByRole('radio', { name: 'Team member' }));
+  expect(picker.getByRole('button', { name: 'Add' })).toHaveProperty('disabled', false);
+});
+
+it('shows available agents while the channel agent list is pending', async () => {
+  vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+    if (url.endsWith('/navigator')) return new Promise<Response>(() => {});
+    if (url.endsWith('/agents')) return Response.json([{ id: 'research', name: 'Research', skills: ['review'], granted_skills: [] }]);
+    return Response.json(url.includes('/members?') ? { items: members } : channel);
+  }));
+  render(<ChannelDetails {...props} initialTab="integrations"/>);
+  await userEvent.click(await screen.findByRole('button', { name: 'Add Agent or App' }));
+  const picker = within(screen.getByRole('dialog', { name: 'Add agents & apps' }));
+  expect(await picker.findByRole('button', { name: 'Add Research' })).toHaveProperty('disabled', false);
+  expect(picker.getByText('Loading agents in this channel…')).toBeTruthy();
+  expect(picker.queryByText('Loading available agents and apps…')).toBeNull();
+});
+
+it('keeps webhook changes when the initial list arrives after creation and revocation', async () => {
+  let finishList!: (value: Response) => void;
+  vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+    if (url.endsWith('/webhooks') && init?.method === 'GET') return new Promise<Response>(resolve => { finishList = resolve; });
+    if (init?.method === 'POST') {
+      const { name } = JSON.parse(String(init.body));
+      return Response.json({ id: name, name, path: '/v1/hooks/incoming/test' });
+    }
+    if (init?.method === 'DELETE') return new Response(null, { status: 204 });
+    return Response.json(url.endsWith('/navigator') ? { candidates: [] } : url.includes('/members?') ? { items: members } : channel);
+  }));
+  render(<ChannelDetails {...props} initialTab="integrations"/>);
+  await userEvent.click(await screen.findByRole('button', { name: 'Manage' }));
+  for (const name of ['First', 'Second']) {
+    await userEvent.type(screen.getByLabelText('Integration name'), name);
+    await userEvent.click(screen.getByRole('button', { name: 'Create incoming webhook' }));
+    if (name === 'First') {
+      await userEvent.click(await screen.findByRole('button', { name: 'Revoke' }));
+      await userEvent.click(screen.getByRole('button', { name: 'Revoke webhook' }));
+    }
+  }
+  expect(screen.getByText('Loading webhooks…')).toBeTruthy();
+  await act(async () => finishList(Response.json([{ id: 'First', name: 'First' }, { id: 'Older', name: 'Older' }])));
+  expect(screen.queryByRole('heading', { name: 'First' })).toBeNull();
+  expect(screen.getByRole('heading', { name: 'Second' })).toBeTruthy();
+  expect(screen.getByRole('heading', { name: 'Older' })).toBeTruthy();
+  expect(screen.queryByText('Loading webhooks…')).toBeNull();
+});
+
+it('preserves the next webhook draft and lets another webhook be revoked during creation', async () => {
+  let finishCreate!: (result:Response) => void;
+  vi.stubGlobal('fetch',vi.fn(async (url:string, init?:RequestInit) => {
+    if (url.endsWith('/webhooks') && init?.method === 'POST') return new Promise<Response>(resolve => { finishCreate = resolve; });
+    if (url.endsWith('/webhooks')) return Response.json([{id:'older', name:'Older'}]);
+    if (init?.method === 'DELETE') return new Response(null,{status:204});
+    return Response.json(url.endsWith('/navigator') ? {candidates:[]} : url.includes('/members?') ? {items:members} : channel);
+  }));
+  render(<ChannelDetails {...props} initialTab="integrations"/>);
+  await userEvent.click(await screen.findByRole('button',{name:'Manage'}));
+  const name = screen.getByLabelText('Integration name');
+  await userEvent.type(name,'First draft');
+  await userEvent.click(screen.getByRole('button',{name:'Create incoming webhook'}));
+  await userEvent.clear(name);
+  await userEvent.type(name,'Next draft');
+  await userEvent.click(screen.getByRole('button',{name:'Revoke'}));
+  await userEvent.click(screen.getByRole('button',{name:'Revoke webhook'}));
+  await waitFor(()=>expect(screen.queryByRole('heading',{name:'Older'})).toBeNull());
+  await act(async()=>finishCreate(Response.json({id:'first',name:'First draft',path:'/v1/hooks/incoming/test'})));
+  expect(screen.getByRole('heading',{name:'First draft'})).toBeTruthy();
+  expect(name).toHaveProperty('value','Next draft');
+});
+
+it('shows Messages while managed tabs are pending and allows switching away', async () => {
+  vi.stubGlobal('fetch',vi.fn(async (url:string) => {
+    if (url.endsWith('/tabs')) return new Promise<Response>(()=>{});
+    return Response.json(url.includes('/members?') ? {items:members} : channel);
+  }));
+  render(<ChannelDetails {...props} initialTab="tabs"/>);
+  expect(await screen.findByText('Loading tabs…')).toBeTruthy();
+  expect(within(screen.getByRole('list',{name:'Channel tabs'})).getByText('Messages')).toBeTruthy();
+  expect(screen.queryByRole('button',{name:/move .* up/i})).toBeNull();
+  await userEvent.click(screen.getByRole('tab',{name:'About'}));
+  expect(screen.getByText('Milestone')).toBeTruthy();
+});
+
+it('keeps other tab visibility controls available while one tab is saving', async () => {
+  let finishSave!: () => void;
+  let filesVisible = true;
+  vi.stubGlobal('fetch',vi.fn(async (url:string, init?:RequestInit) => {
+    if (url.endsWith('/tabs/files') && init?.method === 'PUT') {
+      await new Promise<void>(resolve=>{finishSave=resolve;});
+      filesVisible=false;
+      return Response.json({});
+    }
+    if (url.endsWith('/tabs')) return Response.json({visibility:{files:filesVisible,pins:true}});
+    return Response.json(url.includes('/members?') ? {items:members} : channel);
+  }));
+  render(<ChannelDetails {...props} initialTab="tabs"/>);
+  await userEvent.click(await screen.findByRole('button',{name:'Hide Files & links tab'}));
+  expect(screen.getByRole('button',{name:'Show Files & links tab'})).toHaveProperty('disabled',true);
+  expect(screen.getByRole('button',{name:'Hide Pins tab'})).toHaveProperty('disabled',false);
+  await act(async()=>finishSave());
+  await waitFor(()=>expect(screen.getByRole('button',{name:'Show Files & links tab'})).toHaveProperty('disabled',false));
+});
+
+it('keeps other agent choices available while a grant is saving', async () => {
+  let finishGrant!: () => void;
+  vi.stubGlobal('fetch',vi.fn(async (url:string, init?:RequestInit) => {
+    if (url.includes('/connections/') && init?.method === 'POST') {
+      await new Promise<void>(resolve=>{finishGrant=resolve;});
+      return Response.json({});
+    }
+    if (url.endsWith('/agents')) return Response.json([
+      {id:'review',name:'Reviewer',skills:['review'],granted_skills:[]},
+      {id:'design',name:'Designer',skills:['design'],granted_skills:[]},
+    ]);
+    return Response.json(url.endsWith('/navigator') ? {candidates:[]} : url.includes('/members?') ? {items:members} : channel);
+  }));
+  render(<ChannelDetails {...props} initialTab="integrations"/>);
+  await userEvent.click(await screen.findByRole('button',{name:'Add Agent or App'}));
+  await userEvent.click(await screen.findByRole('button',{name:'Add Reviewer'}));
+  expect(screen.getByRole('button',{name:'Add Reviewer'})).toHaveProperty('disabled',true);
+  expect(screen.getByRole('button',{name:'Add Designer'})).toHaveProperty('disabled',false);
+  await act(async()=>finishGrant());
+  await waitFor(()=>expect(screen.queryByRole('button',{name:'Add Reviewer'})).toBeNull());
 });

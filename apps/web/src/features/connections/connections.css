@@ -21,3 +21,5 @@
 .space-token-guide ol { padding-inline-start: 20px; margin: 8px 0; }
 .space-token-guide li + li { margin-top: 4px; }
 .space-token-guide a { color: var(--sp-info); }
+
+.space-connections-status { display: flex; align-items: center; gap: 8px; color: var(--sp-text-secondary); }

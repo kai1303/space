@@ -6,6 +6,11 @@ import type { AgentSessionStore } from '@space/postgres/agent-sessions';
 export function registerAgentSessionRoutes(app: FastifyInstance, sessions: AgentSessionStore, accepted?: (task:Task)=>Promise<void>, stopped?: (session:string)=>Promise<void>, steer?: (connection:string,input:{session_id:string;execution_id:string;id:string;text:string;browser_url?:string;goal_action?:GoalAction})=>Promise<void>) {
   type Team = { Params: { sessionId: string } };
   type Reviewer = { Params: { sessionId: string; userId:string } };
+  type MessageRoute={Params:{sessionId:string;taskId:string;part:string}};
+  const message='/v1/agent-sessions/:sessionId/turns/:taskId/messages/:part';
+  app.post<MessageRoute>(message,r=>sessions.changeMessage(expectedActor(r),uuid(r.params.sessionId),uuid(r.params.taskId),r.params.part,r.body));
+  app.get<MessageRoute>(message+'/replies',r=>sessions.messageReplies(expectedActor(r),uuid(r.params.sessionId),uuid(r.params.taskId),r.params.part,r.query));
+  app.get<Team>('/v1/agent-sessions/:sessionId/message-pins',r=>sessions.messagePins(expectedActor(r),uuid(r.params.sessionId),r.query));
   const team = '/v1/agent-sessions/:sessionId/team';
   app.post<{ Params: {channelId: string} }>('/v1/channels/:channelId/session-reports', request =>
     readSessionReports(sessions.db, request.actorId, uuid(request.params.channelId), request.body));
@@ -21,6 +26,8 @@ export function registerAgentSessionRoutes(app: FastifyInstance, sessions: Agent
   app.delete<Reviewer>(team+'/reviewers/:userId',async r=>{
     await sessions.team.remove(expectedActor(r),uuid(r.params.sessionId),uuid(r.params.userId)); return {ok:true};
   });
+  app.get<Team>(team+'/mentions',r=>sessions.team.mentionOptions(expectedActor(r),uuid(r.params.sessionId),r.query));
+  app.get<Team>(team+'/discussion',r=>sessions.team.discussion(expectedActor(r),uuid(r.params.sessionId),r.query));
   app.post<Team>(team+'/discussion',async r=>{
     await sessions.team.post(expectedActor(r),uuid(r.params.sessionId),uuid(r.headers['idempotency-key']),r.body); return {ok:true};
   });
@@ -36,6 +43,8 @@ export function registerAgentSessionRoutes(app: FastifyInstance, sessions: Agent
   app.post<{ Params: { threadId: string } }>('/v1/threads/:threadId/agent-sessions', async (request, reply) => reply.code(201).send(await sessions.create(request.actorId, uuid(request.params.threadId), request.body)));
   app.post<{ Params: { channelId: string } }>('/v1/channels/:channelId/agent-sessions', async (request, reply) =>
     reply.code(201).send(await sessions.createForChannel(expectedActor(request),uuid(request.params.channelId),request.body)));
+  app.get<{Params:{sessionId:string;taskId:string}}>('/v1/agent-sessions/:sessionId/turns/:taskId/transcript', r =>
+    sessions.transcript(expectedActor(r),uuid(r.params.sessionId),uuid(r.params.taskId),r.query));
   app.get<{ Params: { sessionId: string } }>('/v1/agent-sessions/:sessionId/resources', request =>
     sessions.resources(expectedActor(request), uuid(request.params.sessionId), request.query));
   app.get<{ Params: { sessionId: string } }>('/v1/agent-sessions/:sessionId/location', request => sessions.location(request.actorId, uuid(request.params.sessionId)));

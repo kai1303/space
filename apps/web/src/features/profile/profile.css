@@ -30,3 +30,5 @@
 .account-pause-menu small,.account-pause-menu form,.account-pause-menu [role=alert] { display:block;padding:4px 16px; }
 .account-pause-menu input { display:block;max-width:100%;box-sizing:border-box;font:inherit;color:inherit;background:var(--sp-surface); }
 .account-pause-menu button:disabled { opacity:.55;cursor:default; }
+
+.space-account-loading { display: flex; align-items: center; gap: 8px; }

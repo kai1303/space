@@ -274,6 +274,40 @@ test('delivery setup uses the handshake identity and cleans up when the socket l
   await cleanup;
 });
 
+test('Codex archive reconciliation fences stale intents, other viewers and replaced connections',async()=>{
+  const seed=await bootstrap(pool), {credential,connection}=await pair(seed);
+  const store=new AgentConnectionStore(pool);
+  const {AgentSessionStore}=await import('@space/postgres/agent-sessions');
+  const sessions=new AgentSessionStore(pool), session=randomUUID(), thread=randomUUID();
+  const installation=connection.installation_id, {connection_id:old}=await store.connect(credential);
+  await pool.query(`INSERT INTO agent_sessions(id,workspace_id,installation_id,origin_thread_id,title,managed)
+    VALUES($1,$2,$3,$4,'Archive test',true)`,[session,seed.workspace_id,installation,seed.thread_id]);
+  const pending=async(fence:string)=>store.archivePage(installation,fence,null,true,null,null);
+  await sessions.updateSidebar(seed.collaborator_id,session,{archived:true});
+  assert.deepEqual(await pending(old),[]);
+  await sessions.updateSidebar(seed.owner_id,session,{archived:true});
+  const [archive]=await pending(old);
+  await sessions.updateSidebar(seed.owner_id,session,{archived:false});
+  await store.recordArchive(installation,old,session,archive!.revision,thread,true);
+  const [restore]=await pending(old);
+  assert.equal(restore!.desired,false);
+  const {connection_id:current}=await store.connect(credential);
+  await store.recordArchive(installation,old,session,restore!.revision,thread,false);
+  assert.deepEqual(await pending(old),[]);
+  assert.equal((await pending(current))[0]?.revision,restore!.revision);
+  await store.recordArchive(installation,current,session,restore!.revision,thread,false);
+  assert.deepEqual(await pending(current),[]);
+  const [native]=await store.archivePage(installation,current,null,false,null,thread);
+  await store.recordArchive(installation,current,session,native!.revision,thread,true);
+  const visible=async(actor:string)=>(await sessions.discover(actor,seed.workspace_id,{archived:'true'})).items.map(i=>i.id);
+  assert.deepEqual(await visible(seed.owner_id),[session]);
+  await store.recordArchive(installation,current,session,native!.revision,randomUUID(),false);
+  assert.deepEqual(await visible(seed.owner_id),[session]);
+  await store.recordArchive(installation,current,session,native!.revision,thread,false);
+  assert.deepEqual(await visible(seed.owner_id),[]);
+  assert.deepEqual(await visible(seed.collaborator_id),[session]);
+});
+
 test('only the owner can pick a project on their active connector and bind it to a new session', async () => {
   const owner = await bootstrap(pool);
   const {credential, connection} = await pair(owner);

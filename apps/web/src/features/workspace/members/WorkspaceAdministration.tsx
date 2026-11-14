@@ -1,7 +1,7 @@
 import { sessionFetch } from '../../../shared/api/session-fetch.js';
 import { WorkspaceInvitations } from '../invitations/WorkspaceInvitations.js';
 import { useEffect, useRef, useState } from 'react';
-import { Select, Avatar, Badge, Button, Dialog, Menu, toast } from '@space/ui/primitives';
+import { Select, Avatar, Badge, Button, Dialog, ListRowSkeleton, Menu, toast } from '@space/ui/primitives';
 import { DotsThree, MagnifyingGlass, Robot, UserPlus } from '@phosphor-icons/react';
 import type { MemberRole, WorkspaceDirectory, WorkspaceDirectoryMember } from '@space/contracts';
 import { request } from '../../../shared/api/request.js';
@@ -25,32 +25,37 @@ type Props = {workspace:string;viewer:string;open:boolean;onClose:()=>void};
 type Action = {kind:'role'|'deactivate'|'reactivate'|'transfer';member:WorkspaceDirectoryMember} | {kind:'add'};
 
 export function WorkspaceAdministration(props:Props) {
-  return props.open ? <MemberAdministration key={props.workspace} {...props}/> : null;
+  return props.open ? <MemberAdministration key={props.workspace + ':' + props.viewer} {...props}/> : null;
 }
 function MemberAdministration({workspace,viewer,onClose}:Props) {
   const [invitations,setInvitations]=useState(false),[agents,setAgents]=useState(false),[query,setQuery]=useState(''),[search,setSearch]=useState('');
   const [role,setRole]=useState('all'),[status,setStatus]=useState('active'),[sort,setSort]=useState('name'),[guest,setGuest]=useState('all');
-  const [data,setData]=useState<WorkspaceDirectory>(),[cursor,setCursor]=useState<string>();
+  const [result,setResult]=useState<{filters:string;cursor?:string;data:WorkspaceDirectory}>();
+  const data = result?.data;
+  const [cursor,setCursor]=useState<string>();
   const [history,setHistory]=useState<(string|undefined)[]>([]),[loading,setLoading]=useState(true),[error,setError]=useState('');
   const [action,setAction]=useState<Action>(),[nextRole,setNextRole]=useState<MemberRole>('member'),[email,setEmail]=useState('');
   const [busy,setBusy]=useState(false),[notice,setNotice]=useState('');
   const generation=useRef(0), alive=useRef(true), mutation=useRef(false);
   useEffect(()=>{alive.current=true;return()=>{alive.current=false;generation.current++;};},[]);
   useEffect(()=>{const timer=setTimeout(()=>{setSearch(query.trim());setCursor(undefined);setHistory([]);},250);return()=>clearTimeout(timer);},[query]);
-  const params=new URLSearchParams({limit:'25',q:search,role,status,sort,guest,...(cursor?{after:cursor}:{})}).toString();
+  const filters = new URLSearchParams({limit:'25',q:search,role,status,sort,guest}).toString();
+  const params = cursor ? filters + '&after=' + encodeURIComponent(cursor) : filters;
+  const matchingFilters = result?.filters === filters && query.trim() === search;
+  const paging = matchingFilters && result?.cursor !== cursor;
   async function refresh() {
     const attempt=++generation.current;
     setLoading(true);
     try {
       const result=await request<WorkspaceDirectory>(`/workspaces/${workspace}/directory?${params}`);
-      if(alive.current&&attempt===generation.current){setData(result);setError('');}
+      if(alive.current&&attempt===generation.current){setResult({ filters, cursor, data: result });setError('');}
     } catch(reason) {
-      if(alive.current&&attempt===generation.current){setError(errorText(reason));setData(undefined);}
+      if(alive.current&&attempt===generation.current){setError(errorText(reason));setResult(undefined);}
     } finally {if(alive.current&&attempt===generation.current)setLoading(false);}
   }
   useEffect(()=>{
     setAction(undefined);
-    const stop=subscribeUpdates('workspace',workspace,refresh,code=>{generation.current++;setData(undefined);setLoading(false);setAction(undefined);setError(errorText(new Error(code)));});
+    const stop=subscribeUpdates('workspace',workspace,refresh,code=>{generation.current++;setResult(undefined);setLoading(false);setAction(undefined);setError(errorText(new Error(code)));});
     return()=>{generation.current++;stop();};
   },[workspace,params]);
   const manager=data?.role==='owner'||data?.role==='admin';
@@ -94,8 +99,8 @@ function MemberAdministration({workspace,viewer,onClose}:Props) {
       </div>
       {error&&<div role="alert" className="workspace-admin-feedback">{error}{!action&&<Button size="sm" onClick={()=>void refresh()}>Retry</Button>}</div>}
       {notice&&<p role="status">{notice}</p>}
-      {loading&&<p role="status">Loading members…</p>}
-      {!loading&&data&&<>
+      {(!matchingFilters && (loading || result)) && <ListRowSkeleton label="Loading members…"/>}
+      {matchingFilters&&data&&<>
         <div className="workspace-admin-table"><table aria-label="Workspace members"><thead><tr><th>Name</th>{(manager||data.email_visible)&&<th>Email address</th>}<th>Account type</th><th>Status</th><th>Date joined</th><th><span className="workspace-admin-sr">Actions</span></th></tr></thead><tbody>
           {data.items.map(member=>{
             const canManage=data.role==='owner'||(data.role==='admin'&&member.role==='member');
@@ -105,7 +110,7 @@ function MemberAdministration({workspace,viewer,onClose}:Props) {
           })}
         </tbody></table></div>
         {data.items.length===0&&<div className="workspace-admin-empty"><strong>No members found</strong><p>Try a different name or adjust the filters.</p></div>}
-        <footer className="workspace-admin-footer"><span>{data.items.length} {data.items.length===1?'person':'people'} on this page</span><div><Button size="sm" disabled={!history.length} onClick={()=>{setCursor(history.at(-1));setHistory(old=>old.slice(0,-1));}}>Previous</Button><Button size="sm" disabled={!data.next_cursor} onClick={()=>{setHistory(old=>[...old,cursor]);setCursor(data.next_cursor!);}}>Next</Button></div></footer>
+        <footer className="workspace-admin-footer"><span role={paging ? "status" : undefined}>{paging ? 'Loading member page…' : <>{data.items.length} {data.items.length===1?'person':'people'} on this page</>}</span><div><Button size="sm" disabled={!history.length || paging} onClick={()=>{setCursor(history.at(-1));setHistory(old=>old.slice(0,-1));}}>Previous</Button><Button size="sm" disabled={!data.next_cursor || paging} onClick={()=>{setHistory(old=>[...old,cursor]);setCursor(data.next_cursor!);}}>Next</Button></div></footer>
       </>}
     </section>
   </Dialog>

@@ -42,6 +42,10 @@ async function codexFixture(t, behavior='normal') {
           if(${JSON.stringify(behavior)}==='wait')return;
           if(${JSON.stringify(behavior)}==='permissions'&&++approved<3)return;
           send({method:'item/completed',params:{...scope,item:{id:'shell',type:'commandExecution',command:'git status',cwd:turn.params.cwd,status:m.result?.decision==='accept'?'completed':'declined',aggregatedOutput:'On branch main'}}});
+          if(${JSON.stringify(behavior)}==='archive'){
+            send({method:'item/completed',params:{...scope,item:{id:'large-tool',type:'commandExecution',command:'cat log',status:'completed',exitCode:0,durationMs:3210,aggregatedOutput:'0123456789'.repeat(120000)+'LAST LINE'}}});
+            send({method:'item/completed',params:{...scope,item:{id:'large-reply',type:'agentMessage',text:'A'.repeat(18000)+'FINAL ANSWER'}}});
+          }
           if(${JSON.stringify(behavior)}==='long')for(let i=0;i<50;i++)send({method:'item/completed',params:{...scope,item:{id:'message-'+i,type:'agentMessage',text:'x'.repeat(1000)}}});
           for(let i=0;i<35;i++) send({method:'item/completed',params:{...scope,item:{id:'read-'+i,type:'commandExecution',command:'cat README.md',cwd:turn.params.cwd,status:'completed',aggregatedOutput:'Read '+i}}});
           send({method:'item/completed',params:{...scope,item:{id:'edit',type:'fileChange',status:'completed',changes:[{path:'README.md',kind:{type:'update'},diff:'--- a/README.md\\n+++ b/README.md\\n@@ -1 +1 @@\\n-old\\n+new'}]}}});
@@ -76,7 +80,7 @@ test('a managed native coding turn publishes its review tab and keeps the channe
     {set:{key:'checks',type:'canvas',name:'Checks',content:'# Results'}},
   ]);
   assert.equal(events.at(-1).payload.text,'Tests passed.');
-  assert.ok(events.every(event=>!JSON.stringify(event.payload.response.messages).includes('<space-review>')));
+  assert.ok(events.every(event=>!JSON.stringify(event.payload.response?.messages ?? []).includes('<space-review>')));
 });
 
 test('Codex coding without controls or with denied project never starts inference', async t=>{
@@ -314,4 +318,26 @@ test('Claude writes priority steering to the same SDK input stream before acknow
   assert.equal(message.uuid,id);assert.equal(message.priority,'now');assert.equal(message.client_composed,true);
   assert.equal(message.message.content,'Check the smaller file first');
   complete();await invocation;
+});
+
+test('managed Codex turns archive the full answer and every tool before preview eviction',async t=>{
+  const f=await codexFixture(t,'archive'),events=[];
+  await f.runtime.invoke({...request('codex'),persistent_session:{resume:false}},async e=>events.push(e),new AbortController().signal,{requestApproval:async()=> 'allow'});
+  assert.equal(events.at(-1).type,'execution.completed');
+  const items=new Map();
+  for(const event of events){
+    const chunk=event.payload.transcript;
+    if(!chunk)continue;
+    const parts=items.get(chunk.id)??[];
+    assert.equal(chunk.part,parts.length);
+    parts.push(chunk.data);items.set(chunk.id,parts);
+  }
+  const full=id=>JSON.parse(items.get(id).join(''));
+  assert.equal(full('shell').result,'On branch main');
+  assert.equal(full('large-tool').result,'0123456789'.repeat(120000)+'LAST LINE');
+  const index=events.map(e=>e.payload.transcript).find(chunk=>chunk?.id==='large-tool' && chunk.last);
+  assert.deepEqual(index.shell,{command:'cat log',exit_code:0,duration_ms:3210,outcome:'success'});
+  assert.equal(full('large-reply').text,'A'.repeat(18000)+'FINAL ANSWER');
+  assert.equal(items.size,39);
+  assert.equal(events.at(-1).payload.response.tools.length,30);
 });

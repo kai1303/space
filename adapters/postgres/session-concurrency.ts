@@ -3,9 +3,12 @@ import { setTimeout as delay } from 'node:timers/promises';
 import type { Database, DbSession } from './database.js';
 import { commitWithTurnTrace } from './turn-trace.js';
 export class SessionConflict extends Error {}
-export async function sessionTransaction<T>(db: Database, work: (c: DbSession) => Promise<T>, isolationLevel: 'serializable' | 'read committed' = 'serializable', retryDelayMs = 20): Promise<T> {
+export function sessionTransaction<T>(db: Database, work: (c: DbSession) => Promise<T>, isolationLevel: 'serializable' | 'read committed' = 'serializable', retryDelayMs = 20): Promise<T> {
+  return retrySessionConflict(() => commitWithTurnTrace(db, work, isolationLevel), retryDelayMs);
+}
+export async function retrySessionConflict<T>(work: () => Promise<T>, retryDelayMs = 20): Promise<T> {
   for (let attempt = 0; attempt < 5; attempt++) {
-    try { return await commitWithTurnTrace(db, work, isolationLevel); }
+    try { return await work(); }
     catch (error) {
       const failure = error as { code?: string; cause?: { code?: string } };
       const code = failure.cause?.code ?? failure.code;

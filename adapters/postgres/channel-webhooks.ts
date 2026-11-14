@@ -68,6 +68,6 @@ export class ChannelWebhooks {
       await c.execute(sql`INSERT INTO messages(id,workspace_id,channel_id,thread_id,author_type,webhook_id,webhook_name,webhook_key,request_hash,text)
         VALUES(${id},${hook.workspace_id},${hook.channel_id},${thread},'app',${hook.id},${hook.name},${retryKey},${hash},${body})`);
       return { message_id: id };
-    }, 'serializable', 100);
+    }, 'serializable', 5);
   }
 }

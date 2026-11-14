@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type RefObject } from 'react';
 import { DocumentEditor, type DocumentEditorProps } from '@onlyoffice/document-editor-react';
-import { Button } from '@space/ui/primitives';
+import { Button, LoadingStatus } from '@space/ui/primitives';
 import { DownloadSimple, PencilSimple, Users } from '@phosphor-icons/react';
 import { OfficeAgent } from './OfficeAgent.js';
 import { sessionFetch } from '../../shared/api/session-fetch.js';
@@ -16,7 +16,8 @@ export function OfficePreview({ id, exit, onAccessLost, onTitle }: { id: string;
   useEffect(() => { accessLost.current = onAccessLost; }, [onAccessLost]);
   const [editing, setEditing] = useState(false);
   const [sharing, setSharing] = useState(false);
-  const [ready, setReady] = useState(false);
+  const [editorState, setEditorState] = useState<'opening' | 'ready' | 'error'>('opening');
+  const ready = editorState === 'ready';
   const [failed, setFailed] = useState(false);
   const [dirty, setDirty] = useState(false);
   const afterClose = useRef<() => void>(undefined);
@@ -35,7 +36,7 @@ export function OfficePreview({ id, exit, onAccessLost, onTitle }: { id: string;
   useEffect(() => {
     const controller = new AbortController();
     setSession(undefined);
-    setReady(false);
+    setEditorState('opening');
     setFailed(false);
     const headers = { ...(editing && window.spaceOffice?.ask && { 'x-space-office-agent': 'selection' }), 'x-space-theme': document.documentElement.dataset.theme ?? 'light' };
     void sessionFetch(base + '/office-session' + (editing ? '?mode=edit' : ''), { signal: controller.signal, headers }).then(async response => {
@@ -72,32 +73,36 @@ export function OfficePreview({ id, exit, onAccessLost, onTitle }: { id: string;
   }
 
   if (failed) return <div className="asset-viewer-fallback" role="alert">Could not open this document. <a href={base + '/download'}>Download file</a></div>;
-  if (!session) return <p className="asset-viewer-loading" role="status">Opening document…</p>;
+
   return <>
     <div className="asset-office-tools">
-      <span className="asset-office-mode">{editing ? 'Editing' : 'Viewing'} · Version {session.revision + 1}</span>
+      {session && <span className="asset-office-mode">{editing ? 'Editing' : 'Viewing'} · Version {session.revision + 1}</span>}
       <div className="asset-office-actions">
-        {session.canShare && !editing && <Button variant="ghost" disabled={sharing} aria-pressed={session.channelEditing}
+        {session?.canShare && !editing && <Button variant="ghost" loading={sharing} aria-pressed={session.channelEditing}
           title="Allow channel members with posting permission to edit this file" onClick={() => void changeSharing()}>
           <Users size={16} />Channel editing {session.channelEditing ? 'on' : 'off'}
         </Button>}
-        {editing && window.spaceOffice?.ask && session.config.documentType === 'word' && session.config.document?.key &&
+        {session && ready && editing && window.spaceOffice?.ask && session.config.documentType === 'word' && session.config.document?.key &&
           <OfficeAgent title={session.config.document.title || 'Document edit'} key={session.config.document.key} sessionKey={session.config.document.key} editorId={`office-${id}`} serverUrl={session.documentServerUrl} />}
         <a className="sp-button sp-button--secondary sp-button--sm" href={base + '/download'}><DownloadSimple size={16}/>Download</a>
-        {session.revision > 0 && <a href={base + '/download?original=1'}>Original upload</a>}
-        {session.canEdit && !editing && <Button onClick={() => { setNotice(''); setEditing(true); }}><PencilSimple size={16} />Edit</Button>}
+        {session && session.revision > 0 && <a href={base + '/download?original=1'}>Original upload</a>}
+        {session?.canEdit && !editing && <Button onClick={() => { setNotice(''); setEditing(true); }}><PencilSimple size={16} />Edit</Button>}
       </div>
     </div>
-    {editing && <p className="asset-office-status">{dirty ? 'Syncing changes…' : 'Changes are saved to Space when the last editor closes the document.'}</p>}
+    {session && editing && <p className="asset-office-status">{dirty ? 'Syncing changes…' : 'Changes are saved to Space when the last editor closes the document.'}</p>}
     {notice && <p className="asset-office-status" role="status">{notice}</p>}
-    <div className="asset-office-preview" data-office-editor={`office-${id}`} role="region" aria-label={editing ? 'Office document editor' : 'Office document viewer'} aria-busy={!ready}>
+    {!session ? <LoadingStatus className="asset-viewer-loading">Opening document…</LoadingStatus> : <div className="asset-office-preview" data-office-editor={`office-${id}`} role="region" aria-label={editing ? 'Office document editor' : 'Office document viewer'} aria-busy={editorState === 'opening'}>
+      {editorState === 'opening' && <LoadingStatus className="asset-office-loading">Loading document content…</LoadingStatus>}
       <DocumentEditor id={`office-${id}`} documentServerUrl={session.documentServerUrl} config={{ ...session.config, events: {
-          onDocumentReady: () => setReady(true),
+          onDocumentReady: () => setEditorState('ready'),
           onDocumentStateChange: event => setDirty(event.data === true),
           onRequestClose: () => afterClose.current?.(),
-          onError: () => setNotice('The document service reported an error. Check the editor before closing.'),
+          onError: () => {
+            setEditorState(current => current === 'opening' ? 'error' : current);
+            setNotice('The document service reported an error. Check the editor before closing.');
+          },
         } }}
         onLoadComponentError={() => setFailed(true)} />
-    </div>
+    </div>}
   </>;
 }

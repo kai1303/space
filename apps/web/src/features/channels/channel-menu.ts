@@ -7,18 +7,18 @@ export function channelMenu(channel: Pick<ChannelSummary,'id'|'name'|'joined'|'n
   dialog: (value: ChannelMenuDialog) => void;
   star: () => void;
   split: () => void;
-  copy: (value: string) => void;
+  copy: (value: string, confirmation: string) => void;
   save: (patch: NotificationPatch) => void;
 }): SidebarAction[] {
   const { dialog, split, copy, star, save } = callbacks;
   const path = conversationPath(channel.id);
-  const copyItems: SidebarAction[] = [{ label:'Copy name', select:() => copy(channel.name) }];
+  const copyItems: SidebarAction[] = [{ label:'Copy name', select:() => copy(channel.name, 'Channel name copied') }];
   if (path) {
     const url = new URL(path, location.origin);
-    copyItems.push({ label:'Copy link', select:() => copy(url.href) });
+    copyItems.push({ label:'Copy link', select:() => copy(url.href, 'Channel link copied') });
     const huddle = new URL(url);
     huddle.searchParams.set('huddle','1');
-    copyItems.push({ label:'Copy huddle link', select:() => copy(huddle.href) });
+    copyItems.push({ label:'Copy huddle link', select:() => copy(huddle.href, 'Huddle link copied') });
   }
   const actions: SidebarAction[] = [];
   if (channel.joined) actions.push({ label:'Channel details', select:() => dialog('details') });

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { ChannelSummary } from '@space/contracts';
-import { Button } from '@space/ui/primitives';
+import { Button, LoadingStatus } from '@space/ui/primitives';
 import { request } from '../../shared/api/request.js';
 import type { Profile } from '../profile/profile-types.js';
 import type { useAttachmentUploads } from '../composer/useAttachmentUploads.js';
@@ -19,6 +19,6 @@ export function ThreadDestination({workspace, channel, thread, profile, attachme
     }).catch(()=>{if (!controller.signal.aborted) setError('This thread could not be opened.');});
     return ()=>controller.abort();
   },[workspace,channel,profile.id,attempt]);
-  if (!room) return <div className="collection-loading">{error?<><p role="alert">{error}</p><Button onClick={()=>retry(n=>n+1)}>Retry</Button></>:<p role="status">Opening thread…</p>} <Button variant="ghost" onClick={onClose}>Close thread</Button></div>;
+  if (!room) return <div className="collection-loading">{error?<><p role="alert">{error}</p><Button onClick={()=>retry(n=>n+1)}>Retry</Button></>:<LoadingStatus>Opening thread…</LoadingStatus>} <Button variant="ghost" onClick={onClose}>Close thread</Button></div>;
   return <ChannelRoom key={thread} threadOnly={{close:onClose,detached}} requestedThread={thread} channel={room} profile={profile} uploads={attachments.uploads} drafts={attachments.draftState.current} onDraftChange={attachments.saveDraft} onChannelChange={setRoom} onAccessLost={()=>{attachments.forgetChannelDrafts(channel); setRoom(undefined); setError('This thread is no longer available.');}} onLeft={onClose} searchOpen={false} onSearchClose={()=>{}} composeRequest={0} onMentionOpened={()=>{}}/>;
 }

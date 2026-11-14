@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { conversationPath, type HubThread, type HubThreadMessage } from '@space/contracts';
-import { Button } from '@space/ui/primitives';
+import { Button, ListRowSkeleton } from '@space/ui/primitives';
 import { ArrowSquareOut, ChatCircle, ChatTeardropText, Hash } from '@phosphor-icons/react';
 import { request } from '../../../shared/api/request.js';
 import { subscribeUpdates } from '../../../shared/realtime/live-updates.js';
@@ -134,7 +134,7 @@ export function ThreadInbox({workspace,viewer,onOpen,renderThread,renderComposer
         openConversation={()=>onOpen({channel_id:item.channel_id,thread_id:item.thread_id})}
         openSource={message=>onOpen({channel_id:item.channel_id,message_id:message?.id ?? item.id})}
         open={button=>{const target={channel_id:item.channel_id,thread_id:item.thread_id}; if (!renderThread) return onOpen(target); origin.current=button;select(target);}}/>)}
-      {data.loading && !data.items.length && <p role="status" className="collection-loading">Loading threads…</p>}
+      {data.loading && !data.items.length && <ListRowSkeleton label="Loading threads…" />}
       {data.cursor && !data.loading && !data.error && <div className="collection-more">{data.items.length<MAX_ITEMS?<Button onClick={()=>void data.more()}>Load more</Button>:'Open a conversation to find older replies.'}</div>}
     </section>
     {detail && renderThread && <div className="thread-inbox-detail" key={selected.thread_id}>{renderThread(selected,close)}</div>}

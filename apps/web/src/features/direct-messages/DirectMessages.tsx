@@ -4,7 +4,7 @@ import { useConversationLocation } from '../../shared/ui/conversation-location.j
 import {useDestinationPresence} from '../../shared/ui/useDestinationPresence.js';
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode, type CSSProperties } from 'react';
 import type { ChannelMember, ChannelUnread, DirectMessageSummary, Page } from '@space/contracts';
-import { Avatar, Button, IconButton } from '@space/ui/primitives';
+import { Avatar, Button, IconButton, ListRowSkeleton, LoadingStatus } from '@space/ui/primitives';
 import { ChatCircle, MagnifyingGlass, PencilSimple } from '@phosphor-icons/react';
 import { request } from '../../shared/api/request.js';
 import { subscribeUpdates } from '../../shared/realtime/live-updates.js';
@@ -88,7 +88,7 @@ export function DirectMessagesPeek({ workspace, viewer, onOpen }: {
       <button type="button" aria-pressed={unreads} onClick={() => setUnreads(value => !value)}>Unreads</button>
     </header>
     {list.error && <p role="alert" className="rail-peek-empty">{list.error} <Button size="sm" onClick={() => void list.refresh()}>Retry</Button></p>}
-    {!list.loaded ? <p role="status" className="rail-peek-empty">Loading direct messages…</p>
+    {!list.loaded ? <ListRowSkeleton label="Loading direct messages…"/>
       : list.items.length ? <ul className="rail-peek-list" aria-label="Direct messages">{list.items.map(dm =>
         <li key={dm.id}><DirectMessageRow dm={dm} viewer={viewer} preview onOpen={() => onOpen(dm.id)}/></li>
       )}</ul>
@@ -100,33 +100,48 @@ export function NewDirectMessage({ workspace, viewer, defaultValue, onDraftChang
   const draft = useRef<RichDocument>(defaultValue ?? { ops: [] });
   const present=useDestinationPresence();
   const [query, setQuery] = useState(''), search = useDebouncedValue(query);
-  const [people, setPeople] = useState<ChannelMember[]>([]), [loaded, setLoaded] = useState(false), [error, setError] = useState('');
-  const [busy, setBusy] = useState(false), [retry, setRetry] = useState(0);
-  const active = useRef(true), opening = useRef(false);
-  useEffect(() => { active.current = true; return () => { active.current = false; }; }, []);
+  const [page, setPage] = useState<{ workspace: string; query: string; items: ChannelMember[] }>();
+  const [failure, setFailure] = useState<{ workspace: string; query: string; text: string }>(), [retry, setRetry] = useState(0);
+  const [openingId, setOpeningId] = useState<string>(), [openError, setOpenError] = useState('');
+  const opening = useRef<AbortController | null>(null);
   useEffect(() => {
-    let current = true; const controller = new AbortController(); setLoaded(false); setError('');
+    setOpeningId(undefined); setOpenError('');
+    return () => { opening.current?.abort(); opening.current = null; };
+  }, [workspace, viewer]);
+  useEffect(() => {
+    const controller = new AbortController();
+    setFailure(undefined);
     void request<Page<ChannelMember>>(`/workspaces/${workspace}/direct-message-people?${new URLSearchParams({ q: search, limit: '30' })}`, undefined, undefined, 'POST', controller.signal)
-      .then(page => { if (current) { setPeople(page.items ?? []); setLoaded(true); } })
-      .catch(reason => { if (current && reason?.name !== 'AbortError') { setError(errorText(reason)); setLoaded(true); } });
-    return () => { current = false; controller.abort(); };
+      .then(result => { if (!controller.signal.aborted) setPage({ workspace, query: search, items: result.items ?? [] }); })
+      .catch(reason => { if (!controller.signal.aborted) { setPage(undefined); setFailure({ workspace, query: search, text: errorText(reason) }); } });
+    return () => controller.abort();
   }, [workspace, search, retry]);
   async function open(person: ChannelMember) {
-    if (opening.current) return; opening.current = true; setBusy(true); setError('');
+    if (opening.current) return;
+    const controller = new AbortController();
+    opening.current = controller; setOpeningId(person.id); setOpenError('');
     try {
-      const dm = await request<DirectMessageSummary>(`/workspaces/${workspace}/direct-messages`, { user_id: person.id });
-      if (active.current && present.current) onOpen(dm, draft.current);
-    } catch (reason) { if (active.current) setError(errorText(reason)); }
-    finally { opening.current = false; if (active.current) setBusy(false); }
+      const dm = await request<DirectMessageSummary>(`/workspaces/${workspace}/direct-messages`, { user_id: person.id }, undefined, 'POST', controller.signal);
+      if (!controller.signal.aborted && present.current) onOpen(dm, draft.current);
+    } catch (reason) { if (!controller.signal.aborted) setOpenError(errorText(reason)); }
+    finally {
+      if (!controller.signal.aborted) { opening.current = null; setOpeningId(undefined); }
+    }
   }
-  const searching = !loaded || search !== query;
+  const currentPage = page?.workspace === workspace ? page : undefined;
+  const searchError = failure?.workspace === workspace && failure.query === query ? failure.text : undefined;
+  const searching = !searchError && (search !== query || currentPage?.query !== query);
+  const people = currentPage?.items.filter(person => !searching || person.name.toLowerCase().includes(query.trim().toLowerCase())) ?? [];
   return <main id="chat-messages" className="dm-new-message" tabIndex={-1}><ConversationHeader title="New message" onClose={onClose} /><div className="dm-recipient-picker">
-    <div className="dm-recipient-search"><MagnifyingGlass size={18} /><label htmlFor="dm-recipient">To</label><input id="dm-recipient" type="search" autoFocus maxLength={100} placeholder="Find a person…" value={query} disabled={busy} onChange={event => setQuery(event.target.value)} /></div>
-    {error && <div role="alert" className="dm-error">{error}<Button size="sm" onClick={() => setRetry(value => value + 1)}>Retry</Button></div>}
-    {searching ? <p role="status">Finding people…</p> : <ul className="dm-people" aria-label="People">{people.map(person => <li key={person.id}><button disabled={busy} onClick={() => void open(person)}><Avatar name={person.name} initials={person.name.slice(0, 2).toUpperCase()} image={person.image} presence={person.presence === 'active' ? 'online' : 'away'} /><span><strong>{person.name}{person.id === viewer ? ' (you)' : ''}</strong><small>{person.id === viewer ? 'Your personal space' : person.title || 'Workspace member'}</small></span></button></li>)}</ul>}
-    {!searching && !error && !people.length && <p>No people found. Try another name.</p>}
+    <div className="dm-recipient-search"><MagnifyingGlass size={18} /><label htmlFor="dm-recipient">To</label><input id="dm-recipient" type="search" autoFocus maxLength={100} placeholder="Find a person…" value={query} onChange={event => {
+      opening.current?.abort(); opening.current = null; setOpeningId(undefined); setOpenError(''); setQuery(event.target.value);
+    }} /></div>
+    {searchError && <div role="alert" className="dm-error">{searchError}<Button size="sm" onClick={() => setRetry(value => value + 1)}>Retry</Button></div>}
+    {openError && <div role="alert" className="dm-error">{openError}</div>}
+    {searching && (!currentPage && !query ? <ListRowSkeleton label="Finding people…"/> : <LoadingStatus>Finding people…</LoadingStatus>)}
+    <ul className="dm-people" aria-label="People">{people.map(person => <li key={person.id}><button disabled={!!openingId} onClick={() => void open(person)}><Avatar name={person.name} initials={person.name.slice(0, 2).toUpperCase()} image={person.image} presence={person.presence === 'active' ? 'online' : 'away'} /><span><strong>{person.name}{person.id === viewer ? ' (you)' : ''}</strong><small>{openingId === person.id ? <LoadingStatus>Opening conversation…</LoadingStatus> : person.id === viewer ? 'Your personal space' : person.title || 'Workspace member'}</small></span></button></li>)}</ul>
+    {!searching && !searchError && !people.length && <p>No people found. Try another name.</p>}
     {!searching && people.length === 30 && <p className="dm-hint">Showing the first 30 matches. Type a name to narrow your search.</p>}
-    {busy && <p role="status">Opening conversation…</p>}
   </div><ConversationComposer channel="new conversation" placeholder="Write a message…" defaultValue={defaultValue} onDraftChange={document => { draft.current = document; onDraftChange?.(document); }} controls={{ attachmentsEnabled: false }} sendDisabledReason="Choose a recipient before sending." onSend={() => {}} /></main>;
 }
 
@@ -210,7 +225,7 @@ export function DirectMessages({ workspace, viewer, requestedId, compose = 0, wi
       <header className="dm-heading"><h2>Direct messages</h2><label className="dm-unreads">Unreads<input type="checkbox" role="switch" checked={unreads} onChange={event => { setUnreads(event.target.checked); setAfter(''); }} /></label><IconButton label="New message" onClick={() => setNewOpen(true)}><PencilSimple size={20} /></IconButton></header>
       <div className="dm-filter"><MagnifyingGlass size={17} /><input type="search" aria-label="Find a DM" placeholder="Find a DM…" maxLength={100} value={query} onChange={event => { setQuery(event.target.value); setAfter(''); }} /></div>
       {list.error && <div role="alert" className="dm-error">{list.error}<Button size="sm" onClick={() => void list.refresh()}>Retry</Button></div>}
-      {!list.loaded || search !== query ? <p role="status">Loading direct messages…</p> : <ul className="dm-list">{items.map(dm => {
+      {!list.loaded || search !== query ? <ListRowSkeleton label="Loading direct messages…" /> : <ul className="dm-list">{items.map(dm => {
         const count = unread.channels.find(item => item.channel_id === dm.id)?.unread_count ?? 0;
         const showTyping = typing.has(dm.id) && (newOpen || dm.id !== selected?.id);
         return <li key={dm.id}><DirectMessageRow dm={dm} viewer={viewer} count={count} typing={showTyping}

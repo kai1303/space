@@ -109,3 +109,5 @@
 .space-channel-alert-toggle small{display:block;color:var(--sp-text-secondary)}
 .chat-app .space-channel-alert-toggle input{width:18px;height:18px;flex:none;accent-color:var(--sp-success)}
 .space-channel-alert-settings>.sp-button{margin-top:16px}
+
+.space-channel-pending { display: flex; align-items: center; gap: 8px; color: var(--sp-text-secondary); }

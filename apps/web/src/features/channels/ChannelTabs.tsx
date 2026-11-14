@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { defaultChannelTabOrder, type ChannelTabsState, type ManagedChannelTab } from '@space/contracts';
-import { IconButton, Menu } from '@space/ui/primitives';
+import { IconButton, Menu, Spinner } from '@space/ui/primitives';
 import { ArrowDown, ArrowUp, BookOpen, ChatCircle, Compass, Eye, EyeSlash, Paperclip, Plus, PushPin, SlidersHorizontal } from '@phosphor-icons/react';
 import { request } from '../../shared/api/request.js';
 import { invalidateUpdates, subscribeUpdates } from '../../shared/realtime/live-updates.js';
@@ -23,7 +23,7 @@ export function useChannelTabs(channel: string | undefined, actor: string) {
         if (e instanceof Error && ['not_found','unauthorized','forbidden'].includes(e.message)) setState(undefined);
         setError('Could not load channel tabs.');
       }
-    }, () => { controller.abort(); setState(undefined); });
+    }, () => { controller.abort(); setState(undefined); setError('Channel tabs are unavailable.'); });
     return () => { controller.abort(); stop(); };
   }, [channel, actor]);
   const visible = (tab: ManagedChannelTab) => state?.visibility[tab] ??
@@ -62,22 +62,22 @@ export const channelTabIcons = { files: Paperclip, pins: PushPin, memory: BookOp
 
 export function ChannelTabManager({ channel, actor, archived }: {channel: string; actor: string; archived: boolean}) {
   const tabs = useChannelTabs(channel, actor);
-  const [pending, setPending] = useState<{tab: ManagedChannelTab; show: boolean}>();
+  const [pending, setPending] = useState<Partial<Record<ManagedChannelTab, boolean>>>({});
   const [error, setError] = useState('');
   async function change(tab: ManagedChannelTab, show: boolean) {
-    if (pending || archived) return;
-    setPending({tab, show}); setError('');
+    if (pending[tab] !== undefined || archived) return;
+    setPending(current => ({...current, [tab]: show})); setError('');
     try { await tabs.change(tab, show); } catch { setError('Could not save this change. Try again.'); }
-    finally { setPending(undefined); }
+    finally { setPending(current => { const next = {...current}; delete next[tab]; return next; }); }
   }
   const {order} = tabs;
-  const hidden = order.filter(tab => !tabs.visible(tab));
+  const hidden = order.filter(tab => !tabs.visible(tab) && pending[tab] === undefined);
   return <section className="space-channel-card channel-tab-manager" aria-label="Manage tabs">
     <h3>Manage tabs</h3><p>Reorder, show, or hide tabs for everyone in this channel.</p>
-    {tabs.state && <ul aria-label="Channel tabs">
+    <ul aria-label="Channel tabs">
       <li><ChatCircle size={16}/>Messages</li>
-      {order.map((tab,index) => {
-        const shown = pending?.tab === tab ? pending.show : tabs.visible(tab);
+      {tabs.state && order.map((tab,index) => {
+        const shown = pending[tab] ?? tabs.visible(tab);
         const Icon = channelTabIcons[tab], Action = shown ? EyeSlash : Eye;
         return <li key={tab} data-hidden={!shown || undefined}><Icon size={16}/><span>{channelTabNames[tab]}</span>
           {!shown && <small>Hidden</small>}
@@ -87,12 +87,12 @@ export function ChannelTabManager({ channel, actor, archived }: {channel: string
           <IconButton label={`Move ${channelTabNames[tab]} down`} size="sm" disabled={archived || tabs.moving || index === order.length-1}
             onClick={() => void tabs.move(tab,order[index+1]!,'after')}><ArrowDown size={16}/></IconButton>
           <IconButton label={`${shown ? 'Hide' : 'Show'} ${channelTabNames[tab]} tab`} size="sm"
-            disabled={!!pending || archived} onClick={() => void change(tab,!shown)}><Action size={17}/></IconButton></div>
+            aria-busy={pending[tab] !== undefined || undefined} disabled={pending[tab] !== undefined || archived} onClick={() => void change(tab,!shown)}><Action size={17}/></IconButton></div>
         </li>;
       })}
-    </ul>}
-    {!tabs.state && !tabs.error && <p role="status">Loading tabs…</p>}
-    {tabs.state && !archived && !pending && hidden.length > 0 && <Menu align="start" floating label="New tab" trigger={<><Plus size={15}/> New Tab</>}
+    </ul>
+    {!tabs.state && !tabs.error && <p className="space-channel-pending" role="status"><Spinner/>Loading tabs…</p>}
+    {tabs.state && !archived && hidden.length > 0 && <Menu align="start" floating label="New tab" trigger={<><Plus size={15}/> New Tab</>}
       items={hidden.map(tab => ({label:channelTabNames[tab],onSelect:() => void change(tab,true)}))}/>}
     {(error || tabs.moveError || tabs.error) && <p role="alert" className="space-channel-error">{error || tabs.moveError || tabs.error}</p>}
   </section>;

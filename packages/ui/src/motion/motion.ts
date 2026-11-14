@@ -13,7 +13,7 @@ export function surfaceMotion(reduced: boolean | null, kind: 'popover' | 'modal'
   };
   return {
     initial: hidden,
-    animate: { opacity: 1, x: 0, y: 0, scale: 1 },
+    animate: kind === 'scrim' ? { opacity: 1 } : { opacity: 1, x: 0, y: 0, scale: 1 },
     exit: hidden,
     transition: motionTransition(reduced),
   };

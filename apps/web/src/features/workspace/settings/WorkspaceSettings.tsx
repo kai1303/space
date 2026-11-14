@@ -1,16 +1,16 @@
 import { workspacePath } from '@space/contracts';
 import { useEffect, useId, useRef, useState } from 'react';
-import { Select, Button, Dialog, Tabs, toast } from '@space/ui/primitives';
+import { Select, Button, Dialog, Spinner, Tabs, toast } from '@space/ui/primitives';
 import { workspacePreferenceDefaults, workspaceLanguages, type WorkspaceSettings as Settings, type WorkspaceSettingsUpdate } from '@space/contracts';
 import { request } from '../../../shared/api/request.js';
 import { subscribeUpdates } from '../../../shared/realtime/live-updates.js';
 import '../members/workspace-administration.css';
 import './workspace-settings.css';
 import '../workspace-dialog-tabs.css';
-type Props = {workspace:string;open:boolean;onClose:()=>void;onRenamed:(name:string)=>void;onManageMembers?:()=>void};
+type Props = {workspaceName?:string;workspace:string;open:boolean;onClose:()=>void;onRenamed:(name:string)=>void;onManageMembers?:()=>void};
 const languageNames:Record<string,string> = {en:'English',vi:'Tiếng Việt',fr:'Français',de:'Deutsch',es:'Español',pt:'Português',ja:'日本語',ko:'한국어',zh:'中文'};
 export function WorkspaceSettings(props:Props) {return props.open ? <SettingsDialog key={props.workspace} {...props}/> : null;}
-function SettingsDialog({workspace,onClose,onRenamed,onManageMembers}:Props) {
+function SettingsDialog({workspace,workspaceName,onClose,onRenamed,onManageMembers}:Props) {
   const [settings,setSettings] = useState<Settings>(), [draft,setDraft] = useState<Settings>();
   const [name,setName] = useState(''), [tab,setTab] = useState('settings'), [editing,setEditing] = useState(false);
   const [error,setError] = useState(''), [busy,setBusy] = useState(false), [notice,setNotice] = useState('');
@@ -24,6 +24,7 @@ function SettingsDialog({workspace,onClose,onRenamed,onManageMembers}:Props) {
   function resetDraft(item:Settings) {setDraft(item);setDomains(item.approved_email_domains.join(', '));setPendingRetention(undefined);dirty.current=false;}
   async function refresh(discard=false) {
     const attempt = ++generation.current;
+    setError('');
     try {
       const response = await request<Settings>(`/workspaces/${workspace}/settings`);
       const item = {...workspacePreferenceDefaults,...response};
@@ -77,12 +78,12 @@ function SettingsDialog({workspace,onClose,onRenamed,onManageMembers}:Props) {
       <div key={tab} id={panelId} role="tabpanel" aria-label={tab==='settings'?'Settings':'Permissions'}>
       {error&&<p role="alert">{error} <Button size="sm" disabled={busy} onClick={()=>void refresh(true)}>Reload settings</Button></p>}
       {notice&&<p role="status">{notice}</p>}
-      {!settings&&!error&&<p role="status">Loading workspace settings…</p>}
-      {settings&&draft&&<>
-        {!manager&&<p>Only workspace owners and admins can change these settings.</p>}
-        {tab==='settings'&&<section className="workspace-settings-row"><header><div><h3>Workspace name</h3><p>Your workspace is called <strong>{settings.name}</strong>.</p></div>{manager&&!editing&&<Button size="sm" aria-label="Edit workspace name" disabled={busy||dirty.current} onClick={()=>{setName(settings.name);setEditing(true);setNotice('');}}>Edit</Button>}</header>
-          {editing&&manager&&<form onSubmit={event=>{event.preventDefault();void save({revision:settings.revision,name:name.trim()},'rename');}}><label>Workspace name<input ref={nameInput} required maxLength={100} value={name} onChange={event=>setName(event.target.value)} disabled={busy}/></label><div><Button type="submit" variant="primary" loading={busy} disabled={!name.trim()||name.trim()===settings.name}>Save changes</Button><Button disabled={busy} onClick={()=>setEditing(false)}>Cancel</Button></div></form>}
+        {tab==='settings'&&(settings || workspaceName)&&<section className="workspace-settings-row"><header><div><h3>Workspace name</h3><p>Your workspace is called <strong>{settings?.name ?? workspaceName}</strong>.</p></div>{settings&&manager&&!editing&&<Button size="sm" aria-label="Edit workspace name" disabled={busy||dirty.current} onClick={()=>{setName(settings.name);setEditing(true);setNotice('');}}>Edit</Button>}</header>
+          {settings&&editing&&manager&&<form onSubmit={event=>{event.preventDefault();void save({revision:settings.revision,name:name.trim()},'rename');}}><label>Workspace name<input ref={nameInput} required maxLength={100} value={name} onChange={event=>setName(event.target.value)} disabled={busy}/></label><div><Button type="submit" variant="primary" loading={busy} disabled={!name.trim()||name.trim()===settings.name}>Save changes</Button><Button disabled={busy} onClick={()=>setEditing(false)}>Cancel</Button></div></form>}
         </section>}
+        {!settings && !error && <p className="workspace-settings-pending" role="status"><Spinner/>{tab === 'settings' ? 'Loading workspace settings…' : 'Loading workspace permissions…'}</p>}
+        {settings&&draft&&<>
+          {!manager&&<p>Only workspace owners and admins can change these settings.</p>}
         <form className="workspace-preferences-form" onSubmit={event=>{event.preventDefault();savePreferences();}}>
           <fieldset disabled={!manager||busy}>
           {tab==='settings'?<>
@@ -96,13 +97,14 @@ function SettingsDialog({workspace,onClose,onRenamed,onManageMembers}:Props) {
             <section className="workspace-settings-row"><h3>Channel creation</h3><label>Who can create channels?<Select aria-label="Who can create channels?" value={draft.create_channel_permission} onChange={event=>change('create_channel_permission',event.target.value as 'admins'|'members')}><option value="members">All members</option><option value="admins">Workspace owners and admins</option></Select></label></section>
             <section className="workspace-settings-row"><h3>Email addresses</h3><label>Who can see member email addresses?<Select aria-label="Who can see member email addresses?" value={draft.email_visibility} onChange={event=>change('email_visibility',event.target.value as 'admins'|'members')}><option value="admins">Workspace owners and admins</option><option value="members">All members</option></Select></label></section>
             <section className="workspace-settings-row"><h3>Approved email domains</h3><label>Domains allowed to join<textarea rows={3} value={domains} onChange={event=>{dirty.current=true;setDomains(event.target.value);setNotice('');}} placeholder="example.com, company.org"/></label><p>People with a verified email at these exact domains can join using the workspace address. Separate domains with commas. Leave empty to require an invitation.</p></section>
-            <section className="workspace-settings-row"><h3>Roles and permissions</h3><dl><dt>Workspace Owners</dt><dd>Manage workspace settings, members and account types. A workspace must retain at least one owner.</dd><dt>Workspace Admins</dt><dd>Manage settings and regular members. Only owners can change account types.</dd><dt>Members</dt><dd>Join public channels and participate in conversations. Private channels require membership.</dd></dl></section>
+
           </>}
           </fieldset>
           {manager&&<div className="workspace-settings-actions"><Button type="submit" variant="primary" loading={busy} disabled={!dirty.current||editing}>Save settings</Button><Button disabled={busy||!dirty.current} onClick={()=>{resetDraft(settings);setError('');}}>Discard changes</Button></div>}
         </form>
-        {tab==='settings'&&<section className="workspace-settings-row"><header><div><h3>Workspace members</h3><p>View people, account types and membership status.</p></div>{onManageMembers&&<Button size="sm" onClick={onManageMembers}>Manage members</Button>}</header></section>}
       </>}
+      {tab==='permissions' && <section className="workspace-settings-row"><h3>Roles and permissions</h3><dl><dt>Workspace Owners</dt><dd>Manage workspace settings, members and account types. A workspace must retain at least one owner.</dd><dt>Workspace Admins</dt><dd>Manage settings and regular members. Only owners can change account types.</dd><dt>Members</dt><dd>Join public channels and participate in conversations. Private channels require membership.</dd></dl></section>}
+        {tab==='settings'&&<section className="workspace-settings-row"><header><div><h3>Workspace members</h3><p>View people, account types and membership status.</p></div>{onManageMembers&&<Button size="sm" onClick={onManageMembers}>Manage members</Button>}</header></section>}
       </div>
     </section>
   </Dialog>

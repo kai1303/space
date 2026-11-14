@@ -15,11 +15,12 @@ async function membership(c: DbSession, actor: string, workspace: string) {
   if (!member) throw new AppError(404, 'not_found');
   return member;
 }
-export async function requireWorkspacePolicy(c: DbSession, actor: string, workspace: string, action: 'invite' | 'create_channel') {
+export async function requireWorkspacePolicy(c: DbSession, actor: string, workspace: string, action: 'invite' | 'create_channel', guestError = `${action}_forbidden`) {
   const member = await membership(c, actor, workspace);
-  if (member.guest_type !== 'none') throw new AppError(403, `${action}_forbidden`);
+  if (member.guest_type !== 'none') throw new AppError(403, guestError);
+  if (member.role !== 'member') return member;
   const settings = await readWorkspacePreferences(c, workspace);
-  if (member.role === 'member' && settings[action === 'invite' ? 'invite_permission' : 'create_channel_permission'] !== 'members') throw new AppError(403, `${action}_forbidden`);
+  if (settings[action === 'invite' ? 'invite_permission' : 'create_channel_permission'] !== 'members') throw new AppError(403, `${action}_forbidden`);
   return member;
 }
 export async function joinDefaultChannels(c: DbSession, actor: string, workspace: string) {

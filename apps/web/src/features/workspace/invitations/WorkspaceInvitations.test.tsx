@@ -33,3 +33,14 @@ it('resends with an idempotency key and exposes the rotated link for copying',as
  await waitFor(()=>expect(api.request).toHaveBeenCalledWith('/workspaces/workspace/invitations/invite/resend',{request_id:expect.any(String)}));
  expect(await screen.findByRole('textbox',{name:'Invitation URL for new@example.test'})).toHaveProperty('value',expect.stringContaining('invite='));
 });
+
+it('allows drafting an email invitation while permissions and optional channels load', async () => {
+ api.request.mockImplementation(() => new Promise(() => {}));
+ render(<WorkspaceInvitations workspace="workspace" onClose={()=>{}}/>);
+ await userEvent.click(screen.getByRole('button',{name:'Invite by email'}));
+ const email = screen.getByRole('textbox',{name:'Email address'});
+ await userEvent.type(email,'draft@example.test');
+ expect(screen.getByText('Loading channels…')).toBeTruthy();
+ expect(screen.getByText('Checking invitation permissions…')).toBeTruthy();
+ expect(screen.getByRole('button',{name:'Create invitation'})).toHaveProperty('disabled',true);
+});

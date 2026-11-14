@@ -15,7 +15,7 @@ test('session stars persist, remain personal, paginate, and recheck channel and 
  const a=await bootstrap(pool),b=await bootstrap(pool),ids=[randomUUID(),randomUUID()].sort();
  for(const id of ids)await pool.query("INSERT INTO agent_sessions(id,workspace_id,installation_id,origin_thread_id,title,managed) VALUES($1,$2,$3,$4,'Review README',true)",[id,a.workspace_id,a.installation_id,a.thread_id]);
  // Revisions survive CDC cleanup; outbox row counts race with delivery.
- const revision=async()=>Number((await pool.query('SELECT revision FROM resource_update_revisions WHERE resource=$1',[`workspace:${a.workspace_id}`])).rows[0].revision);
+ const revision=async()=>Number((await pool.query('SELECT revision FROM resource_revision_totals WHERE resource=$1',[`workspace:${a.workspace_id}`])).rows[0].revision);
  const beforeDelivery=await revision();
  await Promise.all(Array.from({length:6},()=>store.starSession(a.owner_id,a.workspace_id,ids[0]!,{active:true})));
  assert.equal(await revision(),beforeDelivery+1);

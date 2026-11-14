@@ -19,3 +19,14 @@
 .memory-inspector input, .memory-inspector textarea { font: inherit; font-size: 13px; }
 .memory-inspector textarea { min-height: 160px; }
 
+
+.memory-graph { position: relative; }
+.memory-graph-loading {
+  position: absolute;
+  bottom: 16px;
+  align-self: center;
+  padding: 5px 10px;
+  border-radius: var(--sp-radius-md);
+  background: var(--sp-surface);
+  pointer-events: none;
+}

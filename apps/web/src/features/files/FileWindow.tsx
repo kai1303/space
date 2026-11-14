@@ -1,9 +1,14 @@
 import { useEffect, useState } from 'react';
 import type { AssetAttachment } from '@space/contracts';
 import { request } from '../../shared/api/request.js';
+import { Button, LoadingStatus } from '@space/ui/primitives';
 import { AssetViewer } from './AssetAttachments.js';
 
-export default function FileWindow({ id, initialPage }: { id: string; initialPage?: number }) {
+type FileProps = { id: string; initialPage?: number };
+export default function FileWindow(props: FileProps) {
+  return <FileContent key={props.id} {...props}/>;
+}
+function FileContent({ id, initialPage }: FileProps) {
   const [asset, setAsset] = useState<AssetAttachment>();
   const [error, setError] = useState('');
   useEffect(() => {
@@ -13,8 +18,14 @@ export default function FileWindow({ id, initialPage }: { id: string; initialPag
       .catch(() => { if (!controller.signal.aborted) setError('This file is unavailable.'); });
     return () => controller.abort();
   }, [id]);
-  return asset && !error ? <AssetViewer standalone initialPage={initialPage} assets={[asset]} selectedId={id} onSelect={() => {}} onClose={() => {
+  function close() {
     window.close();
     if (!window.closed) window.location.replace('/chat');
-  }} onAccessLost={() => setError('This file is unavailable.')} /> : <p role="status">{error || 'Opening file…'}</p>;
+  }
+  if (error || !asset) return <main className="file-window-status">
+    {error ? <p role="alert">{error}</p> : <LoadingStatus>Opening file…</LoadingStatus>}
+    <Button onClick={close}>Close file</Button>
+  </main>;
+  return <AssetViewer standalone initialPage={initialPage} assets={[asset]} selectedId={id} onSelect={() => {}}
+    onClose={close} onAccessLost={() => setError('This file is unavailable.')} />;
 }

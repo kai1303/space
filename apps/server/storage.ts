@@ -1,15 +1,15 @@
-import { AppError } from '@space/contracts';
+import { AppError, type AssetUpload } from '@space/contracts';
 import {
-  CreateBucketCommand, DeleteObjectCommand, GetObjectCommand,
+  CopyObjectCommand, CreateBucketCommand, DeleteObjectCommand, GetObjectCommand,
   HeadBucketCommand, HeadObjectCommand, PutBucketCorsCommand, PutObjectCommand, S3Client,
 } from '@aws-sdk/client-s3';
 import { createPresignedPost } from '@aws-sdk/s3-presigned-post';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 
 export interface AssetStorage {
-  createUpload(key: string, size: number, expiresAt?: Date): Promise<{ url: string; fields: Record<string, string> }>;
+  createUpload(key: string, size: number, expiresAt?: Date): Promise<AssetUpload['upload']>;
   // Retries and concurrent processors must reuse sealed originals, never overwrite them.
-  finalize(stagingKey: string, finalKey: string, size: number): Promise<void>;
+  finalize(stagingKey: string, finalKey: string, size: number): Promise<Uint8Array | void>;
   download(key: string, name: string, audience?: 'onlyoffice'): Promise<string>;
   read(key: string, maxBytes: number, range?: { start: number; end: number }, expectedEtag?: string, signal?: AbortSignal): Promise<Uint8Array>;
   write(key: string, data: Uint8Array, type: string): Promise<void>;
@@ -47,7 +47,7 @@ export class SeaweedStorage implements AssetStorage {
     };
     this.client = new S3Client({ ...options, endpoint: config.endpoint });
     this.officeClient = config.officeEndpoint ? new S3Client({ ...options, endpoint: config.officeEndpoint }) : this.client;
-    this.publicClient = new S3Client({ ...options, endpoint: config.publicEndpoint });
+    this.publicClient = new S3Client({ ...options, endpoint: config.publicEndpoint, requestChecksumCalculation: 'WHEN_REQUIRED' });
   }
   private async run<T>(operation: () => Promise<T>): Promise<T> {
     try { return await operation(); }
@@ -69,16 +69,17 @@ export class SeaweedStorage implements AssetStorage {
       await this.client.send(new PutBucketCorsCommand({
         Bucket: this.config.bucket,
         CORSConfiguration: { CORSRules: [{
-          AllowedOrigins: this.config.origins, AllowedMethods: ['POST', 'GET', 'HEAD'],
+          AllowedOrigins: this.config.origins, AllowedMethods: ['POST', 'PUT', 'GET', 'HEAD'],
           AllowedHeaders: ['Content-Type'], ExposeHeaders: ['ETag', 'Content-Disposition'], MaxAgeSeconds: 300,
         }] },
       }));
     });
   }
-  async createUpload(key: string, size: number, expiresAt = new Date(Date.now() + 300_000)): Promise<{ url: string; fields: Record<string, string> }> {
+  async createUpload(key: string, size: number, expiresAt = new Date(Date.now() + 300_000)): Promise<AssetUpload['upload']> {
     validateSize(size);
     // Keep signing inside the database deadline used to retire staging objects.
-    const seconds = Math.min(300, Math.floor((expiresAt.getTime() - Date.now()) / 1000) - 1);
+    const signingDate = new Date();
+    const seconds = Math.min(300, Math.floor((expiresAt.getTime() - signingDate.getTime()) / 1000) - 1);
     if (!Number.isFinite(seconds) || seconds < 1) throw new AppError(410, 'upload_expired');
     return this.run(async () => {
       const upload = await createPresignedPost(this.publicClient, {
@@ -88,12 +89,16 @@ export class SeaweedStorage implements AssetStorage {
       });
       const expiration = Date.parse(JSON.parse(Buffer.from(upload.fields.Policy!, 'base64').toString()).expiration);
       if (expiration > expiresAt.getTime() || expiration <= Date.now()) throw new AppError(410, 'upload_expired');
-      return upload;
+      if (size < 1024 * 1024) return upload;
+      const put_url = await getSignedUrl(this.publicClient, new PutObjectCommand({
+        Bucket: this.config.bucket, Key: key, ContentLength: size, ContentType: 'application/octet-stream',
+      }), { expiresIn: seconds, signingDate, signableHeaders: new Set(['content-length', 'content-type']) });
+      return { ...upload, put_url };
     });
   }
-  async finalize(stagingKey: string, finalKey: string, size: number): Promise<void> {
+  async finalize(stagingKey: string, finalKey: string, size: number): Promise<Uint8Array | void> {
     validateSize(size);
-    await this.run(async () => {
+    return this.run(async () => {
       // A retried or expired processor must never overwrite already sealed bytes.
       try {
         const existing = await this.client.send(new HeadObjectCommand({ Bucket: this.config.bucket, Key: finalKey }));
@@ -107,19 +112,29 @@ export class SeaweedStorage implements AssetStorage {
         throw error;
       }
       if (source.ContentLength !== size || !source.ETag) throw new AppError(409, 'invalid_upload');
-      const bytes = await this.read(stagingKey, size, undefined, source.ETag);
-      if (bytes.length !== size) throw new AppError(409, 'invalid_upload');
+      const destination = { Bucket: this.config.bucket, Key: finalKey, IfNoneMatch: '*',
+        ContentType: 'application/octet-stream', ContentDisposition: 'attachment' };
+      let sealed: Uint8Array | undefined;
       try {
-        await this.client.send(new PutObjectCommand({
-          Bucket: this.config.bucket, Key: finalKey, Body: bytes, IfNoneMatch: '*',
-          ContentType: 'application/octet-stream', ContentDisposition: 'attachment',
-        }));
+        if (size >= 1024 * 1024) {
+          const path = stagingKey.split('/').map(encodeURIComponent).join('/');
+          await this.client.send(new CopyObjectCommand({
+            ...destination, CopySource: this.config.bucket + '/' + path,
+            CopySourceIfMatch: source.ETag, MetadataDirective: 'REPLACE',
+          }));
+        } else {
+          const bytes = await this.read(stagingKey, size, undefined, source.ETag);
+          if (bytes.length !== size) throw new AppError(409, 'invalid_upload');
+          await this.client.send(new PutObjectCommand({ ...destination, Body: bytes }));
+          sealed = bytes;
+        }
       } catch (error) {
         // Another claimant may have sealed this object first.
         if (![409, 412].includes(statusOf(error) ?? 0)) throw error;
       }
       const final = await this.client.send(new HeadObjectCommand({ Bucket: this.config.bucket, Key: finalKey }));
       if (final.ContentLength !== size) throw new AppError(409, 'invalid_upload');
+      return sealed;
     });
   }
   async download(key: string, name: string, audience?: 'onlyoffice'): Promise<string> {

@@ -155,7 +155,12 @@ export async function runConnector(args = process.argv.slice(2), host?: Connecto
         if (!(error instanceof ProjectUnavailable)) throw error;
         await failBeforeStart('Checking the selected project.', error.message);
       }
-    }, () => models, host?.webVault, pickProject);
+    }, () => models, host?.webVault, pickProject, provider==='codex' ? {
+      directory:store.directory, async sync(input) {
+        if (currentStatus()!=='ready' || !runtime?.syncArchive) throw new Error('Codex is unavailable.');
+        return runtime.syncArchive(input);
+      },
+    } : undefined);
     try {
       await session.start({paired, login:options.login, desktop:Boolean(host)});
     } catch (error) {

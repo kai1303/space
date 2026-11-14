@@ -121,6 +121,20 @@ describe('Navigator observation settings', () => {
   expect(screen.getByText('Current observation')).toBeTruthy();
  });
 
+ it('keeps a newer draft when an earlier save finishes, including after a settings retry',async()=>{
+  let finish!: (value:unknown)=>void;
+  vi.mocked(request).mockRejectedValueOnce(new Error('unavailable')).mockImplementation(async(path,body)=>
+   body ? new Promise(resolve=>{finish=resolve;}) : path.endsWith('/observations') ? [] : configuration);
+  render(<NavigatorSettings channel="c1" onCandidates={onCandidates}/>);
+  fireEvent.click(screen.getByRole('button',{name:'Navigator settings'}));
+  fireEvent.click(await screen.findByRole('button',{name:'Retry settings'}));
+  fireEvent.click(await screen.findByRole('button',{name:'Save Navigator settings'}));
+  fireEvent.change(screen.getByLabelText('Capability rules'),{target:{value:'review: draft'}});
+  await act(async()=>finish(configuration.settings));
+  expect(screen.getByLabelText('Capability rules')).toHaveProperty('value','review: draft');
+  expect(screen.getByRole('button',{name:'Save Navigator settings'})).toHaveProperty('disabled',false);
+ });
+
  it('does not apply an old-channel save to the current settings dialog', async () => {
   let resolveSave!: (value: unknown) => void;
   vi.mocked(request).mockImplementation(async(path,body)=>{

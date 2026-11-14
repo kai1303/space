@@ -129,7 +129,7 @@ test('workspace and starred session rows follow running turns through completion
   await api(a.owner_token, 'POST', `${workspace}/hub/starred-sessions/${one.id}`, {active:true});
   const read = async () => Promise.all(['agent-sessions','hub/starred-sessions'].map(async resource =>
     (await api(a.owner_token, 'GET', `${workspace}/${resource}`)).items[0].working));
-  const revision = async () => Number((await pool.query('SELECT revision FROM resource_update_revisions WHERE resource=$1',
+  const revision = async () => Number((await pool.query('SELECT revision FROM resource_revision_totals WHERE resource=$1',
     [`workspace:${a.workspace_id}`])).rows[0].revision);
   for (const finish of ['complete','stop']) {
     const task = await api(a.owner_token, 'POST', `/agent-sessions/${one.id}/messages`, {text:'Work'}, 201);
@@ -631,9 +631,9 @@ test('workspace session navigation is paginated, includes private handoffs only 
   assert.equal((await api(a.owner_token, 'GET', path)).items[0].id, privateSession.id);
   assert.ok(!(await api(a.collaborator_token, 'GET', path)).items.some((item: any) => item.id === privateSession.id));
   await api(a.collaborator_token, 'GET', `${path}?before=${privateSession.id}`, undefined, 404);
-  const revision = await pool.query('SELECT revision FROM resource_update_revisions WHERE resource=$1', [`workspace:${a.workspace_id}`]);
+  const revision = await pool.query('SELECT revision FROM resource_revision_totals WHERE resource=$1', [`workspace:${a.workspace_id}`]);
   await session(a, 'Live sidebar entry');
-  const updated = await pool.query('SELECT revision FROM resource_update_revisions WHERE resource=$1', [`workspace:${a.workspace_id}`]);
+  const updated = await pool.query('SELECT revision FROM resource_revision_totals WHERE resource=$1', [`workspace:${a.workspace_id}`]);
   assert.ok(Number(updated.rows[0].revision) > Number(revision.rows[0].revision));
   await pool.query('DELETE FROM channel_members WHERE channel_id=$1 AND user_id=$2', [a.channel_id,a.collaborator_id]);
   assert.deepEqual((await api(a.collaborator_token, 'GET', path)).items, []);
@@ -882,8 +882,26 @@ test('session-only reviewer can discuss an explicit output snapshot without gain
   const shareView = (output:unknown) => app.inject({method:'PUT',url:'/v1'+team+'/shared',headers:{authorization:'Bearer '+a.owner_token},payload:{kind:'view',path:canvas.key,output}});
   const share=(actor:string,output:unknown)=>app.inject({method:'PUT',url:'/v1'+team+'/shared',headers:{authorization:'Bearer '+actor},payload:{kind:'change',path:patch.path,output}});
   await api(token,'GET',team,undefined,404);
+  const options=await api(a.owner_token,'GET',team+'/mentions?ids='+a.collaborator_id);
+  const person=options.items[0];
+  assert.equal(person.id,a.collaborator_id);
+  assert.equal(person.joined,false);
+  assert.equal(person.can_invite_reviewer,true);
+  assert.ok(person.invite_channel);
+  const document={ops:[{insert:'@'+person.label,attributes:{mention:{kind:'user',id:person.id,label:person.label}}}]};
+  const tagKey=randomUUID(),tag={text:'@'+person.label,document};
+  await api(a.owner_token,'POST',team+'/discussion',tag,200,tagKey);
+  await api(a.owner_token,'POST',team+'/discussion',tag,200,tagKey);
+  await api(a.owner_token,'POST',team+'/discussion',{text:tag.text},409,tagKey);
+  assert.deepEqual((await api(a.owner_token,'GET',team+'/discussion')).messages[0].document,document);
+  await api(token,'GET',team,undefined,404);
   assert.equal((await invite(stranger.owner_id)).statusCode,404);
   assert.equal((await invite(a.collaborator_id)).statusCode,200);
+  const existing=await api(a.owner_token,'GET',team+'/mentions?ids='+a.collaborator_id);
+  assert.equal(existing.items[0].joined,true);
+  assert.equal(existing.items[0].can_invite_reviewer,false);
+  assert.equal(existing.items[0].invite_channel,null);
+  await api(token,'GET',team+'/mentions?q=',undefined,404);
   const viewerSocket=io(origin,{transports:['websocket'],auth:{token},autoConnect:false,reconnection:false});
   sockets.push(viewerSocket);
   viewerSocket.on('updates.changed',(_notice,ack:()=>void)=>ack());
@@ -914,7 +932,12 @@ test('session-only reviewer can discuss an explicit output snapshot without gain
   const posts=Array.from({length:4},()=>api(token,'POST',team+'/discussion',{text:'Please review this line'},200,key));
   await Promise.all(posts);
   await api(token,'POST',team+'/discussion',{text:'Different text'},409,key);
-  assert.equal((await api(a.owner_token,'GET',team)).messages.length,1);
+  assert.equal((await api(a.owner_token,'GET',team)).messages.length,2);
+  const discussion=await api(a.owner_token,'GET',team+'/discussion');
+  assert.deepEqual(discussion.messages.map((m:{body:string;author_id:string})=>[m.author_id,m.body]),[[a.owner_id,tag.text],[a.collaborator_id,'Please review this line']]);
+  assert.equal(discussion.shared,undefined);
+  assert.equal((await api(token,'GET',team+'/discussion?before='+discussion.messages[0].sequence)).messages.length,0);
+  await api(stranger.owner_token,'GET',team+'/discussion',undefined,404);
   assert.equal((await pool.query('SELECT id FROM tasks WHERE session_id=$1',[sessionId])).rowCount,0);
   assert.equal((await share(a.owner_token,null)).statusCode,200);
   assert.deepEqual((await api(token,'GET',team)).shared,[]);
@@ -965,4 +988,101 @@ test('creating a fresh code channel is atomic and retriable without posting a so
   const wrong={...input,client_session_id:randomUUID(),client_thread_id:randomUUID(),installation_id:b.installation_id};
   await api(a.owner_token,'POST',start,wrong,404);
   assert.equal((await pool.query('SELECT id FROM threads WHERE id=$1',[wrong.client_thread_id])).rowCount,0);
+});
+
+test('reads full Codex transcript chunks across pages and scopes each turn to its session', async () => {
+  const a=await fixture(), other=await fixture(), one=await session(a), two=await session(a,'Other');
+  const task=await api(a.owner_token,'POST',`/agent-sessions/${one.id}/messages`,{text:'Inspect output'},201);
+  const id=task.active_execution_id;
+  await store.acceptEvent(a.installation_id,event(id,1,'execution.started'));
+  let sequence=1;
+  const original=JSON.stringify({id:'shell',name:'shell',status:'completed',arguments:'pwd',result:'123456789'.repeat(12500)+'END'});
+  const shell={command:'pwd',duration_ms:3200,exit_code:0,outcome:'success'};
+  for(let offset=0,part=0;offset<original.length;offset+=12000,part++){
+    const chunk={position:0,kind:'tool',id:'shell',name:'shell',part,...(offset+12000>=original.length?{shell}:{}),last:offset+12000>=original.length,data:original.slice(offset,offset+12000)};
+    const value={...event(id,++sequence,'execution.progress'),payload:{text:'Recording session output',transcript:chunk}};
+    await store.acceptEvent(a.installation_id,value);
+    await store.acceptEvent(a.installation_id,value);
+  }
+  await store.acceptEvent(a.installation_id,event(id,++sequence,'execution.completed'));
+  const path=`/agent-sessions/${one.id}/turns/${task.id}/transcript`;
+  const list=await api(a.collaborator_token,'GET',path);
+  assert.deepEqual(list,{items:[{position:0,id:'shell',name:'shell',kind:'tool',shell}],next:null});
+  const {chunks}=await api(a.owner_token,'GET',path+'?position=0');
+  assert.equal(chunks.length,8);
+  const tail=await api(a.owner_token,'GET',path+'?position=0&after=7');
+  assert.equal(tail.chunks.at(-1).last,true);
+  assert.equal([...chunks,...tail.chunks].map(c=>c.data).join(''),original);
+  assert.ok((await api(a.owner_token,'GET',`/agent-sessions/${one.id}`)).turns[0].transcript_version);
+  await api(other.owner_token,'GET',path,undefined,404);
+  await api(a.owner_token,'GET',path.replace(one.id,two.id),undefined,404);
+});
+
+test('recovers an older Codex call and its fullest saved input and result from legacy snapshots', async () => {
+  const a = await fixture();
+  const one = await session(a);
+  const task = await api(a.owner_token,'POST',`/agent-sessions/${one.id}/messages`,{text:'Inspect files'},201);
+  const id = task.active_execution_id;
+  await store.acceptEvent(a.installation_id,event(id,1,'execution.started'));
+  const early = {id:'older',name:'shell',status:'running',arguments:'git status --short'};
+  const saved = {id:'older',name:'shell',status:'completed',arguments:'',result:'Original output'};
+  const recent = {id:'latest',name:'shell',status:'completed',arguments:'pwd',result:'/project'};
+  for (const [index,tool] of [early,saved,recent].entries()) {
+    const snapshot=event(id,index+2,index===2?'execution.completed':'execution.progress');
+    await store.acceptEvent(a.installation_id,{...snapshot,payload:{...snapshot.payload,response:{...snapshot.payload.response,tools:[tool]}}});
+  }
+  const path=`/agent-sessions/${one.id}/turns/${task.id}/transcript?legacy=1`;
+  assert.equal((await api(a.owner_token,'GET',`/agent-sessions/${one.id}`)).turns[0].has_legacy_tools,true);
+  const manifest=await api(a.collaborator_token,'GET',path);
+  assert.deepEqual(manifest.items.map(item=>item.id),['latest','older']);
+  const {chunks}=await api(a.collaborator_token,'GET',path+'&position=0');
+  assert.deepEqual(JSON.parse(chunks[0].data),{...saved,arguments:early.arguments});
+});
+
+test('session message actions persist on the selected row and enforce ownership and visibility', async () => {
+  const a=await fixture(), outsider=await fixture(), s=await session(a);
+  const base='/agent-sessions/'+s.id;
+  const task=await api(a.owner_token,'POST',base+'/messages',{text:'Original prompt'},201);
+  const row=base+'/turns/'+task.id+'/messages/request';
+  const change=(token:string,body:object,status=200)=>api(token,'POST',row,body,status);
+  await change(outsider.owner_token,{action:'save',active:true},404);
+  await change(a.collaborator_token,{action:'edit',text:'Someone else'},403);
+  await change(a.owner_token,{action:'edit',text:'Corrected prompt',expected:null});
+  await change(a.owner_token,{action:'edit',text:'Stale editor',expected:null},409);
+  for(let i=0;i<2;i++)await change(a.collaborator_token,{action:'react',emoji:'👀',active:true});
+  const reply={action:'reply',id:randomUUID(),text:'I checked this.'};
+  for(let i=0;i<2;i++)await change(a.collaborator_token,reply);
+  await change(a.owner_token,{action:'save',active:true});
+  await change(a.owner_token,{action:'pin',active:true});
+  const turn=(await api(a.owner_token,'GET',base+'?around='+task.id)).turns[0];
+  assert.equal(turn.task.goal,'Original prompt');
+  const state=turn.message_states.request;
+  assert.equal(state.edited_text,'Corrected prompt');
+  assert.equal(state.saved,true);
+  assert.equal(state.pinned,true);
+  const pins=await api(a.collaborator_token,'GET',base+'/message-pins');
+  assert.equal(pins.items[0].task_id,task.id);
+  assert.equal(pins.items[0].excerpt,'Corrected prompt');
+  await api(outsider.owner_token,'GET',base+'/message-pins',undefined,404);
+  assert.equal(state.unread,true);
+  assert.equal(state.reactions[0].count,1);
+  assert.equal(state.reply_count,1);
+  const saved='/workspaces/'+a.workspace_id+'/hub/saved';
+  assert.ok((await api(a.owner_token,'GET',saved)).items.some((item:any)=>item.session_id===s.id&&item.text==='Corrected prompt'));
+  assert.equal((await api(a.collaborator_token,'GET',saved)).items.length,0);
+  assert.equal((await api(a.owner_token,'GET',row+'/replies')).items[0].body,reply.text);
+  await change(a.owner_token,{action:'follow',active:false});
+  await change(a.owner_token,{action:'unread',active:false});
+  await change(a.collaborator_token,{action:'reply',id:randomUUID(),text:'Another reply'});
+  assert.equal((await api(a.owner_token,'GET',base)).turns[0].message_states.request.unread,false);
+  const bookmark=(await api(a.owner_token,'GET',saved)).items[0];
+  assert.equal((await api(a.owner_token,'POST',saved+'/cleanup',{action:'move',message_id:bookmark.id})).count,1);
+  const todos=await api(a.owner_token,'GET','/workspaces/'+a.workspace_id+'/hub/todos');
+  assert.equal(todos.items[0].title,'Corrected prompt');
+  await api(a.owner_token,'POST',saved+'/'+bookmark.id,{channel_id:a.channel_id,active:true});
+  await api(a.owner_token,'POST',base+'/turns/'+task.id+'/messages/response',{action:'save',active:true},404);
+  await change(a.collaborator_token,{action:'delete'},403);
+  await change(a.owner_token,{action:'delete'});
+  assert.equal((await api(a.owner_token,'GET',saved)).items.length,0);
+  await change(a.owner_token,{action:'react',emoji:'👀',active:true},409);
 });

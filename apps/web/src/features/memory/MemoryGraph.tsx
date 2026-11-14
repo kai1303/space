@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { Button } from '@space/ui/primitives';
+import { Button, LoadingStatus } from '@space/ui/primitives';
 import { GraphCanvas, type GraphLink, type GraphNode } from '@space/ui/graph';
 import type { ChannelMemoryHeader, MemoryNode, ThreadMemory } from '@space/contracts';
 import { subscribeUpdates } from '../../shared/realtime/live-updates.js';
@@ -35,6 +35,7 @@ export function MemoryGraph({ channel, name, onSelect, onAccessLost, onOpenThrea
   // A refresh re-reads from the start (cursors are snapshots), the same number of pages, and every expanded thread.
   const refresh = useCallback(async () => {
     const version = ++generation.current;
+    setError('');
     try {
       let after: string | undefined, next: string | null = null;
       const all: MemoryNode[] = [];
@@ -54,13 +55,11 @@ export function MemoryGraph({ channel, name, onSelect, onAccessLost, onOpenThrea
       if (version !== generation.current) return;
       const code = reason instanceof Error ? reason.message : '';
       if (code === 'not_found' || code === 'unauthorized') lost.current();
-      else setError(message(reason, 'Memory unavailable'));
-      setLoaded(true);
+      setError(message(reason, 'Memory unavailable'));
     }
   }, [channel]);
 
   useEffect(() => {
-    void refresh();
     const stop = subscribeUpdates('channel', channel, refresh, () => lost.current());
     return () => { generation.current++; stop(); };
   }, [channel, refresh]);
@@ -127,9 +126,9 @@ export function MemoryGraph({ channel, name, onSelect, onAccessLost, onOpenThrea
 
   return <div className="memory-graph">
     {error && <p role="alert">{error} <Button size="sm" onClick={() => void refresh()}>Retry</Button></p>}
-    {!loaded && <p role="status">Loading memory graph…</p>}
-    {loaded && <GraphCanvas label={`Memory graph for #${name}`} nodes={nodes} links={links} palette={palette}
-      selectedId={selected} expandedIds={expandedIds} onSelect={select} onToggleExpand={id => void toggle(id)} menu={menu} details={details} />}
+    <GraphCanvas label={`Memory graph for #${name}`} nodes={nodes} links={links} palette={palette}
+      selectedId={selected} expandedIds={expandedIds} onSelect={select} onToggleExpand={id => void toggle(id)} menu={menu} details={details} />
+    {!loaded && !error && <LoadingStatus className="memory-graph-loading">Loading memory graph…</LoadingStatus>}
     {loaded && !threads.length && !error && <p className="memory-graph-empty">No thread has a memory in the last 7 days.</p>}
     <div className="memory-graph-actions">
       {cursor && <Button size="sm" loading={more} onClick={() => void loadMore()}>Load more threads</Button>}

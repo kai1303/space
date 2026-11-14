@@ -68,5 +68,14 @@ export function useAgentSessionHistory(initial:AgentSessionDetail,pinned:RefObje
   }catch(reason){if(version===epoch.current)error.current(reason);}
   finally{if(version===epoch.current){busy.current=null;setLoading(null);}}
  },[initial.session.id]);
- return {data,latest,loading,latestVersion,load};
+ async function around(task:string,focus=false) {
+   const version=++epoch.current;
+   try {
+     const result=await request<AgentSessionDetail>(`/agent-sessions/${initial.session.id}?around=${task}`);
+     if(version!==epoch.current)return;
+     if(focus) {pinned.current=false;update({...result,has_newer:!!result.has_newer});}
+     else update({...current.current,turns:mergeTurns(current.current.turns,result.turns.filter(t=>current.current.turns.some(existing=>existing.task.id===t.task.id)))});
+   } finally {if(epoch.current===version){busy.current=null;setLoading(null);}}
+ }
+ return {data,latest,loading,latestVersion,load,around};
 }

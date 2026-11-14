@@ -447,6 +447,17 @@
   background: var(--sp-border);
   opacity: 0.6;
 }
+.sp-loading-status { display: inline-flex; align-items: center; gap: 8px; color: var(--sp-text-secondary); }
+.sp-list-row-skeleton {
+  padding: 4px 12px;
+  max-width: 360px;
+}
+.sp-list-row-placeholder {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 28px;
+}
 .sp-channel {
   display: flex;
   align-items: center;
@@ -655,6 +666,7 @@
   opacity: 1;
 }
 .sp-message-actions {
+  box-sizing: border-box;
   position: absolute;
   display: flex;
   align-items: center;
@@ -676,6 +688,7 @@
 .sp-message-menu-content{width:300px;max-width:calc(100vw - 16px);max-height:calc(100dvh - 16px);overflow:auto;padding:8px 0;font-family:var(--sp-font-sans);box-shadow:var(--sp-shadow-modal)}
 .sp-menu-item-group{display:block}.sp-menu-item-group hr{border:0;border-top:1px solid var(--sp-border);margin:8px 0}
 .sp-message-menu-content button{font-size:14px;line-height:20px;padding:4px 24px;min-height:28px;border-radius:0;gap:12px}
+.sp-message-menu-content kbd{margin-inline-start:auto;color:var(--sp-text-secondary);font:inherit;font-size:12px}
 .sp-message-emoji-menu-content{width:176px;min-width:176px;display:grid;grid-template-columns:repeat(4,1fr);gap:4px;padding:8px;border-radius:8px;background:var(--sp-surface)}
 .sp-message-emoji-menu-content button{display:grid;place-items:center;width:36px;height:36px;padding:0;font-size:0;gap:0}.sp-message-emoji-menu-content button>span{font-size:20px}
 .sp-message:hover .sp-message-actions,

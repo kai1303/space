@@ -96,3 +96,9 @@ button.wf-template:hover { background: var(--sp-surface-hover); }
 .wf-template-description { grid-column: 1/-1; color: var(--sp-text-secondary); }
 .wf-preview ol { padding-left: 24px; margin: 12px 0 24px; }
 .wf-preview li { margin-block: 8px; }
+
+.wd-agent-placeholder { gap: 12px; }
+.wd-agent-placeholder > .sp-skeleton:last-child { margin-top: auto; }
+.wf-pending { display: flex; align-items: center; gap: 8px; color: var(--sp-text-secondary); }
+
+.wd-bot-pending { display: flex; align-items: center; gap: 8px; margin: 0; color: var(--sp-text-secondary); }

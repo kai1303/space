@@ -1,8 +1,8 @@
 import {useEffect,useRef,useState} from 'react';
 import {AnimatePresence,motion,useReducedMotion} from 'motion/react';
 import {Broom, CaretDown, Eraser, DotsThreeVertical, X} from '@phosphor-icons/react';
-import {conversationPath,isEmojiOnlyText,type HubMessage} from '@space/contracts';
-import {Avatar,Button,Dialog,IconButton,Menu} from '@space/ui/primitives';
+import {conversationPath,sessionMessagePath,isEmojiOnlyText,type HubMessage} from '@space/contracts';
+import {Avatar,Button,Dialog,IconButton,ListRowSkeleton,Menu} from '@space/ui/primitives';
 import {MAX_ITEMS,useCollection} from './useWorkspaceCollection.js';
 import './saved-messages.css';
 
@@ -46,7 +46,7 @@ export function SavedMessages({workspace,viewer,onOpen}:{workspace:string;viewer
   const active=rows.find(row=>row.id===selected);
   const reduce=useReducedMotion();
   const duration=reduce?0:.14;
-  const path=(m:HubMessage)=>conversationPath(m.channel_id,undefined,m.id);
+  const path=(m:HubMessage)=>m.session_id&&m.task_id&&m.part?sessionMessagePath(m.session_id,m.task_id,m.part):conversationPath(m.channel_id,undefined,m.id);
   const target=(m:HubMessage)=>({channel_id:m.channel_id,message_id:m.id});
   const open=(m:HubMessage)=>path(m)?select(m.id):onOpen(target(m));
   function close(){select(undefined);lastButton.current?.focus();}
@@ -79,7 +79,7 @@ export function SavedMessages({workspace,viewer,onOpen}:{workspace:string;viewer
       ]}/>}</header>
       {data.error && <div role="alert" className="collection-error">{data.error} {!data.revoked&&<Button size="sm" onClick={()=>void data.retry()}>Retry</Button>}</div>}
       {data.writeError && <p role="alert" className="collection-error">{data.writeError}. Your change could not be confirmed.</p>}
-      {data.loading && !rows.length && <p role="status" className="collection-loading">Loading saved items…</p>}
+      {data.loading && !rows.length && <ListRowSkeleton label="Loading saved items…" />}
       {!rows.length && !data.loading && !data.error && <div className="saved-empty">
         <img className="saved-illustration" src="/illustrations/saved-bookmark.svg" alt=""/>
         <h2>Nothing saved yet</h2><p>Save a message to keep it here.</p></div>}
@@ -99,7 +99,7 @@ export function SavedMessages({workspace,viewer,onOpen}:{workspace:string;viewer
             <IconButton label={'Remove saved message from '+m.author_name} title="Clear" size="sm" onClick={()=>void clear(m)}><Eraser size={18}/></IconButton>
             <Menu floating label={'More actions for '+m.author_name} trigger={<DotsThreeVertical size={18}/>} items={[
               {label:'Move to to-dos',onSelect:()=>void cleanup('move',m)},
-              {label:'Open in Home',onSelect:()=>onOpen(target(m))},
+              {label:'Open in Home',onSelect:()=>m.session_id&&src?window.location.assign(src):onOpen(target(m))},
               {label:'Open in split view',onSelect:()=>open(m)},
               ...(src?[{label:'Open in new window',onSelect:()=>{window.open(src,'_blank','noopener,noreferrer');}}]:[]),
               {label:'Clear',separatorBefore:true,onSelect:()=>void clear(m)},
@@ -113,7 +113,7 @@ export function SavedMessages({workspace,viewer,onOpen}:{workspace:string;viewer
     <AnimatePresence>{active && path(active) && <motion.aside className="space-channel-split saved-split" aria-label={'Split view of '+active.channel_name}
       initial={{opacity:reduce?1:0,x:reduce?0:12}} animate={{opacity:1,x:0}} exit={{opacity:0,x:reduce?0:12}} transition={{duration}}>
       <div className="saved-split-close"><IconButton label="Close split view" onClick={close}><X size={18}/></IconButton></div>
-      <iframe key={active.id} title={'Conversation in '+active.channel_name} src={path(active)+'?view=split&source=saved'}/></motion.aside>}</AnimatePresence>
+      <iframe key={active.id} title={'Conversation in '+active.channel_name} src={path(active)+(active.session_id?'&':'?')+'view=split&source=saved'}/></motion.aside>}</AnimatePresence>
     <Dialog open={!!confirm} title={confirm==='move'?'Move saved items to to-dos?':'Remove all saved items?'} onClose={()=>setConfirm(undefined)}>
       <p>{confirm==='move'?'Create a personal to-do for each saved message and remove it from Saved.':'This clears your Saved list. The original messages stay in their conversations.'}</p>
       <Button variant="secondary" onClick={()=>setConfirm(undefined)}>Cancel</Button>{' '}

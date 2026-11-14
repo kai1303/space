@@ -1,10 +1,12 @@
 import { useRef } from 'react';
+import { motion, useReducedMotion } from 'motion/react';
+import { motionTransition } from '../motion/motion.js';
 import { pendingToast, toast } from '../primitives/toast.js';
 import { ArrowBendUpRight, BellSlash, BookmarkSimple, ChatCircleDots, CheckCircle, Clock, DotsThreeVertical, Link, PencilSimple, PushPin, Smiley, Sparkle, SquaresFour, TextT, Trash, Tray } from '@phosphor-icons/react';
 import { EmojiPicker } from '../emoji/emoji-picker.js';
 import { IconButton, Menu } from '../primitives/primitives.js';
 
-export type MessageAction = 'broadcastReply' | 'selectMessage' | 'discussWithAgent' | 'forward' | 'addTodo' | 'askAgent' | 'edit' | 'markUnread' | 'unsave' | 'save' | 'saveMemory' | 'remind' | 'toggleReplyNotifications' | 'copyLink' | 'copyMessage' | 'pin' | 'connectApp' | 'delete';
+export type MessageAction = 'broadcastReply' | 'selectMessage' | 'discussWithAgent' | 'forward' | 'addTodo' | 'askAgent' | 'edit' | 'markUnread' | 'unsave' | 'save' | 'saveMemory' | 'remind' | 'markRead' | 'unpin' | 'pinSession' | 'followReplies' | 'muteReplies' | 'toggleReplyNotifications' | 'copyLink' | 'copyMessage' | 'pin' | 'connectApp' | 'delete';
 export type MessageActionHandlers = Partial<Record<MessageAction, () => void | Promise<void>>>;
 const menuActions = [
   { key: 'selectMessage', label: 'Select message', icon: CheckCircle },
@@ -12,14 +14,19 @@ const menuActions = [
   { key: 'broadcastReply', label: 'Send reply to this conversation', icon: ArrowBendUpRight },
   { key: 'edit', label: 'Edit message', icon: PencilSimple },
   { key: 'markUnread', label: 'Mark unread', icon: Tray, separatorBefore: true },
+  { key: 'markRead', label: 'Mark read', icon: Tray },
   { key: 'save', label: 'Add to saved', icon: BookmarkSimple },
   { key: 'unsave', label: 'Remove from saved', icon: BookmarkSimple },
   { key: 'saveMemory', label: 'Save to channel memory', icon: Sparkle },
   { key: 'remind', label: 'Add a reminder', icon: Clock },
   { key: 'toggleReplyNotifications', label: 'Turn off notifications for replies', icon: BellSlash },
+  { key: 'followReplies', label: 'Turn on notifications for replies', icon: ChatCircleDots },
+  { key: 'muteReplies', label: 'Turn off notifications for replies', icon: BellSlash },
   { key: 'copyLink', label: 'Copy link', icon: Link, separatorBefore: true },
   { key: 'copyMessage', label: 'Copy message', icon: TextT },
   { key: 'pin', label: 'Pin to channel', icon: PushPin, separatorBefore: true },
+  { key: 'pinSession', label: 'Pin to session', icon: PushPin, separatorBefore: true },
+  { key: 'unpin', label: 'Unpin from session', icon: PushPin, separatorBefore: true },
   { key: 'connectApp', label: 'Connect to apps', icon: SquaresFour, separatorBefore: true },
   { key: 'delete', label: 'Delete message…', icon: Trash, separatorBefore: true, danger: true },
 ] as const;
@@ -33,13 +40,20 @@ const feedback: Partial<Record<MessageAction, { pending: string; success: string
   addTodo: { pending: 'Adding to-do…', success: 'Added to your to-dos' },
 };
 
-export function MessageActions({ author, onReply, onReact, actions = {} }: {
+const shortcuts: Partial<Record<MessageAction, string>> = {
+  edit: 'e', markUnread: 'u', markRead: 'u', save: 'mod+shift+s', unsave: 'mod+shift+s', copyLink: 'l',
+  copyMessage: 'mod+c', pin: 'p', pinSession: 'p', unpin: 'p', delete: 'delete',
+};
+
+export function MessageActions({ visible, author, onReply, onReact, actions = {} }: {
+  visible?: boolean;
   author: string;
   onReply?: () => void;
   onReact?: (emoji: string) => void;
   actions?: MessageActionHandlers;
 }) {
   const busy = useRef(false);
+  const reduced = useReducedMotion();
   async function run(key: MessageAction, label: string) {
     const handler = actions[key];
     if (!handler || busy.current) return;
@@ -57,13 +71,20 @@ export function MessageActions({ author, onReply, onReact, actions = {} }: {
       busy.current = false;
     }
   }
+  const mac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform);
   const items = menuActions.filter(item => actions[item.key]).map((item, index) => ({
-    label: item.label, icon: <item.icon size={18} />, danger: 'danger' in item && item.danger,
+    shortcut: shortcuts[item.key],
+    shortcutLabel: shortcuts[item.key]?.toUpperCase().replace('MOD+SHIFT+',mac?'⇧⌘':'Ctrl+Shift+').replace('MOD+',mac?'⌘':'Ctrl+').replace('DELETE','Delete'),
+    label: item.label, icon: item.key==='connectApp'||item.key==='delete'?undefined:<item.icon size={18} />, danger: 'danger' in item && item.danger,
     separatorBefore: index > 0 && 'separatorBefore' in item && item.separatorBefore,
     onSelect: () => { void run(item.key, item.label); },
   }));
   return (
-    <div className="sp-message-actions" role="group" aria-label={`Message actions for ${author}`}>
+    <motion.div initial={false}
+      animate={visible === undefined ? undefined : {opacity: visible ? 1 : 0, y: visible || reduced ? 0 : 4}}
+      transition={motionTransition(reduced, visible ? 0.16 : 0.12)}
+      style={visible === undefined ? undefined : {pointerEvents: visible ? 'auto' : 'none'}}
+      className="sp-message-actions" role="group" aria-label={`Message actions for ${author}`}>
       {onReact && <>
         {([['✅', 'white check mark'], ['👀', 'eyes'], ['🙌', 'raised hands']] as const).map(([emoji, label]) => <IconButton key={emoji} label={`React with ${label}`} size="sm" onClick={() => onReact(emoji)}><span className="sp-message-quick-emoji" aria-hidden="true">{emoji}</span></IconButton>)}
         <EmojiPicker label="Add reaction…" className="sp-message-emoji-menu" trigger={<Smiley size={20} />} onSelect={onReact} />
@@ -72,7 +93,7 @@ export function MessageActions({ author, onReply, onReact, actions = {} }: {
       {actions.forward && <IconButton label="Forward message…" size="sm" onClick={() => { void run('forward', 'Forward message'); }}><ArrowBendUpRight size={20} /></IconButton>}
       {actions.addTodo && <IconButton label="Add to-do" size="sm" onClick={() => { void run('addTodo', 'Add to-do'); }}><CheckCircle size={20} /></IconButton>}
       {actions.askAgent && <IconButton label="Ask an agent" size="sm" onClick={() => { void run('askAgent', 'Ask an agent'); }}><Sparkle size={20} /></IconButton>}
-      {items.length > 0 && <Menu label="More actions" menuLabel="Message actions" className="sp-message-menu" floating trigger={<DotsThreeVertical size={20} />} items={items} />}
-    </div>
+      {items.length > 0 && <Menu label="More actions" menuLabel="Message actions" className="sp-message-menu" floating beside trigger={<DotsThreeVertical size={20} />} items={items} />}
+    </motion.div>
   );
 }

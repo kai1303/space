@@ -594,6 +594,14 @@ test('shared editing checks permissions and finalizes concurrent or repeated cal
   result.key = (await api(a.collaborator_token,'GET',open)).json().config.document.key;
   for (const r of await Promise.all([callback(token(result)),callback(token(result))])) assert.deepEqual(r.json(),{error:0});
   assert.equal((await api(a.owner_token,'GET',file+'/office-session')).json().revision,1);
+  const revisionPath = `/v1/office/files/${id}/1`;
+  const headersFor = (path: string) => ({authorization: 'Bearer ' + token({url: new URL(path, office.callbackBase).href}, 'download')});
+  const head = await app.inject({method:'HEAD', url:revisionPath, headers:headersFor(revisionPath)});
+  assert.equal(head.statusCode, 200);
+  assert.equal(head.rawPayload.length, 0);
+  assert.equal(Number(head.headers['content-length']), doc.length);
+  assert.equal((await app.inject({method:'HEAD', url:revisionPath})).statusCode, 401);
+  assert.equal((await app.inject({method:'HEAD', url:revisionPath, headers:headersFor(revisionPath + '0')})).statusCode, 403);
   const next = (await api(a.owner_token,'GET',open)).json().config;
   assert.notEqual(next.document.key,first.document.key);
   assert.deepEqual((await callback(token(result))).json(),{error:0});

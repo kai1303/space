@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import type { ConnectionKind, OutboundAgent, OutboundCall, OutboundConnection, WorkspaceSettings } from '@space/contracts';
-import { Button, Dialog, Select, TextField, toast } from '@space/ui/primitives';
+import { Button, Dialog, ListRowSkeleton, Select, Spinner, TextField, toast } from '@space/ui/primitives';
 import { request } from '../../shared/api/request.js';
 import { subscribeUpdates } from '../../shared/realtime/live-updates.js';
 import { TokenGuide } from './TokenGuide.js';
@@ -51,7 +51,7 @@ function BrowserVaultSetup({ site, close }: { site: ConnectionPreset; close: () 
 export function Connections(props: ConnectionsProps) {
   if ('suggested' in props && props.suggested && window.spaceDesktop?.saveBrowserVaultToken)
     return <BrowserVaultSetup site={props.suggested} close={props.onClose} />;
-  return <ConnectionSettings {...props}/>;
+  return <ConnectionSettings key={'workspaceId' in props ? 'workspace:'+props.workspaceId : 'user:'+props.userId} {...props}/>;
 }
 
 function ConnectionSettings(props: ConnectionsProps) {
@@ -62,64 +62,78 @@ function ConnectionSettings(props: ConnectionsProps) {
   const [role, setRole] = useState<'manager' | 'member'>();
   const [agentPage, setAgentPage] = useState(firstAgentPage);
   const requestedAgentCursors = useRef<string[]>([]);
-  const [items, setItems] = useState<OutboundConnection[]>([]), [calls, setCalls] = useState<OutboundCall[]>([]);
+  const [items, setItems] = useState<OutboundConnection[]>([]), [calls, setCalls] = useState<OutboundCall[]>();
   const [loaded, setLoaded] = useState(false), [busy, setBusy] = useState(false), [error, setError] = useState(''), [revoked, setRevoked] = useState(false);
+  const [agentsReady, setAgentsReady] = useState(false);
+  const [readErrors, setReadErrors] = useState<Partial<Record<'connections' | 'agents' | 'calls', string>>>({});
   const [editing, setEditing] = useState<OutboundConnection | 'new' | null>(null), [access, setAccess] = useState<string | null>(null), [deleting, setDeleting] = useState<string | null>(null);
   const initialPreset = useRef(workspace ? undefined : props.suggested);
   const [preset, setPreset] = useState<ConnectionPreset>();
   const active = useRef(true), generation = useRef(0);
   function clearAccess(nextRole?: 'member') {
     generation.current++;
-    setRole(nextRole); setItems([]); setAgentPage(firstAgentPage); setCalls([]);
+    setRole(nextRole); setItems([]); setAgentPage(firstAgentPage); setCalls(undefined); setAgentsReady(false); setReadErrors({});
     requestedAgentCursors.current = [];
-    setEditing(null); setAccess(null); setDeleting(null); setBusy(false); setLoaded(true);
+    setEditing(null); setAccess(null); setDeleting(null); setBusy(false); setLoaded(false);
   }
   function workspaceDenied(error: unknown) {
     return workspace && error instanceof Error && ['workspace_management_forbidden', 'unauthorized', 'forbidden', 'not_found'].includes(error.message);
   }
-  async function refresh() {
+  async function refresh(waitForDetails = true) {
     if (!active.current) return;
+    setError('');
     const attempt = ++generation.current;
     const current = () => active.current && attempt === generation.current;
+    function receiveItems(items: OutboundConnection[]) {
+      setItems(items);
+      setLoaded(true);
+      const site = initialPreset.current;
+      if (!site) return;
+      initialPreset.current = undefined;
+      const endpoint = site.url.replace(/\/$/, '') + '/';
+      if (!items.some(item => (item.url.split(/[?#]/, 1)[0] + '/').startsWith(endpoint))) {
+        setPreset(site); setEditing('new');
+      }
+    }
+    if (!workspace) {
+      setReadErrors({});
+      async function read<T>(section: keyof typeof readErrors, result: Promise<T>, apply: (value: T) => void) {
+        try {
+          const value = await result;
+          if (current()) apply(value);
+        } catch (reason) {
+          if (current()) setReadErrors(previous => ({ ...previous, [section]: failure(reason) }));
+        }
+      }
+      const connections = read('connections', request<{items: OutboundConnection[]}>(connectionsPath), page => receiveItems(page.items));
+      const details = Promise.all([
+        read('agents', request<AgentPage>('/me/connection-agents'), page => {
+          setAgentPage({ ...page, cursors: [] }); setAgentsReady(true);
+        }),
+        read('calls', request<{items: OutboundCall[]}>('/me/connection-calls'), page => setCalls(page.items)),
+      ]);
+      await connections;
+      if (waitForDetails) await details;
+      return;
+    }
     try {
       const cursors = requestedAgentCursors.current;
-      let page: { items: OutboundConnection[]; agents: AgentPage };
-      let calls: OutboundCall[] = [];
-      if (workspace) {
-        const settings = await request<WorkspaceSettings>(`${base}/settings`);
-        if (!current()) return;
-        if (settings.role !== 'owner' && settings.role !== 'admin') {
-          clearAccess('member'); setError(''); return;
-        }
-        const after = cursors.at(-1);
-        const pageQuery = after ? `?after=${encodeURIComponent(after)}` : '';
-        page = await request(`${connectionsPath}${pageQuery}`);
-      } else {
-        const [connections, agents, history] = await Promise.all([
-          request<{ items: OutboundConnection[] }>(connectionsPath),
-          request<AgentPage>('/me/connection-agents'),
-          request<{ items: OutboundCall[] }>('/me/connection-calls'),
-        ]);
-        page = { items: connections.items, agents };
-        calls = history.items;
+      const settings = await request<WorkspaceSettings>(`${base}/settings`);
+      if (!current()) return;
+      if (settings.role !== 'owner' && settings.role !== 'admin') {
+        clearAccess('member'); setError(''); return;
       }
+      setRole('manager');
+      const after = cursors.at(-1);
+      const pageQuery = after ? `?after=${encodeURIComponent(after)}` : '';
+      const page = await request<{ items: OutboundConnection[]; agents: AgentPage }>(`${connectionsPath}${pageQuery}`);
       if (current()) {
-        setItems(page.items); setAgentPage({ ...page.agents, cursors }); setCalls(calls);
-        if (initialPreset.current) {
-          const site = initialPreset.current;
-          initialPreset.current = undefined;
-          const endpoint = site.url.replace(/\/$/, '') + '/';
-          if (!page.items.some(item => (item.url.split(/[?#]/, 1)[0] + '/').startsWith(endpoint))) {
-            setPreset(site); setEditing('new');
-          }
-        }
-        if (workspace) setRole('manager');
-        setLoaded(true); setError('');
+        receiveItems(page.items); setAgentPage({ ...page.agents, cursors });
       }
     } catch (reason) {
       if (!current()) return;
       if (workspaceDenied(reason)) clearAccess();
-      setError(failure(reason)); setLoaded(true);
+      setError(failure(reason));
     }
   }
   useEffect(() => {
@@ -132,11 +146,11 @@ function ConnectionSettings(props: ConnectionsProps) {
   }, [scopeId, workspace]);
   async function mutate(path: string, body: object, method: 'POST' | 'PATCH' | 'PUT' | 'DELETE' = 'POST') {
     if (busy || !active.current || (workspace && role !== 'manager')) return false;
-    setBusy(true); setError(''); generation.current++;
+    setBusy(true); setError(''); if (workspace) generation.current++;
     try {
       await request(path, body, undefined, method, undefined, workspace ? undefined : scopeId);
       if (!active.current) return false;
-      await refresh();
+      await refresh(false);
       return true;
     } catch (e) {
       if (active.current) {
@@ -163,14 +177,20 @@ function ConnectionSettings(props: ConnectionsProps) {
       {canManage && <><p className="space-connections-hint">Connect a remote MCP server using Streamable HTTP over public HTTPS, with a bearer token or no authentication. OAuth and local stdio servers are not supported.</p>
       <p className="space-connections-hint">{workspace ? 'Choose which tools each workspace agent can use with the shared account.' : 'Connections belong to you. Add separate connections for multiple accounts, then choose tools for each of your agents.'} New tools are never granted automatically.</p></>}
       {error && <p role="alert" className="space-connections-error">{error}</p>}
-      {canManage && <div className="space-connections-actions"><Button variant="primary" disabled={busy || !loaded} onClick={() => { setPreset(undefined); setEditing('new'); setAccess(null); setDeleting(null); setError(''); }}>{workspace ? 'Add MCP server' : 'Add connection'}</Button><Button disabled={busy} onClick={() => { setError(''); void refresh(); }}>Refresh</Button></div>}
+      {canManage && <div className="space-connections-actions"><Button variant="primary" disabled={busy} onClick={() => { initialPreset.current = undefined; setPreset(undefined); setEditing('new'); setAccess(null); setDeleting(null); setError(''); }}>{workspace ? 'Add MCP server' : 'Add connection'}</Button><Button disabled={busy} onClick={() => { setError(''); void refresh(); }}>Refresh</Button></div>}
       {workspace && error && !canManage && !revoked && <Button onClick={() => void refresh()}>Retry</Button>}
-      {!loaded ? <p role="status">Loading connections…</p> : canManage && !items.length && <p>No connections yet. Add an account to get started.</p>}
+
       {editing && <ConnectionEditor preset={editing === 'new' ? preset : undefined} workspace={workspace} key={editing === 'new' ? 'new' : editing.id} connection={editing === 'new' ? undefined : editing} busy={busy} onCancel={() => setEditing(null)} onSave={async body => {
         const saved = await mutate(editing === 'new' ? connectionsPath : `${connectionsPath}/${editing.id}`, editing === 'new' ? body : { revision: editing.revision, ...body }, editing === 'new' ? 'POST' : 'PATCH');
         if (saved && active.current) setEditing(null);
       }} />}
-      <div className="space-connections-list">{items.map(item => <section className="space-connection" aria-label={item.name} key={item.id}>
+      <div className="space-connections-list">
+        {readErrors.connections && <p role="alert">{readErrors.connections}</p>}
+        {!loaded && !readErrors.connections && (!workspace || !error) && !revoked && role !== 'member' && (workspace && !role
+          ? <p className="space-connections-status" role="status"><Spinner/>Checking workspace access…</p>
+          : <ListRowSkeleton label={workspace ? "Loading MCP servers…" : "Loading connections…"}/>)}
+        {loaded && !readErrors.connections && !error && canManage && !items.length && <p>No connections yet. Add an account to get started.</p>}
+        {items.map(item => <section className="space-connection" aria-label={item.name} key={item.id}>
         <div className="space-connection-heading"><h3>{item.name}</h3><span>{item.enabled ? 'Enabled' : 'Disabled'}</span></div>
         <p className="space-connection-url">{item.kind === 'people' ? 'Built-in people directory' : item.kind === 'channels' ? 'Built-in channel directory' : item.url}</p>
         <p className="space-connections-hint">{item.auth_type === 'bearer' ? 'Bearer token saved' : 'No authentication'} · Last observed: {statusText[item.status]} · {item.tools.length} tools</p>
@@ -188,12 +208,16 @@ function ConnectionSettings(props: ConnectionsProps) {
           }
         }}>Delete connection</Button></div></div>}
       </section>)}</div>
-      {selected && <GrantEditor workspace={workspace} key={`${selected.id}:${selected.revision}:${agentPage.cursors.at(-1) ?? ''}`} connection={selected} agents={agentPage.items} busy={busy}
+      {selected && readErrors.agents && <p role="alert">{readErrors.agents}</p>}
+      {selected && !workspace && !agentsReady && !readErrors.agents && <p role="status" className="space-connections-status"><Spinner/>Loading agents…</p>}
+      {selected && (workspace || agentsReady) && <GrantEditor workspace={workspace} key={`${selected.id}:${selected.revision}:${agentPage.cursors.at(-1) ?? ''}`} connection={selected} agents={agentPage.items} busy={busy}
         onPrevious={workspace && agentPage.cursors.length ? () => showAgentPage(agentPage.cursors.slice(0, -1)) : undefined}
         onNext={workspace && agentPage.next_cursor ? () => showAgentPage([...agentPage.cursors, agentPage.next_cursor!]) : undefined} onSave={async (installation_id, tools) => { if (await mutate(`${connectionsPath}/${selected.id}/grants`, { revision: selected.revision, installation_id, tools }, 'PUT')) setAccess(null); }} onCancel={() => setAccess(null)} />}
       {canManage && <p className="space-connections-hint">Test connection discovers the server’s current tools. Status shows the last observed result, not a continuous health check.</p>}
-      {!workspace && <section className="space-connection-history" aria-label="Recent tool calls"><h3>Recent tool calls</h3>
-        {!calls.length ? <p className="space-connections-hint">No tool calls yet.</p> : <ul>{calls.map(call => <li key={call.id}><div><strong>{call.tool_name}</strong><span>{callStatus[call.status]}</span></div><p>{call.connection_name} · {call.agent_name}</p><small><time dateTime={call.created_at}>{new Date(call.created_at).toLocaleString()}</time>{call.duration_ms !== null && ` · ${call.duration_ms} ms`}</small>{call.status === 'uncertain' && <p className="space-connections-hint">The remote action may have completed. Check the service before trying it again.</p>}</li>)}</ul>}
+      {!workspace && !revoked && <section className="space-connection-history" aria-label="Recent tool calls"><h3>Recent tool calls</h3>
+        {readErrors.calls && <p role="alert">{readErrors.calls}</p>}
+        {!calls && !readErrors.calls && <p className="space-connections-status" role="status"><Spinner/>Loading recent tool calls…</p>}
+        {calls && (!calls.length ? <p className="space-connections-hint">No tool calls yet.</p> : <ul>{calls.map(call => <li key={call.id}><div><strong>{call.tool_name}</strong><span>{callStatus[call.status]}</span></div><p>{call.connection_name} · {call.agent_name}</p><small><time dateTime={call.created_at}>{new Date(call.created_at).toLocaleString()}</time>{call.duration_ms !== null && ` · ${call.duration_ms} ms`}</small>{call.status === 'uncertain' && <p className="space-connections-hint">The remote action may have completed. Check the service before trying it again.</p>}</li>)}</ul>)}
       </section>}
     </div>;
   return workspace ? content : <Dialog open title="Connections" description="Your accounts and the tools your agents can use." onClose={props.onClose} onBeforeClose={() => !busy}>{content}</Dialog>;

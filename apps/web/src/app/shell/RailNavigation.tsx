@@ -29,9 +29,10 @@ const contentVariants = {
 
 function PreviewContent({ direction, children }: { direction: number; children: ReactNode }) {
   const present = useIsPresent();
+  const reduced = useReducedMotion();
   return <motion.div className="rail-peek-content" inert={!present} aria-hidden={!present || undefined}
     custom={direction} variants={contentVariants} initial="enter" animate="visible" exit="exit"
-    transition={{ duration: .14, ease: [.25, 1, .5, 1] }}>
+    transition={motionTransition(reduced)}>
     {children}
   </motion.div>;
 }
@@ -77,7 +78,7 @@ export function RailNavigation({active, onNavigate, onDirectMessages, onActivity
       card.style.left = left + 'px';
       if (smooth && !reduced && !panel?.keyboard) {
         panelTop.jump(Math.max(4, Math.min(panelTop.get(), maxTop)));
-        animate(panelTop, target, { duration: .12, ease: [.25, 1, .5, 1] });
+        animate(panelTop, target, motionTransition(reduced, .12));
       } else {
         panelTop.jump(target);
       }
@@ -211,7 +212,7 @@ export function RailNavigation({active, onNavigate, onDirectMessages, onActivity
         const next = event.key === 'Home' ? 0 : event.key === 'End' ? items.length - 1 : (index + items.length + (event.key === 'ArrowUp' ? -1 : 1)) % items.length;
         items[next]?.focus();
       }}>
-      <motion.div className="rail-peek-card" initial={reduced ? false : {opacity:0,x:-8}} animate={{opacity:1,x:0}} transition={{duration:reduced ? 0 : .16,ease:[.25,1,.5,1]}}>
+      <motion.div className="rail-peek-card" initial={reduced ? false : {opacity:0,x:-8}} animate={{opacity:1,x:0}} transition={motionTransition(reduced)}>
         {reduced || panel.keyboard
           ? <div className="rail-peek-content" key={panel.tab}>{preview}</div>
           : <AnimatePresence initial={false} custom={panel.direction ?? 1}>

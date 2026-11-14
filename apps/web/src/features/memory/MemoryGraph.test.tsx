@@ -4,7 +4,7 @@ import { MemoryGraph } from './MemoryGraph.js';
 
 const updates = new Map<string, { read: () => unknown; revoke?: (code: string) => void }>();
 vi.mock('../../shared/realtime/live-updates.js', () => ({
-  subscribeUpdates: (scope: string, id: string, read: () => unknown, revoke?: (code: string) => void) => { updates.set(`${scope}:${id}`, { read, revoke }); return () => updates.delete(`${scope}:${id}`); },
+  subscribeUpdates: (scope: string, id: string, read: () => unknown, revoke?: (code: string) => void) => { updates.set(`${scope}:${id}`, { read, revoke }); void read(); return () => updates.delete(`${scope}:${id}`); },
 }));
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); updates.clear(); });
 
@@ -69,4 +69,19 @@ it('reports lost access when the live subscription is revoked', async () => {
   await screen.findByRole('button', { name: '#payments, channel' });
   act(() => updates.get(`channel:${ch}`)!.revoke!('not_found'));
   expect(lost).toHaveBeenCalled();
+});
+
+it('keeps canvas controls and the channel node available while threads load', async () => {
+  let finish!: (value: Response) => void;
+  vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>(resolve => { finish = resolve; })));
+  const onSelect = vi.fn();
+  render(<MemoryGraph channel={ch} name="payments" onSelect={onSelect} onAccessLost={() => {}} />);
+  fireEvent.click(screen.getByRole('button', { name: 'Zoom in' }));
+  fireEvent.click(screen.getByRole('button', { name: '#payments, channel' }));
+  expect(onSelect).toHaveBeenCalledWith({ kind: 'channel' });
+  expect(screen.getByText('Loading memory graph…')).toBeTruthy();
+  expect(screen.queryByText(/No thread has a memory/)).toBeNull();
+  await act(async () => finish(Response.json({ nodes: [thread(1)], next_cursor: null })));
+  expect(screen.getByRole('button', { name: 'Thread 1, thread' })).toBeTruthy();
+  expect(screen.queryByText('Loading memory graph…')).toBeNull();
 });

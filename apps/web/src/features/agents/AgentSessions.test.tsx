@@ -207,12 +207,16 @@ it('shows one waiting indicator for Kiro and adds the reply when it arrives',asy
  expect(screen.queryAllByText(/queued/i)).toHaveLength(0);
  expect(within(log).getAllByRole('article')).toHaveLength(1);
  expect(screen.getByText('Waiting for',{exact:false}).textContent).toContain('Waiting for Local Kiro');
- expect((screen.getByRole('button',{name:'Queue'}) as HTMLButtonElement).disabled).toBe(true);
+ const composer=within(screen.getByRole('textbox',{name:'Message agent session'}).closest('.chat-compose')!);
+ expect(composer.getByRole('button',{name:'Stop'})).toBeTruthy();
+ expect(composer.queryByRole('button',{name:'Send now'})).toBeNull();
  expect(screen.queryByText(/You can draft your next message/)).toBeNull();
  current=thinking;await act(async()=>{await mocks.refresh?.();});
  await screen.findByText('is thinking…');
  expect(within(log).getAllByRole('article')).toHaveLength(1);
  current=answered;await act(async()=>{await mocks.refresh?.();});
+ expect(composer.queryByRole('button',{name:'Stop'})).toBeNull();
+ expect(composer.getByRole('button',{name:'Send now'})).toBeTruthy();
  const reply = log.querySelector('.sp-agent-markdown')!;
  expect(reply.textContent).not.toBe(answered.task.result);
  await waitFor(()=>expect(reply.querySelector('.sp-agent-word')).toBeTruthy());
@@ -647,4 +651,100 @@ it('submits the patch review to this session without consuming the conversation 
  expect(req).toHaveLength(1);
  expect(JSON.parse(String(req[0]![1]!.body)).text).toContain('Handle initialization errors.');
  expect(new Headers(req[0]![1]!.headers).get('idempotency-key')).toBeTruthy();
+});
+
+it('routes the agent reply toolbar to the response and reserves edit and delete for the requester',async()=>{
+ const fetch=setup();
+ render(<AgentSessions thread="thread" channel="channel" viewerId="user" initialSessionId="one" onAccessLost={()=>{}}/>);
+ const group=await screen.findByRole('group',{name:'Message actions for Codex'});
+ await userEvent.hover(group.closest('article')!);
+ await userEvent.click(within(group).getByLabelText('More actions'));
+ const menu=screen.getByRole('menu',{name:'Message actions'});
+ expect(within(menu).queryByRole('menuitem',{name:'Edit message'})).toBeNull();
+ expect(within(menu).queryByRole('menuitem',{name:'Delete message…'})).toBeNull();
+ await userEvent.click(within(menu).getByRole('menuitem',{name:'Pin to session'}));
+ expect(fetch.mock.calls.some(([path,init])=>path.endsWith('/turns/Research prompt/messages/response')&&init?.body===JSON.stringify({action:'pin',active:true}))).toBe(true);
+ const ownActions=screen.getByRole('group',{name:'Message actions for Kai'});
+ await userEvent.hover(ownActions.closest('article')!);
+ await userEvent.click(within(ownActions).getByLabelText('More actions'));
+ await userEvent.click(screen.getByRole('menuitem',{name:'Delete message…'}));
+ await userEvent.click(within(screen.getByRole('dialog',{name:'Delete message?'})).getByRole('button',{name:'Cancel'}));
+ expect(fetch.mock.calls.some(([,init])=>init?.body===JSON.stringify({action:'delete'}))).toBe(false);
+});
+
+it('shows reviewer comments in Messages and sends team discussion without prompting the agent',async()=>{
+ const fetch=setup(), original=fetch.getMockImplementation()!;
+ const messages=[{sequence:'1',author:'Sam',author_id:'sam',body:'Ready for review',created_at:'2026-11-03T01:00:00Z'}];
+ fetch.mockImplementation(async(path,init)=>{
+   if(path.endsWith('/team/discussion')){
+     if(init?.method==='POST')messages.push({...messages[0]!,sequence:'2',body:JSON.parse(String(init.body)).text});
+     return {ok:true,json:async()=>({messages:[...messages],before:null,writable:true})};
+   }
+   if(path.endsWith('/team'))return {ok:true,json:async()=>({reviewers:[],shared:[],messages,workspace_id:'workspace',viewer_id:'user',can_manage:true,writable:true})};
+   return original(path,init);
+ });
+ render(<AgentSessions thread="thread" channel="channel" viewerId="user" initialSessionId="one" onAccessLost={()=>{}}/>);
+ expect(await within(await screen.findByRole('log',{name:'Session conversation'})).findByText('Ready for review')).toBeTruthy();
+ await userEvent.type(await screen.findByRole('textbox',{name:'Message agent session'}),'Keep this prompt');
+ await userEvent.click(screen.getByRole('button',{name:'Message recipient'}));
+ await userEvent.click(screen.getByRole('menuitem',{name:'Team discussion'}));
+ const editor=await screen.findByRole('textbox',{name:'Message team discussion'});
+ await userEvent.type(editor,'Looks good{Enter}');
+ expect(await screen.findByText('Looks good',{selector:'.sp-message-text *'})).toBeTruthy();
+ expect(fetch.mock.calls.filter(([path,init])=>init?.method==='POST'&&/(?:messages|queue|steer)$/.test(path))).toHaveLength(0);
+ await userEvent.click(screen.getByRole('button',{name:'Message recipient'}));
+ await userEvent.click(screen.getByRole('menuitem',{name:'Message Codex'}));
+ expect((await screen.findByRole('textbox',{name:'Message agent session'})).textContent).toContain('Keep this prompt');
+ await userEvent.click(screen.getByRole('tab',{name:'Team'}));
+ const team=screen.getByRole('tabpanel',{name:'Team'});
+ expect(await within(team).findByText('People and access')).toBeTruthy();
+ expect(within(team).queryByRole('textbox',{name:'Message the team'})).toBeNull();
+});
+
+it.each(['Invite as reviewer instead','Add to Channel','Send This Message'])('defers tag-only sends until the user chooses %s',async label=>{
+ const fetch=setup(),original=fetch.getMockImplementation()!;
+ const person={kind:'user',id:'00000000-0000-4000-8000-000000000099',label:'Riley',detail:'Designer',joined:false,can_invite_reviewer:true,invite_channel:'design'};
+ fetch.mockImplementation(async(path,init)=>{
+   if(path.includes('/team/mentions?'))return {ok:true,json:async()=>({items:[person],member_count:1})};
+   if(path.endsWith('/team/discussion'))return {ok:true,json:async()=>({messages:[],before:null,writable:true})};
+   return original(path,init);
+ });
+ render(<AgentSessions thread="thread" channel="channel" viewerId="user" initialSessionId="one" onAccessLost={()=>{}}/>);
+ await userEvent.click(await screen.findByRole('button',{name:'Add people'}));
+ expect(screen.queryByRole('dialog')).toBeNull();
+ await userEvent.click(await screen.findByRole('option',{name:/Riley/}));
+ expect(screen.queryByRole('dialog')).toBeNull();
+ expect(screen.queryByRole('button',{name:'Add to Channel'})).toBeNull();
+ await userEvent.click(screen.getByRole('button',{name:'Send now'}));
+ const dialog=await screen.findByRole('dialog',{name:'Want to add this person instead?'});
+ const writes=()=>fetch.mock.calls.filter(([path,init])=>['POST','PUT'].includes(init?.method??'')&&/\/(members|discussion|messages|reviewers\/[^/]+)$/.test(path));
+ expect(writes()).toHaveLength(0);
+ await userEvent.click(within(dialog).getByRole('button',{name:label}));
+ const expected=label.startsWith('Invite')?'/team/reviewers/'+person.id:label.startsWith('Add')?'/channels/channel/members':'/team/discussion';
+ await waitFor(()=>expect(writes().map(([path])=>path)).toEqual(['/v1'+(expected.startsWith('/channels')?'':'/agent-sessions/one')+expected]));
+ await waitFor(()=>expect(screen.getByRole('textbox',{name:'Message team discussion'}).textContent?.trim()).toBe(''));
+
+});
+
+it('posts a tagged team message and then offers an optional invitation',async()=>{
+ const fetch=setup(),original=fetch.getMockImplementation()!;
+ const person={kind:'user',id:'00000000-0000-4000-8000-000000000099',label:'Riley',joined:false,can_invite_reviewer:true,invite_channel:null};
+ fetch.mockImplementation(async(path,init)=>{
+   if(path.includes('/team/mentions?'))return {ok:true,json:async()=>({items:[person],member_count:1})};
+   if(path.endsWith('/team/discussion'))return {ok:true,json:async()=>({messages:[],writable:true})};
+   return original(path,init);
+ });
+ render(<AgentSessions thread="thread" channel="channel" viewerId="user" initialSessionId="one" onAccessLost={()=>{}}/>);
+ await userEvent.click(await screen.findByRole('button',{name:'Add people'}));
+ await userEvent.click(await screen.findByRole('option',{name:/Riley/}));
+ const editor=screen.getByRole('textbox',{name:'Message team discussion'});
+ await userEvent.keyboard('please review');
+ await userEvent.click(screen.getByRole('button',{name:'Send now'}));
+ const invite=await screen.findByRole('button',{name:'Invite as reviewer'});
+ await waitFor(()=>expect(editor.textContent?.trim()).toBe(''));
+ expect(fetch.mock.calls.filter(([path,init])=>path.endsWith('/discussion')&&init?.method==='POST')).toHaveLength(1);
+ expect(JSON.parse(String(fetch.mock.calls.find(([path,init])=>path.endsWith('/discussion')&&init?.method==='POST')![1]?.body)).document.ops[0].attributes.mention.id).toBe(person.id);
+ await userEvent.click(screen.getByRole('button',{name:'Dismiss'}));
+ await waitFor(()=>expect(invite.isConnected).toBe(false));
+ expect(fetch.mock.calls.some(([,init])=>init?.method==='PUT')).toBe(false);
 });

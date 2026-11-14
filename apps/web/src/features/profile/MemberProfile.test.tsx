@@ -124,3 +124,16 @@ it('prepares an agent mention without replacing an existing draft or duplicating
   expect(profileMessageDraft(agent as any,result)).toBe(result);
   expect(draft.ops).toEqual([{insert:'Unsent thoughts'}]);
 });
+
+it('offers identity-based copy actions before the profile details arrive',async()=>{
+  api.request.mockImplementationOnce(()=>new Promise(()=>{}));
+  const user=userEvent.setup();
+  mount(); await user.click(screen.getByText('Open Ada'));
+  await user.click(screen.getByRole('button',{name:'More profile actions'}));
+  expect(screen.getByRole('menuitem',{name:'Copy member ID'})).toBeTruthy();
+  expect(screen.queryByRole('menuitem',{name:/Copy display name/})).toBeNull();
+  await user.click(screen.getByRole('menuitem',{name:'Copy link to profile'}));
+  expect(await navigator.clipboard.readText()).toContain('profile=user%3Aada');
+  expect(await screen.findByText('Profile link copied')).toBeTruthy();
+  expect(screen.getByText('Loading profile…')).toBeTruthy();
+});

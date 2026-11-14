@@ -65,3 +65,20 @@ it('opens a copied channel huddle link at the prejoin dialog before requesting m
   expect(mocks.request.mock.calls.some(([path])=>String(path).endsWith('/join'))).toBe(false);
  } finally { history.replaceState(null,'',original); }
 });
+
+it('keeps matching teammates selectable while refining a huddle invite search',async()=>{
+ const {HuddleInvite}=await import('./HuddleDirectory.js');
+ let finish!:(value:unknown)=>void;
+ mocks.request.mockImplementation(async(path:string)=>path.includes('q=Jo')?new Promise(resolve=>{finish=resolve;}):{items:[{id:'jo',name:'Jo Lee'},{id:'sam',name:'Sam Lee'}]});
+ render(<HuddleInvite workspace="w" viewer="me" onClose={()=>{}}/>);
+ await screen.findByRole('button',{name:/Sam Lee/});
+ fireEvent.change(screen.getByRole('searchbox'),{target:{value:'Jo'}});
+ await waitFor(()=>expect(finish).toBeTypeOf('function'));
+ expect(screen.queryByRole('button',{name:/Sam Lee/})).toBeNull();
+ expect(screen.getByText('Searching teammates…')).toBeTruthy();
+ fireEvent.click(screen.getByRole('button',{name:/Jo Lee/}));
+ expect(screen.getByRole('button',{name:'Start a Huddle'})).toHaveProperty('disabled',false);
+ await act(async()=>finish({items:[]}));
+ expect(screen.getByText('No teammates found')).toBeTruthy();
+ expect(screen.getByRole('button',{name:'Start a Huddle'})).toHaveProperty('disabled',true);
+});

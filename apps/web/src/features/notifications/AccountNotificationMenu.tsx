@@ -1,3 +1,6 @@
+import { AnimatePresence, useIsPresent } from 'motion/react';
+import { PopoverSurface } from '@space/ui/motion';
+import { LoadingStatus, Spinner } from '@space/ui/primitives';
 import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import type { NotificationSettings } from '@space/contracts';
 import { CaretRight } from '@phosphor-icons/react';
@@ -24,7 +27,7 @@ export function AccountNotificationMenu({ workspace, actor, onClose }: {
           });
         }
       }}>Notifications <CaretRight size={14} aria-hidden="true"/></button>
-    {open && <PauseMenu key={workspace + actor} {...{ id, workspace, actor, back }} onClose={() => { setOpen(false); onClose(); }} anchor={trigger.current!}/>}
+    <AnimatePresence>{open && <PauseMenu key={workspace + actor} {...{ id, workspace, actor, back }} onClose={() => { setOpen(false); onClose(); }} anchor={trigger.current!}/>}</AnimatePresence>
   </div>;
 }
 
@@ -34,17 +37,21 @@ function PauseMenu({ id, workspace, actor, anchor, onClose, back }: {
   const menu = useRef<HTMLDivElement>(null);
   const [until, setUntil] = useState<string | null>();
   const [custom, setCustom] = useState(false), [date, setDate] = useState('');
-  const [error, setError] = useState(''), [busy, setBusy] = useState(false);
+  const [error, setError] = useState(''), [readError, setReadError] = useState(false);
+  const [saving, setSaving] = useState<string>();
+  const busy = saving !== undefined;
+  const present = useIsPresent(), visible = useRef(present);
+  visible.current = present;
   const path = `/workspaces/${workspace}/notification-settings`;
   const [attempt, setAttempt] = useState(0);
   const mounted = useRef(false);
   useEffect(() => {
     mounted.current = true;
     const controller = new AbortController();
-    setError('');
+    setReadError(false);
     request<NotificationSettings>(path, undefined, undefined, 'POST', controller.signal, actor)
       .then(value => { if (!controller.signal.aborted) setUntil(value.paused_until); })
-      .catch(() => { if (!controller.signal.aborted) setError('Couldn’t load notification settings.'); });
+      .catch(() => { if (!controller.signal.aborted) setReadError(true); });
     return () => { mounted.current = false; controller.abort(); };
   }, [path, actor, attempt]);
   useEffect(() => {
@@ -72,18 +79,18 @@ function PauseMenu({ id, workspace, actor, anchor, onClose, back }: {
     window.addEventListener('scroll', place, true);
     return () => { observer?.disconnect(); window.removeEventListener('resize', place); window.removeEventListener('scroll', place, true); };
   }, [anchor]);
-  async function save(expires: Date | null) {
+  async function save(expires: Date | null, choice: string) {
     if (busy) return;
     if (expires && !(expires.getTime() > Date.now() && expires.getTime() <= Date.now() + 7 * 86400000)) {
       setError('Choose a future time within seven days.'); return;
     }
-    setBusy(true); setError('');
+    setSaving(choice); setError('');
     try {
       await request(path, { paused_until: expires?.toISOString() ?? null }, undefined, 'PATCH', undefined, actor);
-      if (mounted.current) onClose();
-    } catch { if (mounted.current) { setError('Couldn’t save your notification pause. Try again.'); setBusy(false); } }
+      if (mounted.current) { setSaving(undefined); if (visible.current) onClose(); }
+    } catch { if (mounted.current) { setError('Couldn’t save your notification pause. Try again.'); setSaving(undefined); } }
   }
-  return <div ref={menu} id={id} className="account-pause-menu" popover="manual" tabIndex={-1} role="menu" aria-busy={busy} aria-label="Notifications"
+  return <PopoverSurface ref={menu} id={id} className="account-pause-menu" popover="manual" tabIndex={-1} role="menu" aria-label="Notifications"
     onKeyDown={event => {
       if (event.key === 'Escape' || event.key === 'ArrowLeft' && event.target instanceof HTMLButtonElement) {
         event.preventDefault(); event.stopPropagation(); back(); return;
@@ -96,15 +103,16 @@ function PauseMenu({ id, workspace, actor, anchor, onClose, back }: {
       items[next]?.focus();
     }}>
     <small>{until && Date.parse(until) > Date.now() ? 'Paused until ' + new Date(until).toLocaleString() : 'Pause notifications'}</small>
-    {until && Date.parse(until) > Date.now() && <button role="menuitem" disabled={busy} onClick={() => void save(null)}>Resume notifications</button>}
-    {until === undefined && !error && <small role="status">Loading…</small>}
-    {[15, 30, 60, 120].map(minutes => <button key={minutes} role="menuitem" disabled={busy || until === undefined}
-      onClick={() => void save(new Date(Date.now() + minutes * 60000))}>{minutes < 60 ? minutes + ' minutes' : minutes === 60 ? '1 hour' : '2 hours'}</button>)}
-    <button role="menuitem" disabled={busy || until === undefined} onClick={() => setCustom(true)}>Custom…</button>
-    {custom && <form onSubmit={event => { event.preventDefault(); void save(new Date(date)); }}>
-      <label>Pause until<input autoFocus type="datetime-local" required value={date} onChange={event => setDate(event.target.value)}/></label>
-      <button type="submit" disabled={busy}>Pause notifications</button>
+    {until && Date.parse(until) > Date.now() && <button role="menuitem" disabled={busy} aria-busy={saving==='resume' || undefined} onClick={() => void save(null,'resume')}>Resume notifications{saving==='resume' && <Spinner/>}</button>}
+    {until === undefined && !readError && !busy && <LoadingStatus>Checking notification pause…</LoadingStatus>}
+    {[15, 30, 60, 120].map(minutes => <button key={minutes} role="menuitem" disabled={busy} aria-busy={saving===String(minutes) || undefined}
+      onClick={() => void save(new Date(Date.now() + minutes * 60000),String(minutes))}>{minutes < 60 ? minutes + ' minutes' : minutes === 60 ? '1 hour' : '2 hours'}{saving===String(minutes) && <Spinner/>}</button>)}
+    <button role="menuitem" disabled={busy} onClick={() => setCustom(true)}>Custom…</button>
+    {custom && <form onSubmit={event => { event.preventDefault(); void save(new Date(date),'custom'); }}>
+      <label>Pause until<input autoFocus type="datetime-local" required disabled={busy} value={date} onChange={event => setDate(event.target.value)}/></label>
+      <button type="submit" disabled={busy} aria-busy={saving==='custom' || undefined}>Pause notifications{saving==='custom' && <Spinner/>}</button>
     </form>}
-    {error && <div role="alert">{error}{until === undefined && <button onClick={() => setAttempt(n => n + 1)}>Retry</button>}</div>}
-  </div>;
+    {readError && <div role="alert">Couldn’t load notification settings. <button onClick={() => setAttempt(n => n + 1)}>Retry</button></div>}
+    {error && <div role="alert">{error}</div>}
+  </PopoverSurface>;
 }

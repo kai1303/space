@@ -1,7 +1,7 @@
 import {useDestinationPresence} from '../../shared/ui/useDestinationPresence.js';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { NotificationActivity, NotificationItem, NotificationSettings } from '@space/contracts';
-import { Tabs, Select, Avatar, Button, Dialog, IconButton } from '@space/ui/primitives';
+import { Tabs, Select, Avatar, Button, Dialog, IconButton, ListRowSkeleton, Spinner } from '@space/ui/primitives';
 import { At, Bell, BellSlash, ChatCircle, Chats, Check, Checks, GearSix, Hash, Smiley } from '@phosphor-icons/react';
 import { request } from '../../shared/api/request.js';
 import { subscribeUpdates } from '../../shared/realtime/live-updates.js';
@@ -158,7 +158,7 @@ export function Notifications({ workspace, onOpen, viewState, preview = false }:
       </button>
     </header>
     {(readError || error) && <p role="alert" className="rail-peek-empty">{readError || error} <Button size="sm" onClick={() => void refresh()}>Retry</Button></p>}
-    {!loaded ? <p role="status" className="rail-peek-empty">Loading activity…</p>
+    {!loaded ? <ListRowSkeleton label="Loading activity…"/>
       : page.items.length ? <ul className="rail-peek-list activity-peek-list" aria-label="Activity">{page.items.map(item =>
         <ActivityPeekRow key={item.id} item={item} onOpen={openNotification} busy={busy}/>
       )}</ul>
@@ -169,7 +169,7 @@ export function Notifications({ workspace, onOpen, viewState, preview = false }:
     <Tabs className="notification-tabs" label="Activity types" value={kind} items={tabs.map(([id,label])=>({id,label}))} onChange={value=>{setKind(value);setBefore('');view.current.scroll=0;}}/>
     <div className="notification-toolbar"><label><input type="checkbox" checked={unread} onChange={event => { setUnread(event.target.checked); setBefore(''); }}/>Unreads</label><span>{page.unread_count} unread</span><Button size="sm" disabled={busy || !page.unread_count || !loaded} onClick={() => void change(() => request(`/workspaces/${workspace}/notifications/read`, { through: page.latest_id }))}><Checks size={17}/>Mark all as read</Button></div>
     {(readError || error) && <p role="alert" className="notification-error">{readError || error}<Button size="sm" onClick={() => void refresh()}>Retry</Button></p>}
-    {!loaded ? <p role="status" className="notification-empty">Loading activity…</p> : !page.items.length && !readError ? <div className="notification-empty"><Bell size={38}/><h2>You’re all caught up</h2><p>{unread ? 'No unread notifications in this view.' : 'New messages, mentions, replies, and reactions will appear here.'}</p></div> : <ul className="notification-list">{page.items.map(item => <li key={item.id} className={item.read_at ? '' : 'is-unread'}>
+    {!loaded ? <ListRowSkeleton label="Loading activity…" /> : !page.items.length && !readError ? <div className="notification-empty"><Bell size={38}/><h2>You’re all caught up</h2><p>{unread ? 'No unread notifications in this view.' : 'New messages, mentions, replies, and reactions will appear here.'}</p></div> : <ul className="notification-list">{page.items.map(item => <li key={item.id} className={item.read_at ? '' : 'is-unread'}>
       {openButton(item)}
       <IconButton label={item.read_at ? `Mark notification ${item.id} unread` : `Mark notification ${item.id} read`} disabled={busy} onClick={() => void mark(item, !item.read_at)}>{item.read_at ? <Bell size={18}/> : <Check size={18}/>}</IconButton>
     </li>)}</ul>}
@@ -178,7 +178,11 @@ export function Notifications({ workspace, onOpen, viewState, preview = false }:
   </main>;
 }
 
-export function NotificationPreferences({ workspace, onClose, title = "Notification settings" }: { title?: string; workspace: string; onClose: () => void }) {
+type NotificationPreferencesProps = { title?: string; workspace: string; onClose: () => void };
+export function NotificationPreferences(props: NotificationPreferencesProps) {
+  return <PreferencesDialog key={props.workspace} {...props}/>;
+}
+function PreferencesDialog({ workspace, onClose, title = "Notification settings" }: NotificationPreferencesProps) {
   const [settings, setSettings] = useState<NotificationSettings>(), [error, setError] = useState(''), [busy, setBusy] = useState(false);
   const [permission, setPermission] = useState<string>(() => typeof Notification === 'undefined' ? 'unsupported' : Notification.permission);
   const active = useRef(true), revision = useRef(0), scope = useRef(0);
@@ -192,6 +196,7 @@ export function NotificationPreferences({ workspace, onClose, title = "Notificat
     active.current = true; scope.current++;
     const read = async () => {
       const version = ++revision.current;
+      setError('');
       try { const next = await request<NotificationSettings>(`/workspaces/${workspace}/notification-settings`); if (active.current && version === revision.current) { setSettings(next); setError(''); } }
       catch (reason) { if (active.current && version === revision.current) { if (denied(reason)) setSettings(undefined); setError(failure(reason)); } }
     };
@@ -203,31 +208,43 @@ export function NotificationPreferences({ workspace, onClose, title = "Notificat
     if (busy) return; revision.current++; setBusy(true); setError('');
     const version = scope.current;
     try { const next = await request<NotificationSettings>(`/workspaces/${workspace}/notification-settings`, patch, undefined, 'PATCH'); if (active.current && version === scope.current) { revision.current++; setSettings(next); } }
-    catch (reason) { if (active.current) setError(failure(reason)); }
+    catch (reason) { if (active.current && version === scope.current) { if (denied(reason)) setSettings(undefined); setError(failure(reason)); } }
     finally { if (active.current) setBusy(false); }
   }
   async function enable() {
-    if (typeof Notification === 'undefined') return;
+    if (typeof Notification === 'undefined' || busy) return;
+    const version = scope.current;
+    setBusy(true);
     try {
-      const result = await Notification.requestPermission(); if (!active.current) return; setPermission(result);
+      const result = await Notification.requestPermission(); if (!active.current || version !== scope.current) return; setPermission(result);
       if (result === 'granted') await save({ desktop_enabled: true });
-    } catch (reason) { if (active.current) setError(failure(reason)); }
+    } catch (reason) { if (active.current && version === scope.current) setError(failure(reason)); }
+    finally { if (active.current) setBusy(false); }
   }
   const paused = !!settings?.paused_until && Date.parse(settings.paused_until) > Date.now();
+  const actionPending = busy || (!settings && !!error);
+  const browserCanNotify = permission === 'default' || permission === 'granted';
+  const desktopEnabled = permission === 'granted' && settings?.desktop_enabled;
   return <Dialog open title={title} onClose={onClose}><div className="notification-preferences">
     {title === "Preferences" && <h3>Notifications</h3>}
     <p>Activity keeps your notifications even when alerts are paused. These preferences apply across your workspaces.</p>
     {error && <p role="alert">{error}<Button size="sm" onClick={() => void retry.current()}>Retry preferences</Button></p>}
-    {!settings ? <p role="status">Loading preferences…</p> : <>
+    {!settings && !error && <p className="notification-preferences-pending" role="status"><Spinner/>Loading preferences…</p>}
+    {settings && <>
       <label>Notify me about<Select aria-label="Notify me about" disabled={busy} value={settings.mode} onChange={event => void save({ mode: event.target.value as NotificationSettings['mode'] })}><option value="mentions">Mentions and direct messages</option><option value="all">All new messages in joined channels</option><option value="none">Nothing — keep Activity only</option></Select></label>
       <label className="notification-checkbox"><input type="checkbox" checked={settings.thread_replies} disabled={busy} onChange={event => void save({ thread_replies: event.target.checked })}/>Also alert me about followed thread replies</label>
       <label className="notification-checkbox"><input type="checkbox" checked={settings.sound_enabled} disabled={busy} onChange={event => void save({ sound_enabled: event.target.checked })}/>Play a sound for notifications</label>
-      <section><h3>Desktop alerts</h3><p>Delivered by this browser while Space is open. Your browser and operating system control whether banners appear.</p>
-        {permission === 'unsupported' ? <p>This browser does not support desktop alerts.</p> : permission === 'denied' ? <p role="status">Desktop alerts are blocked in your browser. Allow notifications for Space in site settings to enable them.</p> : settings.desktop_enabled && permission === 'granted' ? <Button size="sm" disabled={busy} onClick={() => void save({ desktop_enabled: false })}>Disable desktop alerts</Button> : <Button size="sm" disabled={busy} onClick={() => void enable()}>Enable desktop alerts</Button>}
-      </section>
       <label className="notification-checkbox"><input type="checkbox" checked={settings.preview_enabled} disabled={busy} onChange={event => void save({ preview_enabled: event.target.checked })}/>Include sender and message preview in desktop alerts</label>
-      <section><h3>Pause notifications</h3><p>{paused ? `Paused until ${new Date(settings.paused_until!).toLocaleString()}` : 'Alerts are not paused.'}</p><div className="notification-pause">{paused && <Button size="sm" disabled={busy} onClick={() => void save({ paused_until: null })}>Resume notifications</Button>}<Button size="sm" disabled={busy} onClick={() => void save({ paused_until: new Date(Date.now() + 15 * 60000).toISOString() })}>Pause for 15 minutes</Button><Button size="sm" disabled={busy} onClick={() => void save({ paused_until: new Date(Date.now() + 3600000).toISOString() })}>Pause for 1 hour</Button></div></section>
     </>}
+      <section><h3>Desktop alerts</h3><p>Delivered by this browser while Space is open. Your browser and operating system control whether banners appear.</p>
+        {permission === 'unsupported' && <p>This browser does not support desktop alerts.</p>}
+        {permission === 'denied' && <p role="status">Desktop alerts are blocked in your browser. Allow notifications for Space in site settings to enable them.</p>}
+        {browserCanNotify && (permission === 'default' || settings) && <Button size="sm" disabled={actionPending}
+          onClick={() => desktopEnabled ? void save({desktop_enabled: false}) : void enable()}>
+          {desktopEnabled ? 'Disable desktop alerts' : 'Enable desktop alerts'}
+        </Button>}
+      </section>
+      <section><h3>Pause notifications</h3>{settings && <p>{paused ? `Paused until ${new Date(settings.paused_until!).toLocaleString()}` : 'Alerts are not paused.'}</p>}<div className="notification-pause">{paused && <Button size="sm" disabled={busy} onClick={() => void save({ paused_until: null })}>Resume notifications</Button>}<Button size="sm" disabled={actionPending} onClick={() => void save({ paused_until: new Date(Date.now() + 15 * 60000).toISOString() })}>Pause for 15 minutes</Button><Button size="sm" disabled={actionPending} onClick={() => void save({ paused_until: new Date(Date.now() + 3600000).toISOString() })}>Pause for 1 hour</Button></div></section>
   </div></Dialog>;
 }
 

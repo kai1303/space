@@ -19,7 +19,7 @@
 .attach-file-types button:hover,.attach-file-types button[aria-pressed=true] { background:var(--sp-surface-hover); }
 .attach-file-body { display:flex; flex-direction:column; gap:10px; min-width:0; min-height:260px; }
 .attach-file-sort { display:flex; justify-content:space-between; align-items:center; font-size:13px; gap:8px; }
-.attach-file-sort select { max-width:55%; background:var(--sp-surface); color:inherit; border:1px solid var(--sp-border); border-radius:4px; font:inherit; }
+.attach-file-sort > .sp-select { width:auto; max-width:55%; }
 .attach-file-results label { position:relative; border-radius:5px; padding:8px; }
 .attach-file-results label:has(input:checked) { background:var(--sp-info-soft); box-shadow:inset 0 0 0 1px var(--sp-info); }
 .attach-file-results label:has(input:focus-visible) { outline:2px solid var(--sp-info); outline-offset:-2px; }

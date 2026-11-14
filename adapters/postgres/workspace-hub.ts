@@ -1,4 +1,3 @@
-import { sessionWorkStatus } from './session-work-status.js';
 import type { Pool } from 'pg';
 import type { StarredAgentSession } from '@space/contracts';
 import { sql, type SQL } from 'drizzle-orm';
@@ -76,7 +75,6 @@ export class WorkspaceHubStore {
       const result=await c.execute<StarredAgentSession & Record<string,unknown>>(sql`
         SELECT a.id,a.title AS name,'agent_session' AS kind,c.private,
           EXISTS(SELECT 1 FROM tasks WHERE session_id=a.id AND status='running') AS working,
-          ${sessionWorkStatus(sql`a.id`,sql`a.state`)} AS status,
           (a.created_by IS NOT DISTINCT FROM ${actor}::uuid OR i.owner_id=${actor}) AS can_rename,
           jsonb_build_object('id',a.id,'agent_name',coalesce(ac.name,d.name),'origin_thread_id',a.origin_thread_id,
             'channel_id',c.id,'channel_archived',c.archived_at IS NOT NULL,'code_channel',a.handoff_context IS NULL) AS session
@@ -142,6 +140,14 @@ export class WorkspaceHubStore {
         WHERE m.workspace_id=${workspace} AND m.agent_session_id IS NULL AND ${channelAccess(actor, workspace)} AND ${visible}
           ${after ? sql`AND (${sort},m.id)<(${after.time}::timestamptz,${after.id}::uuid)` : sql``}
         ORDER BY ${sort} DESC,m.id DESC LIMIT ${limit + 1}`);
+      if (saved) {
+        const sessionRows=await c.execute<HubMessage & Record<string,unknown>>(sql`SELECT s.id,s.channel_id,s.channel_name,s.thread_id,s.text,s.author_name,s.session_id,s.task_id,s.part,0 AS reply_count,
+          to_char(s.created_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS created_at,to_char(s.saved_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS saved_at
+          FROM session_saved_items s JOIN channels c ON c.id=s.channel_id WHERE s.workspace_id=${workspace} AND s.viewer=${actor} AND ${channelAccess(actor,workspace)}
+          ${after?sql`AND (s.saved_at,s.id)<(${after.time}::timestamptz,${after.id}::uuid)`:sql``} ORDER BY s.saved_at DESC,s.id DESC LIMIT ${limit+1}`);
+        rows.rows.push(...sessionRows.rows);
+        rows.rows.sort((a,b)=>b.saved_at!.localeCompare(a.saved_at!)||b.id.localeCompare(a.id));
+      }
       return page(rows.rows, limit, row => chronologicalCursor({id:row.id,created_at:row.saved_at ?? row.created_at}));
     });
   }
@@ -438,6 +444,16 @@ export class WorkspaceHubStore {
           p.document,p.channel_id,p.message_id FROM candidates p JOIN removed USING(message_id)
       )`:sql``}
       SELECT count(*)::int AS count,to_char(${cutoff} AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS before FROM removed`);
+      const sessionResult=await db.execute<{count:number}>(sql`WITH candidates AS MATERIALIZED (
+        SELECT s.id,s.text FROM session_saved_items s JOIN channels c ON c.id=s.channel_id WHERE s.viewer=${actor} AND s.workspace_id=${workspace}
+          AND ${channelAccess(actor,workspace)} AND s.saved_at<=${cutoff} ${id?sql`AND s.id=${id}`:sql``} ORDER BY s.saved_at DESC,s.id DESC LIMIT ${100-result.rows[0]!.count}
+      ), cleared AS (UPDATE session_message_preferences p SET saved_at=NULL FROM candidates s
+        WHERE p.message_id=s.id AND p.user_id=${actor} AND p.saved_at<=${cutoff} RETURNING p.message_id)
+      ${action==='move'?sql`, moved AS (INSERT INTO hub_todos(id,workspace_id,user_id,title)
+        SELECT gen_random_uuid(),${workspace},${actor},left(coalesce(nullif(s.text,''),'Saved message'),500) FROM candidates s JOIN cleared x ON x.message_id=s.id)`:sql``}
+      SELECT count(*)::int AS count FROM cleared`);
+      if(sessionResult.rows[0]!.count) await db.execute(sql`INSERT INTO chat_delivery_outbox(workspace_id,resource_scope) VALUES(${workspace},'metadata')`);
+      result.rows[0]!.count+=sessionResult.rows[0]!.count;
       return result.rows[0]!;
     });
   }
@@ -447,6 +463,14 @@ export class WorkspaceHubStore {
     const v = record(input, ['channel_id', 'active']), channel = uuid(v.channel_id), { active } = parseHubToggle({ active: v.active });
     const visible = sql`SELECT m.id FROM messages m JOIN channels c ON c.id=m.channel_id AND c.workspace_id=m.workspace_id
       WHERE m.workspace_id=${workspace} AND m.channel_id=${channel} AND m.id=${message} AND ${savedSource(actor,workspace)} AND ${channelAccess(actor, workspace)}`;
+    const sessionItem=await this.db.execute(sql`WITH source AS (
+      SELECT s.id FROM session_message_state s JOIN tasks t ON t.id=s.task_id JOIN agent_sessions a ON a.id=t.session_id
+      JOIN threads th ON th.id=a.origin_thread_id JOIN channels c ON c.id=th.channel_id WHERE s.id=${message} AND s.deleted_at IS NULL
+      AND t.workspace_id=${workspace} AND c.id=${channel} AND ${channelAccess(actor,workspace)} AND (a.handoff_context IS NULL OR a.created_by=${actor})
+    ), changed AS (INSERT INTO session_message_preferences(message_id,user_id,saved_at) SELECT id,${actor},${active?sql`now()`:sql`NULL::timestamptz`} FROM source
+      ON CONFLICT(message_id,user_id) DO UPDATE SET saved_at=excluded.saved_at RETURNING message_id)
+    INSERT INTO chat_delivery_outbox(workspace_id,resource_scope) SELECT ${workspace},'metadata' FROM changed RETURNING 1`);
+    if(sessionItem.rows.length) return {active};
     const mutation = active
       ? sql`INSERT INTO hub_saved_messages(workspace_id,user_id,channel_id,message_id)
           SELECT ${workspace},${actor},${channel},id FROM visible ON CONFLICT DO NOTHING`

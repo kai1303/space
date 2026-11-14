@@ -55,7 +55,7 @@ async function assertMessageCount(channel: string, expected: number) {
   }
 }
 
-test('send with mentions, attachments and replies uses serializable transactions without explicit locks', async () => {
+test('attachments and mentions retain serializable protection and plain replies use atomic sequencing without explicit locks', async () => {
   const seed = await bootstrap(pool), asset = await readyAsset(seed);
   statements = [];
   const root = await chat.send(seed.owner_id, seed.channel_id, {
@@ -64,7 +64,8 @@ test('send with mentions, attachments and replies uses serializable transactions
   });
   await chat.send(seed.collaborator_id, seed.channel_id, { client_message_id: randomUUID(), text: 'Reply', thread_id: root.thread_id });
   assert.deepEqual(statements.filter(text => /\bfor\s+(?:update|share|no key update|key share)\b|pg_advisory|\block\s+table\b/i.test(text)), []);
-  assert.equal(statements.filter(text => /begin.*serializable/i.test(text)).length, 2);
+  assert.equal(statements.filter(text => /begin.*serializable/i.test(text)).length, 1);
+  assert.equal(statements.filter(text => /begin.*read committed/i.test(text)).length, 1);
   assert.equal((await pool.query('SELECT message_id FROM assets WHERE id=$1', [asset])).rows[0].message_id, root.id);
   assert.equal((await pool.query('SELECT count(*)::int AS count FROM mention_notifications WHERE message_id=$1', [root.id])).rows[0].count, 1);
 });
@@ -72,12 +73,52 @@ test('send with mentions, attachments and replies uses serializable transactions
 test('concurrent identical retries create one durable message, event and notification', async () => {
   const seed = await bootstrap(pool);
   const input = { client_message_id: randomUUID(), text: '@collaborator', document: { ops: [{ insert: '@collaborator', attributes: { mention: { kind: 'user', id: seed.collaborator_id, label: 'collaborator' } } }, { insert: '\n' }] } };
-  const results = await Promise.all(Array.from({ length: 6 }, () => chat.send(seed.owner_id, seed.channel_id, input)));
+  const otherInstance = new ChatStore(pool);
+  const results = await Promise.all([chat, otherInstance, chat, otherInstance, chat, otherInstance].map(store => store.send(seed.owner_id, seed.channel_id, input)));
   assert.equal(new Set(results.map(message => message.id)).size, 1);
   await assertMessageCount(seed.channel_id, 1);
   for (const table of ['notifications', 'mention_notifications']) {
     assert.equal((await pool.query(`SELECT count(*)::int AS count FROM ${table} WHERE message_id=$1`, [results[0]!.id])).rows[0].count, 1);
   }
+});
+
+test('a full channel queue bounds admission and drains after a rejected write', { timeout: 10000 }, async () => {
+  const seed = await bootstrap(pool), gate = pauseMessageInsert();
+  const input = { client_message_id: randomUUID(), text: 'First' };
+  const first = chat.send(seed.owner_id, seed.channel_id, input);
+  await gate.reached;
+  const conflict = assert.rejects(chat.send(seed.owner_id, seed.channel_id, { ...input, text: 'Different' }), { code: 'idempotency_conflict' });
+  const repeats = Array.from({ length: 30 }, () => chat.send(seed.owner_id, seed.channel_id, input));
+  try {
+    await assert.rejects(chat.send(seed.owner_id, seed.channel_id, input), { code: 'channel_write_busy' });
+  } finally { gate.resume(); }
+  await conflict;
+  const results = await Promise.all([first, ...repeats]);
+  assert.equal(new Set(results.map(row => row.id)).size, 1);
+  await chat.send(seed.owner_id, seed.channel_id, { ...input, client_message_id: randomUUID() });
+  await assertMessageCount(seed.channel_id, 2);
+});
+
+test('workspace revision totals retain existing counts and count each committed change', async () => {
+  const seed = await bootstrap(pool);
+  const key = 'workspace-messages:' + seed.workspace_id;
+  await pool.query('INSERT INTO resource_update_revisions(resource,revision) VALUES($1,17)', [key]);
+  const read = async () => Number((await pool.query('SELECT revision FROM resource_revision_totals WHERE resource=$1', [key])).rows[0].revision);
+  const bump = "INSERT INTO chat_delivery_outbox(workspace_id,channel_id,resource_scope) VALUES($1,$2,'message')";
+  const initial = await read();
+  const delayed = await pool.connect();
+  try {
+    await delayed.query('BEGIN');
+    await pool.query(bump, [seed.workspace_id, seed.channel_id]);
+    await delayed.query(bump, [seed.workspace_id, seed.channel_id]);
+    assert.equal(await read(), initial + 1);
+    await delayed.query('COMMIT');
+    assert.equal(await read(), initial + 2);
+    await delayed.query('BEGIN');
+    await delayed.query(bump, [seed.workspace_id, seed.channel_id]);
+    await delayed.query('ROLLBACK');
+    assert.equal(await read(), initial + 2);
+  } finally { await delayed.query('ROLLBACK'); delayed.release(); }
 });
 
 test('the workspace identity constraint resolves concurrent conflicting sends across channels', async () => {
@@ -129,6 +170,60 @@ test('archiving after the authorization snapshot forces a fresh check before sen
   await assertMessageCount(seed.channel_id, 0);
 });
 
+test('a cancellation on another API can win after the send checked its identity', { timeout: 10000 }, async () => {
+  const seed = await bootstrap(pool), gate = pauseMessageInsert();
+  const input = { client_message_id: randomUUID(), text: 'Cancelled across APIs' };
+  const rejected = assert.rejects(chat.send(seed.owner_id, seed.channel_id, input), { code: 'message_cancelled' });
+  try {
+    await gate.reached;
+    const other = new ChatStore(pool);
+    assert.deepEqual(await other.cancelOutgoing(seed.owner_id, seed.channel_id, input.client_message_id), { message: null });
+  } finally { gate.resume(); }
+  await rejected;
+  await assert.rejects(chat.send(seed.owner_id, seed.channel_id, input), { code: 'message_cancelled' });
+  await assertMessageCount(seed.channel_id, 0);
+});
+
+test('both API writers commit distinct messages in channel replay order', async () => {
+  const seed = await bootstrap(pool), other = new ChatStore(pool);
+  const senders = [chat, other, chat, other];
+  const sent = await Promise.all(senders.map((writer, i) => writer.send(i % 2 ? seed.collaborator_id : seed.owner_id,
+    seed.channel_id, { client_message_id: randomUUID(), text: 'Concurrent ' + i })));
+  const replay = await chat.events(seed.owner_id, seed.channel_id, '0');
+  assert.deepEqual(replay.map(event => event.sequence), ['1', '2', '3', '4']);
+  assert.deepEqual(replay.map(event => event.type === 'message.created' ? event.payload.id : null).sort(), sent.map(row => row.id).sort());
+  await assertMessageCount(seed.channel_id, 4);
+});
+
+test('duplicate reaction changes across API writers return the same revision and emit one event per change', async () => {
+  const seed = await bootstrap(pool), other = new ChatStore(pool);
+  const root = await chat.send(seed.owner_id, seed.channel_id, {client_message_id: randomUUID(), text: 'Reaction target'});
+  for (const active of [true, false]) {
+    const [first, second] = await Promise.all([chat, other].map(writer =>
+      writer.react(seed.collaborator_id, seed.channel_id, root.id, {emoji: '👍', active})));
+    assert.equal(first!.reaction_sequence, second!.reaction_sequence);
+    assert.deepEqual(first!.reactions, second!.reactions);
+    assert.equal(first!.reactions?.length, active ? 1 : 0);
+  }
+  const replay = await chat.events(seed.owner_id, seed.channel_id, root.sequence!);
+  assert.deepEqual(replay.map(event => event.type), ['message.updated', 'message.updated']);
+  const notifications = await pool.query("SELECT id FROM notifications WHERE message_id=$1 AND kind='reaction'", [root.id]);
+  assert.equal(notifications.rowCount, 1);
+});
+
+test('an edit racing the same message on another API has one winning revision', async () => {
+  const seed = await bootstrap(pool), other = new ChatStore(pool);
+  const root = await chat.send(seed.owner_id, seed.channel_id, {client_message_id: randomUUID(), text: 'Draft'});
+  const results = await Promise.allSettled([chat, other].map((writer, i) =>
+    writer.editMessage(seed.owner_id, seed.channel_id, root.id, {
+      revision: root.reaction_sequence ?? '0', document: {ops: [{insert: 'Edit ' + i}]},
+    })));
+  assert.equal(results.filter(result => result.status === 'fulfilled').length, 1);
+  assert.equal(results.find(result => result.status === 'rejected')?.reason.code, 'message_changed');
+  const replay = await chat.events(seed.owner_id, seed.channel_id, root.sequence!);
+  assert.deepEqual(replay.map(event => event.type), ['message.updated']);
+});
+
 test('membership revocation denies subsequent sends and replay of a previously authorized identity', async () => {
   const seed = await bootstrap(pool), input = { client_message_id: randomUUID(), text: 'Authorized before revocation' };
   await chat.send(seed.collaborator_id, seed.channel_id, input);
@@ -157,7 +252,7 @@ test('overlapping membership revocations preserve a complete send or rejection a
 });
 
 test('repeated serialization conflicts exhaust the bounded retry budget without partial messages', { timeout: 10000 }, async () => {
-  const seed = await bootstrap(pool);
+  const seed = await bootstrap(pool), asset = await readyAsset(seed);
   let conflicts = 0;
   beforeQuery = async text => {
     if (!/^insert into "messages"/i.test(text)) return;
@@ -165,7 +260,7 @@ test('repeated serialization conflicts exhaust the bounded retry budget without 
     await pool.query('UPDATE channels SET topic=$2 WHERE id=$1', [seed.channel_id, `Competing update ${conflicts}`]);
   };
   try {
-    await assert.rejects(chat.send(seed.owner_id, seed.channel_id, { client_message_id: randomUUID(), text: 'Bounded retry' }), { code: 'session_conflict' });
+    await assert.rejects(chat.send(seed.owner_id, seed.channel_id, { client_message_id: randomUUID(), text: 'Bounded retry', asset_ids: [asset] }), { code: 'session_conflict' });
   } finally { beforeQuery = undefined; }
   assert.equal(conflicts, 5);
   await assertMessageCount(seed.channel_id, 0);

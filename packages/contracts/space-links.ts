@@ -96,6 +96,11 @@ export function sessionPath(id: string) {
   return key ? '/s/' + key : undefined;
 }
 
+export function sessionMessagePath(session:string,task:string,part:'request'|'response') {
+  const base=sessionPath(session);
+  return base && uuid.test(task) ? base+'?turn='+task+'&part='+part : undefined;
+}
+
 export function parseSessionPath(path: string) {
   const match = /^\/s\/([^/]+)\/?$/.exec(path);
   if (!match) throw new Error('Invalid session link.');

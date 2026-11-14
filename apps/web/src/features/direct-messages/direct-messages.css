@@ -87,3 +87,11 @@
 .dm-encrypted-image { padding:0; border:0; background:transparent; cursor:zoom-in; }
 .dm-encrypted-image img { display:block; width:100%; max-height:220px; object-fit:contain; }
 .dm-encrypted-full-image { display:block; max-width:100%; max-height:70vh; margin-bottom:12px; object-fit:contain; }
+
+.dm-encrypted-search { display: flex; align-items: flex-end; gap: 8px; }
+.dm-encrypted-search label { display: grid; flex: 1; min-width: 0; gap: 4px; }
+.dm-encrypted-search input {
+  width: 100%; box-sizing: border-box; padding: 8px;
+  font: inherit; color: var(--sp-text); background: var(--sp-surface);
+  border: 1px solid var(--sp-border-strong); border-radius: var(--sp-radius-md);
+}

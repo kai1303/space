@@ -2,7 +2,7 @@ import { workspacePath, workspaceIdFromPath } from '@space/contracts';
 import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { AnimatePresence, useIsPresent } from 'motion/react';
-import { Avatar, Badge, Button, Menu, SidePanel } from '@space/ui/primitives';
+import { Avatar, Badge, Button, Menu, SidePanel, LoadingStatus } from '@space/ui/primitives';
 import { AgentProfileLinkContext } from '@space/ui/agents';
 import { ChatCircle, Clock, DotsThree, EnvelopeSimple, Phone, X } from '@phosphor-icons/react';
 import { visibleStatus, type DirectMessageSummary, type WorkspaceProfile } from '@space/contracts';
@@ -44,7 +44,7 @@ export function ProfileProvider({ children, workspace, viewer, onMessage, onConn
   }, []);
   useEffect(() => { setSelection(value => value?.workspace === workspace ? value : undefined); }, [workspace]);
   return <Context.Provider value={{open, close, selected}}><AgentProfileLinkContext.Provider value={{workspace, viewer, open}}>{children}</AgentProfileLinkContext.Provider>{createPortal(
-    <AnimatePresence>{selected && <ProfilePanel key={`${workspace}:${selected.kind}:${selected.id}`} workspace={workspace} viewer={viewer} target={selected} onClose={close} onMessage={onMessage} onConnection={onConnection}/>}</AnimatePresence>, document.body
+    <AnimatePresence>{selected && <ProfilePanel key={`${workspace}:${viewer}:${selected.kind}:${selected.id}`} workspace={workspace} viewer={viewer} target={selected} onClose={close} onMessage={onMessage} onConnection={onConnection}/>}</AnimatePresence>, document.body
   )}</Context.Provider>;
 }
 
@@ -117,9 +117,17 @@ function ProfilePanel({workspace, viewer, target, onClose, onMessage, onConnecti
   link.searchParams.set('profile', `${target.kind}:${target.id}`);
   const status = profile?.kind === 'user' ? visibleStatus(profile.status) : null;
   return <SidePanel ref={panel} className="space-profile-panel space-member-profile" role="region" aria-label="Profile">
-    <header><strong>Profile</strong><button ref={closeButton} type="button" aria-label="Close profile" onClick={onClose}><X size={20}/></button></header>
+    <header><strong>Profile</strong><div className="space-member-profile-toolbar">
+      <Menu label="More profile actions" floating trigger={<DotsThree size={22} weight="bold"/>} items={[
+        ...(profile ? [{label:`Copy display name: @${profile.display_name}`,onSelect:()=>void copy(`@${profile.display_name}`,'Display name copied')}] : []),
+        {label:target.kind === 'agent' ? 'Copy agent ID' : 'Copy member ID',onSelect:()=>void copy(target.id,'ID copied')},
+        {label:'Copy link to profile',onSelect:()=>void copy(link.href,'Profile link copied')},
+      ]}/>
+      <button ref={closeButton} type="button" aria-label="Close profile" onClick={onClose}><X size={20}/></button></div></header>
     <div className="space-profile-scroll">
-      {error ? <div className="space-member-profile-notice"><p role="alert">{error}</p><Button onClick={() => {setError(''); setAttempt(value => value + 1);}}>Retry</Button></div> : !profile ? <p className="space-member-profile-notice" role="status">Loading profile…</p> : <>
+      {copied && <p role="status" className="space-member-profile-feedback">{copied}</p>}
+      {actionError && <p role="alert" className="space-member-profile-feedback">{actionError}</p>}
+      {error ? <div className="space-member-profile-notice"><p role="alert">{error}</p><Button onClick={() => {setError(''); setAttempt(value => value + 1);}}>Retry</Button></div> : !profile ? <LoadingStatus className="space-member-profile-notice">Loading profile…</LoadingStatus> : <>
         <div className="space-profile-portrait"><span className="space-profile-photo"><Avatar name={profile.display_name} initials={profile.display_name.slice(0,2).toUpperCase()} image={profile.image} size="lg" tone={profile.kind === 'agent' ? 'green' : 'blue'}/></span></div>
         <section>
           <div className="space-profile-name"><h2>{profile.kind === 'user' ? profile.full_name || profile.display_name : profile.display_name}</h2>{profile.kind === 'agent' && <Badge>Agent</Badge>}</div>
@@ -132,14 +140,8 @@ function ProfilePanel({workspace, viewer, target, onClose, onMessage, onConnecti
           </> : <p className="space-profile-row"><span className={`space-profile-presence${profile.availability !== 'online' || !profile.enabled ? ' is-away' : ''}`} aria-hidden="true"/>{!profile.enabled ? 'Disabled' : ({online:'Online',offline:'Offline',auth_required:'Sign-in required',error:'Connection needs attention',unknown:'Status unavailable'})[profile.availability]}</p>}
           <div className="space-member-profile-actions">
             {(profile.kind === 'user' || profile.can_message) && <Button aria-label={`Message ${profile.display_name}`} loading={busy} onClick={() => void message()}><ChatCircle size={18}/>Message</Button>}
-            <Menu label="More profile actions" floating trigger={<DotsThree size={22} weight="bold"/>} items={[
-              {label:`Copy display name: @${profile.display_name}`,onSelect:()=>void copy(`@${profile.display_name}`,'Display name copied')},
-              {label:profile.kind === 'agent' ? 'Copy agent ID' : 'Copy member ID',onSelect:()=>void copy(profile.id,'ID copied')},
-              {label:'Copy link to profile',onSelect:()=>void copy(link.href,'Profile link copied')},
-            ]}/>
+
           </div>
-          {copied && <p role="status" className="space-profile-secondary">{copied}</p>}
-          {actionError && <p role="alert">{actionError}</p>}
         </section>
         {profile.kind === 'user' && (profile.email || profile.phone) && <section><div className="space-profile-section-heading"><h3>Contact information</h3></div>
           {profile.email && <div className="space-profile-row"><EnvelopeSimple size={20}/><div><small>Email address</small><a href={`mailto:${profile.email}`}>{profile.email}</a></div></div>}

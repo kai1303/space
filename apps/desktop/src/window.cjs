@@ -7,7 +7,7 @@ function createSpaceWindow(configuredUrl, { show = true, pair, keychain, vaultMa
   const url = spaceUrl(configuredUrl);
   const win = new BaseWindow({
     title: 'Space', width: 1360, height: 900, minWidth: 800, minHeight: 600,
-    icon: join(__dirname, '../assets/space-icon.png'),
+    icon: join(__dirname, '../assets', process.platform === 'win32' ? 'space-icon.ico' : 'space-icon.png'),
     show: false, backgroundColor: '#19171d',
   });
   const workspace = new WebContentsView({

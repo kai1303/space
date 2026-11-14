@@ -249,7 +249,7 @@ function WorkspaceView({ profile: initialProfile, attachments, address, onOpenSe
     {workspace && agentSetup?.workspace === workspace && <WorkspaceMembers workspace={workspace} viewer={profile.id} initialConnector={agentSetup.connector} open onClose={() => setAgentSetup(undefined)}/>}
     {workspace && connection && <WorkspaceMembers workspace={workspace} viewer={profile.id} agent={connection} open onClose={()=>setConnection(undefined)}/>}
     {workspace && <WorkspaceAdministration key={`members:${workspace}`} workspace={workspace} viewer={profile.id} open={membersOpen} onClose={() => setMembersOpen(false)} />}
-    {workspace && <WorkspaceSettings onManageMembers={() => { setSettingsOpen(false); setMembersOpen(true); }} key={workspace} workspace={workspace} open={settingsOpen} onClose={() => setSettingsOpen(false)} onRenamed={name => setWorkspaces(old => old.map(item => item.id === workspace ? {...item,name} : item))}/>}
+    {workspace && <WorkspaceSettings workspaceName={selectedWorkspace?.name} onManageMembers={() => { setSettingsOpen(false); setMembersOpen(true); }} key={workspace} workspace={workspace} open={settingsOpen} onClose={() => setSettingsOpen(false)} onRenamed={name => setWorkspaces(old => old.map(item => item.id === workspace ? {...item,name} : item))}/>}
     {error && <p role="alert">{error}</p>}
     {navigationError && <p role="alert">{navigationError}</p>}
     <SidebarSectionsProvider workspace={workspace} viewer={profile.id}><DestinationTransition destination={destination} scope={workspace}>

@@ -172,7 +172,7 @@ test('an installed persistent backend opens a task session, publishes results an
     assert.deepEqual(detail.outputs?.views,[{...plan,content:'# Final plan'},{key:'checks',name:'Checks',type:'blocks',blocks:[]}]);
     const {items}=await readSessionReports(store.db,seed.collaborator_id,seed.channel_id,{threads:[seed.thread_id,foreign.thread_id]});
     assert.equal(items.length,1); assert.equal(items[0]?.id,approved.session_id); assert.equal(items[0]?.source_message_id,source.id); assert.equal(items[0]?.result,'Ready for review');
-    assert.equal(items[0]?.artifact,'changes'); assert.equal(items[0]?.status,'archived');
+    assert.equal(items[0]?.artifact,'changes'); assert.equal(Object.hasOwn(items[0]!,'status'),false);
     await assert.rejects(readSessionReports(store.db,foreign.owner_id,seed.channel_id,{threads:[seed.thread_id]}),/not_found/);
   } finally { server.closeAllConnections(); await new Promise<void>(resolve=>server.close(()=>resolve())); }
 });

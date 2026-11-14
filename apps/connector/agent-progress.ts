@@ -63,7 +63,7 @@ export class AgentProgress {
   setActivity(activity: AgentActivity) {
     this.activity = [...this.tools.values()].some(tool => tool.status === 'running' || tool.status === 'calling') ? 'using_tools' : activity;
   }
-  tool(id: unknown, name: unknown, args: unknown, status: AgentTool['status'], result?: unknown) {
+  tool(id: unknown, name: unknown, args: unknown, status: AgentTool['status'], result?: unknown, shell = this.tools.get(String(id))?.shell) {
     if (typeof id !== 'string' || !id || id.length > 128 || typeof name !== 'string' || !name || name.length > 200) throw new Error('Invalid tool identity.');
     if (!this.tools.has(id) && this.tools.size >= 30) {
       if (!this.rolling) throw new Error('Too many tool calls.');
@@ -73,8 +73,8 @@ export class AgentProgress {
       if (index >= 0) this.items.splice(index, 1);
     }
     if (!this.tools.has(id)) this.items.push({ type: 'tool', id });
-    const printable = (value: unknown, limit: number) => (typeof value === 'string' ? value : JSON.stringify(value) ?? '').replaceAll('\0', '').slice(0, limit);
-    this.tools.set(id, { id, name, arguments: printable(args, 8000), status, ...(result === undefined ? {} : { result: printable(toolResult(result), 16000) }) });
+    const printable = (value: unknown, limit: number) => (typeof value === 'string' ? value : JSON.stringify(value) ?? '').replaceAll('\0', '').slice(0, limit).replace(/[\uD800-\uDBFF]$/, '');
+    this.tools.set(id, { ...(shell ? {shell} : {}), id, name, arguments: printable(args, 8000), status, ...(result === undefined ? {} : { result: printable(toolResult(result), 16000) }) });
     this.setActivity('working');
   }
   snapshot(messages: AgentText[], terminal = false) {
@@ -125,7 +125,7 @@ export class AgentProgress {
               const middle = Math.ceil((low + high) / 2);
               if (JSON.stringify(original.slice(0, middle) + suffix).length - 2 <= remaining) low = middle; else high = middle - 1;
             }
-            value = original.slice(0, low) + suffix;
+            value = original.slice(0, low).replace(/[\uD800-\uDBFF]$/, '') + suffix;
           }
         }
         snapshot.tools[index]![field] = value;

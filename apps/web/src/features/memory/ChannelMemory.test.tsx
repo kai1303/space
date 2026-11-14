@@ -153,3 +153,36 @@ it('refreshes saved quotes and keeps an unsaved draft when its evidence changes'
   expect(editor.value).toBe('My changes');
   expect(screen.getByRole('button', {name:'Load latest for comparison'})).toBeTruthy();
 });
+
+it('shows the selected message and keeps both tabs available while Notes loads', async () => {
+  let finish!: (result: Response) => void;
+  vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>(resolve => { finish = resolve; })));
+  render(<ChannelMemory channel="first" name="general" message={{ id: 'message', text: 'Keep this decision.' }} />);
+  expect(screen.getByText('Keep this decision.')).toBeTruthy();
+  expect(screen.getByText('Loading channel memory…')).toBeTruthy();
+  expect(screen.queryByRole('button', { name: 'Save message to memory' })).toBeNull();
+  await userEvent.click(screen.getByRole('tab', { name: 'Graph' }));
+  expect(screen.queryByText('Loading channel memory…')).toBeNull();
+  await notes();
+  await act(async () => finish(Response.json(state(true))));
+  expect(screen.getByRole('button', { name: 'Save message to memory' })).toBeTruthy();
+  expect(screen.queryByText('Loading channel memory…')).toBeNull();
+});
+
+it('keeps the editor usable during a search and drops results for a changed query', async () => {
+  let finish!: (result: Response) => void;
+  vi.stubGlobal('fetch', vi.fn(async (path: string) => path.includes('/search?')
+    ? new Promise<Response>(resolve => { finish = resolve; }) : Response.json(state(true))));
+  render(<ChannelMemory channel="first" name="general" />);
+  await notes();
+  const search = screen.getByRole('textbox', { name: 'Search saved memory' });
+  fireEvent.change(search, { target: { value: 'old' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Search memory' }));
+  const editor = screen.getByRole('textbox', { name: 'Channel memory Markdown' }) as HTMLTextAreaElement;
+  expect(editor.disabled).toBe(false);
+  fireEvent.change(editor, { target: { value: 'My draft' } });
+  fireEvent.change(search, { target: { value: 'new' } });
+  await act(async () => finish(Response.json({ items: [{ line: 1, text: 'Old result' }] })));
+  expect(editor.value).toBe('My draft');
+  expect(screen.queryByText('Old result')).toBeNull();
+});

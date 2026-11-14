@@ -43,7 +43,7 @@ CORS configuration; use a dedicated bucket.
 | Method and path | Behavior |
 | --- | --- |
 | `GET /v1/assets/config` | Returns `enabled`, `max_file_size` and `max_files` for the composer. |
-| `POST /v1/channels/:channelId/assets` | Reserves an authorized channel upload and returns `AssetUpload`, including its signed POST form. |
+| `POST /v1/channels/:channelId/assets` | Reserves an authorized channel upload and returns `AssetUpload`, including its signed POST form and an optional direct PUT URL. |
 | `POST /v1/assets/:assetId/complete` | Accepts `{}`, verifies and seals the stored bytes, then returns file metadata. |
 | `GET /v1/assets/:assetId/download` | Checks current chat access and redirects to a signed attachment URL valid for 60 seconds. |
 | `GET /v1/assets/:assetId/preview` | Returns byte-validated preview metadata; legacy attachments use an atomic processing claim. |
@@ -58,8 +58,11 @@ attachment references are persisted by migration `009_assets.sql`.
 
 1. An authenticated caller reserves a file in a specific chat scope. The server
    generates the object key and records expected size and original display name.
-2. The browser sends a multipart form directly to SeaweedFS using a signed POST
-   valid for at most five minutes and never beyond the stored reservation deadline.
+2. For files of at least 1 MiB the API also signs a PUT URL that binds the staging key,
+   Content-Length and Content-Type. The browser sends the file body with
+   `application/octet-stream` and supplies Content-Length automatically. The signed
+   POST form remains available to all clients. Both signatures are valid for at
+   most five minutes and expire by the stored reservation deadline.
    Signing reserves a one-second margin and refuses an expired or nearly expired
    reservation with `410 upload_expired`. The policy permits only the generated staging key,
    exact reserved byte count and `application/octet-stream`. Files must contain
@@ -343,7 +346,9 @@ Conversion admits two jobs per API, a 25MiB input, first-page-only 720px raster,
 512MiB address space, 5 CPU seconds and 4MiB output-file size. The Docker runtime
 installs `poppler-utils`, `util-linux-misc` and `font-liberation`; rebuild the
 server image to activate them. Native development needs `pdftoppm` and fonts on
-PATH, plus `prlimit` on Linux. Unsupported, encrypted and over-budget documents
+PATH, plus `prlimit` on Linux. If native Poppler reports that it cannot load the default Fontconfig file,
+set `FONTCONFIG_FILE` in the API environment to the installed `fonts.conf`.
+Unsupported, encrypted and over-budget documents
 retain the icon/viewer/download path. Office attachments open in the separately configured ONLYOFFICE service.
 
 Verification: 26 server, 19 asset API and 32 frontend preview tests passed,

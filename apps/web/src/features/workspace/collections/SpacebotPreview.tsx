@@ -1,6 +1,6 @@
 import { useId, useState } from 'react';
 import { NotePencil } from '@phosphor-icons/react';
-import { Button, IconButton, Tabs } from '@space/ui/primitives';
+import { Button, IconButton, Tabs, ListRowSkeleton } from '@space/ui/primitives';
 import { Spacebot } from '@space/ui/navigation';
 import type { AgentSessionReference, HubTodo } from '@space/contracts';
 import { useAgentSessionList } from '../../agents/useAgentSessionList.js';
@@ -42,7 +42,7 @@ function Recents({ workspace, onOpenSession, onNewMessage }: Omit<Props, 'onOpen
       <h3>Recent agent sessions</h3>
       <IconButton label="New message" onClick={onNewMessage}><NotePencil size={18}/></IconButton>
     </div>
-    {sessions.loading && <p className="rail-peek-empty" role="status">Loading sessions…</p>}
+    {sessions.loading && !sessions.items.length && <ListRowSkeleton label="Loading sessions…"/>}
     {sessions.error && <p className="rail-peek-empty" role="alert">{sessions.error} {!sessions.revoked && <Button size="sm" onClick={() => void sessions.refresh()}>Retry</Button>}</p>}
     {!sessions.loading && !sessions.error && !sessions.items.length && <p className="rail-peek-empty">No recent agent sessions.</p>}
     {!!sessions.items.length && <ul className="rail-peek-list" aria-label="Recent agent sessions">
@@ -60,7 +60,7 @@ function Agenda({ workspace, onOpenTodos }: Pick<Props, 'workspace' | 'onOpenTod
   const data = useCollection(workspace, 'todos', 'status=open&reminder=upcoming&sort=due&archived=false', { preview: true });
   return <>
     <div className="spacebot-preview-subhead"><h3>Upcoming reminders</h3><Button size="sm" variant="ghost" onClick={onOpenTodos}>Open To-dos</Button></div>
-    {data.loading && <p className="rail-peek-empty" role="status">Loading reminders…</p>}
+    {data.loading && !data.items.length && <ListRowSkeleton label="Loading reminders…" />}
     {data.error && <p className="rail-peek-empty" role="alert">{data.error} {!data.revoked && <button type="button" onClick={() => void data.retry()}>Retry</button>}</p>}
     {!data.loading && !data.error && !data.items.length && <p className="rail-peek-empty">No upcoming reminders.</p>}
     {!!data.items.length && <ul className="rail-peek-list" aria-label="Upcoming reminders">{(data.items as HubTodo[]).map(todo =>

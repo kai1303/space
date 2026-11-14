@@ -140,3 +140,17 @@ it('shows the conversation source below the message and keeps the timestamp besi
   expect(row.querySelector('time')?.previousElementSibling?.textContent).toBe('Alex');
   expect(screen.getByText(reply.text).compareDocumentPosition(source) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 });
+
+it('applies a pause before the initial preferences read resolves', async () => {
+  let release!: (value: unknown) => void;
+  fake((_path, init) => init?.method === 'PATCH'
+    ? { ...settings, ...JSON.parse(String(init.body)) }
+    : new Promise(resolve => { release = resolve; }));
+  render(<NotificationPreferences workspace="workspace" onClose={() => {}}/>);
+  expect(screen.queryByRole('checkbox')).toBeNull();
+  await userEvent.click(screen.getByRole('button', { name:'Pause for 15 minutes' }));
+  await screen.findByRole('button', { name:'Resume notifications' });
+  await act(async () => release(settings));
+  expect(screen.getByRole('button', { name:'Resume notifications' })).toBeTruthy();
+  expect(screen.queryByText('Loading preferences…')).toBeNull();
+});

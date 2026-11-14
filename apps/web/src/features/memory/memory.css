@@ -27,3 +27,15 @@
 .workspace-memory-toolbar{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
 .workspace-memory-toolbar>p{margin:0 auto 0 0;font:14px/1.5 var(--sp-font-sans);color:var(--sp-text-secondary)}
 .workspace-memory>small{font:12px/1.4 var(--sp-font-sans);color:var(--sp-text-secondary)}
+
+.workspace-memory-toolbar > p { display: flex; align-items: center; gap: 8px; }
+
+.channel-memory-document-placeholder {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  min-height: 160px;
+  padding: 16px;
+  border: 1px solid var(--sp-border);
+  border-radius: var(--sp-radius-md);
+}

@@ -1,5 +1,6 @@
 import type { AssetPreview } from '@space/contracts';
-import { fileTypeFromBuffer } from 'file-type';
+import { AssetTokenizer } from './asset-tokenizer.js';
+import { fileTypeFromBuffer, fileTypeFromTokenizer } from 'file-type';
 import sharp from 'sharp';
 import type { AssetStorage } from './storage.js';
 
@@ -20,23 +21,33 @@ const textLanguages: Record<string, string> = {
 };
 const unsupported = (reason: string): AssetPreview => ({ kind: 'unsupported', reason });
 
-export async function generateAssetPreview(storage: AssetStorage, id: string, name: string, key: string, size: number): Promise<AssetPreview> {
+export async function generateAssetPreview(storage: AssetStorage, id: string, name: string, key: string, size: number, sealed?: Uint8Array): Promise<AssetPreview> {
   if (!Number.isSafeInteger(size) || size < 1 || size > maxBytes) return unsupported('This file exceeds the preview size limit.');
   // The sealed original already has a verified size; PDF classification only needs a prefix.
   if (/\.pdf$/i.test(name)) {
     const limit = Math.min(size, 4100);
-    const prefix = await storage.read(key, limit, { start: 0, end: limit - 1 });
+    const prefix = sealed?.subarray(0, limit) ?? await storage.read(key, limit, { start: 0, end: limit - 1 });
     if (prefix.length !== limit) return unsupported('The uploaded file size could not be verified.');
     try {
       if ((await fileTypeFromBuffer(prefix))?.mime === 'application/pdf') return { kind: 'pdf', mime: 'application/pdf' };
     } catch { /* Unrecognized prefixes fall back to full byte classification. */ }
   }
-  const bytes = await storage.read(key, maxBytes);
-  if (bytes.length !== size) return unsupported('The uploaded file size could not be verified.');
+  let original = sealed;
+  const load = async () => original ??= await storage.read(key, maxBytes);
+  const tokenizer = !sealed && size >= 1024 * 1024 ? new AssetTokenizer(storage, key, size) : undefined;
+  if (!tokenizer && (await load()).length !== size) return unsupported('The uploaded file size could not be verified.');
   let detected;
-  try { detected = await fileTypeFromBuffer(bytes); }
-  catch { return unsupported('This file could not be recognized.'); }
+  try {
+    detected = tokenizer ? await fileTypeFromTokenizer(tokenizer) : await fileTypeFromBuffer(original!);
+  } catch (error) {
+    if (tokenizer?.failure) throw tokenizer.failure;
+    return unsupported('This file could not be recognized.');
+  }
+  if (tokenizer?.failure) throw tokenizer.failure;
+  original ??= tokenizer?.original;
   if (detected && rasterTypes.has(detected.mime)) {
+    const bytes = await load();
+    if (bytes.length !== size) return unsupported('The uploaded file size could not be verified.');
     // Decode before writing; storage outages must remain retryable rather than becoming unsupported.
     let image: { preview: AssetPreview; thumbnail: Buffer; display?: Buffer };
     try {
@@ -46,7 +57,7 @@ export async function generateAssetPreview(storage: AssetStorage, id: string, na
       if (!width || !height || pages > 500 || width * height * pages > maxPixels) return unsupported('This image is too large to preview.');
       if ([5, 6, 7, 8].includes(meta.orientation ?? 0)) [width, height] = [height, width];
       const thumbnail = await sharp(bytes, { limitInputPixels: maxPixels, failOn: 'warning' })
-        .rotate().resize({ width: 360, height: 240, fit: 'inside', withoutEnlargement: true }).webp().toBuffer();
+        .rotate().resize({ width: 360, height: 240, fit: 'inside', withoutEnlargement: true }).webp({ effort: 2 }).toBuffer();
       if (detected.mime === 'image/gif') {
         // Validate all frames before allowing the browser to play the original GIF.
         await sharp(bytes, { animated: true, limitInputPixels: maxPixels, failOn: 'warning' }).raw().toBuffer();
@@ -54,7 +65,7 @@ export async function generateAssetPreview(storage: AssetStorage, id: string, na
       } else {
         // Tiny static images use one encoding and object for both card and viewer.
         const display = width <= 360 && height <= 240 ? thumbnail : await sharp(bytes, { limitInputPixels: maxPixels, failOn: 'warning' })
-          .rotate().resize({ width: 1600, height: 1200, fit: 'inside', withoutEnlargement: true }).webp().toBuffer();
+          .rotate().resize({ width: 1600, height: 1200, fit: 'inside', withoutEnlargement: true }).webp({ effort: 2 }).toBuffer();
         image = { preview: { kind: 'image', mime: 'image/webp', width, height }, thumbnail, display };
       }
     } catch { return unsupported('This image could not be decoded safely.'); }
@@ -76,6 +87,8 @@ export async function generateAssetPreview(storage: AssetStorage, id: string, na
   if (detected && detected.mime !== 'application/xml') return unsupported('A preview is not available for this file type.');
   const language = textLanguages[name.split('.').at(-1)?.toLowerCase() ?? ''];
   if (!language) return unsupported('A preview is not available for this file type.');
+  const bytes = await load();
+  if (bytes.length !== size) return unsupported('The uploaded file size could not be verified.');
   let text: string;
   try { text = new TextDecoder('utf-8', { fatal: true }).decode(bytes); }
   catch { return unsupported('This file does not contain valid UTF-8 text.'); }

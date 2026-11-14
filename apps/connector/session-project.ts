@@ -64,17 +64,20 @@ export async function selectSessionProject(connection: Connection, session: stri
 export class ProjectUnavailable extends Error {
   constructor() { super('The selected project is unavailable on this computer. Restore the folder or choose a folder in a new session.'); }
 }
+export function projectBinding(storage: {connection:Connection; projectKey?:string}, session:string, token:string) {
+  const bytes = Buffer.from(token, 'base64url');
+  const cipher = createDecipheriv('aes-256-gcm', key(storage.projectKey), bytes.subarray(0, 12));
+  cipher.setAAD(binding(storage.connection, session));
+  cipher.setAuthTag(bytes.subarray(-16));
+  return JSON.parse(Buffer.concat([cipher.update(bytes.subarray(12, -16)), cipher.final()]).toString()) as [string,string,string];
+}
 export async function projectForTurn<T extends { connection: Connection; project?: string; coding?: boolean; projectKey?: string }>(
   storage: T, request?: InvocationRequest,
 ): Promise<T> {
   const token = request?.persistent_session?.project_token;
   if (!token) return storage;
   try {
-    const bytes = Buffer.from(token, 'base64url');
-    const cipher = createDecipheriv('aes-256-gcm', key(storage.projectKey), bytes.subarray(0, 12));
-    cipher.setAAD(binding(storage.connection, request.session_id));
-    cipher.setAuthTag(bytes.subarray(-16));
-    const [path, dev, ino] = JSON.parse(Buffer.concat([cipher.update(bytes.subarray(12, -16)), cipher.final()]).toString());
+    const [path, dev, ino] = projectBinding(storage, request.session_id, token);
     const canonical = await resolveProject(path);
     const info = await stat(path, {bigint: true});
     if (canonical !== path || String(info.dev) !== dev || String(info.ino) !== ino) throw new Error();

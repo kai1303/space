@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { motion, useReducedMotion } from "motion/react";
 import { CaretRight, ChatCircle } from "@phosphor-icons/react";
 import { motionTransition } from "../motion/motion.js";
@@ -23,6 +23,7 @@ export function Message({
   replyParticipants = [], participantCount = replyParticipants.length, lastReplyAt, hasReplyDraft = false, threadOpen,
   tone = "purple",
   arrival = false,
+  animateActions = false,
   actions,
   footer,
   grouped = false,
@@ -46,6 +47,7 @@ export function Message({
   threadOpen?: boolean;
   tone?: "purple" | "blue" | "green" | "orange";
   arrival?: boolean | "glide" | "fade";
+  animateActions?: boolean;
   actions?: MessageActionHandlers;
   footer?: ReactNode;
   grouped?: boolean;
@@ -55,9 +57,31 @@ export function Message({
   const reduced = useReducedMotion();
   const glide = arrival !== "fade";
   const press = useLongPress();
+  const [hovered, setHovered] = useState(false);
+  const [focused, setFocused] = useState(false);
+  const [popoverOpen, setPopoverOpen] = useState(false);
+  useEffect(() => {
+    const row = press.ref.current;
+    if (!animateActions || !row) return;
+    // Native details toggle does not bubble. Keep the toolbar visible while its portaled menu owns focus.
+    const sync = () => setPopoverOpen(!!row.querySelector('.sp-message-actions details[open]'));
+    const enter = (event: PointerEvent) => { if (event.pointerType !== 'touch') setHovered(true); };
+    const leave = () => setHovered(false);
+    row.addEventListener('pointerenter', enter);
+    row.addEventListener('pointerleave', leave);
+    row.addEventListener('toggle', sync, true);
+    return () => {
+      row.removeEventListener('pointerenter', enter);
+      row.removeEventListener('pointerleave', leave);
+      row.removeEventListener('toggle', sync, true);
+    };
+  }, [animateActions, press.ref]);
+  const actionsVisible = animateActions ? hovered || focused || popoverOpen || press.open : undefined;
   return (
     <motion.article
       ref={press.ref}
+      onFocusCapture={animateActions ? () => setFocused(true) : undefined}
+      onBlurCapture={animateActions ? event => setFocused(event.currentTarget.contains(event.relatedTarget)) : undefined}
       data-actions-open={press.open || undefined}
       onPointerDown={press.start} onPointerMove={press.move} onPointerUp={press.cancel} onPointerCancel={press.cancel}
       className={`sp-message${grouped ? " sp-message--grouped" : ""}`}
@@ -112,7 +136,7 @@ export function Message({
         )}
         {footer}
       </div>
-      {(onReply || onReact || actions) && <MessageActions author={author} onReply={onReply} onReact={onReact} actions={actions} />}
+      {(onReply || onReact || actions) && <MessageActions visible={actionsVisible} author={author} onReply={onReply} onReact={onReact} actions={actions} />}
     </motion.article>
   );
 }

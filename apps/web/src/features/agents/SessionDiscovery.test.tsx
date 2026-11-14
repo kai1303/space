@@ -1,5 +1,6 @@
 import {afterEach,beforeAll,expect,it,vi} from 'vitest';
 import {cleanup,fireEvent,render,screen,waitFor} from '@testing-library/react';
+import {toast} from '@space/ui/primitives';
 import {SessionDiscovery} from './SessionDiscovery.js';
 
 const mocks=vi.hoisted(()=>({read:vi.fn()}));
@@ -11,7 +12,7 @@ beforeAll(()=>{
   HTMLDialogElement.prototype.showModal=function(){this.open=true;};
   HTMLDialogElement.prototype.close=function(){this.open=false;this.dispatchEvent(new Event('close'));};
 });
-afterEach(()=>{cleanup();mocks.read.mockReset();});
+afterEach(()=>{cleanup();mocks.read.mockReset();vi.restoreAllMocks();});
 it('opens a source session inside the workspace and routes reviewer-only matches to the review room',async()=>{
   const id='d15c0ffe-0000-4000-a000-000000000001', second='d15c0ffe-0000-4000-a000-000000000002';
   const source={id,access:'source',origin_thread_id:'t',channel_id:'c',channel_archived:false,title:'Ship regression fix',status:'needs_attention',agent_name:'Claude',channel_name:'general'};
@@ -20,13 +21,15 @@ it('opens a source session inside the workspace and routes reviewer-only matches
   const onOpen=vi.fn();
   render(<SessionDiscovery workspace="w" viewer="m" onOpen={onOpen}/>);
   expect((await screen.findByText('Review prototype')).closest('a')?.getAttribute('href')).toBe('/review/'+second);
+  expect(screen.queryByText('Needs attention')).toBeNull();
   fireEvent.click(screen.getByText('Ship regression fix'));
   expect(onOpen).toHaveBeenCalledWith(source);
   fireEvent.change(screen.getByRole('searchbox'),{target:{value:'regression'}});
-  fireEvent.change(screen.getByLabelText('Status'),{target:{value:'needs_attention'}});
+  fireEvent.click(screen.getByRole('combobox',{name:'Archive'}));
+  fireEvent.click(await screen.findByRole('option',{name:'Unarchived'}));
   fireEvent.click(screen.getByRole('button',{name:'Search sessions'}));
   await waitFor(()=>expect(screen.queryByText('Review prototype')).toBeNull());
-  expect(mocks.read.mock.calls.at(-1)?.[0]).toContain('q=regression&status=needs_attention');
+  expect(mocks.read.mock.calls.at(-1)?.[0]).toContain('q=regression&archived=false');
   expect(await screen.findByText('Ship regression fix')).toBeTruthy();
 });
 
@@ -50,6 +53,7 @@ it('creates an agent session for a selected conversation, reusing its identity o
   await waitFor(()=>expect(mocks.read.mock.calls.some(([url])=>url.endsWith('scope=workspace'))).toBe(true));
   fireEvent.click(screen.getByRole('button',{name:'New agent session'}));
   fireEvent.change(await screen.findByLabelText('Session name'),{target:{value:'Checkout fix'}});
+  await waitFor(()=>expect(screen.getByRole('combobox',{name:'Source channel'})).toHaveProperty('disabled',false));
   fireEvent.click(screen.getByRole('combobox',{name:'Source channel'}));
   fireEvent.click(await screen.findByRole('option',{name:'#general'}));
   fireEvent.click(await screen.findByRole('combobox',{name:'Source conversation'}));
@@ -66,4 +70,38 @@ it('creates an agent session for a selected conversation, reusing its identity o
   expect(calls).toHaveLength(2);
   expect(calls[0]?.[1]).toEqual(calls[1]?.[1]);
   expect(calls[0]?.[1]).toEqual(expect.objectContaining({title:'Checkout fix',installation_id:'codex',skill:'codex.run'}));
+});
+
+it('labels only archived sessions and restores them through the sidebar archive action',async()=>{
+  const success=vi.spyOn(toast,'success');
+  const id='d15c0ffe-0000-4000-a000-000000000003';
+  mocks.read.mockResolvedValue({items:[{id,access:'source',title:'Archived project',sidebar_archived:true}],next_cursor:null});
+  render(<SessionDiscovery workspace="w" viewer="owner"/>);
+  expect(await screen.findByText('Archived',{selector:'span'})).toBeTruthy();
+  fireEvent.click(screen.getByRole('button',{name:'Unarchive session'}));
+  await waitFor(()=>expect(mocks.read).toHaveBeenCalledWith('/agent-sessions/'+id+'/sidebar',{archived:false},undefined,'PATCH',undefined,'owner'));
+  expect(success).toHaveBeenCalledWith('Session restored');
+});
+
+it('lets a session start fresh while conversations load and retries only the failed agent lookup', async()=>{
+  let catalogs=0;
+  mocks.read.mockImplementation(async(path:string)=>{
+    if(path.includes('/channels?'))return {items:[{id:'room',name:'general',joined:true}]};
+    if(path.endsWith('/navigator')){
+      if(++catalogs===1)throw new Error('Agent lookup failed');
+      return {candidates:[{installation_id:'agent',skill:'review',name:'Reviewer',persistent_sessions:true}]};
+    }
+    if(path.includes('/messages?'))return new Promise(()=>{});
+    return {items:[],next_cursor:null};
+  });
+  render(<SessionDiscovery workspace="w" viewer="m" onOpen={()=>{}}/>);
+  fireEvent.click(screen.getByRole('button',{name:'New agent session'}));
+  fireEvent.change(screen.getByRole('textbox',{name:'Session name'}),{target:{value:'Review'}});
+  await waitFor(()=>expect((screen.getByRole('combobox',{name:'Source channel'}) as HTMLButtonElement).disabled).toBe(false));
+  fireEvent.click(screen.getByRole('combobox',{name:'Source channel'}));
+  fireEvent.click(await screen.findByRole('option',{name:'#general'}));
+  fireEvent.click(await screen.findByRole('button',{name:'Retry agents'}));
+  await waitFor(()=>expect((screen.getByRole('button',{name:'Create agent session'}) as HTMLButtonElement).disabled).toBe(false));
+  expect(screen.getByText('Loading conversations…')).toBeTruthy();
+  expect(mocks.read.mock.calls.filter(([path])=>path.includes('/messages?'))).toHaveLength(1);
 });

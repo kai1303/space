@@ -14,7 +14,8 @@ export async function uploadAsset(channel: string, file: File, progress: (percen
       signal.removeEventListener('abort', abort);
       if (error) reject(error); else resolve();
     };
-    xhr.open('POST', signed.upload.url);
+    const direct = signed.upload.put_url;
+    xhr.open(direct ? 'PUT' : 'POST', direct ?? signed.upload.url);
     xhr.timeout = 5 * 60 * 1000;
     xhr.upload.onprogress = event => {
       if (event.lengthComputable && !signal.aborted) progress(Math.round(event.loaded / event.total * 100));
@@ -23,6 +24,11 @@ export async function uploadAsset(channel: string, file: File, progress: (percen
     xhr.onerror = xhr.ontimeout = () => finish(new Error('Upload failed. Try again.'));
     xhr.onabort = () => finish(new Error('Upload cancelled'));
     signal.addEventListener('abort', abort, { once: true });
+    if (direct) {
+      xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+      xhr.send(file);
+      return;
+    }
     const form = new FormData();
     for (const [name, value] of Object.entries(signed.upload.fields)) form.append(name, value);
     form.append('file', file);

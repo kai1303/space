@@ -61,6 +61,8 @@ The DMG uses macOS's built-in `hdiutil`; Forge creates the app and ZIP. To reque
 
 The desktop icon has a curved purple orbit on a white or black tile. Electron updates the Dock icon from the PNGs in `assets/` when the system appearance changes. Forge compiles `Space.icon` for Finder using macOS 26 or later and Xcode 26 or later, and includes `assets/space-icon.icns` for older systems.
 
+Windows packages and windows use `assets/space-icon.ico`, which contains the orbit on a transparent background at sizes from 16 to 256 pixels.
+
 Edit `desktop.config.json` before packaging to set the default deployment. A local configuration at `~/Library/Application Support/Space/desktop.json` overrides that default:
 
 ```json

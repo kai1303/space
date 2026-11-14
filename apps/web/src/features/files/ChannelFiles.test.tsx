@@ -156,3 +156,17 @@ it('closes a loaded attachment preview when its message is deleted', async () =>
   expect(screen.queryByText('Private document contents')).toBeNull();
   expect(screen.queryByRole('dialog')).toBeNull();
 });
+
+it('keeps the current results usable during refresh and clears them for a new filter', async () => {
+  vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(response([file('brief')]))
+    .mockImplementation(() => new Promise(() => {})));
+  render(<ChannelFiles {...props}/>);
+  await screen.findByText('brief.png');
+  await userEvent.click(screen.getByRole('button', { name: 'Refresh files' }));
+  await userEvent.click(screen.getByRole('button', { name: 'View message for brief.png' }));
+  expect(props.onMessage).toHaveBeenCalledWith('message-brief');
+  await userEvent.click(screen.getByLabelText('File type'));
+  await userEvent.click(screen.getByRole('option', { name: 'PDFs' }));
+  expect(screen.queryByText('brief.png')).toBeNull();
+  expect(screen.getByRole('status').textContent).toContain('Loading files');
+});

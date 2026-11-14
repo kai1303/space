@@ -155,3 +155,18 @@
 .sp-agent-data-table th svg, .sp-agent-data-table small { color: var(--sp-text-secondary); }
 .sp-agent-data-table th[aria-sort] svg { color: var(--sp-accent); }
 .sp-agent-data-table small { display: block; margin-top: 4px; }
+
+.sp-shell-execution { min-width:0; color:var(--sp-text-secondary); font-size:13px; }
+.sp-shell-toggle { display:flex; align-items:center; gap:6px; max-width:100%; border:0; background:none; padding:3px 0; color:inherit; font:inherit; text-align:left; cursor:pointer; }
+.sp-shell-toggle > svg,.sp-shell-time,.sp-shell-caret { flex:none; }
+.sp-shell-label { min-width:0; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
+.sp-shell-label[data-shimmer] { background-image:linear-gradient(100deg,var(--sp-text-secondary) 35%,var(--sp-text) 50%,var(--sp-text-secondary) 65%); background-size:200% 100%; background-clip:text; color:transparent; }
+.sp-shell-caret { display:inline-flex; }
+.sp-shell-panel { margin:5px 0 8px; border:1px solid var(--sp-border); border-radius:8px; overflow:hidden; background:var(--sp-surface); }
+.sp-shell-command,.sp-shell-output { position:relative; padding:9px 40px 9px 12px; }
+.sp-shell-command { color:var(--sp-text); border-bottom:1px solid var(--sp-border); }
+.sp-shell-command code,.sp-shell-output pre { white-space:pre-wrap; overflow-wrap:anywhere; font:12px/1.55 var(--sp-font-mono,monospace); color:var(--sp-text); }
+.sp-shell-output pre { margin:0; padding:0; background:transparent; max-height:20rem; overflow:auto; user-select:text; }
+.sp-shell-command > button,.sp-shell-output > button { position:absolute; top:5px; right:5px; }
+.sp-shell-footer { padding:5px 12px; border-top:1px solid var(--sp-border); font-size:12px; }
+.sp-message-text .sp-shell-command code { padding:0; border:0; background:transparent; color:var(--sp-text); }

@@ -131,7 +131,7 @@ test('inbox previews expose author avatars, actor-owned saves and current reply 
   await pool.query('UPDATE users SET image=$2 WHERE id=$1',[a.collaborator_id,avatar]);
   const root = await send(a, 'Review'), reply = await send(a,'Approved',{thread_id:root.thread_id},a.collaborator_token);
   await mutate(a,'saved/'+reply.id,{channel_id:a.channel_id,active:true});
-  const revision = async () => (await pool.query('SELECT revision FROM resource_update_revisions WHERE resource=$1',
+  const revision = async () => (await pool.query('SELECT revision FROM resource_revision_totals WHERE resource=$1',
     ['workspace-messages:'+a.workspace_id])).rows[0].revision;
   const prev = await revision();
   await request(a.owner_token,'POST','/channels/'+a.channel_id+'/messages/'+reply.id+'/reactions',{emoji:'👍',active:true});
@@ -199,7 +199,7 @@ test('files show only ready shared attachments with access and ordinary message 
 test('hub mutations publish durable invalidation without explicit database locks', async () => {
   const a = await bootstrap(pool), message = await send(a), statements: string[] = [], originals = new Map<PoolClient, PoolClient['query']>();
   const trace = (client: PoolClient) => { if (originals.has(client)) return; const query = client.query; originals.set(client, query); client.query = function(this: PoolClient, ...args: any[]) { statements.push(typeof args[0] === 'string' ? args[0] : args[0]?.text ?? ''); return (query as Function).apply(this, args); } as PoolClient['query']; };
-  const revision = async () => (await pool.query('SELECT revision::text FROM resource_update_revisions WHERE resource=$1', [`workspace:${a.workspace_id}`])).rows[0]?.revision;
+  const revision = async () => (await pool.query('SELECT revision::text FROM resource_revision_totals WHERE resource=$1', [`workspace:${a.workspace_id}`])).rows[0]?.revision;
   const before = await revision(); pool.on('acquire', trace);
   try { await mutate(a, `saved/${message.id}`, { channel_id: a.channel_id, active: true }); await mutate(a, `starred/${a.channel_id}`, { active: true }); await mutate(a, `todos/${randomUUID()}`, { title: 'Check', completed: false }); }
   finally { pool.off('acquire', trace); for (const [client, query] of originals) client.query = query; }

@@ -1,8 +1,8 @@
-import { Children, Fragment, isValidElement, useEffect, useId, useLayoutEffect, useRef, useState, type ComponentProps, type KeyboardEvent, type ReactNode, type Ref } from 'react';
+import { Children, Fragment, isValidElement, useEffect, useId, useLayoutEffect, useRef, useState, type ComponentProps, type KeyboardEvent, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { CaretDown, Check, MagnifyingGlass } from '@phosphor-icons/react';
-import { AnimatePresence, motion, useIsPresent, useReducedMotion } from 'motion/react';
-import { surfaceMotion } from '../motion/motion.js';
+import { AnimatePresence } from 'motion/react';
+import { PopoverSurface } from '../motion/popover-surface.js';
 
 type Option = { value: string; label: string; disabled: boolean };
 export type SelectProps = Omit<ComponentProps<'select'>, 'multiple' | 'size' | 'ref' | 'value' | 'defaultValue'> & {
@@ -27,7 +27,6 @@ function readOptions(children: ReactNode, disabled = false): Option[] {
 /** Single selection with a native backing control for validation and form submission. */
 export function Select({ children, value, defaultValue, searchable, className = '', id, autoFocus, 'aria-label': label, 'aria-describedby': description, 'aria-invalid': invalid, onChange, onInvalid, ...props }: SelectProps) {
   const uid = useId(), listId = `${uid}-list`;
-  const reduced = useReducedMotion();
   const native = useRef<HTMLSelectElement>(null), trigger = useRef<HTMLButtonElement>(null), panel = useRef<HTMLDivElement>(null), search = useRef<HTMLInputElement>(null);
   const [uncontrolled, setUncontrolled] = useState(String(defaultValue ?? ''));
   const [validationMessage, setValidationMessage] = useState('');
@@ -137,7 +136,7 @@ export function Select({ children, value, defaultValue, searchable, className = 
     form?.addEventListener('reset', reset);
     return () => form?.removeEventListener('reset', reset);
   }, [defaultValue]);
-  const popup = <AnimatePresence>{open && <SelectPanel key={uid} panelRef={panel} className="sp-select-panel" style={{ position: 'fixed', ...position }} onKeyDown={navigate} {...surfaceMotion(reduced)}>
+  const popup = <AnimatePresence>{open && <PopoverSurface key={uid} ref={panel} className="sp-select-panel" style={{ position: 'fixed', ...position }} onKeyDown={navigate}>
     {canSearch && <div className="sp-select-search"><MagnifyingGlass size={16} aria-hidden="true" /><input ref={search} role="combobox" aria-label={`Search ${label}`} aria-controls={listId} aria-expanded="true" aria-autocomplete="list" aria-activedescendant={activeId} value={query} onChange={event => { setQuery(event.target.value); setActive(''); }} placeholder="Search…" /></div>}
     <div id={listId} role="listbox" aria-label={label} className="sp-select-options">
       {filtered.map(option => <button key={option.value} id={`${uid}-option-${options.indexOf(option)}`} type="button" role="option" aria-selected={option.value === selected?.value} aria-disabled={option.disabled || undefined} disabled={option.disabled} tabIndex={-1} data-active={option === highlighted || undefined} onPointerDown={event => event.preventDefault()} onPointerMove={() => { if (!option.disabled) setActive(option.value); }} onClick={() => choose(option)}>
@@ -145,7 +144,7 @@ export function Select({ children, value, defaultValue, searchable, className = 
       </button>)}
       {!filtered.length && <div role="status" className="sp-select-empty">No matches</div>}
     </div>
-  </SelectPanel>}</AnimatePresence>;
+  </PopoverSurface>}</AnimatePresence>;
   return <span className={`sp-select ${className}`}>
     <button ref={trigger} id={id} type="button" role="combobox" className="sp-select-trigger" autoFocus={autoFocus} disabled={props.disabled} aria-label={label} aria-describedby={[description, validationMessage ? `${uid}-error` : undefined].filter(Boolean).join(' ') || undefined} aria-invalid={invalid ?? (validationMessage ? true : undefined)} aria-required={props.required || undefined} aria-haspopup="listbox" aria-controls={open ? listId : undefined} aria-expanded={open} aria-activedescendant={open && !canSearch ? activeId : undefined} onKeyDown={navigate} onClick={() => open ? close() : show()}>
       <span>{selected?.label ?? 'Choose…'}</span><CaretDown size={14} aria-hidden="true" />
@@ -154,9 +153,4 @@ export function Select({ children, value, defaultValue, searchable, className = 
     {validationMessage && <span id={`${uid}-error`} role="alert" className="sp-select-error">{validationMessage}</span>}
     {trigger.current && createPortal(popup, trigger.current.closest('[data-sp-popover-panel], dialog') ?? document.body)}
   </span>;
-}
-
-function SelectPanel({ panelRef, ...props }: ComponentProps<typeof motion.div> & { panelRef: Ref<HTMLDivElement> }) {
-  const present = useIsPresent();
-  return <motion.div {...props} ref={panelRef} inert={!present} aria-hidden={!present || undefined} />;
 }

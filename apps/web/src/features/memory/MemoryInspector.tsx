@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Button } from '@space/ui/primitives';
+import { Button, LoadingStatus } from '@space/ui/primitives';
 import type { ChannelMemoryHeader, MemoryFact, SessionMemory, ThreadContextMessage, ThreadMemory } from '@space/contracts';
 import { subscribeUpdates } from '../../shared/realtime/live-updates.js';
 import { memoryApi } from './memory-api.js';
@@ -63,17 +63,17 @@ function NodeInspector({ channel, selection, onOpenThread, onOpenSession }: Prop
   const title = selection.kind === 'thread' ? selection.node.summary : `${selection.node.agent ?? 'Agent'} · ${selection.node.title ?? ''}`;
   return <aside className="memory-inspector" aria-label="Memory details">
     <h3>{title}</h3>
+    <small>{selection.kind}{detail?.ended ? ' · ended' : ''}{selection.node.updated_at ? ` · ${selection.node.updated_at}` : ''}</small>
     {error && <p role="alert">{error}</p>}
-    {!detail && !error && <p role="status">Loading…</p>}
+    {!detail && !error && <LoadingStatus>Loading memory details…</LoadingStatus>}
     {detail && <>
-      <small>{selection.kind}{detail.ended ? ' · ended' : ''}{selection.node.updated_at ? ` · ${selection.node.updated_at}` : ''}</small>
       <Messages label="Messages" messages={detail.messages} />
       <Messages label="Related" messages={detail.related} />
       {detail.topics.length > 0 && <p aria-label="Topics">{detail.topics.join(' · ')}</p>}
       {detail.facts.length > 0 && <details open><summary>Facts ({detail.facts.length})</summary>
         <ul>{detail.facts.map(f => <li key={f.id}><small>{f.kind}</small> {f.text}</li>)}</ul></details>}
-      {selection.kind === 'thread' && onOpenThread && <Button size="sm" variant="ghost" onClick={() => onOpenThread(id)}>Open thread →</Button>}
-      {selection.kind === 'session' && onOpenSession && <Button size="sm" variant="ghost" onClick={() => onOpenSession(selection.threadId, id)}>Open session →</Button>}
     </>}
+    {!error && selection.kind === 'thread' && onOpenThread && <Button size="sm" variant="ghost" onClick={() => onOpenThread(id)}>Open thread →</Button>}
+    {!error && selection.kind === 'session' && onOpenSession && <Button size="sm" variant="ghost" onClick={() => onOpenSession(selection.threadId, id)}>Open session →</Button>}
   </aside>;
 }

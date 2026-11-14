@@ -8,8 +8,9 @@ import { useEffect, useLayoutEffect, useRef, useState, useId, type ReactNode } f
 import { EmojiPicker } from "../emoji/emoji-picker.js";
 import { emojiCompletion, emojiDocument, emojiNative, emojiPreferences } from "../emoji/emoji.js";
 import type Quill from "quill";
+import { PopoverSurface } from "../motion/popover-surface.js";
 import { Reveal } from "../motion/reveal.js";
-import { motion, useReducedMotion } from "motion/react";
+import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { motionTransition } from "../motion/motion.js";
 import { isDefaultComposerSendKey } from "./composer-keyboard.js";
 import { ScheduleSend, openScheduleMenu } from "./schedule-send.js";
@@ -18,6 +19,7 @@ import {
   UploadSimple,
   File as FileIcon,
   PaperPlaneRight,
+  Stop,
   Plus,
   At,
   TextAa,
@@ -72,9 +74,10 @@ export function RichComposer({
   onDraftChange,
   onAttachmentsChange,
   onSend,
+  beforeSend,
   onSchedule,
   mentions = [],
-  findMentions,
+  findMentions, onMentionOpened, mentionRequest, outsideMentionLabel,
   plainText = false,
   maxLength = 10000,
   attachmentsEnabled = true,
@@ -88,7 +91,7 @@ export function RichComposer({
   showKeyboardHint = true,
   feedbackAtSendButton = false,
   attachedFormattingToolbar = false,
-  submitLabel, submitIcon, submitAccessory, onAlternateSend,
+  submitLabel, submitIcon, submitAccessory, stopAction, onAlternateSend,
   renderFilePicker,
   renderExtraActions, renderAddMenuItems, renderBeforeSend,
   addMenuVariant = "standard",
@@ -116,10 +119,15 @@ export function RichComposer({
     attachments: Attachment[],
     options?: { broadcast_confirmed: boolean },
   ) => void | Promise<void>;
+  /** Return false to keep the draft while the caller confirms a send. */
+  beforeSend?: (document: RichDocument) => Promise<boolean>;
   /** Shows Slack's schedule menu beside Send. Resolves once the server has stored the schedule. */
   onSchedule?: (text: string, document: RichDocument, attachments: Attachment[], at: Date) => Promise<void>;
   mentions?: string[];
   findMentions?: FindMentions;
+  onMentionOpened?: () => void;
+  mentionRequest?: number;
+  outsideMentionLabel?: string;
   plainText?: boolean;
   maxLength?: number;
   attachmentsEnabled?: boolean;
@@ -136,6 +144,8 @@ export function RichComposer({
   submitLabel?: string;
   submitIcon?: ReactNode;
   submitAccessory?: ReactNode;
+  /** Occupies the Send position during a turn. A drafted follow-up can still be submitted beside it. */
+  stopAction?: { onClick: () => void; disabled: boolean } | null;
   onAlternateSend?: (text:string, document:RichDocument, attachments:Attachment[])=>void | Promise<void>;
   renderFilePicker?: (insert: (files: File[]) => void, close: () => void, remaining: number, upload: () => void) => ReactNode;
   addMenuVariant?: "standard" | "agent-session";
@@ -317,7 +327,15 @@ export function RichComposer({
     root.setAttribute('aria-label', editorLabel ?? `Message ${channel}`);
     root.setAttribute('data-placeholder', visibleReply ? '' : placeholder ?? `Message #${channel}`);
   }, [channel, placeholder, editorLabel, editorVersion, visibleReply]);
-  const mentionsUI = useMentions(editor, ready, conversationKey ?? channel, findMentions, editorVersion);
+  const mentionsUI = useMentions(editor, ready, conversationKey ?? channel, findMentions, editorVersion, outsideMentionLabel);
+  const handledMention = useRef(0);
+  useEffect(() => {
+    if (!mentionRequest) { handledMention.current = 0; return; }
+    if (mentionRequest === handledMention.current || !ready || !editor.current || !findMentions) return;
+    handledMention.current = mentionRequest;
+    mentionsUI.begin();
+    onMentionOpened?.();
+  }, [mentionRequest, ready, editorVersion, findMentions]);
   const mentionKeys = useRef(mentionsUI.key); mentionKeys.current = mentionsUI.key;
   const [broadcastWarning, setBroadcastWarning] = useState(false);
   const sendRef = useRef<(alternate?:boolean) => void>(() => {});
@@ -440,6 +458,7 @@ export function RichComposer({
           })
         : selected;
       if (!isCurrent()) return;
+      if (!at && !alternate && beforeSend && (!await beforeSend(document) || !isCurrent())) return;
       if (at && callbacks.current.onSchedule) await callbacks.current.onSchedule(plainText, document, batch, at);
       else if (confirmed) await callbacks.current.onSend(plainText, document, batch, { broadcast_confirmed: true });
       else await (alternateSubmit ?? normalSubmit)(plainText, document, batch);
@@ -728,13 +747,20 @@ export function RichComposer({
       {formatButtons.slice(7)}
     </div>
   );
+  const sendIcon = submitIcon ?? submitLabel ?? <PaperPlaneRight size={19} weight="fill" />;
+  const sendProps = {
+    label: submitLabel ?? "Send now",
+    disabled: !ready || sending || blocked || files.some(file => file.status === "error") || (!text.trim() && !files.length),
+    "data-send-disabled": sending && ready && !filesPending && Boolean(text.trim() || files.length) || undefined,
+    onClick: () => { if (heldSend.current) { heldSend.current = false; return; } void send(); },
+  };
   return (
     <div className={feedbackAtSendButton ? "sp-rich-composer sp-rich-composer--send-feedback" : "sp-rich-composer"} aria-busy={sending || undefined}>
       {mentionsUI.suggestions}
       <Dialog open={broadcastWarning} title="Notify the channel?" onClose={() => setBroadcastWarning(false)}><p>This message can notify {mentionsUI.memberCount || 'all eligible'} channel members. Use channel-wide mentions sparingly.</p><div className="sp-mention-confirm"><Button onClick={() => setBroadcastWarning(false)}>Keep editing</Button><Button variant="primary" onClick={() => { setBroadcastWarning(false); void send(true); }}>Send and notify</Button></div></Dialog>
-      {completion && <div className="sp-emoji-suggestions" id={suggestionsId} role="listbox" aria-label="Emoji suggestions">
+      <AnimatePresence>{completion && <PopoverSurface key="emoji" className="sp-emoji-suggestions" id={suggestionsId} role="listbox" aria-label="Emoji suggestions">
         {completion.items.map((item, index) => <button id={`${suggestionsId}-${index}`} type="button" role="option" aria-selected={index === emojiIndex} key={item.id} onMouseDown={event => event.preventDefault()} onClick={() => completeEmoji(index)}><span>{emojiNative(item.id, emojiPreferences().skin)}</span><span>:{item.id}:</span></button>)}
-      </div>}
+      </PopoverSurface>}</AnimatePresence>
       {picking && attachmentsEnabled && renderFilePicker?.(incoming=>{addFiles(incoming);setPicking(false);editor.current?.focus();},()=>{setPicking(false);editor.current?.focus();},MAX_MESSAGE_ASSETS-files.length,()=>{setPicking(false);fileInput.current?.click();})}
       <div className="sp-rich-editor-shell" data-file-drop={draggingFiles || undefined}
         data-attached-formatting={attachedFormattingToolbar && formattingEnabled && !plainText ? (showFormats ? "open" : "closed") : undefined}
@@ -871,13 +897,11 @@ export function RichComposer({
             aria-describedby={feedbackAtSendButton && sendDisabledReason ? feedbackId : undefined}>
           {submitAccessory}
           {renderBeforeSend?.(insert, !ready || sending)}
+          {stopAction && (text.trim() || files.length > 0) && <IconButton {...sendProps} size="sm" className="sp-send-rich">{sendIcon}</IconButton>}
           <IconButton
-            label={submitLabel ?? "Send now"}
+            {...(stopAction ? { label: "Stop", disabled: stopAction.disabled, onClick: stopAction.onClick } : sendProps)}
             size="sm"
-            className="sp-send-rich"
-            disabled={!ready || sending || blocked || files.some(file => file.status === "error") || (!text.trim() && !files.length)}
-            data-send-disabled={sending && ready && !filesPending && Boolean(text.trim() || files.length) || undefined}
-            onClick={() => { if (heldSend.current) { heldSend.current = false; return; } void send(); }}
+            className={stopAction ? "sp-send-rich agent-session-stop" : "sp-send-rich"}
             onPointerDown={onSchedule ? event => {
               if (event.pointerType !== "touch") return;
               const group = event.currentTarget.parentElement;
@@ -888,7 +912,16 @@ export function RichComposer({
             onPointerLeave={() => clearTimeout(holdTimer.current)}
             onContextMenu={onSchedule ? event => event.preventDefault() : undefined}
           >
-            {submitIcon ?? submitLabel ?? <PaperPlaneRight size={19} weight="fill" />}
+            {stopAction === undefined || reducedMotion ? (stopAction ? <Stop size={18} weight="fill"/> : sendIcon) :
+              <span className="sp-composer-action-icon" aria-hidden="true">
+                <AnimatePresence initial={false}>
+                  <motion.span key={stopAction ? "stop" : "send"} initial={{ opacity: 0, scale: 0.75 }}
+                    animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.75 }}
+                    transition={motionTransition(false, 0.16)}>
+                    {stopAction ? <Stop size={18} weight="fill"/> : sendIcon}
+                  </motion.span>
+                </AnimatePresence>
+              </span>}
           </IconButton>
           {onSchedule && <ScheduleSend disabled={!ready || sending || blocked || filesPending || (!text.trim() && !files.length)} onSchedule={at => void send(false, at)} />}
           </div>

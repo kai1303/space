@@ -1,7 +1,7 @@
 import {SavedMessages} from './SavedMessages.js';
 import { ThreadInbox, type ThreadDetail, type InlineComposer } from './ThreadInbox.js';
 import type { HubMessage } from '@space/contracts';
-import { Avatar, Button } from '@space/ui/primitives';
+import { Avatar, Button, ListRowSkeleton } from '@space/ui/primitives';
 import { NavigationIcon } from '@space/ui/navigation';
 import { RichContent } from '@space/ui/rich-text';
 import { WorkspaceFiles } from '../../files/WorkspaceFiles.js';
@@ -37,8 +37,8 @@ function Collection({ view, workspace, onOpen }: Props) {
           {empty && <Empty icon={view} title={view === 'sent' ? 'No sent messages yet' : 'No files shared yet'} text={view === 'sent' ? 'Messages you send in this workspace will appear here.' : 'Files shared in conversations you can access will appear here.'} />}
           <ul className="collection-message-list">{(data.items as HubMessage[]).map(message => <li key={message.id} className="collection-message-card"><header><button type="button" className="collection-source" onClick={() => openMessage(message)}>{message.channel_name}</button><time dateTime={message.created_at}>{date(message.created_at)}</time></header><div className="collection-message"><Avatar name={message.author_name} initials={message.author_name.slice(0, 2).toUpperCase()} size="sm" /><div><strong>{message.author_name}</strong>{message.document ? <RichContent document={message.document} /> : <p className="collection-message-text">{message.text || 'Shared a file'}</p>}</div></div><footer><button type="button" aria-label={`View message in ${message.channel_name}`} onClick={() => openMessage(message)}>View message</button></footer></li>)}</ul>
         </div>
-        {data.loading && <p className="collection-loading" role="status">Loading {titles[view].toLowerCase()}…</p>}
-        {!data.loading && !data.error && data.cursor && <div className="collection-more">{data.items.length < MAX_ITEMS ? <Button variant="secondary" disabled={data.busy} onClick={() => void data.more()}>Load more</Button> : <p>Showing the first {MAX_ITEMS} items. Open a conversation to find older items.</p>}</div>}
+        {data.loading && !data.items.length && <ListRowSkeleton label={`Loading ${titles[view].toLowerCase()}…`} />}
+        {!data.error && data.cursor && <div className="collection-more">{data.items.length < MAX_ITEMS ? <Button variant="secondary" loading={data.loadingMore} disabled={data.busy} onClick={() => void data.more()}>Load more</Button> : <p>Showing the first {MAX_ITEMS} items. Open a conversation to find older items.</p>}</div>}
     </section>
 
   </main>;
