@@ -2142,8 +2142,7 @@ it('opens agent sessions below direct messages, retains drafts, and refreshes si
   await act(async()=>{latestChatSocket().receive('updates.changed',{scope:'workspace',id:'workspace'});});
  };
  await updateActivity(true);
- await within(entry).findByRole('img',{name:'My Codex is working'});
- expect(entry.querySelector('svg')).toBeTruthy();
+ expect((await within(entry).findByRole('img',{name:'My Codex is working'})).querySelectorAll('circle')).toHaveLength(3);
  await updateActivity(false);
  await waitFor(()=>expect(within(entry).queryByRole('img',{name:'My Codex is working'})).toBeNull());
  fireEvent.contextMenu(entry);
@@ -2168,8 +2167,7 @@ it('opens agent sessions below direct messages, retains drafts, and refreshes si
  await act(async () => releaseDetail());
  await screen.findByRole('heading',{name:'Launch plan',exact:true,level:1});
  await updateActivity(true);
- await within(entry).findByRole('img',{name:'My Codex is working'});
- expect(entry.querySelector('svg')).toBeTruthy();
+ expect((await within(entry).findByRole('img',{name:'My Codex is working'})).querySelectorAll('circle')).toHaveLength(3);
  await updateActivity(false);
  expect(await screen.findByRole('textbox',{name:'Message agent session'})).toBe(editor);
  expect(editor.closest('main')).toBe(frame);

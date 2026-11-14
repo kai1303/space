@@ -240,13 +240,11 @@ export function WorkspaceSidebar({
               badgeCount={c.badgeCount}
               onClick={event => { if (c.onSplit && (event.metaKey || event.ctrlKey) && event.altKey) c.onSplit(); else onSelect(c.id); }}
               icon={
-                c.statusIcon ? c.statusIcon : c.agentName ? (
-                  <span className="sp-sidebar-avatar" aria-hidden={!c.typing} role={c.typing ? 'img' : undefined}
-                    aria-label={c.typing ? `${c.agentName} is working` : undefined}>
+                c.statusIcon ? c.statusIcon : c.agentName && c.typing ? (
+                  <DirectTypingIcon name={c.agentName} label={`${c.agentName} is working`} size={17}/>
+                ) : c.agentName ? (
+                  <span className="sp-sidebar-avatar" aria-hidden="true">
                     {c.codeChannel ? <Code size={17} aria-hidden="true"/> : <Avatar name={c.agentName} initials={c.agentName.slice(0,2).toUpperCase()} image={c.image} size="sm" tone="green"/>}
-                    {c.typing && <motion.span aria-hidden="true" className="sp-sidebar-working-dot"
-                      animate={{opacity: reduced ? 1 : [1, 0.5, 1]}}
-                      transition={reduced ? {duration:0} : {duration:1.4, repeat:Infinity, ease:'easeInOut'}}/>}
                   </span>
                 ) : c.typing && c.id !== selectedId ? (
                   <DirectTypingIcon name={c.name} size={iconSection === "starred" ? 16 : 20}/>

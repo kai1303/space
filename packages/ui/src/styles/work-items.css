@@ -90,6 +90,7 @@
 .sp-agent-markdown :is(ul, ol) { margin-block: 0; padding-inline-start: 24px; }
 .sp-agent-markdown > :is(ul, ol):not(:first-child) { margin-block-start: var(--sp-space-1); }
 .sp-agent-markdown > :is(ul, ol):not(:last-child) { margin-block-end: var(--sp-space-1); }
+.sp-agent-markdown > * + .sp-alert { margin-block-start: var(--sp-space-2); }
 .sp-agent-markdown > :first-child { margin-top: 0; }
 .sp-agent-markdown > :last-child { margin-bottom: 0; }
 .sp-agent-markdown a:not(.sp-mention-token) { color: var(--sp-info); text-decoration: underline; }

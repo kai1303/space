@@ -111,7 +111,6 @@
 }
 .sp-workspace-sidebar .sp-channel > svg { width: 16px; height: 16px; flex-shrink: 0; }
 .sp-workspace-sidebar .sp-sidebar-avatar { position:relative;display:flex;flex-shrink:0; }
-.sp-sidebar-working-dot { position:absolute;right:-1px;bottom:-1px;width:7px;height:7px;border-radius:50%;background:var(--sp-info);box-shadow:0 0 0 1px var(--sp-surface);pointer-events:none; }
 .sp-workspace-sidebar .sp-sidebar-avatar .sp-avatar { width:20px;height:20px;min-width:20px;border-radius:4px;font-size:9px; }
 .sp-workspace-sidebar .sp-sidebar-avatar .sp-presence { width:7px;height:7px;right:-2px;bottom:-1px; }
 .sp-workspace-sidebar .sp-channel--unread { font-weight: 700; }
