@@ -107,7 +107,7 @@ it('reuses sign-in and refreshes the authenticated session after success', async
   await userEvent.type(screen.getByRole('textbox', { name: 'Email' }), 'person@example.com');
   await userEvent.type(screen.getByLabelText('Password'), 'password1234');
   await userEvent.click(screen.getByRole('button', { name: 'Sign in', exact: true }));
-  expect(auth.signIn).toHaveBeenCalledWith({ email: 'person@example.com', password: 'password1234' });
+  expect(auth.signIn).toHaveBeenCalledWith({ email: 'person@example.com', password: 'password1234' }, { signal: expect.any(AbortSignal) });
   await waitFor(() => expect(refreshed).toHaveBeenCalledOnce());
   window.removeEventListener('space:session-expired', refreshed);
 });

@@ -1952,6 +1952,8 @@ it('uses the focused access layout while workspaces are loading',async()=>{
  vi.stubGlobal('fetch',vi.fn(async(path:string)=>({ok:true,json:async()=>path.startsWith('/v1/workspaces?')?pending:[]})));
  const view=render(<Chat/>);
  expect((await screen.findByRole('status')).textContent).toContain('Loading workspaces…');
+ expect(screen.getByRole('heading', { name: 'Your workspaces' })).toBeTruthy();
+ expect(screen.getByRole('button', { name: 'Sign out' })).toHaveProperty('disabled', false);
  expect(view.container.querySelector('.access-frame')).toBeTruthy();
  view.unmount();await act(async()=>{finish({items:[],next_cursor:null});await pending;});
 });

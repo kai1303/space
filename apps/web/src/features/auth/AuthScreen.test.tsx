@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { AuthScreen, SignOutButton } from './AuthScreen.js';
 const auth = vi.hoisted(() => ({ signIn: vi.fn(), signUp: vi.fn(), signOut: vi.fn() }));
 vi.mock('./auth-client.js', () => ({ authClient: { signIn: { email: auth.signIn }, signUp: { email: auth.signUp }, signOut: auth.signOut } }));
@@ -11,7 +11,7 @@ it('sends email/password to Better Auth and preserves form values on a rejected 
   fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'Incorrect-password' } });
   fireEvent.click(screen.getByRole('button', { name: 'Sign in', exact: true }));
   expect((await screen.findByRole('alert')).textContent).toContain('Email or password didn’t match.');
-  expect(auth.signIn).toHaveBeenCalledWith({ email: 'person@example.test', password: 'Incorrect-password' });
+  expect(auth.signIn).toHaveBeenCalledWith({ email: 'person@example.test', password: 'Incorrect-password' }, { signal: expect.any(AbortSignal) });
   expect((screen.getByLabelText('Email') as HTMLInputElement).value).toBe('person@example.test');
 });
 
@@ -31,7 +31,7 @@ it('associates rejected credentials with the fields and clears stale feedback on
   expect(password.getAttribute('aria-invalid')).not.toBe('true');
   expect(email).toHaveProperty('value', 'person@example.test');
 });
-it('registers a named account with password constraints and clears a successful password', async () => {
+it('registers a named account with password constraints and opens the workspace after success', async () => {
   auth.signUp.mockResolvedValue({ data: {}, error: null });
   render(<AuthScreen />);
   fireEvent.click(screen.getByRole('button', { name: 'New here? Create an account' }));
@@ -41,8 +41,9 @@ it('registers a named account with password constraints and clears a successful 
   expect(password.minLength).toBe(12); expect(password.autocomplete).toBe('new-password');
   fireEvent.change(password, { target: { value: 'Long-password-1234' } });
   fireEvent.click(screen.getByRole('button', { name: 'Create account', exact: true }));
-  await waitFor(() => expect(auth.signUp).toHaveBeenCalledWith({ name: 'Person', email: 'person@example.test', password: 'Long-password-1234' }));
-  await waitFor(() => expect(password.value).toBe(''));
+  await waitFor(() => expect(auth.signUp).toHaveBeenCalledWith({ name: 'Person', email: 'person@example.test', password: 'Long-password-1234' }, { signal: expect.any(AbortSignal) }));
+  expect(await screen.findByRole('status')).toHaveProperty('textContent', 'Opening your workspace…');
+  expect(screen.queryByLabelText('Password')).toBeNull();
 });
 it('shows a retryable logout error instead of pretending the session was revoked', async () => {
   auth.signOut.mockRejectedValue(new Error('offline'));
@@ -51,7 +52,7 @@ it('shows a retryable logout error instead of pretending the session was revoked
   expect(await screen.findByRole('alert')).toHaveProperty('textContent', 'Could not sign out. Try again.');
 });
 
-it('announces sign-in progress and prevents changes or duplicate submissions while pending', async () => {
+it('announces sign-in progress while allowing edits and preventing duplicate submissions', async () => {
   let finish!: (result: unknown) => void;
   auth.signIn.mockReturnValue(new Promise(resolve => { finish = resolve; }));
   render(<AuthScreen />);
@@ -60,11 +61,24 @@ it('announces sign-in progress and prevents changes or duplicate submissions whi
   const form = screen.getByLabelText('Email').closest('form')!;
   fireEvent.submit(form);
   expect(screen.getByRole('button', { name: 'Signing in…' })).toHaveProperty('disabled', true);
-  expect(screen.getByLabelText('Email')).toHaveProperty('disabled', true);
+  fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'new@example.test' } });
   fireEvent.submit(form);
   expect(auth.signIn).toHaveBeenCalledTimes(1);
   finish({ error: { message: 'Try again' } });
-  await screen.findByRole('alert');
-  expect(screen.getByLabelText('Email')).toHaveProperty('disabled', false);
+  expect((await screen.findByRole('alert')).textContent).toContain('updated details');
+  expect(screen.getByLabelText('Email')).toHaveProperty('value', 'new@example.test');
   expect(screen.getByLabelText('Password')).toHaveProperty('value', 'Long-password-1234');
+});
+
+it('ignores a late auth response after switching forms', async () => {
+  let finish!: (value: unknown) => void;
+  auth.signIn.mockReturnValue(new Promise(resolve => { finish = resolve; }));
+  const authenticated = vi.fn();
+  render(<AuthScreen onAuthenticated={authenticated} />);
+  fireEvent.submit(screen.getByLabelText('Email').closest('form')!);
+  fireEvent.click(screen.getByRole('button', { name: 'New here? Create an account' }));
+  expect(auth.signIn.mock.calls[0]![1].signal.aborted).toBe(true);
+  await act(async () => finish({ data: {}, error: null }));
+  expect(authenticated).not.toHaveBeenCalled();
+  expect(screen.getByRole('button', { name: 'Create account', exact: true })).toHaveProperty('disabled', false);
 });

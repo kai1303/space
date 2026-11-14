@@ -23,10 +23,11 @@ import { WorkspaceAdministration } from '../features/workspace/members/Workspace
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { motion, useReducedMotion } from 'motion/react';
 import { motionTransition } from '@space/ui/motion';
-import { AccessFrame, AccessLoading } from '../features/auth/AccessFrame.js';
+import { SignOutButton } from '../features/auth/AuthScreen.js';
+import { AccessFrame } from '../features/auth/AccessFrame.js';
 import { WorkspaceSetup } from '../features/workspace/onboarding/WorkspaceSetup.js';
 import type { DirectMessageSummary } from '@space/contracts';
-import { Button } from '@space/ui/primitives';
+import { Button, ListRowSkeleton } from '@space/ui/primitives';
 import { AgentMessageLinkContext } from '@space/ui/agents';
 import { acquireRealtime } from '../shared/realtime/socket-session.js';
 import { listAll, request } from '../shared/api/request.js';
@@ -141,8 +142,16 @@ function WorkspaceView({ profile: initialProfile, attachments, address, onOpenSe
   }, [profile.id, workspace]);
   function forgetChannel(id: string) { pageViews.rooms.delete(id); forgetChannelDrafts(id); void getMessageOutbox(profile.id, workspace).purgeChannel(id).catch(reason => setError(errorText(reason))); }
   const [loaded, setLoaded] = useState(false), [loadAttempt, setLoadAttempt] = useState(0);
+  const creationScope = useRef<AbortController | null>(null);
+  useEffect(() => {
+    const scope = new AbortController();
+    creationScope.current = scope;
+    return () => scope.abort();
+  }, [profile.id]);
   async function addWorkspace(name: string) {
-    const created = await request<Workspace>('/workspaces', { name: name.trim() });
+    const signal = creationScope.current?.signal;
+    const created = await request<Workspace>('/workspaces', { name: name.trim() }, undefined, 'POST', signal, profile.id);
+    if (signal?.aborted) return;
     setWorkspaces(items => [...items, created]);
     changeWorkspace(created.id);
   }
@@ -217,7 +226,14 @@ function WorkspaceView({ profile: initialProfile, attachments, address, onOpenSe
   useEffect(() => {
     if (loaded && (hubView || activityOpen)) publish(null);
   }, [loaded, hubView, activityOpen, publish]);
-  if (!loaded) return error ? <AccessFrame screen="workspace-error" title="Let’s try that again."><p role="alert">{error}</p><Button onClick={() => { setError(''); setLoadAttempt(attempt => attempt + 1); }}>Try again</Button>{location.pathname !== '/chat' && <a href="/chat">Open workspace</a>}</AccessFrame> : (location.pathname.startsWith('/c/') || location.pathname.startsWith('/s/')) ? <ConversationLinkLoading /> : <AccessLoading message="Loading workspaces…" />;
+  if (!loaded) {
+    if (error) return <AccessFrame screen="workspace-error" title="Let’s try that again."><p role="alert">{error}</p><Button onClick={() => { setError(''); setLoadAttempt(attempt => attempt + 1); }}>Try again</Button>{location.pathname !== '/chat' && <a href="/chat">Open workspace</a>}<SignOutButton /></AccessFrame>;
+    if (location.pathname.startsWith('/c/') || location.pathname.startsWith('/s/')) return <ConversationLinkLoading />;
+    return <AccessFrame screen="workspace-list" title="Your workspaces">
+      <ListRowSkeleton label="Loading workspaces…" />
+      <div className="access-account"><span>Signed in as {profile.display_name}</span><SignOutButton /></div>
+    </AccessFrame>;
+  }
   if (!workspace) return <WorkspaceSetup name={profile.display_name} onCreate={addWorkspace} />;
   const detached = location.pathname.startsWith('/c/') && new URLSearchParams(location.search).get('threadWindow')==='1' ? parseConversationPath(location.pathname) : undefined;
   if (detached?.thread) return <main className="thread-window"><ThreadDestination workspace={workspace} channel={detached.channel} thread={detached.thread} detached profile={profile} attachments={attachments} onClose={()=>{window.close(); if (!window.closed) location.replace(location.pathname);}}/></main>;
