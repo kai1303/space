@@ -11,6 +11,10 @@ export function text(value: unknown, max = 4000): string {
   if (typeof value !== 'string' || !value.trim() || value.length > max || value.includes('\0')) throw new AppError(400, 'invalid_text');
   return value;
 }
+export function projectToken(value: unknown): string {
+  if (typeof value !== 'string' || !/^[A-Za-z0-9_-]{40,12000}$/.test(value)) throw new AppError(400, 'invalid_project_selection');
+  return value;
+}
 export function uuid(value: unknown): string {
   const id = text(value, 36);
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id)) throw new AppError(400, 'invalid_id');

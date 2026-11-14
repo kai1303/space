@@ -22,7 +22,8 @@ function setup(){
  let sessions=[session('one','Research'),session('two','Implementation')];
  const fetch=vi.fn(async(path:string,init?:RequestInit)=>({ok:true,json:async()=>{
   if(path.endsWith('/models'))return [{id:'provider-default',label:'Connector default',efforts:['low','medium'],defaultEffort:'medium',isDefault:true},{id:'sdk-model-42',label:'Model 42',efforts:['low','medium','high','ultra'],defaultEffort:'low'}];
-  if(path==='/v1/channels/channel/navigator')return {candidates:[{installation_id:'agent',skill:'codex.run',name:'Codex',persistent_sessions:true}]};
+  if(path.endsWith('/project-picker'))return {selection:{name:'Project A',project_token:'folder-selection'}};
+  if(path==='/v1/channels/channel/navigator')return {candidates:[{project_picker:true,installation_id:'agent',skill:'codex.run',name:'Codex',persistent_sessions:true}]};
   if(path==='/v1/channels/channel/agents')return [];
   if(path==='/v1/threads/thread/agent-sessions'){
    if(init?.method==='POST'){const body=JSON.parse(String(init.body));const created=session(body.client_session_id,body.title);sessions=[...sessions,created];return created;}
@@ -102,8 +103,13 @@ it('creates another session and sends only through its own composer with a retry
  const fetch=setup();render(<SessionViews/>);
  await userEvent.click(await screen.findByRole('button',{name:'New agent session'}));
  await userEvent.type(screen.getByRole('textbox',{name:'Session name'}),'Design review');
+ await userEvent.click(screen.getByRole('button',{name:'Choose project folder…'}));
+ await screen.findByRole('button',{name:'Project A'});
  await userEvent.click(screen.getByRole('button',{name:'Start session',exact:true}));
  await screen.findByText(/Codex was invited to this agent session/);
+ const posted = fetch.mock.calls.find(([url,init])=>url.endsWith('/agent-sessions') && init?.method==='POST');
+ const picked = fetch.mock.calls.find(([url])=>url.endsWith('/project-picker'));
+ expect(JSON.parse(String(posted?.[1]?.body))).toMatchObject({client_session_id:JSON.parse(String(picked?.[1]?.body)).session_id, project_token:'folder-selection'});
  const composer=await screen.findByRole('textbox',{name:'Message agent session'});
  await userEvent.type(composer,'Follow up');await userEvent.keyboard('{Enter}');
  await waitFor(()=>expect(fetch.mock.calls.some(([path,init])=>path.endsWith('/messages')&&init?.headers&&new Headers(init.headers).get('idempotency-key'))).toBe(true));

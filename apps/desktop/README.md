@@ -2,7 +2,7 @@
 
 Space Desktop loads your Space web deployment and includes the local agent connector. Install the app and your provider CLI on the Mac. In the workspace’s agent setup, select **Local runner**, choose a provider, then **Connect on this Mac**. Confirm the server in the native dialog. Codex opens ChatGPT authorization in your browser. Kiro and Claude display their own sign-in prompts in a local window when needed.
 
-The app keeps each paired provider running when you close the workspace window. Quitting stops the runners. Opening Space restores them for the configured server. Desktop pairings use separate private profiles under the Space application data directory. Pairing grants chat access. Project folders and coding mode still require the connector CLI.
+The app keeps each paired provider running when you close the workspace window. Quitting stops the runners. Opening Space restores them for the configured server. Desktop pairings use separate private profiles under the Space application data directory. Pairing grants chat access. In **New agent session**, choose your paired agent and use **Choose project folder…** to enable coding in that folder for the session.
 
 In a Mac browser, **Open Space Desktop** carries the workspace and selected provider into the app. Sign in to Space Desktop if prompted and confirm pairing there. Opening a different server requires native confirmation. Switching servers stops the previous server’s runners.
 

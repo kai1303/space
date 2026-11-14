@@ -22,7 +22,7 @@ export function serverPrompt(servers: TurnServer[], project?: string) {
 }
 
 // Capabilities belong to a turn, while native conversation IDs stay in provider storage.
-export async function turnScopedRuntime(create: (onExit: () => void, servers: TurnServer[], signal?: AbortSignal, enableGoals?: boolean, personalOnly?: boolean) => Promise<AgentRuntime>, onExit: () => void, platform?: string, browserTurn?: BrowserTurn): Promise<AgentRuntime> {
+export async function turnScopedRuntime(create: (onExit: () => void, servers: TurnServer[], signal?: AbortSignal, enableGoals?: boolean, personalOnly?: boolean, request?: InvocationRequest) => Promise<AgentRuntime>, onExit: () => void, platform?: string, browserTurn?: BrowserTurn): Promise<AgentRuntime> {
   let closed = false, busy = false;
   const exited = () => { if (!closed) { closed = true; onExit(); } };
   let runtime: AgentRuntime | undefined = await create(exited, []);
@@ -34,7 +34,7 @@ export async function turnScopedRuntime(create: (onExit: () => void, servers: Tu
       const request = parseInvocation(raw);
       const servers = turnServers(request, platform);
       const personalOnly = Boolean(request.context?.handoff?.browser_url);
-      const scoped = personalOnly || servers.length > 0 || Boolean(request.goal_action);
+      const scoped = Boolean(request.persistent_session?.project_token) || personalOnly || servers.length > 0 || Boolean(request.goal_action);
       if (closed || busy || signal.aborted) throw new Error('Agent unavailable or busy.');
       busy = true;
       const lifetime = new AbortController();
@@ -44,7 +44,7 @@ export async function turnScopedRuntime(create: (onExit: () => void, servers: Tu
           if (local) servers.push(local);
         }
         if (scoped) { runtime?.stop(); runtime = undefined; }
-        if (!runtime) runtime = await create(exited, servers, signal, Boolean(request.goal_action), personalOnly);
+        if (!runtime) runtime = await create(exited, servers, signal, Boolean(request.goal_action), personalOnly, request);
         if (closed || signal.aborted) { runtime.stop(); runtime = undefined; throw new Error('Agent unavailable.'); }
         await runtime.invoke(request, emit, signal, controls);
       } finally {

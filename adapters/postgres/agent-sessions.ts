@@ -166,7 +166,7 @@ export class AgentSessionStore {
     return sessionTransaction(this.db, c => this.createIn(c,actor,threadId,input,null));
   }
   async createForChannel(actor: string, channelId: string, raw: unknown): Promise<AgentSessionSummary> {
-    const {client_thread_id, ...fields} = record(raw, ['client_thread_id','client_session_id','installation_id','title','skill']);
+    const {client_thread_id, ...fields} = record(raw, ['client_thread_id','client_session_id','installation_id','title','skill','project_token']);
     const threadId = uuid(client_thread_id), input = parseAgentSessionInput(fields);
     return sessionTransaction(this.db, async c => {
       const [channel] = await c.select().from(s.channels).where(eq(s.channels.id,uuid(channelId)));
@@ -191,13 +191,14 @@ export class AgentSessionStore {
     if (!definition?.capabilities.persistent_sessions) throw new AppError(409, 'session_connector_unsupported');
     const grants = await c.select().from(s.agentGrants).where(and(eq(s.agentGrants.installation_id, input.installation_id), eq(s.agentGrants.channel_id, thread.channel_id)));
     const [connection] = await c.select({revoked_at:s.agentConnections.revoked_at}).from(s.agentConnections).where(eq(s.agentConnections.installation_id,input.installation_id));
+    if (input.project_token && (!connection || ref?.owner_id !== actor)) throw new AppError(403, 'installation_not_owned');
     const skills = definition.capabilities.skills.filter(skill => connection ? !connection.revoked_at : grants.some(grant => grant.skill === skill));
     const skill = input.skill ?? (skills.length === 1 ? skills[0] : undefined);
     if (!skill) throw new AppError(400, 'session_skill_required');
     const installation = await this.tasks.eligible(c, { thread_id: threadId, workspace_id: thread.workspace_id, installation_id: input.installation_id, requester_id: actor, skill }, true);
-    await c.insert(s.agentSessions).values({ id: input.client_session_id, parent_session_id: parentId, workspace_id: thread.workspace_id, installation_id: installation.id, origin_thread_id: threadId, title: input.title, managed: true, created_by: actor, skill }).onConflictDoNothing({ target: s.agentSessions.id });
+    await c.insert(s.agentSessions).values({ id: input.client_session_id, project_token:input.project_token, parent_session_id: parentId, workspace_id: thread.workspace_id, installation_id: installation.id, origin_thread_id: threadId, title: input.title, managed: true, created_by: actor, skill }).onConflictDoNothing({ target: s.agentSessions.id });
     const [existing] = await c.select().from(s.agentSessions).where(eq(s.agentSessions.id, input.client_session_id));
-    if (!existing || existing.parent_session_id !== parentId || !existing.managed || existing.origin_thread_id !== threadId || existing.installation_id !== input.installation_id || (existing.creation_title ?? existing.title) !== input.title || existing.created_by !== actor || existing.skill !== skill) throw new AppError(409, 'idempotency_conflict');
+    if (!existing || existing.project_token !== (input.project_token ?? null) || existing.parent_session_id !== parentId || !existing.managed || existing.origin_thread_id !== threadId || existing.installation_id !== input.installation_id || (existing.creation_title ?? existing.title) !== input.title || existing.created_by !== actor || existing.skill !== skill) throw new AppError(409, 'idempotency_conflict');
     return this.summary(c, input.client_session_id);
   }
   async inviteAgent(actor:string, parentId:string, key:string, raw:unknown) {

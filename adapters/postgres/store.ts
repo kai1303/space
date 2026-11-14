@@ -328,7 +328,7 @@ export class PostgresStore implements DeliveryStore {
           if (preview?.kind==='image') images.push({index:attached.length-1,id:file.id,animated:preview.mime==='image/gif'});
         }
       }
-      return { installation, request: { ...(task.goal_action ? {goal_action:task.goal_action} : {}), ...(task.codex_settings ? {codex_settings:task.codex_settings} : {}), ...(attached.length ? {attachments:attached} : {}), ...(session?.managed ? { persistent_session: { resume: Boolean(priorReady) } } : {}), schema_version: '1.0', task_id: task.id, session_id: task.session_id!, execution_id: delivery.execution_id, idempotency_key: delivery.execution_id, goal: task.goal, skill: task.skill, context } };
+      return { installation, request: { ...(task.goal_action ? {goal_action:task.goal_action} : {}), ...(task.codex_settings ? {codex_settings:task.codex_settings} : {}), ...(attached.length ? {attachments:attached} : {}), ...(session?.managed ? { persistent_session: { resume: Boolean(priorReady), ...(session.project_token ? {project_token: session.project_token} : {}) } } : {}), schema_version: '1.0', task_id: task.id, session_id: task.session_id!, execution_id: delivery.execution_id, idempotency_key: delivery.execution_id, goal: task.goal, skill: task.skill, context } };
     });
     if (prepared && this.outboundAccess) prepared.request.outbound = await this.outboundAccess(prepared.request.execution_id,prepared.installation.id);
     if (!prepared) return null;

@@ -41,8 +41,9 @@ export class NavigatorStore {
   return member?.guest_type==='none'&&(channel.created_by===actor||member.role==='owner'||member.role==='admin');
  }
  private async settings(c:DbSession,channel:string):Promise<Settings> {return readNavigatorSettings(c,channel);}
- private async catalog(c:DbSession,channel:string):Promise<NavigatorCandidate[]> {
+ private async catalog(c:DbSession,channel:string,actor?:string):Promise<NavigatorCandidate[]> {
   const candidates=await rows<NavigatorCandidate & {owner_id:string;workspace_id:string}>(c,sql`SELECT i.id AS installation_id,coalesce(ac.name,d.name) AS name,skill.value AS skill,
+    (ac.project_picker AND i.owner_id=${actor ?? null} AND ac.connection_id IS NOT NULL AND ac.auth_status='ready' AND ac.last_seen_at > now() - interval '45 seconds') AS project_picker,
     coalesce(ac.name,d.name)||' supports '||skill.value AS description,i.owner_id,i.workspace_id,coalesce((d.capabilities->>'persistent_sessions')::boolean,false) AS persistent_sessions
     FROM agent_installations i JOIN agent_definitions d ON d.id=i.definition_id
     CROSS JOIN LATERAL jsonb_array_elements_text(d.capabilities->'skills') AS skill(value)
@@ -52,9 +53,9 @@ export class NavigatorStore {
     JOIN workspace_members wm ON wm.workspace_id=i.workspace_id AND wm.user_id=i.owner_id AND wm.active
     WHERE i.enabled AND ac.revoked_at IS NULL AND ch.archived_at IS NULL
     AND (ac.installation_id IS NOT NULL OR EXISTS(SELECT 1 FROM agent_grants g WHERE g.installation_id=i.id AND g.workspace_id=i.workspace_id AND g.channel_id=ch.id AND g.skill=skill.value)) ORDER BY i.id,skill.value LIMIT 100`);
-  return candidates.map(({installation_id,name,skill,description,persistent_sessions})=>({installation_id,name,skill,description,persistent_sessions}));
+  return candidates.map(({installation_id,name,skill,description,persistent_sessions,project_picker})=>({installation_id,name,skill,description,persistent_sessions,...(project_picker ? {project_picker:true} : {})}));
  }
- async read(actor:string,channel:string) {return sessionTransaction(this.db,async c=>{const ch=await this.channel(c,actor,channel);const {policy_version,...settings}=await this.settings(c,channel);return {settings,candidates:await this.catalog(c,channel),can_manage:await this.manager(c,actor,ch)};});}
+ async read(actor:string,channel:string) {return sessionTransaction(this.db,async c=>{const ch=await this.channel(c,actor,channel);const {policy_version,...settings}=await this.settings(c,channel);return {settings,candidates:await this.catalog(c,channel,actor),can_manage:await this.manager(c,actor,ch)};});}
  async configure(actor:string,channel:string,input:unknown) {
   const v=record(input,['mode','execution_mode','rules','daily_token_limit','cooldown_seconds']);
   const patch:Partial<Settings>={};

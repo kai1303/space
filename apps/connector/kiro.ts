@@ -12,6 +12,7 @@ import { AgentSessionStopped, type InvokeAgent, type SpawnAgent } from './agent-
 import { localSessionStore, type LocalSessionStorage } from './session-storage.js';
 import { approveCoding, approveProject, readCodeContext, reviewInstructions, contentPatch, kiroCodingTools } from './coding-tools.js';
 import { AgentProgress } from './agent-progress.js';
+import { projectForTurn } from './session-project.js';
 import { projectServer, projectToolNames, resolveProject } from './project-tools.js';
 import { prepareKiroProfile, resolveKiroAcpCommand } from './kiro-auth.js';
 import { turnScopedRuntime, type TurnServer } from './outbound-tools.js';
@@ -352,5 +353,5 @@ async function startSingleKiro(storage: LocalSessionStorage, onExit: () => void,
 }
 
 export async function startKiro(storage: LocalSessionStorage, onExit: () => void, launch: SpawnAgent = spawn) {
-  return turnScopedRuntime((done, servers, signal, _goals, personalOnly) => startSingleKiro(personalOnly ? { ...storage, project: undefined, coding: false } : storage, done, launch, servers, signal), onExit, storage.connection.origin);
+  return turnScopedRuntime(async (done, servers, signal, _goals, personalOnly, request) => startSingleKiro(personalOnly ? { ...storage, project: undefined, coding: false } : await projectForTurn(storage, request), done, launch, servers, signal), onExit, storage.connection.origin);
 }

@@ -185,3 +185,26 @@ test('desktop Vault dispatch is installation-bound and independent of a model tu
     assert.equal(calls,1);
   } finally { connection.close(); await new Promise(resolve => io.close(resolve)); }
 });
+
+test('project picker admits one live selection and rejects stale, foreign and path-bearing requests', async () => {
+  const http = createServer(), io = new Server(http);
+  await new Promise(resolve => http.listen(0,'127.0.0.1',resolve));
+  const connected = new Promise(resolve => io.of('/agents').once('connection',resolve));
+  const id = '282b6a70-ea37-45c3-92e6-cf889470ac99';
+  const opened = Promise.withResolvers(), choice = Promise.withResolvers();
+  const connection = connectPlatform({origin:'http://127.0.0.1:'+http.address().port,credential:'fixture',installation_id:id,workspace_id:'w'},
+    ()=>'ready',()=>{},undefined,undefined,undefined,async session=>{assert.equal(session,id);opened.resolve();return choice.promise;});
+  try {
+    const socket = await connected;
+    const pick = payload => socket.timeout(2000).emitWithAck('agent.project.pick',payload);
+    const input = {installation_id:id,session_id:id,expires:Date.now()+30000};
+    assert.equal(socket.handshake.auth.project_picker,true);
+    for (const change of [{expires:0},{installation_id:'other'},{path:'/tmp'}])
+      assert.deepEqual(await pick({...input,...change}),{error:'project_picker_unavailable'});
+    const pending = pick(input);
+    await opened.promise;
+    assert.deepEqual(await pick(input),{error:'project_picker_busy'});
+    choice.resolve(null);
+    assert.deepEqual(await pending,{selection:null});
+  } finally { connection.close(); await new Promise(resolve => io.close(resolve)); }
+});

@@ -112,9 +112,19 @@ export class AgentConnectionStore {
         eq(s.workspaceMembers.active, true), isNull(s.agentConnections.revoked_at), installation ? eq(s.agentInstallations.id, installation) : undefined))
       .orderBy(s.agentConnections.name, s.agentConnections.installation_id).limit(100);
   }
-  async connect(token: unknown, vaultMac = false) {
+  async projectPickerConnection(actor: string, installation: string) {
+    const [row] = await this.db.select({ connection: s.agentConnections.connection_id }).from(s.agentConnections)
+      .innerJoin(s.agentInstallations, eq(s.agentInstallations.id, s.agentConnections.installation_id))
+      .innerJoin(s.workspaceMembers, and(eq(s.workspaceMembers.workspace_id, s.agentInstallations.workspace_id), eq(s.workspaceMembers.user_id, actor)))
+      .where(and(eq(s.agentInstallations.id, installation), eq(s.agentInstallations.owner_id, actor), eq(s.workspaceMembers.active, true),
+        eq(s.agentInstallations.enabled, true), isNull(s.agentConnections.revoked_at), eq(s.agentConnections.auth_status, 'ready'),
+        eq(s.agentConnections.project_picker, true), sql`${s.agentConnections.last_seen_at} > now() - interval '45 seconds'`));
+    if (!row?.connection) throw new AppError(409, 'project_picker_unavailable');
+    return row.connection;
+  }
+  async connect(token: unknown, vaultMac = false, projectPicker = false) {
     const identity = await this.authenticate(token), connection_id = randomUUID();
-    const rows = await this.db.update(s.agentConnections).set({ connection_id, vault_mac: vaultMac, last_seen_at: new Date(), auth_status: 'required', model_catalog:null })
+    const rows = await this.db.update(s.agentConnections).set({ connection_id, vault_mac: vaultMac, project_picker: projectPicker, last_seen_at: new Date(), auth_status: 'required', model_catalog:null })
       .where(and(eq(s.agentConnections.installation_id, identity.id), eq(s.agentConnections.token_hash, hash(token as string)), isNull(s.agentConnections.revoked_at))).returning();
     if (!rows.length) throw unauthorized();
     return { ...identity, connection_id };

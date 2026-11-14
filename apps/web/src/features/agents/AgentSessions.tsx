@@ -1,3 +1,4 @@
+import { SessionProjectPicker, type SessionProject } from './SessionProjectPicker.js';
 import { codeArtifacts, CodeChannelArtifacts, CodeChannelContext } from './CodeChannelArtifacts.js';
 import { SessionAgentHandoff } from './SessionAgentHandoff.js';
 import { SessionTeam } from './SessionTeam.js';
@@ -62,6 +63,9 @@ export function AgentSessions({primary,agentName,initialArtifact,artifactRequest
  const [error,setError]=useState(''),[loading,setLoading]=useState(true),[saving,setSaving]=useState(false),[revision,setRevision]=useState(0),[revoked,setRevoked]=useState(false),[loadAttempt,setLoadAttempt]=useState(0);
  const drafts=useRef<Record<string,RichDocument>>({}),attempts=useRef(new Map<string,MessageAttempt>());
  const [acknowledged,setAcknowledged]=useState<Record<string,RichDocument>>({});
+ const [project,setProject]=useState<SessionProject>(), [choosing,setChoosing]=useState(false);
+ const candidate=catalog.find(item=>item.installation_id+'|'+item.skill===agent);
+ const selectedProject=candidate && project?.installation===candidate.installation_id ? project : undefined;
  const creation=useRef<{body:string;id:string}|undefined>(undefined);
  const lost=useRef(onAccessLost);lost.current=onAccessLost;
  const revokedRef=useRef(false);
@@ -98,12 +102,12 @@ export function AgentSessions({primary,agentName,initialArtifact,artifactRequest
   finally{if(alive.current)setSaving(false);}
  }
  async function create(event:FormEvent){
-  event.preventDefault();setSaving(true);setError('');
+  event.preventDefault();if(choosing || saving)return;setSaving(true);setError('');
   const [installation_id,skill]=agent.split('|');
-  const body=JSON.stringify({title:title.trim(),installation_id,skill});
-  if(creation.current?.body!==body)creation.current={body,id:crypto.randomUUID()};
+  const body=JSON.stringify({title:title.trim(),installation_id,skill,...(selectedProject && {project_token:selectedProject.project_token})});
+  if(creation.current?.body!==body)creation.current={body,id:selectedProject?.session ?? crypto.randomUUID()};
   try{const session=await request<AgentSessionSummary>(`/threads/${thread}/agent-sessions`,{...JSON.parse(body),client_session_id:creation.current.id});
-   if(!alive.current||!present.current)return;setSessions(items=>[session,...items.filter(item=>item.id!==session.id)]);setCreating(false);setTitle('');creation.current=undefined;onOpenSession?.(session.id);
+   if(!alive.current||!present.current)return;setSessions(items=>[session,...items.filter(item=>item.id!==session.id)]);setCreating(false);setProject(undefined);setTitle('');creation.current=undefined;onOpenSession?.(session.id);
   }catch(reason){if(denied(reason))revoke();else setError(errorText(reason));}
   finally{if(alive.current)setSaving(false);}
  }
@@ -147,7 +151,10 @@ export function AgentSessions({primary,agentName,initialArtifact,artifactRequest
     maxLength={4000} draftValue={getDraft(selected) ?? null} attachments={uploads?.drafts[draftKey(selected)] ?? []}
     onDraftChange={doc => saveDraft(selected, doc)} onSend={() => {}}/>}
   {picker&&<nav aria-label="Sessions in this thread" className="agent-sessions-list">{sessions.map(session=><button key={session.id} type="button" aria-label={session.title} onClick={()=>onOpenSession?.(session.id)}><span><SessionTitle title={session.title}/></span><small>{session.agent_name} · {session.state==='ended'?'Ended':`${session.turn_count} ${session.turn_count===1?'turn':'turns'}`}</small></button>)}</nav>}
-  {picker&&creating&&<form className="agent-session-create" onSubmit={create}><h3>New agent session</h3><label>Session name<input required maxLength={120} value={title} onChange={event=>setTitle(event.target.value)} placeholder="What are we working on?"/></label><label>Agent<Select aria-label="Agent" value={agent} onChange={event=>setAgent(event.target.value)}>{catalog.map(item=><option key={`${item.installation_id}|${item.skill}`} value={`${item.installation_id}|${item.skill}`}>{item.name} · {item.skill}</option>)}</Select></label>{!catalog.length&&<p>No session-capable agent is available in this conversation.</p>}{local.filter(item=>item.persistent_sessions&&!item.inherits_owner_access).flatMap(item=>item.skills.filter(skill=>!item.granted_skills.includes(skill)).map(skill=><Button key={`${item.id}|${skill}`} size="sm" disabled={saving} onClick={()=>void enable(item.id,skill)}>Enable {item.name}{item.skills.length>1?` · ${skill}`:''} in this channel</Button>))}<div><Button type="submit" disabled={saving||!title.trim()||!agent}>Start session</Button><Button variant="ghost" onClick={()=>setCreating(false)}>Cancel</Button></div></form>}
+  {picker&&creating&&<form className="agent-session-create" onSubmit={create}><h3>New agent session</h3><label>Session name<input required maxLength={120} value={title} onChange={event=>setTitle(event.target.value)} placeholder="What are we working on?"/></label><label>Agent<Select aria-label="Agent" value={agent} disabled={saving} onChange={event=>{setProject(undefined);setAgent(event.target.value);}}>{catalog.map(item=><option key={`${item.installation_id}|${item.skill}`} value={`${item.installation_id}|${item.skill}`}>{item.name} · {item.skill}</option>)}</Select></label>
+   {candidate && (candidate.project_picker || selectedProject) && <SessionProjectPicker key={candidate.installation_id} installation={candidate.installation_id}
+     viewer={viewerId} project={selectedProject} disabled={saving} onChange={setProject} onBusy={setChoosing}/>}
+   {!catalog.length&&<p>No session-capable agent is available in this conversation.</p>}{local.filter(item=>item.persistent_sessions&&!item.inherits_owner_access).flatMap(item=>item.skills.filter(skill=>!item.granted_skills.includes(skill)).map(skill=><Button key={`${item.id}|${skill}`} size="sm" disabled={saving} onClick={()=>void enable(item.id,skill)}>Enable {item.name}{item.skills.length>1?` · ${skill}`:''} in this channel</Button>))}<div><Button type="submit" disabled={saving||choosing||!title.trim()||!agent}>Start session</Button><Button type="button" variant="ghost" disabled={saving} onClick={()=>{setProject(undefined);setCreating(false);}}>Cancel</Button></div></form>}
   {!picker&&current&&detail?.session.id===current.id&&<SessionConversation primary={primary} artifactRequest={artifactRequest} initialArtifact={initialArtifact} key={current.id} initial={detail} session={current} channel={channel} channelName={channelName} onBack={onBack} onClose={onClose} viewerId={viewerId} revision={revision} draft={getDraft(current.id)} acknowledged={externalAcknowledged?.[draftKey(current.id)]??acknowledged[current.id]} onDraftChange={document=>saveDraft(current.id,document)} uploads={uploads} onSend={(text,document,files,mode,execution,settings)=>send(current.id,text,document,files,mode,execution,settings)} onAccessLost={revoke} archived={archived}/>}
   {picker&&!loading&&!creating&&!sessions.length&&<p className="agent-sessions-empty">No agent sessions yet.</p>}
   {!picker&&!loading&&!current&&!error&&<p role="alert" className="agent-sessions-empty">This session is unavailable.</p>}

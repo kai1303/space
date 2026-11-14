@@ -36,7 +36,8 @@ it('creates an agent session for a selected conversation, reusing its identity o
   mocks.read.mockImplementation(async(url:string,body?:Record<string,string>)=>{
     if(url.includes('/discover?'))return {items:[],next_cursor:null};
     if(url.includes('/channels?'))return {items:[{id:'general',name:'general',joined:true}],next_cursor:null};
-    if(url.endsWith('/navigator'))return {candidates:[{installation_id:'codex',name:'Codex',skill:'codex.run',persistent_sessions:true}]};
+    if(url.endsWith('/project-picker'))return {selection:{name:'Space repository',project_token:'sealed-selection'}};
+    if(url.endsWith('/navigator'))return {candidates:[{project_picker:true,installation_id:'codex',name:'Codex',skill:'codex.run',persistent_sessions:true}]};
     if(url.endsWith('/messages?limit=50'))return {messages:[{thread_id:'checkout',text:'Checkout failed'}]};
     if(url==='/threads/checkout/agent-sessions') {
       if(++creates===1)throw Error('network_error');
@@ -53,11 +54,15 @@ it('creates an agent session for a selected conversation, reusing its identity o
   fireEvent.click(await screen.findByRole('option',{name:'#general'}));
   fireEvent.click(await screen.findByRole('combobox',{name:'Source conversation'}));
   fireEvent.click(await screen.findByRole('option',{name:'Checkout failed'}));
+  fireEvent.click(screen.getByRole('button',{name:'Choose project folder…'}));
+  await screen.findByRole('button',{name:'Space repository'});
   fireEvent.click(screen.getByRole('button',{name:'Create agent session'}));
   await screen.findByRole('alert');
   fireEvent.click(screen.getByRole('button',{name:'Create agent session'}));
   await waitFor(()=>expect(onOpen).toHaveBeenCalledWith(expect.objectContaining({origin_thread_id:'checkout',channel_id:'general'})));
   const calls=mocks.read.mock.calls.filter(([url])=>url==='/threads/checkout/agent-sessions');
+  const pick = mocks.read.mock.calls.find(([url])=>url.endsWith('/project-picker'));
+  expect(calls[0]?.[1]).toMatchObject({client_session_id:pick?.[1].session_id,project_token:'sealed-selection'});
   expect(calls).toHaveLength(2);
   expect(calls[0]?.[1]).toEqual(calls[1]?.[1]);
   expect(calls[0]?.[1]).toEqual(expect.objectContaining({title:'Checkout fix',installation_id:'codex',skill:'codex.run'}));

@@ -1,7 +1,7 @@
 import { observeOutbox } from '../fixtures/observe-outbox.js';
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { Pool } from 'pg';
 import { io, type Socket } from 'socket.io-client';
 import { migrate } from '@space/postgres/migrate';
@@ -36,8 +36,8 @@ async function offboardOwner(owner: Awaited<ReturnType<typeof bootstrap>>) {
   await pool.query('UPDATE workspaces SET primary_owner_id=$2 WHERE id=$1', [owner.workspace_id, owner.collaborator_id]);
   await pool.query('UPDATE workspace_members SET active=false WHERE workspace_id=$1 AND user_id=$2', [owner.workspace_id, owner.owner_id]);
 }
-async function connect(credential: string, namespace = '/agents', vaultMac = false) {
-  const socket = io(`${origin}${namespace}`, { transports: ['websocket'], auth: { token: credential, ...(vaultMac && {vault_mac:true}) }, autoConnect: false, reconnection: false });
+async function connect(credential: string, namespace = '/agents', vaultMac = false, projectPicker = false) {
+  const socket = io(`${origin}${namespace}`, { transports: ['websocket'], auth: { token: credential, ...(projectPicker && {project_picker:true}), ...(vaultMac && {vault_mac:true}) }, autoConnect: false, reconnection: false });
   sockets.push(socket);
   const ready = new Promise<void>((resolve, reject) => {
     const timeout = setTimeout(() => reject(new Error('Connection timed out')), 3000);
@@ -272,4 +272,35 @@ test('delivery setup uses the handshake identity and cleans up when the socket l
     await disconnected;
   } finally { release(); socket.disconnect(); }
   await cleanup;
+});
+
+test('only the owner can pick a project on their active connector and bind it to a new session', async () => {
+  const owner = await bootstrap(pool);
+  const {credential, connection} = await pair(owner);
+  const installation = connection.installation_id, session = randomUUID();
+  const path = '/agents/connections/' + installation + '/project-picker';
+  const socket = await connect(credential, '/agents', false, true);
+  assert.ok((await socket.timeout(2000).emitWithAck('agent.heartbeat', {auth_status:'ready'})).data);
+  const catalog = await api(owner.owner_token, 'GET', '/channels/'+owner.channel_id+'/navigator');
+  assert.equal(catalog.candidates.find((c: {installation_id:string})=>c.installation_id===installation)?.project_picker, true);
+  const token = randomBytes(48).toString('base64url');
+  let picks = 0;
+  socket.on('agent.project.pick', (input, ack) => {
+    assert.equal(input.session_id, session);
+    assert.equal(input.installation_id, installation);
+    ack({selection: ++picks === 1 ? null : {name:'Space',project_token:token}});
+  });
+  await api(owner.collaborator_token, 'POST', path, {session_id: session}, 409);
+  assert.equal((await api(owner.owner_token, 'POST', path, {session_id:session})).selection, null);
+  const {selection} = await api(owner.owner_token, 'POST', path, {session_id:session});
+  assert.deepEqual(selection, {name:'Space', project_token:token});
+  const create = '/channels/'+owner.channel_id+'/agent-sessions';
+  const input = {client_thread_id:randomUUID(),client_session_id:session, installation_id:installation, title:'Space work', project_token:token};
+  await api(owner.collaborator_token,'POST',create,input,403);
+  const created = await api(owner.owner_token,'POST',create,input,201);
+  assert.equal(created.id,session);
+  assert.deepEqual(await api(owner.owner_token,'POST',create,input,201),created);
+  await api(owner.owner_token,'POST',create,{...input,project_token:randomBytes(48).toString('base64url')},409);
+  assert.equal((await pool.query('SELECT project_token FROM agent_sessions WHERE id=$1',[session])).rows[0].project_token, token);
+  socket.disconnect();
 });

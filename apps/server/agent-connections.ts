@@ -2,7 +2,7 @@ import { registerWebVault } from './web-vault.js';
 import type { EventBus } from '@space/events';
 import type { FastifyInstance } from 'fastify';
 import type { Server } from 'socket.io';
-import { AppError, localProviderForConnector, record, text, uuid } from '@space/contracts';
+import { AppError, projectToken, localProviderForConnector, record, text, uuid } from '@space/contracts';
 import type { AgentConnectionStore } from '@space/postgres/agent-connections';
 import type { PostgresStore } from '@space/postgres/store';
 import {registerDirectTurns} from './direct-turns.js';
@@ -42,11 +42,28 @@ export function registerAgentConnectionRoutes(app: FastifyInstance, store: Agent
 export function registerAgentConnections(app: FastifyInstance, io: Server, store: AgentConnectionStore, tasks: PostgresStore, onOutbox: (listener: (keys?: readonly string[]) => void) => () => void, getEvents: () => Promise<EventBus>, work: RealtimeWork) {
   const agents = io.of('/agents');
   registerWebVault(app, agents, store);
+  const choosing = new Set<string>();
+  app.post<{Params:{id:string}}>('/v1/agents/connections/:id/project-picker', async (r, reply) => {
+    reply.header('Cache-Control', 'no-store');
+    const installation = uuid(r.params.id), session = uuid(record(r.body, ['session_id']).session_id);
+    if (choosing.has(installation) || choosing.size >= 128) throw new AppError(429, 'project_picker_busy');
+    choosing.add(installation);
+    try {
+      const connection = await store.projectPickerConnection(r.actorId, installation);
+      const replies = await agents.to('connection:' + connection).timeout(61000).emitWithAck('agent.project.pick',
+        {session_id: session, installation_id: installation, expires: Date.now() + 60000}).catch(() => []);
+      if (replies.length !== 1 || replies[0]?.error || connection !== await store.projectPickerConnection(r.actorId, installation))
+        throw new AppError(409, replies[0]?.error === 'project_picker_busy' ? 'project_picker_busy' : 'project_picker_unavailable');
+      if (replies[0]?.selection === null) return {selection: null};
+      const selected = record(replies[0]?.selection, ['name', 'project_token']);
+      return {selection: {name: text(selected.name, 512), project_token: projectToken(selected.project_token)}};
+    } finally { choosing.delete(installation); }
+  });
   agents.use(async (socket, next) => {
     socket.conn.once('close', () => work.cancel(socket.id));
     try {
-      const auth = record(socket.handshake.auth, ['token', 'vault_mac']);
-      socket.data.agent = await work.run(socket.id, () => store.connect(auth.token, auth.vault_mac === true));
+      const auth = record(socket.handshake.auth, ['token', 'vault_mac', 'project_picker']);
+      socket.data.agent = await work.run(socket.id, () => store.connect(auth.token, auth.vault_mac === true, auth.project_picker === true));
       if (socket.conn.readyState !== 'open') return;
       socket.data.token = auth.token;
       next();

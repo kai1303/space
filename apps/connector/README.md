@@ -79,7 +79,7 @@ By default Claude receives supplied conversation context and its own retained se
 
 ## Project file tools and activity
 
-Stop the current connector, then select the project folder explicitly on each launch:
+To set a default folder for project file tools, start the connector with an absolute path:
 
 ```sh
 pnpm connector --project /absolute/path/to/project
@@ -94,7 +94,11 @@ Space shows Working, Thinking, Responding or Using tools above the shared sessio
 
 ## Coding from Space
 
-Opt in locally when starting any of the three providers:
+In **New agent session**, select your connected agent and click **Choose project folder…**. Confirm the folder on the computer running the connector, then create the session. Each session keeps its own folder across follow-ups and connector restarts. Selecting a folder enables coding for that session. Leaving it empty uses the connector’s launch settings.
+
+The picker is available on macOS, Windows with Windows PowerShell, and Linux desktops with Zenity. It appears for the owner of an online connector that supports it. The browser receives the folder name and an encrypted selection bound to the session. The coding approval card still identifies the full project path for the owner.
+
+To set a default coding project from the CLI:
 
 ```sh
 pnpm connector --coding --project /absolute/path/to/project
@@ -106,7 +110,7 @@ Start a new Space agent session after changing mode or project. Each coding turn
 
 Coding mode enables the provider's native tools for editing files, running tests and Git commands, with a thirty-minute turn deadline. Space shows bounded command activity and file changes using its existing timeline and Changes view. Codex uses its workspace-write sandbox and on-request approval policy; Claude enforces native-tool permission hooks; Kiro uses its ACP permission requests. These provider controls are not a uniform OS filesystem read-root jail. Select only a project you intend to expose to that agent, and review native requests for access beyond it. Credentials and native session history remain local.
 
-The provider CLIs must already be installed and signed in through their Space connector profiles. Git identity, repository access and any necessary local credential helper must be configured for the connector's execution environment. Space does not import desktop chats, copy Git credentials, or provide a folder picker in this release. A public session does not give its other participants authority to approve the computer owner's tools.
+The provider CLIs must already be installed and signed in through their Space connector profiles. Git identity, repository access and any necessary local credential helper must be configured for the connector's execution environment. Space does not import desktop chats or copy Git credentials. A public session does not give its other participants authority to approve the computer owner's tools.
 
 Set `SPACE_PULL_REQUEST_URL` when starting a coding connector to offer a link to your project's pull request or branch comparison page after a turn produces changes. Use the HTTPS URL for the repository and branch selected for this connector. Participants open the link using their own Git hosting account and confirm any PR creation there. Space stores and shares the URL with session participants, so URLs with credentials, query strings, or fragments are rejected.
 

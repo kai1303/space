@@ -1,3 +1,4 @@
+import { SessionProjectPicker, type SessionProject } from './SessionProjectPicker.js';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { Button, Dialog, Select } from '@space/ui/primitives';
 import type { AgentSessionReference, AgentSessionSummary, ChannelSummary, MessagePage, NavigatorCandidate, Page } from '@space/contracts';
@@ -14,6 +15,7 @@ export function NewCodeChannel({workspace,viewer,onClose,onCreated}:Props) {
   const [source,setSource] = useState<{channel:string;agents:NavigatorCandidate[];threads:Source[];error:string}>();
   const [agent,setAgent] = useState(''), [title,setTitle] = useState('');
   const [error,setError] = useState(''), [busy,setBusy] = useState(false), [retry,setRetry] = useState(0);
+  const [project,setProject] = useState<SessionProject>(), [choosing,setChoosing] = useState(false);
   const attempt = useRef<{body:string;session:string;thread:string} | undefined>(undefined);
   const submitting = useRef(false);
   const present = useDestinationPresence();
@@ -48,15 +50,16 @@ export function NewCodeChannel({workspace,viewer,onClose,onCreated}:Props) {
     return ()=>controller.abort();
   },[channel,viewer,retry]);
 
-  function selectChannel(value:string) { setChannel(value); setThread(''); setAgent(''); setSource(undefined); setError(''); }
+  function selectChannel(value:string) { setProject(undefined); setChannel(value); setThread(''); setAgent(''); setSource(undefined); setError(''); }
   const current = channel && source?.channel===channel ? source : undefined;
   const candidate = current?.agents.find(item=>item.installation_id+'|'+item.skill===agent);
+  const selected = candidate && project?.installation === candidate.installation_id ? project : undefined;
   async function create(event:FormEvent) {
     event.preventDefault();
-    if (!candidate || !title.trim() || submitting.current) return;
-    const fields = {installation_id:candidate.installation_id,skill:candidate.skill,title:title.trim()};
+    if (!candidate || !title.trim() || choosing || submitting.current) return;
+    const fields = {...(selected && {project_token:selected.project_token}),installation_id:candidate.installation_id,skill:candidate.skill,title:title.trim()};
     const body = JSON.stringify({channel,thread,...fields});
-    if (attempt.current?.body!==body) attempt.current = {body,session:crypto.randomUUID(),thread:crypto.randomUUID()};
+    if (attempt.current?.body!==body) attempt.current = {body,session:selected?.session ?? crypto.randomUUID(),thread:crypto.randomUUID()};
     const ids = attempt.current;
     submitting.current = true; setBusy(true); setError('');
     try {
@@ -77,15 +80,17 @@ export function NewCodeChannel({workspace,viewer,onClose,onCreated}:Props) {
         <label>Source conversation<Select aria-label="Source conversation" value={thread} onChange={e=>setThread(e.target.value)} disabled={busy}>
           <option value="">Start fresh in this channel</option>{current.threads.map(item=><option value={item.id} key={item.id}>{item.text}</option>)}
         </Select></label>
-        <label>Agent<Select aria-label="Agent" value={agent} onChange={e=>setAgent(e.target.value)} disabled={busy||!current.agents.length}>
+        <label>Agent<Select aria-label="Agent" value={agent} onChange={e=>{setProject(undefined);setAgent(e.target.value);}} disabled={busy||!current.agents.length}>
           {!current.agents.length && <option value="">No eligible agents in this channel</option>}
           {current.agents.map(item=>{const key=item.installation_id+'|'+item.skill;return <option value={key} key={key}>{item.name} · {item.skill}</option>;})}
         </Select></label>
+        {(candidate?.project_picker || selected) && candidate && <SessionProjectPicker key={candidate.installation_id} installation={candidate.installation_id}
+          viewer={viewer} project={selected} disabled={busy} onChange={setProject} onBusy={setChoosing}/>}
       </>}
       {channel && !current && <p role="status">Loading agents and conversations…</p>}
       {(channelError || current?.error) && <p role="alert">{channelError || current?.error} <Button size="sm" type="button" onClick={()=>setRetry(n=>n+1)}>Retry</Button></p>}
       {error && <p role="alert">{error}</p>}
-      <footer><Button type="button" variant="ghost" onClick={onClose} disabled={busy}>Cancel</Button><Button type="submit" disabled={!title.trim() || !candidate || busy || !!channelError}>Create agent session</Button></footer>
+      <footer><Button type="button" variant="ghost" onClick={onClose} disabled={busy}>Cancel</Button><Button type="submit" disabled={!title.trim() || !candidate || busy || choosing || !!channelError}>Create agent session</Button></footer>
     </form>
   </Dialog>;
 }

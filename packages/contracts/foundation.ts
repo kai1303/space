@@ -3,7 +3,7 @@ import { parseGoalAction } from './session-goal.js';
 import { parseCodexSettings } from './codex-settings.js';
 import { parseAgentInputFiles } from './assets.js';
 import { parseSidekickContext } from './sidekick.js';
-import { AppError, record, text, uuid } from './validation.js';
+import { projectToken, AppError, record, text, uuid } from './validation.js';
 import { parseAgentMemoryContext } from './memory.js';
 import { parseThreadContext } from './thread-context.js';
 import { parseKnowledgeNotesContext } from './knowledge-notes.js';
@@ -71,9 +71,9 @@ export function parseInvocation(value: unknown): InvocationRequest {
   }
   let persistent_session: InvocationRequest['persistent_session'];
   if (v.persistent_session !== undefined) {
-    const persistent = record(v.persistent_session, ['resume']);
+    const persistent = record(v.persistent_session, ['resume', 'project_token']);
     if (typeof persistent.resume !== 'boolean') throw new AppError(400, 'invalid_persistent_session');
-    persistent_session = { resume: persistent.resume };
+    persistent_session = { resume: persistent.resume, ...(persistent.project_token === undefined ? {} : {project_token: projectToken(persistent.project_token)}) };
   }
   if (v.codex_settings !== undefined && !isLocalAgentSkill(v.skill)) throw new AppError(400,'invalid_codex_settings');
   const pdfToken = v.pdf_tool_token;

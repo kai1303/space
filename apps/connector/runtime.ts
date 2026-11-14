@@ -39,7 +39,7 @@ function unauthorized(error: unknown): boolean {
 }
 export interface WebVaultRequest { id: string; actor: string; installation: string; action: WebVaultAction; expires: number; cursor?: string; transfer?: string; sealed?: string; title?: string; token?: string; publicKey?:string; change?:import('@space/contracts').VaultChange }
 export type WebVaultHandler = (request: WebVaultRequest, signal: AbortSignal) => Promise<unknown>;
-export function connectPlatform(connection: Connection, status: () => AuthStatus, onUnauthorized: () => void, invoke?: InvokeAgent, models?: () => import('@space/contracts').AgentModel[] | undefined, webVault?: WebVaultHandler) {
+export function connectPlatform(connection: Connection, status: () => AuthStatus, onUnauthorized: () => void, invoke?: InvokeAgent, models?: () => import('@space/contracts').AgentModel[] | undefined, webVault?: WebVaultHandler, pickProject?: (session: string, signal: AbortSignal) => Promise<{name:string; project_token:string} | null>) {
   const origin = platformOrigin(connection.origin);
   const provider = parseLocalProvider(connection.provider);
   let lastMessage: string | undefined;
@@ -50,10 +50,30 @@ export function connectPlatform(connection: Connection, status: () => AuthStatus
   }
   logChange('Connecting to Space.');
   const socket = io(`${origin}/agents`, {
-    transports: ['websocket'], auth: { token: connection.credential, ...(webVault && {vault_mac: true}) },
+    transports: ['websocket'], auth: { token: connection.credential, ...(pickProject && {project_picker: true}), ...(webVault && {vault_mac: true}) },
     reconnection: true, reconnectionAttempts: Infinity, reconnectionDelay: 1_000,
     reconnectionDelayMax: 30_000, randomizationFactor: 0.5, timeout: 15_000,
   });
+  if (pickProject) {
+    let pending: AbortController | undefined;
+    socket.on('agent.project.pick', async (raw: unknown, ack: unknown) => {
+      if (typeof ack !== 'function') return;
+      if (pending || status() !== 'ready') { ack({error: 'project_picker_busy'}); return; }
+      const controller = pending = new AbortController();
+      try {
+        const input = record(raw, ['session_id', 'installation_id', 'expires']);
+        if (input.installation_id !== connection.installation_id || typeof input.expires !== 'number') throw new Error();
+        const remaining = Math.min(input.expires - Date.now(), 60000);
+        if (!Number.isSafeInteger(remaining) || remaining <= 0) throw new Error();
+        const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(remaining)]);
+        const selected = await pickProject(uuid(input.session_id), signal);
+        signal.throwIfAborted();
+        ack({selection: selected});
+      } catch { if (!controller.signal.aborted) ack({error: 'project_picker_unavailable'}); }
+      finally { pending = undefined; }
+    });
+    socket.on('disconnect', () => pending?.abort());
+  }
   let vaultRequest: AbortController | undefined;
   if (webVault) {
     const pages = webVaultPages(webVault);

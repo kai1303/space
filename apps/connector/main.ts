@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-import { randomUUID } from 'node:crypto';
+import { nativeFolderPicker, selectSessionProject, ProjectUnavailable } from './session-project.js';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
 import { supportsModelSettings, parseLocalProvider, localProviders, type AgentModel, type LocalProvider } from '@space/contracts';
@@ -70,7 +71,7 @@ export async function runConnector(args = process.argv.slice(2), host?: Connecto
     let state = await store.load();
     const createSession = () => createProvider(provider, {
       store, state, signal: controller.signal, announce: host?.announce, login: host?.login,
-      storage: state.connection && {directory:store.directory, connection:state.connection, project, coding:options.coding, browserTurn:host?.browserTurn?.(state.connection)},
+      storage: state.connection && {directory:store.directory, projectKey:state.project_key, connection:state.connection, project, coding:options.coding, browserTurn:host?.browserTurn?.(state.connection)},
       publish: () => platform?.publish(),
       async activate(start, readyMessage) {
         if (controller.signal.aborted) return;
@@ -115,6 +116,17 @@ export async function runConnector(args = process.argv.slice(2), host?: Connecto
     }
     if (!state.connection) throw new Error('Pairing did not save a connection.');
     if (parseLocalProvider(state.connection.provider) !== provider) throw new Error('The saved connection belongs to a different provider.');
+    const choose = nativeFolderPicker();
+    const connection = state.connection;
+    if (choose && !state.project_key) {
+      state.project_key = randomBytes(32).toString('base64url');
+      await store.save(state);
+    }
+    const pickProject = choose && (async (session: string, signal: AbortSignal) => {
+      const path = await choose(signal);
+      signal.throwIfAborted();
+      return path ? selectSessionProject(connection, session, path, state.project_key!) : null;
+    });
     const session = createSession();
     const currentStatus = (): AuthStatus => {
       if (status === 'ready' && (!runtime?.alive() || (session.renewal && (session.renewal.expiresAt() ?? 0) <= Date.now()))) return 'error';
@@ -127,17 +139,23 @@ export async function runConnector(args = process.argv.slice(2), host?: Connecto
       stop();
     }, async (request, emit, signal, controls) => {
       if (currentStatus() !== 'ready' || !runtime?.alive()) throw new Error('The agent is not ready.');
-      // The provider may have changed since a queued turn was admitted.
-      if (models && request.codex_settings && !supportsModelSettings(models,request.codex_settings)) {
+      async function failBeforeStart(check: string, detail: string) {
         for (const [index,type] of (['execution.started','execution.failed'] as const).entries()) {
           signal.throwIfAborted();
-          await emit({id:randomUUID(),schema_version:request.schema_version,execution_id:request.execution_id,sequence:index+1,
-            type,occurred_at:new Date().toISOString(),payload:{text:type === 'execution.started' ? 'Checking model selection.' : 'The selected model or reasoning effort is no longer available. Choose another and send again.'}});
+          await emit({id:randomUUID(), schema_version:request.schema_version, execution_id:request.execution_id, sequence:index+1,
+            type, occurred_at:new Date().toISOString(), payload:{text:type === 'execution.started' ? check : detail}});
         }
-        return;
       }
-      await runtime.invoke(request, emit, signal, controls);
-    }, () => models, host?.webVault);
+      // The provider may have changed since a queued turn was admitted.
+      if (models && request.codex_settings && !supportsModelSettings(models,request.codex_settings)) {
+        return failBeforeStart('Checking model selection.', 'The selected model or reasoning effort is no longer available. Choose another and send again.');
+      }
+      try { await runtime.invoke(request, emit, signal, controls); }
+      catch (error) {
+        if (!(error instanceof ProjectUnavailable)) throw error;
+        await failBeforeStart('Checking the selected project.', error.message);
+      }
+    }, () => models, host?.webVault, pickProject);
     try {
       await session.start({paired, login:options.login, desktop:Boolean(host)});
     } catch (error) {

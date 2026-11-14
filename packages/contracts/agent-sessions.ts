@@ -5,7 +5,7 @@ import { parseCodexSettings } from './codex-settings.js';
 import { parseAssetIds, parseAssetDescriptions } from './assets.js';
 import { parseRichDocument } from './rich-text.js';
 import type { AgentResponse, AgentSession, AgentSessionOutputs, Task } from './index.js';
-import { AppError, record, text, uuid } from './validation.js';
+import { projectToken, AppError, record, text, uuid } from './validation.js';
 export interface AgentSessionSummary extends AgentSession {
   code_channel?: boolean; queue_paused?: boolean; supports_steering?: boolean; title: string; state: 'active' | 'ended'; managed: boolean; agent_name: string; owner_id: string;
   created_by: string | null; created_at: string; skill: string; turn_count: number;
@@ -28,8 +28,8 @@ export interface SessionResourceMessage {
 }
 export interface AgentSessionDetail { final_summary?: { task_id:string; excerpt:string }; related_agents?: SessionRelatedAgent[]; session_goal?: SessionGoal | null; inputs?:SessionInput[]; audience?: string; tool_approvals?: import('./local-tools.js').LocalToolApproval[]; context?: import('./sidekick.js').SidekickContext; outputs?: AgentSessionOutputs; session: AgentSessionSummary; turns: AgentSessionTurn[]; next_cursor: string | null; has_newer?: boolean }
 export function parseAgentSessionInput(value: unknown) {
-  const v = record(value, ['client_session_id', 'installation_id', 'title', 'skill']);
-  return { skill: v.skill === undefined ? undefined : text(v.skill, 80), client_session_id: uuid(v.client_session_id), installation_id: uuid(v.installation_id), title: text(v.title, 160) };
+  const v = record(value, ['client_session_id', 'installation_id', 'title', 'skill', 'project_token']);
+  return { ...(v.project_token === undefined ? {} : { project_token: projectToken(v.project_token) }), skill: v.skill === undefined ? undefined : text(v.skill, 80), client_session_id: uuid(v.client_session_id), installation_id: uuid(v.installation_id), title: text(v.title, 160) };
 }
 export function parseAgentSessionMessage(value: unknown) {
   const v = record(value, ['text', 'document', 'asset_ids', 'asset_descriptions', 'codex_settings', 'goal_action', 'browser_url']);

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { mkdtemp, mkdir, rm, realpath, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -220,4 +220,27 @@ test('reads new native goal verdicts for this Claude session after transcript fl
  await writeFile(path,row(randomUUID(),objective,'another session')+row(id,'another goal','wrong')+row(id,objective,'All checks passed.'),{flag:'a'});
  assert.deepEqual(await transcript.read(objective),{objective,status:'complete',reason:'All checks passed.'});
  assert.equal(await transcript.read(objective),undefined);
+});
+
+test('Claude keeps each selected folder and conversation across interleaved sessions', async t=>{
+  const {selectSessionProject} = await import('../dist/session-project.js');
+  const f = await fixture(t);
+  const projectKey = randomBytes(32).toString('base64url');
+  const runtime = await f.start({projectKey});
+  t.after(()=>runtime.stop());
+  const projects = await Promise.all(['one','two'].map(async name=>{
+    const path = join(await realpath(f.storage.directory),name), session = randomUUID();
+    await mkdir(path);
+    const {project_token} = await selectSessionProject(f.storage.connection,session,path,projectKey);
+    return {session,path,project_token};
+  }));
+  let first;
+  for (const [index, p] of [projects[0],projects[1],projects[0]].entries()) {
+    await runtime.invoke({...request,session_id:p.session,persistent_session:{resume:index===2,project_token:p.project_token}},
+      async()=>{},new AbortController().signal,{requestApproval:async()=> 'allow'});
+    const options = f.calls.at(-1).options;
+    assert.equal(options.cwd,p.path);
+    if (index===0) first = options.sessionId;
+    if (index===2) assert.equal(options.resume,first);
+  }
 });

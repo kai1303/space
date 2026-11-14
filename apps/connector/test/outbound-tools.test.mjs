@@ -1,10 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { parseInvocation } from '@space/contracts';
 import { EventEmitter } from 'node:events';
 import { PassThrough, Writable } from 'node:stream';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, realpath, mkdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { startCodex } from '../dist/codex.js';
@@ -246,4 +246,34 @@ for (const provider of ['codex','kiro','claude']) test(provider+' browser follow
       }
     }
   }
+});
+
+for (const provider of ['codex', 'kiro']) test(provider + ' switches selected project per session and resumes in the original folder', async t => {
+  const {selectSessionProject} = await import('../dist/session-project.js');
+  const directory = await realpath(await mkdtemp(join(tmpdir(),'space-folders-')));
+  t.after(()=>rm(directory,{recursive:true,force:true}));
+  const storage = {directory, projectKey:randomBytes(32).toString('base64url'), connection:{origin:'http://localhost:3000',workspace_id:'w',installation_id:'i',credential:'test',provider},
+    identity:{issuer:provider,subject:'user',client_id:'space'}};
+  const calls = [], launch = fakeLaunch(calls);
+  const runtime = provider === 'codex' ? await startCodex('test',()=>{},launch,storage) : await startKiro(storage,()=>{},launch);
+  t.after(()=>runtime.stop());
+  const projects = await Promise.all(['first','second'].map(async name => {
+    const path = join(directory,name), id = randomUUID();
+    await mkdir(path);
+    const {project_token} = await selectSessionProject(storage.connection,id,path,storage.projectKey);
+    return {id,path,project_token};
+  }));
+  const signal = new AbortController().signal;
+  const turn = (p, resume) => runtime.invoke({...invocation,skill:provider+'.run',session_id:p.id,
+    persistent_session:{resume,project_token:p.project_token}}, async()=>{}, signal,
+    {requestApproval:async approval=>{assert.ok(approval.details.includes(p.path));return 'allow';}});
+  for (const [index, p] of [projects[0],projects[1],projects[0]].entries()) {
+    await turn(p,index===2);
+    const call = calls.at(-1);
+    const method = provider==='codex' ? 'turn/start' : index===2 ? 'session/load' : 'session/new';
+    assert.equal(call.messages.filter(m=>m.method===method).at(-1).params.cwd,p.path);
+  }
+  await assert.rejects(turn({...projects[0],project_token:projects[1].project_token},true),/selected project/);
+  await rm(projects[0].path,{recursive:true});
+  await assert.rejects(turn(projects[0],true),/selected project/);
 });

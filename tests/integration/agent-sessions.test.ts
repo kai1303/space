@@ -212,7 +212,11 @@ test('concurrent distinct sends create only one turn and legacy sessions cannot 
 });
 
 test('resume requires an acknowledged saved local session and first invocation receives linked thread context', async () => {
-  const a = await fixture(), one = await session(a), path = `/agent-sessions/${one.id}`;
+  const a = await fixture(), project_token = 'x'.repeat(64);
+  const one = await api(a.owner_token, 'POST', `/threads/${a.thread_id}/agent-sessions`, {
+    client_session_id:randomUUID(), installation_id:a.installation_id, title:'Project work', project_token,
+  },201);
+  const path = `/agent-sessions/${one.id}`;
   const root = await api(a.owner_token, 'POST', `/channels/${a.channel_id}/messages`, { client_message_id: randomUUID(), thread_id: a.thread_id, text: 'The linked thread context' }, 201);
   const rejected = await api(a.collaborator_token, 'POST', `${path}/messages`, { text: 'Rejected request' }, 201);
   await api(a.owner_token, 'POST', `/tasks/${rejected.id}/reject`, {});
@@ -222,20 +226,20 @@ test('resume requires an acknowledged saved local session and first invocation r
   const first = await api(a.owner_token, 'POST', `${path}/messages`, { text: 'First real execution' }, 201);
   const delivery = (await store.claimDelivery(a.installation_id))!;
   const prepared = (await store.prepareDelivery(delivery))!;
-  assert.deepEqual(prepared.request.persistent_session, { resume: false });
+  assert.deepEqual(prepared.request.persistent_session, { resume: false, project_token });
   assert.equal(prepared.request.context!.working_memory!.root!.id, root.id);
   await store.acceptEvent(a.installation_id, event(first.active_execution_id, 1, 'execution.started'), delivery);
   await api(a.owner_token, 'POST', `${path}/stop`, {});
   const unready = await api(a.owner_token, 'POST', `${path}/messages`, { text: 'Start interrupted before saved session was ready' }, 201);
   const unreadyDelivery = (await store.claimDelivery(a.installation_id))!;
-  assert.deepEqual((await store.prepareDelivery(unreadyDelivery))!.request.persistent_session, { resume: false });
+  assert.deepEqual((await store.prepareDelivery(unreadyDelivery))!.request.persistent_session, { resume: false, project_token });
   await store.acceptEvent(a.installation_id, event(unready.active_execution_id, 1, 'execution.started'), unreadyDelivery);
   const ready = event(unready.active_execution_id, 2, 'execution.progress');
   await store.acceptEvent(a.installation_id, { ...ready, payload: { ...ready.payload, session_ready: true } }, unreadyDelivery);
   await api(a.owner_token, 'POST', `${path}/stop`, {});
   await api(a.owner_token, 'POST', `${path}/messages`, { text: 'Resume after interrupted ready turn' }, 201);
   const followup = (await store.claimDelivery(a.installation_id))!;
-  assert.deepEqual((await store.prepareDelivery(followup))!.request.persistent_session, { resume: true });
+  assert.deepEqual((await store.prepareDelivery(followup))!.request.persistent_session, { resume: true, project_token });
   const other = await session(a, 'Unrelated history');
   await api(a.owner_token, 'POST', `/agent-sessions/${other.id}/messages`, { text: 'Separate first turn' }, 201);
   const unrelated = (await store.claimDelivery(a.installation_id))!;

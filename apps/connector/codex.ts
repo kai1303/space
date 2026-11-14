@@ -15,6 +15,7 @@ import {sessionRuntime} from './session-runtime.js';
 import { serverPrompt, turnScopedRuntime, type TurnServer } from './outbound-tools.js';
 import { approveCoding, approveProject, readCodeContext, reviewInstructions, boundCodingMessages, codingInstructions } from './coding-tools.js';
 import { AgentProgress } from './agent-progress.js';
+import { projectForTurn } from './session-project.js';
 import { projectMcp, projectServer, projectToolNames, resolveProject } from './project-tools.js';
 import { AgentSessionStopped, type InvokeAgent, type SpawnAgent } from './agent-runtime.js';
 export { AgentSessionStopped } from './agent-runtime.js';
@@ -475,5 +476,9 @@ async function startSingleCodex(accessToken: string, onExit: () => void, launch:
 }
 
 export async function startCodex(accessToken: string, onExit: () => void, launch: SpawnAgent = spawn, storage?: LocalSessionStorage, selectedProject?: string) {
-  return sessionRuntime(exited => turnScopedRuntime((done, servers, signal, enableGoals, personalOnly) => startSingleCodex(accessToken, done, launch, personalOnly && storage ? { ...storage, project: undefined, coding: false } : storage, personalOnly ? undefined : selectedProject, servers, signal, enableGoals), exited, storage?.connection.origin, storage?.browserTurn),4,onExit);
+  return sessionRuntime(exited => turnScopedRuntime(async (done, servers, signal, enableGoals, personalOnly, request) => {
+    if (!storage && request?.persistent_session?.project_token) throw new Error('Project selection requires a paired connector.');
+    const scoped = personalOnly && storage ? {...storage, project: undefined, coding: false} : storage && await projectForTurn(storage, request);
+    return startSingleCodex(accessToken, done, launch, scoped, personalOnly || request?.persistent_session?.project_token ? undefined : selectedProject, servers, signal, enableGoals);
+  }, exited, storage?.connection.origin, storage?.browserTurn), 4, onExit);
 }

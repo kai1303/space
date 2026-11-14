@@ -13,6 +13,7 @@ export interface Credentials extends Registration {
 export interface Connection { provider?: LocalProvider; origin: string; credential: string; installation_id: string; workspace_id: string }
 export interface LocalState {
   host_id: string;
+  project_key?: string;
   pending?: { origin: string; credential: string; code_hash: string };
   connection?: Connection;
   registration?: Registration;
