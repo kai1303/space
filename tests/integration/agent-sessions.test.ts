@@ -1034,7 +1034,7 @@ test('recovers an older Codex call and its fullest saved input and result from l
   const path=`/agent-sessions/${one.id}/turns/${task.id}/transcript?legacy=1`;
   assert.equal((await api(a.owner_token,'GET',`/agent-sessions/${one.id}`)).turns[0].has_legacy_tools,true);
   const manifest=await api(a.collaborator_token,'GET',path);
-  assert.deepEqual(manifest.items.map(item=>item.id),['latest','older']);
+  assert.deepEqual(manifest.items.map((item:{id:string})=>item.id),['latest','older']);
   const {chunks}=await api(a.collaborator_token,'GET',path+'&position=0');
   assert.deepEqual(JSON.parse(chunks[0].data),{...saved,arguments:early.arguments});
 });
