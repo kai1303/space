@@ -95,28 +95,21 @@ test('browser searches actual Typesense across history, channels and replies wit
   await page.screenshot({path:fileURLToPath(new URL('../test-results/typesense-search.png',import.meta.url)),fullPage:true});
   await expect(dialog.locator('mark')).toHaveText('browserneedle');
   await dialog.getByRole('button',{name:/Old browserneedle deployment message/}).click();
-  let source=page.getByRole('dialog',{name:'Original message in #general',exact:true});
-  await expect(source.getByText('Old browserneedle deployment message README.md',{exact:true})).toBeVisible();await page.keyboard.press('Escape');
-  dialog=await search('crosschannelneedle');await expect(dialog.getByRole('button',{name:/Crosschannelneedle/})).toBeVisible();await dialog.getByRole('button',{name:/Crosschannelneedle/}).click();
-  source=page.getByRole('dialog',{name:'Original message in #search-engineering',exact:true});await expect(source.getByText('Crosschannelneedle deployment discussion',{exact:true})).toBeVisible();await page.keyboard.press('Escape');
-  dialog=await search('replybrowserneedle is:thread');await expect(dialog.getByRole('button',{name:/Replybrowserneedle/})).toBeVisible();await dialog.getByRole('button',{name:/Replybrowserneedle/}).click();
-  source=page.getByRole('dialog',{name:'Original message in #search-engineering',exact:true});
-  await expect(source.getByText('Replybrowserneedle answer in a thread',{exact:true})).toBeVisible();
-  await page.evaluate(() => {
-    const state = window as unknown as {searchDialogEvents:unknown[]}; state.searchDialogEvents=[];
-    for(const type of ['keydown','cancel','close']) document.addEventListener(type,event=>{
-      queueMicrotask(()=>state.searchDialogEvents.push({type,key:(event as KeyboardEvent).key,prevented:event.defaultPrevented,target:(event.target as HTMLElement)?.tagName,heading:(event.target as HTMLElement)?.closest('dialog')?.querySelector('h2')?.textContent}));
-    },true);
-  });
-  await page.keyboard.press('Escape');
-  try { await expect(source).toBeHidden({timeout:3000}); }
-  catch(error) {
-    t.diagnostic(JSON.stringify(await page.evaluate(()=>({events:(window as unknown as {searchDialogEvents:unknown[]}).searchDialogEvents,focused:document.activeElement?.outerHTML,dialogs:[...document.querySelectorAll('dialog')].map(dialog=>({open:dialog.open,inert:dialog.inert,heading:dialog.querySelector('h2')?.textContent}))}))));
-    await page.screenshot({path:fileURLToPath(new URL('../test-results/typesense-reply-escape.png',import.meta.url)),fullPage:true});
-    throw error;
-  }
+  const oldMessage=page.locator('#chat-message-'+old.id);
+  await expect(oldMessage).toContainText('Old browserneedle deployment message README.md');
+  await expect(oldMessage).toBeFocused();
+  dialog=await search('crosschannelneedle');
+  await dialog.getByRole('button',{name:/Crosschannelneedle/}).click();
+  const channelMessage=page.locator('#chat-message-'+root.id);
+  await expect(channelMessage).toContainText('Crosschannelneedle deployment discussion');
+  await expect(channelMessage).toBeFocused();
+  dialog=await search('replybrowserneedle is:thread');
+  await dialog.getByRole('button',{name:/Replybrowserneedle/}).click();
+  const threadReply=page.locator('#thread-message-'+reply.id);
+  await expect(threadReply).toContainText('Replybrowserneedle answer in a thread');
+  await expect(threadReply).toBeFocused();
   dialog=await search('privateneedle');await expect(dialog.getByText('No messages found',{exact:true})).toBeVisible();await page.keyboard.press('Escape');
-  try { await expect(dialog).toBeHidden({timeout:3000}); } catch(error) { t.diagnostic(JSON.stringify(await page.evaluate(()=>({events:(window as unknown as {searchDialogEvents:unknown[]}).searchDialogEvents,focused:document.activeElement?.outerHTML,dialogs:[...document.querySelectorAll('dialog[open]')].map(dialog=>dialog.querySelector('h2')?.textContent)})))); throw error; }
+  await expect(dialog).toBeHidden();
   dialog=await search('otherworkspaceneedle');await expect(dialog.getByText('No messages found',{exact:true})).toBeVisible();await page.keyboard.press('Escape');
   await page.goto(`${web}/chat?workspace=${seed.workspace_id}&channel=${seed.channel_id}`);
   await expect(page.getByRole('button',{name:'Search in general',exact:true})).toBeVisible();
