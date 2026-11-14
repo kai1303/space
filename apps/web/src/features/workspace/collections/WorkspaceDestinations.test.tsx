@@ -374,7 +374,7 @@ it('manages workspace MCP servers and drops credentials when the viewer loses th
   expect((screen.getByRole('checkbox', { name: 'lookup' }) as HTMLInputElement).checked).toBe(true);
   await userEvent.click(screen.getByRole('checkbox', { name: 'report' }));
   await userEvent.click(screen.getByRole('button', { name: 'Save access' }));
-  await waitFor(() => expect(api.request).toHaveBeenCalledWith('/workspaces/workspace/connections/service/grants', { revision: 3, installation_id: 'installed', tools: ['lookup', 'report'] }, undefined, 'PUT'));
+  await waitFor(() => expect(api.request).toHaveBeenCalledWith('/workspaces/workspace/connections/service/grants', { revision: 3, installation_id: 'installed', tools: ['lookup', 'report'] }, undefined, 'PUT', undefined, undefined));
   await userEvent.click(row.getByRole('button', { name: 'Edit' }));
   const url = screen.getByLabelText('MCP endpoint');
   await userEvent.clear(url);
@@ -452,7 +452,7 @@ it('only removes saved grants when an agent becomes unavailable during editing',
   expect(save.disabled).toBe(true);
   await userEvent.click(read);
   await userEvent.click(save);
-  await waitFor(() => expect(api.request).toHaveBeenCalledWith('/workspaces/workspace/connections/service/grants', { revision: 4, installation_id: 'paired', tools: [] }, undefined, 'PUT'));
+  await waitFor(() => expect(api.request).toHaveBeenCalledWith('/workspaces/workspace/connections/service/grants', { revision: 4, installation_id: 'paired', tools: [] }, undefined, 'PUT', undefined, undefined));
 });
 
 it.each(['people', 'channels', 'knowledge'])('installs a workspace knowledge source of kind %s', async kind => {
@@ -479,5 +479,5 @@ it.each(['people', 'channels', 'knowledge'])('installs a workspace knowledge sou
   expect(api.request).toHaveBeenCalledWith('/workspaces/workspace/connections', {
     kind, name: kind === 'people' ? 'People directory' : kind === 'channels' ? 'Channel directory' : 'Catalog',
     url: kind !== 'knowledge' ? 'space:' + kind : 'https://kb.example/mcp', auth_type: 'none',
-  }, undefined, 'POST');
+  }, undefined, 'POST', undefined, undefined);
 });

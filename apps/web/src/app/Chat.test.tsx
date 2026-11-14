@@ -1576,6 +1576,7 @@ it('opens a persistent agent session from its channel link without duplicating t
  vi.mocked(fetch).mockImplementation(async(...args)=>{
   const path=String(args[0]);
   if(path==='/v1/threads/thread/agent-sessions')return new Response(JSON.stringify({items:[session],next_cursor:null}),{status:200});
+  if(path==='/v1/agent-sessions/session-one/resources')return Response.json({items:[],next_cursor:null});
   if(path==='/v1/agent-sessions/session-one')return new Response(JSON.stringify({session,turns:[],next_cursor:null}),{status:200});
   return initialFetch(...args);
  });

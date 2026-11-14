@@ -88,7 +88,7 @@ it('only exposes connection management to the owner and keeps messaging errors i
 });
 
 it('opens people from directory cards and message names and avatars through the same panel', async () => {
-  api.request.mockImplementation(async (path: string) => path.includes('/participants') ? { items: [{id:'ada',kind:'human',name:'Ada'}], next_cursor:null } : person);
+  api.request.mockImplementation(async (path: string) => path.startsWith('/workspaces/workspace/directory?') ? { items: [{user_id:'ada',display_name:'Ada',presence:'active'}], next_cursor:null } : person);
   const message = {id:'message',channel_id:'channel',thread_id:'thread',created_at:'2026-11-06T00:00:00Z',text:'Hello',author:{id:'ada',name:'Ada',kind:'human' as const}};
   render(<ProfileProvider workspace="workspace" viewer="me" onMessage={onMessage} onConnection={onConnection}>
     <WorkspaceDestinations view="directories" workspace="workspace" viewer="me" onOpenChannel={()=>{}} onOpenMembers={()=>{}} onOpenAgents={()=>{}} />
