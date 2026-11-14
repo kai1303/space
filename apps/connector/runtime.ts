@@ -1,3 +1,5 @@
+import { codexArchives } from './codex-archives.js';
+import type { SyncArchive } from './agent-runtime.js';
 import { createHash, randomBytes } from 'node:crypto';
 import { io } from 'socket.io-client';
 import { sidekickPageUrl, parseGoalAction, parseInvocation, parseAgentEvent, parseLocalProvider, localProviders, type LocalProvider, type AgentEvent, type InvocationRequest, uuid, text, record, webVaultCommand, type WebVaultAction } from '@space/contracts';
@@ -39,7 +41,7 @@ function unauthorized(error: unknown): boolean {
 }
 export interface WebVaultRequest { id: string; actor: string; installation: string; action: WebVaultAction; expires: number; cursor?: string; transfer?: string; sealed?: string; title?: string; token?: string; publicKey?:string; change?:import('@space/contracts').VaultChange }
 export type WebVaultHandler = (request: WebVaultRequest, signal: AbortSignal) => Promise<unknown>;
-export function connectPlatform(connection: Connection, status: () => AuthStatus, onUnauthorized: () => void, invoke?: InvokeAgent, models?: () => import('@space/contracts').AgentModel[] | undefined, webVault?: WebVaultHandler, pickProject?: (session: string, signal: AbortSignal) => Promise<{name:string; project_token:string} | null>) {
+export function connectPlatform(connection: Connection, status: () => AuthStatus, onUnauthorized: () => void, invoke?: InvokeAgent, models?: () => import('@space/contracts').AgentModel[] | undefined, webVault?: WebVaultHandler, pickProject?: (session: string, signal: AbortSignal) => Promise<{name:string; project_token:string} | null>, archives?:{directory:string;sync:SyncArchive}) {
   const origin = platformOrigin(connection.origin);
   const provider = parseLocalProvider(connection.provider);
   let lastMessage: string | undefined;
@@ -54,6 +56,7 @@ export function connectPlatform(connection: Connection, status: () => AuthStatus
     reconnection: true, reconnectionAttempts: Infinity, reconnectionDelay: 1_000,
     reconnectionDelayMax: 30_000, randomizationFactor: 0.5, timeout: 15_000,
   });
+  const archive = archives && provider==='codex' ? codexArchives(socket,archives.directory,archives.sync) : undefined;
   if (pickProject) {
     let pending: AbortController | undefined;
     socket.on('agent.project.pick', async (raw: unknown, ack: unknown) => {
@@ -285,6 +288,7 @@ export function connectPlatform(connection: Connection, status: () => AuthStatus
   const close = () => {
     if (closed) return;
     closed = true;
+    archive?.stop();
     for (const item of direct.values()) item.controller.abort();
     active?.abort(); approvals.close(); clearInterval(heartbeat); clearTimeout(reconnect); socket.disconnect();
     logChange('Connector stopped.');
@@ -310,7 +314,9 @@ export function connectPlatform(connection: Connection, status: () => AuthStatus
       }
       publishedCatalog = catalog;
       logChange(halted ? 'Work interrupted. Restart the connector to accept new work.' : `Space confirmed provider status: ${authStatus}.`);
+      if (authStatus !== 'ready') archive?.stop();
       if (authStatus === 'ready' && status() === 'ready' && !halted) {
+        archive?.start();
         readyToClaim = true;
         if (pendingTitles.size && titleFailures<3) void flushTitles();
         if (!wasReady || claimPending) void claim();

@@ -20,13 +20,14 @@ it('opens a source session inside the workspace and routes reviewer-only matches
   const onOpen=vi.fn();
   render(<SessionDiscovery workspace="w" viewer="m" onOpen={onOpen}/>);
   expect((await screen.findByText('Review prototype')).closest('a')?.getAttribute('href')).toBe('/review/'+second);
+  expect(screen.queryByText('Needs attention')).toBeNull();
   fireEvent.click(screen.getByText('Ship regression fix'));
   expect(onOpen).toHaveBeenCalledWith(source);
   fireEvent.change(screen.getByRole('searchbox'),{target:{value:'regression'}});
-  fireEvent.change(screen.getByLabelText('Status'),{target:{value:'needs_attention'}});
+  fireEvent.change(screen.getByLabelText('Archive'),{target:{value:'false'}});
   fireEvent.click(screen.getByRole('button',{name:'Search sessions'}));
   await waitFor(()=>expect(screen.queryByText('Review prototype')).toBeNull());
-  expect(mocks.read.mock.calls.at(-1)?.[0]).toContain('q=regression&status=needs_attention');
+  expect(mocks.read.mock.calls.at(-1)?.[0]).toContain('q=regression&archived=false');
   expect(await screen.findByText('Ship regression fix')).toBeTruthy();
 });
 
@@ -66,4 +67,13 @@ it('creates an agent session for a selected conversation, reusing its identity o
   expect(calls).toHaveLength(2);
   expect(calls[0]?.[1]).toEqual(calls[1]?.[1]);
   expect(calls[0]?.[1]).toEqual(expect.objectContaining({title:'Checkout fix',installation_id:'codex',skill:'codex.run'}));
+});
+
+it('labels only archived sessions and restores them through the sidebar archive action',async()=>{
+  const id='d15c0ffe-0000-4000-a000-000000000003';
+  mocks.read.mockResolvedValue({items:[{id,access:'source',title:'Archived project',sidebar_archived:true}],next_cursor:null});
+  render(<SessionDiscovery workspace="w" viewer="owner"/>);
+  expect(await screen.findByText('Archived',{selector:'span'})).toBeTruthy();
+  fireEvent.click(screen.getByRole('button',{name:'Unarchive session'}));
+  await waitFor(()=>expect(mocks.read).toHaveBeenCalledWith('/agent-sessions/'+id+'/sidebar',{archived:false},undefined,'PATCH',undefined,'owner'));
 });

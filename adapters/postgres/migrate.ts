@@ -44,6 +44,7 @@ export const migrationFiles = [
   '138_code_channel_inactivity.sql',
   '139_session_input_resources.sql',
   '140_session_project.sql',
+  '147_codex_session_archives.sql',
 ] as const;
 
 export async function migrate(pool: Pool): Promise<void> {

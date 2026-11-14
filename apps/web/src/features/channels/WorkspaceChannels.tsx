@@ -1,6 +1,6 @@
 import {DirectoryCreateChannel} from './create-channel-context.js';
 import { ConversationMain } from '../chat/ConversationFrame.js';
-import { sessionWorkStatusLabels, sessionPath, conversationPath } from '@space/contracts';
+import { sessionPath, conversationPath } from '@space/contracts';
 import { ConversationHistory, usePublishedPath } from '../../shared/ui/conversation-location.js';
 import { ChannelNotificationEditor } from './ChannelNotificationEditor.js';
 import { ChannelConfirmation } from './ChannelDetails.js';
@@ -24,7 +24,7 @@ import { Button, Dialog, toast } from '@space/ui/primitives';
 import { WorkspaceSidebar } from '@space/ui/navigation';
 import { motionTransition } from '@space/ui/motion';
 import { type RichDocument } from '@space/ui/rich-text';
-import { Archive, Headphones, WarningCircle, CaretDown, Hash, Lock, Plus } from '@phosphor-icons/react';
+import { Headphones, CaretDown, Hash, Lock, Plus } from '@phosphor-icons/react';
 import { listAll, request } from '../../shared/api/request.js';
 import type { ChannelSummary as Channel } from '@space/contracts';
 import type { Workspace } from '../workspace/workspace-types.js';
@@ -100,11 +100,11 @@ export function WorkspaceChannels({ codeChannelView, onOpenOrigin, onReturnDirec
   const sessionRows = [
     ...starredSessions.conversations.flatMap(item => item.session ? [{
       id:item.id, title:item.name, thread:item.session.origin_thread_id, agentName:item.session.agent_name, codeChannel:item.session.code_channel,
-      section:'starred' as const, working:item.working, status:item.status, canRename:item.can_rename,
+      section:'starred' as const, working:item.working, canRename:item.can_rename,
     }] : []),
     ...visibleSessions.map(item => ({
       id:item.id, title:item.title, thread:item.origin_thread_id, agentName:item.agent_name, codeChannel:item.code_channel,
-      section:'sessions' as const, working:item.working, status:item.status, canRename:item.created_by===profile.id || item.owner_id===profile.id,
+      section:'sessions' as const, working:item.working, canRename:item.created_by===profile.id || item.owner_id===profile.id,
     })),
   ];
   function sessionActions(item: typeof sessionRows[number]) {
@@ -418,11 +418,7 @@ export function WorkspaceChannels({ codeChannelView, onOpenOrigin, onReturnDirec
             private:c.private, ...badges(c.id), section:'channels' as const, ...(c.joined && sectionProps(c.id, 'channels')),
           })),
           ...sessionRows.map(item => ({ id:`session:${item.id}`, name:item.title, ...sessionActions(item), agentName:item.agentName, codeChannel:item.codeChannel,
-            typing:item.working || item.status === 'active', section:item.section,
-            statusIcon:item.status === 'needs_attention' || item.status === 'archived'
-              ? <span className={`session-row-status session-row-status--${item.status}`} role="img" aria-label={sessionWorkStatusLabels[item.status]} title={sessionWorkStatusLabels[item.status]}>
-                {item.status==='needs_attention'?<WarningCircle size={17}/>:<Archive size={17}/>}
-              </span> : undefined, onRename:item.canRename ? () => setRenameId(item.id) : undefined })),
+            typing:item.working, section:item.section, onRename:item.canRename ? () => setRenameId(item.id) : undefined })),
           ...directs.items.filter(dm => !starred.ids.includes(dm.id)).map(dm => ({
             id:dm.id, name:dm.name, typing:typing.has(dm.id), section:'direct' as const,
             ...sectionProps(dm.id, 'direct'), ...directAvatar(dm.id), statusIcon:huddleIcon(dm.id), unread:unreadById.get(dm.id)?.unread_count ?? 0,

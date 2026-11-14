@@ -4,9 +4,9 @@ import { replyFormatInstructions } from './reply-format.js';
 import { memoryInstructions } from './memory-instructions.js';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { mkdtemp, mkdir, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, relative, sep } from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
 import { localSessionStore, type LocalSessionStorage } from './session-storage.js';
 import { CODING_TURN_TIMEOUT_MS, parseInvocation, parseAgentEvent, parseAgentResponse, type AgentEvent, type AgentText } from '@space/contracts';
@@ -15,19 +15,19 @@ import {sessionRuntime} from './session-runtime.js';
 import { serverPrompt, turnScopedRuntime, type TurnServer } from './outbound-tools.js';
 import { approveCoding, approveProject, readCodeContext, reviewInstructions, boundCodingMessages, codingInstructions } from './coding-tools.js';
 import { AgentProgress } from './agent-progress.js';
-import { projectForTurn } from './session-project.js';
+import { projectBinding, projectForTurn } from './session-project.js';
 import { projectMcp, projectServer, projectToolNames, resolveProject } from './project-tools.js';
-import { AgentSessionStopped, type InvokeAgent, type SpawnAgent } from './agent-runtime.js';
+import { AgentSessionStopped, type InvokeAgent, type SyncArchive, type SpawnAgent } from './agent-runtime.js';
 export { AgentSessionStopped } from './agent-runtime.js';
 export type { InvokeAgent as InvokeCodex, SpawnAgent as SpawnCodex } from './agent-runtime.js';
 type Message = { id?: string | number; method?: string; result?: any; error?: unknown; params?: any };
 
-async function startSingleCodex(accessToken: string, onExit: () => void, launch: SpawnAgent = spawn, storage?: LocalSessionStorage, selectedProject?: string, servers: TurnServer[] = [], startupSignal?: AbortSignal, enableGoals = false) {
+async function startSingleCodex(accessToken: string, onExit: () => void, launch: SpawnAgent = spawn, storage?: LocalSessionStorage, selectedProject?: string, servers: TurnServer[] = [], startupSignal?: AbortSignal, enableGoals = false, archiveStore?: Awaited<ReturnType<typeof localSessionStore>>) {
   const coding = storage?.coding === true;
   const project = await resolveProject(selectedProject ?? storage?.project);
   if (coding && !project) throw new Error('Coding requires --project.');
   if (storage && project) storage = { ...storage, project };
-  const sessions = storage ? await localSessionStore(storage) : undefined;
+  const sessions = archiveStore ?? (storage ? await localSessionStore(storage) : undefined);
   const directory = sessions?.directory ?? await mkdtemp(join(tmpdir(), 'space-codex-'));
   const home = sessions?.home ?? join(directory, 'home');
   const cwd = sessions?.cwd ?? join(directory, 'work');
@@ -472,13 +472,40 @@ async function startSingleCodex(accessToken: string, onExit: () => void, launch:
       if (taskDirectory && !project && !request.persistent_session) await rm(taskDirectory, { recursive: true, force: true });
     }
   };
-  return { stop, alive: () => live, invoke, listModels };
+  async function syncThread(threadId:string, desired:boolean|null) {
+    const {thread} = await rpc('thread/read', {threadId, includeTurns:false});
+    if (thread?.id !== threadId || typeof thread.path !== 'string') throw new Error('Unknown Codex thread.');
+    const root = relative(await realpath(home),await realpath(thread.path)).split(sep)[0];
+    if (root !== 'archived_sessions' && root !== 'sessions') throw new Error('Unknown Codex rollout location.');
+    const archived = root === 'archived_sessions';
+    if (desired !== null && desired !== archived) await rpc(desired ? 'thread/archive' : 'thread/unarchive', {threadId});
+    return {thread_id:threadId, archived:desired ?? archived};
+  }
+  return { stop, alive: () => live, invoke, listModels, syncThread };
 }
 
 export async function startCodex(accessToken: string, onExit: () => void, launch: SpawnAgent = spawn, storage?: LocalSessionStorage, selectedProject?: string) {
-  return sessionRuntime(exited => turnScopedRuntime(async (done, servers, signal, enableGoals, personalOnly, request) => {
+  const runtime = await sessionRuntime(exited => turnScopedRuntime(async (done, servers, signal, enableGoals, personalOnly, request) => {
     if (!storage && request?.persistent_session?.project_token) throw new Error('Project selection requires a paired connector.');
     const scoped = personalOnly && storage ? {...storage, project: undefined, coding: false} : storage && await projectForTurn(storage, request);
     return startSingleCodex(accessToken, done, launch, scoped, personalOnly || request?.persistent_session?.project_token ? undefined : selectedProject, servers, signal, enableGoals);
   }, exited, storage?.connection.origin, storage?.browserTurn), 4, onExit);
+  if (storage) {
+    const syncArchive:SyncArchive = async request => {
+      const scope = request.project_token ? {...storage, project:projectBinding(storage,request.session_id,request.project_token)[0], coding:true}
+        : request.personal ? {...storage, project:undefined, coding:false} : {...storage, project:selectedProject ?? storage.project};
+      const store = await localSessionStore(scope);
+      const mapping = await store.session(request.session_id,true).catch(error => {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+        return undefined;
+      });
+      if (!mapping?.threadId) return null;
+      if (request.thread_id && request.thread_id!==mapping.threadId) throw new Error('Codex thread mapping changed.');
+      const native = await startSingleCodex('',()=>{},launch,undefined,undefined,[],undefined,false,store);
+      try { return await native.syncThread(mapping.threadId,request.desired); }
+      finally { native.stop(); }
+    };
+    runtime.syncArchive = syncArchive;
+  }
+  return runtime;
 }

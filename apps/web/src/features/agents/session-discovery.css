@@ -12,8 +12,6 @@
 .session-discovery-list a:hover strong { text-decoration:underline; }
 .session-discovery-list small { color:var(--sp-text-secondary,GrayText); }
 .session-discovery nav { display:flex; gap:8px; }
-.session-row-status { display:inline-flex; align-items:center; justify-content:center; width:20px; color:var(--sp-text-secondary); }
-.session-row-status--needs_attention { color:var(--sp-warning,#956009); }
 .code-channel-browser-bar {display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap}
 .code-channel-create {display:grid;gap:14px}
 .code-channel-create label {display:grid;gap:4px;font-size:14px;font-weight:600}

@@ -153,7 +153,6 @@ export interface SessionReport {
   thread_id: string;
   source_message_id: string;
   title: string;
-  status: import('./session-discovery.js').SessionWorkStatus;
   result: string | null;
   artifact: 'changes' | 'preview' | 'files' | 'artifacts' | null;
 }

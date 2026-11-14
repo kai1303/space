@@ -1,4 +1,3 @@
-import { sessionWorkStatus } from './session-work-status.js';
 import type { Pool } from 'pg';
 import type { StarredAgentSession } from '@space/contracts';
 import { sql, type SQL } from 'drizzle-orm';
@@ -76,7 +75,6 @@ export class WorkspaceHubStore {
       const result=await c.execute<StarredAgentSession & Record<string,unknown>>(sql`
         SELECT a.id,a.title AS name,'agent_session' AS kind,c.private,
           EXISTS(SELECT 1 FROM tasks WHERE session_id=a.id AND status='running') AS working,
-          ${sessionWorkStatus(sql`a.id`,sql`a.state`)} AS status,
           (a.created_by IS NOT DISTINCT FROM ${actor}::uuid OR i.owner_id=${actor}) AS can_rename,
           jsonb_build_object('id',a.id,'agent_name',coalesce(ac.name,d.name),'origin_thread_id',a.origin_thread_id,
             'channel_id',c.id,'channel_archived',c.archived_at IS NOT NULL,'code_channel',a.handoff_context IS NULL) AS session

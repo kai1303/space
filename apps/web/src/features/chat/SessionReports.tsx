@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Code } from '@phosphor-icons/react';
-import { sessionWorkStatusLabels, type ChatMessage, type SessionReport } from '@space/contracts';
+import { type ChatMessage, type SessionReport } from '@space/contracts';
 import { request } from '../../shared/api/request.js';
 import { subscribeUpdates } from '../../shared/realtime/live-updates.js';
 
@@ -51,11 +51,9 @@ export function SessionReports({message,inThread,reports,onOpen}:{
   }
   return <>{[...links].map(([id,title]) => {
     const report = detail.get(id);
-    const statusId = `session-status-${inThread ? "thread" : "channel"}-${message.id}-${id}`;
     return <div className="code-channel-unfurl" key={id}>
-      <button type="button" data-code-channel-id={id} className="sp-thread-link chat-session-link" aria-label={`Agent session: ${title}`} aria-describedby={report ? statusId : undefined} title={title} onClick={()=>onOpen(message.thread_id,id)}>
+      <button type="button" data-code-channel-id={id} className="sp-thread-link chat-session-link" aria-label={`Agent session: ${title}`} title={title} onClick={()=>onOpen(message.thread_id,id)}>
         <Code size={16} aria-hidden="true"/><span>{title}</span>
-        {report && <small id={statusId}>{sessionWorkStatusLabels[report.status]}</small>}
       </button>
       {report && (report.result || report.artifact) && <div className="chat-session-result">
         {report.result && <span>{report.result}</span>}

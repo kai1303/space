@@ -1,5 +1,4 @@
 import { readSessionResources } from './session-resources.js';
-import { sessionWorkStatus } from './session-work-status.js';
 import { discoverSessions } from './session-discovery.js';
 import { directTurnTarget, runTurn, type TurnPlan } from './direct-turn-admission.js';
 import { SessionTeamStore } from './session-team.js';
@@ -103,7 +102,6 @@ export class AgentSessionStore {
       }
       const result = await c.execute<WorkspaceAgentSession & Record<string, unknown>>(sql`
         SELECT ${summaryColumns},EXISTS(SELECT 1 FROM tasks WHERE session_id=a.id AND status='running') AS working,
-          ${sessionWorkStatus(sql`a.id`,sql`a.state`)} AS status,
           t.channel_id,ch.archived_at IS NOT NULL AS channel_archived, idle.expires::text AS sidebar_expires_at,
           extract(epoch FROM (idle.expires - now()))*1000 AS expires_in_ms
         FROM agent_sessions a JOIN threads t ON t.id=a.origin_thread_id
@@ -136,6 +134,10 @@ export class AgentSessionStore {
         await c.execute(sql`INSERT INTO session_sidebar_preferences(workspace_id,user_id,session_id,archived)
           VALUES(${workspace},${actor},${id},${archive})
           ON CONFLICT(workspace_id,user_id,session_id) DO UPDATE SET archived=excluded.archived`);
+        await c.execute(sql`INSERT INTO codex_session_archives(session_id,desired)
+          SELECT ${id},${archive} FROM agent_installations
+          WHERE id=${session.installation_id} AND owner_id=${actor} AND connector_id='codex.local'
+          ON CONFLICT(session_id) DO UPDATE SET desired=excluded.desired, revision=gen_random_uuid()`);
       } else {
         const target = await this.visible(c,actor,targetId!);
         if (!target.managed || target.workspace_id !== workspace) throw notFound();

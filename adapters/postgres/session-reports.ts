@@ -2,7 +2,6 @@ import { sql } from 'drizzle-orm';
 import { AppError, record, uuid, type SessionReport } from '@space/contracts';
 import { hasChannelAccess } from './access.js';
 import type { Database } from './database.js';
-import { sessionWorkStatus } from './session-work-status.js';
 
 export async function readSessionReports(db: Database, actor: string, channel: string, raw: unknown) {
   const { threads } = record(raw, ['threads']);
@@ -14,7 +13,6 @@ export async function readSessionReports(db: Database, actor: string, channel: s
     const reports = await c.execute<SessionReport & Record<string, unknown>>(sql`
       SELECT t.id AS thread_id, report.* FROM threads t CROSS JOIN LATERAL (
         SELECT a.id, a.title, coalesce(origin.source_message_id,root.id) AS source_message_id,
-          ${sessionWorkStatus(sql`a.id`, sql`a.state`)} AS status,
           CASE WHEN latest.status='completed' THEN left(latest.result,240) END AS result,
           CASE WHEN jsonb_array_length(a.outputs->'changes')>0 THEN 'changes'
                WHEN a.outputs->'preview'->>'state'='ready' THEN 'preview'

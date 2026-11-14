@@ -150,7 +150,7 @@ export function AgentSessions({primary,agentName,initialArtifact,artifactRequest
     channel="agent session" placeholder={`Message ${agentName ?? 'agent'}`} controls={{}} sendDisabled
     maxLength={4000} draftValue={getDraft(selected) ?? null} attachments={uploads?.drafts[draftKey(selected)] ?? []}
     onDraftChange={doc => saveDraft(selected, doc)} onSend={() => {}}/>}
-  {picker&&<nav aria-label="Sessions in this thread" className="agent-sessions-list">{sessions.map(session=><button key={session.id} type="button" aria-label={session.title} onClick={()=>onOpenSession?.(session.id)}><span><SessionTitle title={session.title}/></span><small>{session.agent_name} · {session.state==='ended'?'Ended':`${session.turn_count} ${session.turn_count===1?'turn':'turns'}`}</small></button>)}</nav>}
+  {picker&&<nav aria-label="Sessions in this thread" className="agent-sessions-list">{sessions.map(session=><button key={session.id} type="button" aria-label={session.title} onClick={()=>onOpenSession?.(session.id)}><span><SessionTitle title={session.title}/></span><small>{session.agent_name} · {`${session.turn_count} ${session.turn_count===1?'turn':'turns'}`}</small></button>)}</nav>}
   {picker&&creating&&<form className="agent-session-create" onSubmit={create}><h3>New agent session</h3><label>Session name<input required maxLength={120} value={title} onChange={event=>setTitle(event.target.value)} placeholder="What are we working on?"/></label><label>Agent<Select aria-label="Agent" value={agent} disabled={saving} onChange={event=>{setProject(undefined);setAgent(event.target.value);}}>{catalog.map(item=><option key={`${item.installation_id}|${item.skill}`} value={`${item.installation_id}|${item.skill}`}>{item.name} · {item.skill}</option>)}</Select></label>
    {candidate && (candidate.project_picker || selectedProject) && <SessionProjectPicker key={candidate.installation_id} installation={candidate.installation_id}
      viewer={viewerId} project={selectedProject} disabled={saving} onChange={setProject} onBusy={setChoosing}/>}
@@ -375,7 +375,7 @@ function SessionConversation({primary,initialArtifact,artifactRequest,uploads,in
   </Dialog>}
   {renaming&&manage&&<RenameSessionDialog id={session.id} title={session.title} workspace={session.workspace_id}
     thread={session.origin_thread_id} viewerId={viewerId} onClose={()=>setRenaming(false)}/>}
-  <Dialog open={detailsOpen} title="Conversation details" onClose={()=>setDetailsOpen(false)}><div className="agent-session-details"><h3>{session.title}</h3><p>{session.agent_name}</p><p>{activeSession.state==='ended'?'Ended':'Active'} · {activeSession.turn_count} turns</p>{channelName&&<p>From #{channelName}</p>}<p>Started {new Date(session.created_at).toLocaleString()}</p></div></Dialog>
+  <Dialog open={detailsOpen} title="Conversation details" onClose={()=>setDetailsOpen(false)}><div className="agent-session-details"><h3>{session.title}</h3><p>{session.agent_name}</p><p>{activeSession.turn_count} turns</p>{channelName&&<p>From #{channelName}</p>}<p>Started {new Date(session.created_at).toLocaleString()}</p></div></Dialog>
   {selectedMention&&<MentionDetails channel={channel} mention={selectedMention} onClose={()=>setSelectedMention(undefined)}/>}
  </div>;
 }

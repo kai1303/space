@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from 'react';
-import { sessionPath, sessionWorkStatusLabels, type AgentSessionReference, type SessionDiscoveryPage } from '@space/contracts';
+import { sessionPath, type AgentSessionReference, type SessionDiscoveryPage } from '@space/contracts';
 import { Badge, Button, Tabs } from '@space/ui/primitives';
 import { MagnifyingGlass, Plus } from '@phosphor-icons/react';
 import { NewCodeChannel } from './NewCodeChannel.js';
@@ -8,7 +8,7 @@ import { errorText } from '../../shared/api/error-text.js';
 import { invalidateUpdates, subscribeUpdates } from '../../shared/realtime/live-updates.js';
 import './session-discovery.css';
 
-const defaultFilters = {q:'',status:'',scope:'all',archived:'all',agent:'',channel:'',creator:''};
+const defaultFilters = {q:'',scope:'all',archived:'all',agent:'',channel:'',creator:''};
 const emptyPage:SessionDiscoveryPage = {items:[],next_cursor:null};
 
 export function SessionDiscovery({workspace,viewer,onOpen}: {workspace:string;viewer:string;onOpen?:(item:AgentSessionReference)=>void}) {
@@ -68,11 +68,8 @@ export function SessionDiscovery({workspace,viewer,onOpen}: {workspace:string;vi
     <form onSubmit={apply}>
       <label className="session-discovery-search"><MagnifyingGlass size={18}/><input type="search" aria-label="Search session titles and conversations" placeholder="Search titles and conversations" maxLength={160} value={filters.q} onChange={e=>setFilters({...filters,q:e.target.value})}/></label>
       <div className="session-discovery-filters">
-        <label>Status<select value={filters.status} onChange={e=>setFilters({...filters,status:e.target.value})}>
-          <option value="">All statuses</option>{Object.entries(sessionWorkStatusLabels).map(([value,label])=><option key={value} value={value}>{label}</option>)}
-        </select></label>
-        <label>Sidebar<select value={filters.archived} onChange={e=>setFilters({...filters,archived:e.target.value})}>
-          <option value="all">All sessions</option><option value="false">In sidebar</option><option value="true">Archived by you</option>
+        <label>Archive<select value={filters.archived} onChange={e=>setFilters({...filters,archived:e.target.value})}>
+          <option value="all">All sessions</option><option value="false">Unarchived</option><option value="true">Archived</option>
         </select></label>
         {(['agent','channel','creator'] as const).map(key=><label key={key}>{ {agent:'Agent',creator:'Created by',channel:'Source channel'}[key]}
           <input maxLength={160} value={filters[key]} onChange={e=>setFilters({...filters,[key]:e.target.value})}/></label>)}
@@ -86,8 +83,8 @@ export function SessionDiscovery({workspace,viewer,onOpen}: {workspace:string;vi
           <a href={sessionPath(item.id)} onClick={e=>{if(onOpen && !e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey){e.preventDefault();onOpen(item);}}}>
             <strong>{item.title}</strong><small>{item.agent_name} · {item.channel_name}{item.creator_name && ' · '+item.creator_name}</small>
           </a>
-          <Badge tone={item.status==='needs_attention'?'warning':item.status==='active'?'info':item.status==='done'?'success':'neutral'}>{sessionWorkStatusLabels[item.status]}</Badge>
-          {(item.sidebar_archived || item.sidebar_inactive) && <Button size="sm" disabled={!!mutation.busy} onClick={()=>void restore(item.id)}>Restore to sidebar</Button>}
+          {item.sidebar_archived && <Badge tone="neutral">Archived</Badge>}
+          {(item.sidebar_archived || item.sidebar_inactive) && <Button size="sm" disabled={!!mutation.busy} onClick={()=>void restore(item.id)}>{item.sidebar_archived ? 'Unarchive session' : 'Restore to sidebar'}</Button>}
         </>}
       </li>)}</ul>}
     {(cursors.length>0 || page.next_cursor) && <nav aria-label="Session result pages">

@@ -26,24 +26,24 @@ test('discovery scopes conversation search and review invitations, including aft
     [id,workspace,seed.installation_id,seed.thread_id,'Billing fix',owner]);
   await pool.query(`INSERT INTO tasks(id,workspace_id,thread_id,installation_id,goal,skill,requester_id,status,session_id,idempotency_key,request_hash)
     VALUES($1,$2,$3,$4,'Repair tax rounding','demo.echo',$5,'awaiting_approval',$6,'key','hash')`,[task,workspace,seed.thread_id,seed.installation_id,owner,id]);
-  assert.equal((await find(owner,{q:'tax',status:'needs_attention',channel:'general',creator:'owner'})).items[0]?.id,id);
+  assert.equal((await find(owner,{q:'tax',channel:'general',creator:'owner'})).items[0]?.id,id);
   await pool.query("UPDATE tasks SET status='completed',result='Fixed' WHERE id=$1",[task]);
   await pool.query(`INSERT INTO task_events(id,type,workspace_id,actor_id,resource_id,correlation_id,sequence,payload)
     VALUES($1,'task.completed',$2,$3,$4,$4,1,$5)`,[randomUUID(),workspace,owner,task,{response:{messages:[{text:'Added regression coverage'}],tools:[{result:'unsearchablesecret'}]}}]);
-  assert.equal((await find(reviewer,{q:'regression',status:'done'})).items[0]?.id,id);
+  assert.equal((await find(reviewer,{q:'regression'})).items[0]?.id,id);
   assert.deepEqual((await find(reviewer,{q:'unsearchablesecret'})).items,[]);
   await pool.query('INSERT INTO session_discussion_messages(session_id,actor_id,client_id,body) VALUES($1,$2,$3,$4)',[id,owner,randomUUID(),'The invoice is ready']);
   assert.equal((await find(owner,{q:'invoice'})).items[0]?.id,id);
   await pool.query("UPDATE agent_sessions SET state='ended' WHERE id=$1",[id]);
   await sessions.updateSidebar(owner,id,{archived:true});
-  assert.equal((await find(owner,{status:'archived',archived:'true'})).items[0]?.id,id);
+  assert.equal((await find(owner,{archived:'true'})).items[0]?.id,id);
   assert.deepEqual((await find(reviewer,{archived:'true'})).items,[]);
   await pool.query('DELETE FROM channel_members WHERE channel_id=$1 AND user_id=$2',[seed.channel_id,reviewer]);
   assert.deepEqual((await find(reviewer,{q:'Billing'})).items,[]);
   await pool.query('INSERT INTO session_reviewers(workspace_id,session_id,user_id) VALUES($1,$2,$3)',[workspace,id,reviewer]);
   assert.deepEqual((await find(reviewer,{q:'Billing'})).items,[{id,title:'Billing fix',access:'reviewer'}]);
   assert.deepEqual((await find(reviewer,{scope:'workspace'})).items,[]);
-  for (const query of [{q:'regression'},{q:'tax'},{q:'invoice'},{status:'archived'},{creator:'owner'},{channel:'general'}]) {
+  for (const query of [{q:'regression'},{q:'tax'},{q:'invoice'},{archived:'true'},{creator:'owner'},{channel:'general'}]) {
     assert.deepEqual((await sessions.discover(reviewer,workspace,query)).items,[]);
   }
   await pool.query('DELETE FROM session_reviewers WHERE session_id=$1 AND user_id=$2',[id,reviewer]);
@@ -65,10 +65,10 @@ test('session pages use a stable creation cursor and reject invalid filters',asy
   const second=await sessions.discover(seed.owner_id,seed.workspace_id,{before:first.next_cursor});
   assert.equal(first.items.length,25);assert.equal(second.next_cursor,null);
   assert.equal(new Set([...first.items,...second.items].map(item=>item.id)).size,27);
-  await assert.rejects(sessions.discover(seed.owner_id,seed.workspace_id,{status:'unknown'}),/invalid_session_status/);
+  await assert.rejects(sessions.discover(seed.owner_id,seed.workspace_id,{archived:'unknown'}),/invalid_archive_filter/);
 });
 
-test('a committed status transition refreshes the discovery view without a running CDC bridge',async()=>{
+test('a committed archive transition refreshes the discovery view without a running CDC bridge',async()=>{
   const {createApi}=await import('@space/server/api');
   const api=createApi(new PostgresStore(pool),{allowDevelopmentTokens:true});
   const seed=await bootstrap(pool), id=randomUUID();
@@ -78,18 +78,17 @@ test('a committed status transition refreshes the discovery view without a runni
   try {
     const connected=new Promise<void>((resolve,reject)=>{socket.once('connect',resolve);socket.once('connect_error',reject);});
     socket.connect();await connected;
-    const path=`/v1/workspaces/${seed.workspace_id}/agent-sessions/discover?status=needs_attention`;
+    const path=`/v1/workspaces/${seed.workspace_id}/agent-sessions/discover?archived=true`;
     const list=async()=>{const r=await api.inject({url:path,headers:{authorization:'Bearer '+seed.owner_token}});assert.equal(r.statusCode,200,r.body);return r.json().items;};
     await pool.query('INSERT INTO agent_sessions(id,workspace_id,installation_id,origin_thread_id,title,managed) VALUES($1,$2,$3,$4,$5,true)',
       [id,seed.workspace_id,seed.installation_id,seed.thread_id,'Review',]);
     assert.deepEqual(await list(),[]);
     assert.ok((await socket.timeout(3000).emitWithAck('updates.subscribe',{scope:'workspace',id:seed.workspace_id})).data);
     const changed=new Promise<void>((resolve,reject)=>{
-      timeout=setTimeout(()=>reject(Error('workspace did not receive committed status')),4000);
+      timeout=setTimeout(()=>reject(Error('workspace did not receive committed archive')),4000);
       socket.on('updates.changed',(event,ack)=>{ack?.(true);if(event.scope==='workspace' && event.id===seed.workspace_id)resolve();});
     });
-    await pool.query(`INSERT INTO tasks(id,workspace_id,thread_id,installation_id,goal,skill,requester_id,status,session_id,idempotency_key,request_hash)
-      VALUES($1,$2,$3,$4,'Approve','demo.echo',$5,'awaiting_approval',$6,'key','hash')`,[randomUUID(),seed.workspace_id,seed.thread_id,seed.installation_id,seed.owner_id,id]);
+    await sessions.updateSidebar(seed.owner_id,id,{archived:true});
     await changed;assert.equal((await list())[0].id,id);
   } finally {clearTimeout(timeout);socket.disconnect();await api.close();}
 });
@@ -122,7 +121,7 @@ test('seven-day inactivity hides only unpinned code channels and preserves searc
   assert.ok(visible.every(item=>item.id===recent || !item.sidebar_expires_at));
   const search=await sessions.discover(owner,workspace,{q:'Inactive channel'});
   assert.equal(search.items[0]?.access==='source' && search.items[0].sidebar_inactive,true);
-  assert.deepEqual((await sessions.discover(owner,workspace,{q:'Inactive channel',archived:'false'})).items,[]);
+  assert.equal((await sessions.discover(owner,workspace,{q:'Inactive channel',archived:'false'})).items[0]?.id,idle);
   assert.deepEqual((await sessions.listWorkspace(owner,workspace,{archived:'true'})).items.map(item=>item.id),[archived]);
   assert.equal((await sessions.read(owner,idle)).session.id,idle);
   await discuss(idle);
