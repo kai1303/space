@@ -76,14 +76,14 @@ test('Directories filters and sorts before pagination and preserves guest visibi
  await pool.query("UPDATE users SET display_name='Zed',title='Designer',time_zone='Asia/Tokyo' WHERE id=$1",[a.owner_id]);
  await pool.query("UPDATE users SET display_name='Ari' WHERE id=$1",[a.collaborator_id]);
  const people=await workspaces.directory(a.owner_id,a.workspace_id,{sort:'name_desc',limit:'1'});
- assert.equal(people.items[0].user_id,a.owner_id);
- assert.equal((await workspaces.directory(a.owner_id,a.workspace_id,{sort:'name_desc',limit:'1',after:people.next_cursor})).items[0].user_id,a.collaborator_id);
+ assert.equal(people.items[0]?.user_id,a.owner_id);
+ assert.equal((await workspaces.directory(a.owner_id,a.workspace_id,{sort:'name_desc',limit:'1',after:people.next_cursor})).items[0]?.user_id,a.collaborator_id);
  assert.equal((await workspaces.directory(a.owner_id,a.workspace_id,{title:'designer',time_zone:'Asia/Tokyo'})).items.length,1);
  const project=await chat.createChannel(a.owner_id,a.workspace_id,{name:'project',private:false});
  await chat.createChannel(a.owner_id,a.workspace_id,{name:'project-secret',private:true});
  const page=await chat.channels(a.owner_id,a.workspace_id,{directory:'1',q:'project',sort:'name_desc',limit:'1'});
- assert.equal(page.items[0].name,'project-secret');
- assert.equal((await chat.channels(a.owner_id,a.workspace_id,{directory:'1',q:'project',sort:'name_desc',after:page.next_cursor})).items[0].id,project.id);
+ assert.equal(page.items[0]?.name,'project-secret');
+ assert.equal((await chat.channels(a.owner_id,a.workspace_id,{directory:'1',q:'project',sort:'name_desc',after:page.next_cursor})).items[0]?.id,project.id);
  assert.deepEqual((await chat.channels(a.collaborator_id,a.workspace_id,{directory:'1',membership:'other',q:'project'})).items.map(c=>c.id),[project.id]);
  await pool.query("UPDATE workspace_members SET guest_type='multi' WHERE workspace_id=$1 AND user_id=$2",[a.workspace_id,a.collaborator_id]);
  assert.deepEqual((await chat.channels(a.collaborator_id,a.workspace_id,{directory:'1',q:'project'})).items,[]);

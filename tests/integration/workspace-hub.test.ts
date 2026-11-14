@@ -5,6 +5,7 @@ import { Pool, type PoolClient } from 'pg';
 import { bootstrap } from '@space/postgres/bootstrap';
 import { migrate } from '@space/postgres/migrate';
 import { PostgresStore } from '@space/postgres/store';
+import type { HubMessage, HubTodo } from '@space/contracts';
 import { createApi } from '@space/server/api';
 const schema = `hub_${randomBytes(8).toString('hex')}`;
 const admin = new Pool({ connectionString: process.env.TEST_DATABASE_URL });
@@ -336,8 +337,8 @@ test('Saved uses bookmark time, moves exactly once across concurrent attempts, a
   assert.equal(first.items[0].id,old.id);assert.equal((await hub(a,'saved?after='+first.next_cursor)).items[0].id,recent.id);
   const moved=await Promise.all(Array.from({length:4},()=>mutate(a,'saved/cleanup',{action:'move',message_id:old.id})));
   assert.equal(moved.reduce((sum,r)=>sum+r.count,0),1);
-  assert.deepEqual((await hub(a,'todos')).items.map(t=>t.message_id),[old.id]);
+  assert.deepEqual((await hub(a,'todos')).items.map((todo: HubTodo)=>todo.message_id),[old.id]);
   await mutate(a,'saved/cleanup',{action:'clear'});
   assert.equal((await hub(a,'saved')).items.length,0);
-  assert.deepEqual((await hub(a,'saved',a.collaborator_token)).items.map(t=>t.id),[old.id]);
+  assert.deepEqual((await hub(a,'saved',a.collaborator_token)).items.map((message: HubMessage)=>message.id),[old.id]);
 });
