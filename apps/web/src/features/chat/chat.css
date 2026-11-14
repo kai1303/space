@@ -261,3 +261,15 @@
   /* Slack adds and edits channel tabs from the desktop app only. */
   .chat-channel-tabs .channel-tab-menu{display:none}
 }
+
+.chat-session-link small{font:inherit;color:var(--sp-text-secondary);flex:none}
+.chat-session-result{display:flex;align-items:baseline;gap:.5rem;flex-wrap:wrap;color:var(--sp-text-secondary);font-size:.8125rem;overflow-wrap:anywhere}
+.chat-session-result button{background:none;border:0;color:var(--sp-info);font:inherit;cursor:pointer;padding:0}
+.chat-session-result button:hover{text-decoration:underline}
+
+/* Let the message viewport end above the attached toolbar, including when its buttons wrap. */
+.channel-message-view > .chat-compose .sp-rich-editor-shell > :has(> .sp-rich-toolbar--attached) {
+  position: relative;
+  inset: auto;
+  margin-inline: -1px;
+}

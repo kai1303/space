@@ -24,6 +24,7 @@ export type SidebarChannel = {
   name: string;
   section: "starred" | "channels" | "direct" | "sessions" | "apps";
   unread?: number;
+  statusIcon?: ReactNode;
   badgeCount?: number;
   private?: boolean;
   initials?: string;
@@ -235,7 +236,7 @@ export function WorkspaceSidebar({
                     badgeCount={c.badgeCount}
                     onClick={event => { if (c.onSplit && (event.metaKey || event.ctrlKey) && event.altKey) c.onSplit(); else onSelect(c.id); }}
                     icon={
-                      c.typing && c.id !== selectedId ? (
+                      c.statusIcon ? c.statusIcon : c.typing && c.id !== selectedId ? (
                         <DirectTypingIcon name={c.name} label={c.agentName ? `${c.agentName} is working` : undefined} size={c.section === "starred" && !c.agentName ? 16 : 20}/>
                       ) : c.agentName ? (
                         <span className="sp-sidebar-avatar" aria-hidden="true"><Avatar name={c.agentName} initials={c.agentName.slice(0,2).toUpperCase()} image={c.image} size="sm" tone="green"/></span>

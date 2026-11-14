@@ -2,10 +2,10 @@ import { AppError, record, uuid } from '@space/contracts';
 import type { ChatStore } from '@space/postgres/chat';
 import { hasChannelAccess, hasThreadAccess, hasWorkspaceAccess } from '@space/postgres/access';
 
-export type ResourceSubscription = { scope: 'actor' | 'workspace' | 'channel' | 'thread' | 'task'; id: string; revision?: string; keys?: string[] };
+export type ResourceSubscription = { scope: 'actor' | 'workspace' | 'channel' | 'thread' | 'task' | 'session-team'; id: string; revision?: string; keys?: string[] };
 export function parseResourceSubscription(input: unknown): ResourceSubscription {
   const value = record(input, ['scope', 'id']);
-  if (!['actor', 'workspace', 'channel', 'thread', 'task'].includes(value.scope as string)) throw new AppError(400, 'invalid_scope');
+  if (!['actor', 'workspace', 'channel', 'thread', 'task', 'session-team'].includes(value.scope as string)) throw new AppError(400, 'invalid_scope');
   return { scope: value.scope as ResourceSubscription['scope'], id: uuid(value.id) };
 }
 export async function resourceRevision(chat: ChatStore, actor: string, subscription: ResourceSubscription): Promise<string> {
@@ -21,6 +21,16 @@ export async function resourceRevision(chat: ChatStore, actor: string, subscript
   if (scope === 'workspace') {
     workspace = id;
     allowed = await hasWorkspaceAccess(chat.db, actor, workspace);
+  } else if (scope === 'session-team') {
+    const result = await chat.pool.query<{workspace_id:string;channel_id:string;thread_id:string;writable:boolean;can_manage:boolean;revision:string}>(`SELECT
+      access.workspace_id,t.channel_id,t.id AS thread_id,access.writable,access.can_manage,
+      coalesce(rev.revision,0)::text AS revision FROM session_team_access($1,$2) access JOIN agent_sessions a ON a.id=$1
+      JOIN threads t ON t.id=a.origin_thread_id LEFT JOIN resource_update_revisions rev ON rev.resource='session-team:'||a.id`,[id,actor]);
+    const row=result.rows[0];
+    if (!row) throw new AppError(404,'not_found');
+    // Recheck access on membership and lifecycle changes. Never expose the source's revision or traffic.
+    subscription.keys=['global', `workspace:${row.workspace_id}`, `channel:${row.channel_id}`, `thread:${row.thread_id}`, `actor:${actor}`, `session-team:${id}`];
+    return JSON.stringify([row.revision,row.writable,row.can_manage]);
   } else {
     const query = scope === 'channel' ? 'SELECT workspace_id,id AS channel_id FROM channels WHERE id=$1'
       : scope === 'thread' ? 'SELECT workspace_id,channel_id FROM threads WHERE id=$1'

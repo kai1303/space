@@ -1,4 +1,5 @@
 import { workspacePath, workspaceIdFromPath } from '@space/contracts';
+import { SessionTeam } from '../features/agents/SessionTeam.js';
 import { ConversationLinkLoading } from './shell/ConversationLinkLoading.js';
 import { HuddleProvider } from '../features/huddles/Huddles.js';
 import { CallingProvider } from '../features/calling/Calling.js';
@@ -29,6 +30,8 @@ export function Chat() {
   if (isPending) return location.pathname.startsWith('/c/') ? <ConversationLinkLoading /> : <AccessLoading />;
   if (error) return <AccessFrame screen="session-error" title="Let’s try that again."><p role="alert">Cannot check your session. Please try again.</p><Button onClick={() => void refetch()}>Try again</Button></AccessFrame>;
   if (!session) return <AuthScreen />;
+  const review = /^\/review\/([\da-f-]{36})\/?$/i.exec(location.pathname);
+  if (review) return <SocketSession key={session.session.id}><SessionTeam id={review[1]!} viewer={session.user.id} standalone/></SocketSession>;
   const invitation = new URLSearchParams(window.location.search).get('invite');
   if(invitation) return <InviteAcceptance token={invitation} onAccepted={id=>window.location.assign(workspacePath(id))} onCancel={()=>window.location.assign('/chat')}/>;
   if (location.pathname.startsWith('/w/') && !workspaceIdFromPath(location.pathname)) {

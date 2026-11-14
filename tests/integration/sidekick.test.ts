@@ -4,6 +4,7 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { Pool } from 'pg';
 import { migrate } from '@space/postgres/migrate';
 import { bootstrap } from '@space/postgres/bootstrap';
+import { AgentConnectionStore } from '@space/postgres/agent-connections';
 import { PostgresStore } from '@space/postgres/store';
 import { createApi } from '@space/server/api';
 import { parseInvocation } from '@space/contracts';
@@ -85,4 +86,55 @@ test('ownership, source access, missing messages and oversize threads are enforc
   for(let n=0;n<49;n++)await pool.query(`INSERT INTO messages(id,workspace_id,channel_id,thread_id,author_type,user_id,text,client_message_id,request_hash) VALUES($1,$2,$3,$4,'human',$5,'Reply',gen_random_uuid(),'test')`,[randomUUID(),a.workspace_id,a.channel_id,a.thread_id,a.owner_id]);
   const error=await api(a.owner_token,'POST',a.path,{...a.input,source:{channel_id:a.channel_id,thread_id:a.thread_id}},400);
   assert.equal(error.error,'sidekick_context_too_large');
+});
+
+test('browser tabs open one private Sidekick each with the owned pair and sanitized page context',async()=>{
+  const a=await fixture(), connections=new AgentConnectionStore(pool);
+  const pairing=await connections.createPairing(a.owner_id,a.workspace_id,{provider:'codex',name:'Kai Mac Codex'});
+  const credential=randomBytes(32).toString('base64url');
+  const paired=await connections.claim({code:pairing.code,provider:'codex',credential});
+  const agents=await api(a.owner_token,'GET',`/workspaces/${a.workspace_id}/sidekick-agents?paired=true`);
+  assert.deepEqual(agents.map((agent:any)=>agent.id),[paired.installation_id]);
+  const source={browser_url:'https://github.com/org/repo?token=secret#private'};
+  await api(a.owner_token,'POST',a.path,{...a.input,source},409);
+  const input={...a.input,source,installation_id:paired.installation_id};
+  const [one,again]=await Promise.all([api(a.owner_token,'POST',a.path,input,201),api(a.owner_token,'POST',a.path,input,201)]);
+  assert.equal(one.id,again.id);
+  const two=await api(a.owner_token,'POST',a.path,{...input,client_session_id:randomUUID()},201);
+  assert.notEqual(one.origin_thread_id,two.origin_thread_id);
+  const detail=await api(a.owner_token,'GET',`/agent-sessions/${one.id}`);
+  assert.equal(detail.context.browser_url,'https://github.com/org/repo');
+  assert.deepEqual(detail.context.messages,[]);
+  assert.equal(detail.session.installation_id,paired.installation_id);
+  assert.equal(agents[0].name,'Kai Mac Codex');
+  assert.equal(one.agent_name,agents[0].name);
+  assert.equal(detail.session.agent_name,agents[0].name);
+  await api(a.collaborator_token,'GET',`/agent-sessions/${one.id}`,undefined,404);
+  await api(a.collaborator_token,'POST',`/agent-sessions/${one.id}/messages`,{text:'Follow up'},404);
+  await api(a.owner_token,'POST',a.path,{...input,source:{browser_url:'file:///private'}},400);
+  const socket=io(origin+'/agents',{transports:['websocket'],auth:{token:credential},autoConnect:false,reconnection:false});
+  try {
+    const received=new Map<string,ReturnType<typeof parseInvocation>>();
+    socket.on('agent.turn.capacity',(_input,ack)=>ack({data:true}));
+    socket.on('agent.turn.start',(raw,ack)=>{const request=parseInvocation(raw);received.set(request.task_id,request);ack({data:true});});
+    const ready=new Promise<void>((resolve,reject)=>{socket.once('connect',resolve);socket.once('connect_error',reject);});
+    socket.connect();await ready;
+    const command=(name:string,body:object)=>socket.timeout(3000).emitWithAck(name,body);
+    assert.equal((await command('agent.heartbeat',{auth_status:'ready'})).data.installation_id,paired.installation_id);
+    for (const [index,text] of ['Summarize the repository','Explain the first change'].entries()) {
+      const page=index ? 'https://github.com/org/repo/pull/1' : detail.context.browser_url;
+      const task=await api(a.owner_token,'POST',`/agent-sessions/${one.id}/messages`,{text,browser_url:page+'?token=private'},201);
+      const turn=received.get(task.id)!;
+      assert.equal(turn.session_id,one.id);
+      assert.equal(turn.goal,text);
+      assert.deepEqual(turn.persistent_session,{resume:index>0});
+      assert.deepEqual(turn.context,{thread_id:one.origin_thread_id,messages:[],handoff:{...detail.context,browser_url:page}});
+      for (const [sequence,type] of ['execution.started','execution.progress','execution.completed'].entries()) {
+        assert.deepEqual(await command('agent.turn.event',{task_id:task.id,event:{id:randomUUID(),schema_version:'1.0',execution_id:turn.execution_id,
+          sequence:sequence+1,type,occurred_at:new Date().toISOString(),payload:{text:'OK',...(sequence===1?{session_ready:true}:{})}}}),{data:true});
+      }
+      assert.deepEqual(await command('agent.turn.finish',{task_id:task.id}),{data:true});
+    }
+    assert.equal((await api(a.owner_token,'GET',`/agent-sessions/${one.id}`)).turns.length,2);
+  } finally {socket.disconnect();}
 });

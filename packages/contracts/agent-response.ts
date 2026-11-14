@@ -7,6 +7,7 @@ export type AgentComponent =
   | { id: string; type: 'card'; title: string; body: string }
   | { id: string; type: 'table'; title: string; columns: string[]; rows: string[][] };
 export type AgentSessionOutputs = {
+  actions?: { label: string; url: string }[];
   preview?: { state: 'starting' | 'ready' | 'stopped'; label: string; url?: string; document?: string };
   files: { path: string; content: string; language?: string }[];
   changes: { path: string; patch: string }[];
@@ -15,8 +16,8 @@ export type AgentActivity = 'working' | 'thinking' | 'responding' | 'using_tools
 export type AgentResponseItem = { type: 'message' | 'tool'; id: string };
 export type AgentResponse = { messages: AgentText[]; tools: AgentTool[]; components: AgentComponent[]; items?: AgentResponseItem[]; activity?: AgentActivity; step?: string; outputs?: AgentSessionOutputs; memory?: AgentMemoryUpdate };
 
-function parseOutputs(input: unknown): AgentSessionOutputs {
-  const v = record(input, ['preview', 'files', 'changes']);
+export function parseSessionOutputs(input: unknown): AgentSessionOutputs {
+  const v = record(input, ['preview', 'files', 'changes', 'actions']);
   const files = list(v.files, 20, item => {
     const f = record(item, ['path', 'content', 'language']);
     return { path: text(f.path, 300), content: string(f.content, 32000), ...(f.language === undefined ? {} : { language: text(f.language, 50) }) };
@@ -36,7 +37,14 @@ function parseOutputs(input: unknown): AgentSessionOutputs {
     if (url && (url.protocol !== 'https:' || url.username || url.password)) throw new AppError(400, 'invalid_preview');
     preview = { state: p.state as NonNullable<typeof preview>['state'], label: text(p.label, 200), ...(url ? {url: url.href} : {}), ...(p.document === undefined ? {} : {document: string(p.document, 32000)}) };
   }
-  return { ...(preview ? {preview} : {}), files, changes };
+  const actions = v.actions === undefined ? undefined : list(v.actions, 8, input => {
+    const item = record(input, ['label', 'url']);
+    let url: URL;
+    try { url = new URL(text(item.url, 2000)); } catch { throw new AppError(400, 'invalid_result_action'); }
+    if (url.protocol !== 'https:' || url.username || url.password) throw new AppError(400, 'invalid_result_action');
+    return { label: text(item.label, 64), url: url.href };
+  });
+  return { ...(preview ? {preview} : {}), ...(actions ? {actions} : {}), files, changes };
 }
 
 function string(value: unknown, max: number): string {
@@ -91,7 +99,7 @@ export function parseAgentResponse(input: unknown): AgentResponse {
     });
     if (remaining.size) throw new AppError(400, 'incomplete_agent_response_order');
   }
-  const result = { messages, tools, components, ...(items === undefined ? {} : { items }), ...(v.activity === undefined ? {} : { activity: v.activity as AgentActivity }), ...(v.step === undefined ? {} : { step: text(v.step, 200) }), ...(v.outputs === undefined ? {} : { outputs: parseOutputs(v.outputs) }) };
+  const result = { messages, tools, components, ...(items === undefined ? {} : { items }), ...(v.activity === undefined ? {} : { activity: v.activity as AgentActivity }), ...(v.step === undefined ? {} : { step: text(v.step, 200) }), ...(v.outputs === undefined ? {} : { outputs: parseSessionOutputs(v.outputs) }) };
   if (messages.map(message => message.text).join('\n\n').length > 16000 || JSON.stringify(result).length > 64000) throw new AppError(400, 'agent_response_too_large');
   // A bad memory block is dropped and never fails the turn. Its own size is bounded by parseAgentMemoryUpdate.
   if (v.memory !== undefined) {

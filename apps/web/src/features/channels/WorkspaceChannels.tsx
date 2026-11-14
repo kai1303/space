@@ -1,9 +1,12 @@
+import { Archive, CheckCircle, WarningCircle } from '@phosphor-icons/react';
+import {sessionWorkStatusLabels} from '@space/contracts';
 import { sessionPath, conversationPath } from '@space/contracts';
 import { usePublishedPath } from '../../shared/ui/conversation-location.js';
 import { ChannelNotificationEditor } from './ChannelNotificationEditor.js';
 import { ChannelConfirmation } from './ChannelDetails.js';
 import { NotificationPreferences } from '../notifications/Notifications.js';
 import { channelMenu, type NotificationPatch, type ChannelMenuDialog } from './channel-menu.js';
+import { SessionDiscovery } from '../agents/SessionDiscovery.js';
 import { RenameSessionDialog } from '../agents/RenameSessionDialog.js';
 import { AgentSessions } from '../agents/AgentSessions.js';
 import { useAgentSessionList } from '../agents/useAgentSessionList.js';
@@ -46,15 +49,16 @@ export function WorkspaceChannels({ initialSession, onSessionRestored, viewForCh
   const sessions = useAgentSessionList(workspace);
   const starred = useStarredChannels(workspace, undefined, profile.id);
   const starredSessions = useStarredChannels(workspace, undefined, profile.id, 'starred-sessions');
+  const [browseWorkspace,setBrowseWorkspace] = useState<string>();
   const [renameId,setRenameId] = useState<string>();
   const sessionRows = [
     ...starredSessions.conversations.flatMap(item => item.session ? [{
       id:item.id, title:item.name, thread:item.session.origin_thread_id, agentName:item.session.agent_name,
-      section:'starred' as const, working:item.working, canRename:item.can_rename,
+      section:'starred' as const, working:item.working, status:item.status, canRename:item.can_rename,
     }] : []),
     ...sessions.items.filter(item => !starredSessions.ids.includes(item.id)).map(item => ({
       id:item.id, title:item.title, thread:item.origin_thread_id, agentName:item.agent_name,
-      section:'sessions' as const, working:item.working, canRename:item.created_by===profile.id || item.owner_id===profile.id,
+      section:'sessions' as const, working:item.working, status:item.status, canRename:item.created_by===profile.id || item.owner_id===profile.id,
     })),
   ];
   const renameTarget = sessionRows.find(item => item.id === renameId && item.canRename);
@@ -248,12 +252,16 @@ export function WorkspaceChannels({ initialSession, onSessionRestored, viewForCh
         loading={!loaded && !error} showEmptySections onNewMessage={onNewDirectMessage}
         selectedShortcut={shortcut} onThreads={() => onShortcut('threads')} onHuddles={() => onShortcut('huddles')} onDrafts={() => onShortcut('drafts')} onSaved={() => onShortcut('saved')} onDirectories={() => onShortcut('directories')}
         workspaceControl={workspaceControl}
-        channels={[...starred.conversations.filter(c => showMuted || !hiddenChannel(c.id)).map(c => ({id:c.id,name:c.name,section:'starred' as const,...channelActions(c),...badges(c.id),private:c.private,typing:c.kind === 'direct' && typing.has(c.id)})), ...channels.filter(c => !starred.ids.includes(c.id) && (showMuted || !hiddenChannel(c.id))).map(c => ({ id: c.id, ...channelActions(c), name: c.archived_at ? `${c.name} (archived)` : c.name, private: c.private, ...badges(c.id), section: 'channels' as const })), ...sessionRows.map(item => ({ id:`session:${item.id}`, name:item.title, agentName:item.agentName, typing:item.working, section:item.section, onRename:item.canRename ? () => setRenameId(item.id) : undefined })), ...directs.items.filter(dm => !starred.ids.includes(dm.id)).map(dm => ({ id: dm.id, name: dm.name, typing: typing.has(dm.id), section: 'direct' as const, initials: (dm.participants.find(person => person.id !== profile.id) ?? dm.participants[0])?.name.slice(0, 2).toUpperCase(), image: (dm.participants.find(person => person.id !== profile.id) ?? dm.participants[0])?.image, online: (dm.participants.find(person => person.id !== profile.id) ?? dm.participants[0])?.presence === 'active', unread: unread.channels.find(item => item.channel_id === dm.id)?.unread_count ?? 0 }))]} selectedId={shortcut ? '' : agentSession ? `session:${agentSession.id}` : homeDirect?.id ?? selected}
+        channels={[...starred.conversations.filter(c => showMuted || !hiddenChannel(c.id)).map(c => ({id:c.id,name:c.name,section:'starred' as const,...channelActions(c),...badges(c.id),private:c.private,typing:c.kind === 'direct' && typing.has(c.id)})), ...channels.filter(c => !starred.ids.includes(c.id) && (showMuted || !hiddenChannel(c.id))).map(c => ({ id: c.id, ...channelActions(c), name: c.archived_at ? `${c.name} (archived)` : c.name, private: c.private, ...badges(c.id), section: 'channels' as const })), ...sessionRows.map(item => ({ id:`session:${item.id}`, name:item.title, agentName:item.agentName, statusIcon:item.status && ['needs_attention','done','archived'].includes(item.status)
+              ? <span className={`session-row-status session-row-status--${item.status}`} role="img" aria-label={sessionWorkStatusLabels[item.status]} title={sessionWorkStatusLabels[item.status]}>
+                {item.status==='needs_attention'?<WarningCircle size={17}/>:item.status==='done'?<CheckCircle size={17}/>:<Archive size={17}/>}
+              </span> : undefined,  actions:[{label:"Archive session",select:()=>{void request("/agent-sessions/"+item.id+"/sidebar",{archived:true},undefined,"PATCH",undefined,profile.id).then(()=>sessions.refresh()).catch(reason=>updateView(view=>({...view,error:errorText(reason)})));}}], typing:item.working, section:item.section, onRename:item.canRename ? () => setRenameId(item.id) : undefined })), ...directs.items.filter(dm => !starred.ids.includes(dm.id)).map(dm => ({ id: dm.id, name: dm.name, typing: typing.has(dm.id), section: 'direct' as const, initials: (dm.participants.find(person => person.id !== profile.id) ?? dm.participants[0])?.name.slice(0, 2).toUpperCase(), image: (dm.participants.find(person => person.id !== profile.id) ?? dm.participants[0])?.image, online: (dm.participants.find(person => person.id !== profile.id) ?? dm.participants[0])?.presence === 'active', unread: unread.channels.find(item => item.channel_id === dm.id)?.unread_count ?? 0 }))]} selectedId={shortcut ? '' : agentSession ? `session:${agentSession.id}` : homeDirect?.id ?? selected}
         onSelect={id => { onContentClose(); const session = sessions.items.find(item => `session:${item.id}` === id) ?? starredSessions.conversations.find(item=>`session:${item.id}`===id)?.session; if (session) { updateView(view => ({...view,agentSession:session})); onSearchClose(); return; } closeSession(); if (directs.items.some(dm => dm.id === id) || starred.conversations.some(c => c.id === id && c.kind === 'direct')) { const dm = directs.items.find(item => item.id === id); if (dm) { updateView(view => ({ ...view, direct: dm })); onVisit(dm); onSearchClose(); } else onDirectMessage(id); return; } updateView(view => ({ ...view, selected: id, direct: undefined })); onVisit(channels.find(channel => channel.id === id)); setComposeRequest(0); onSearchClose(); }} onCreateChannel={() => setCreateOpen(true)}
         sectionFooters={{channels:channels.some(c => hiddenChannel(c.id)) && <button className="sp-sidebar-section-toggle" onClick={() => setShowMuted(!showMuted)}>{showMuted ? 'Hide muted channels' : 'Show muted channels'}</button>,starred:<>
           {starredSessions.next&&<Button size="sm" onClick={starredSessions.loadMore}>More starred sessions</Button>}
           {starredSessions.hasPrevious&&<Button size="sm" onClick={starredSessions.first}>First starred sessions</Button>}
         </>,sessions:<>
+          <button className="sp-sidebar-section-toggle" onClick={()=>setBrowseWorkspace(workspace)}>Browse sessions</button>
           {sessions.loading && <p className="agent-session-sidebar-notice" role="status">Loading sessions…</p>}
           {sessions.error && <p className="agent-session-sidebar-notice" role="alert">{sessions.error} <Button size="sm" onClick={()=>void sessions.refresh()}>Retry sessions</Button></p>}
           {sessions.next_cursor && <button className="sp-sidebar-section-toggle" onClick={sessions.older}>Older sessions</button>}
@@ -281,6 +289,12 @@ export function WorkspaceChannels({ initialSession, onSessionRestored, viewForCh
     {detailsChannel && <ChannelDetails open channel={detailsChannel} viewer={profile.id} permissions={sidebarPermissions.snapshot}
       permissionsPending={!sidebarPermissions.snapshot} onClose={() => setDetailsId(undefined)} onChange={channelChanged}
       onLeft={() => { leftChannel(detailsChannel); setDetailsId(undefined); }} />}
+    {browseWorkspace === workspace && <Dialog open title="Agent sessions" onClose={()=>setBrowseWorkspace(undefined)}>
+      <SessionDiscovery key={workspace} workspace={workspace} viewer={profile.id} onOpen={item=>{
+        setBrowseWorkspace(undefined); onContentClose(); onSearchClose();
+        updateView(view=>({...view,agentSession:item}));
+      }}/>
+    </Dialog>}
     {renameTarget && <RenameSessionDialog key={renameTarget.id} id={renameTarget.id} title={renameTarget.title}
       workspace={workspace} thread={renameTarget.thread} viewerId={profile.id} onClose={()=>setRenameId(undefined)}/>}
     <Dialog open={createOpen} title="Create a channel" onClose={() => setCreateOpen(false)}><form className="chat-form" onSubmit={create}><p>Channels bring the right people and conversations together.</p><label>Channel name<input maxLength={80} placeholder="e.g. product" value={name} required onChange={e => setName(e.target.value)} /></label><label className="chat-checkbox"><input type="checkbox" checked={isPrivate} onChange={e => setPrivate(e.target.checked)} /><span>Make private<small>Only added members can read and send messages.</small></span></label>{error && <p role="alert">{error}</p>}<div className="chat-form-actions"><Button disabled={busy} onClick={() => setCreateOpen(false)}>Cancel</Button><Button variant="primary" type="submit" loading={busy}>Create channel</Button></div></form></Dialog>

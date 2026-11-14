@@ -1,18 +1,14 @@
 import { subscribeUpdates } from '../../shared/realtime/live-updates.js';
-import { useEffect, useId, useRef, useState, type ReactNode, type RefObject } from 'react';
-import type { Task, TaskStatus } from '@space/contracts';
+import { useEffect, useId, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
+import { patchLines, usePatchReview, type SubmitReview } from './PatchReview.js';
+import type { Task, TaskStatus, AgentSessionOutputs } from '@space/contracts';
 import { Badge, Button, IconButton, SidePanel, Tabs, type Tone } from '@space/ui/primitives';
 import { CodeBlock } from '@space/ui/rich-text';
 import { ArrowClockwise, ArrowSquareOut, Clock, Code, Desktop, DownloadSimple, FileCode, Files, Globe, Lightning, ListChecks, X } from '@phosphor-icons/react';
 import { request } from '../../shared/api/request.js';
 import './agent-task-workspace.css';
 
-// View data only. An execution adapter will supply outputs when sandbox execution is connected.
-export type TaskOutputs = {
-  preview?: { state: 'starting' | 'ready' | 'stopped'; label: string; url?: string; document?: string };
-  files: { path: string; content: string; language?: string }[];
-  changes: { path: string; patch: string }[];
-};
+export type TaskOutputs = AgentSessionOutputs;
 const states: Record<TaskStatus, { label: string; tone: Tone }> = {
   awaiting_approval: { label: 'Awaiting approval', tone: 'warning' },
   queued: { label: 'Queued', tone: 'neutral' }, running: { label: 'Running', tone: 'info' },
@@ -70,7 +66,7 @@ export function AgentWorkspaceView({ task, outputs, channelName, example = false
   return <SidePanel className={`agent-workspace ${example ? 'agent-workspace--example' : ''}`} role="region" aria-label="Agent workspace">
     <header className="agent-workspace-header"><div><span className="agent-workspace-heading"><Desktop size={19} /><h2>Agent workspace</h2></span><span className="agent-workspace-context">{example ? 'Example run · local sample outputs' : channelName ? `#${channelName}` : 'Task details'}</span></div><div className="agent-workspace-header-actions">{onRefresh && <IconButton label="Refresh task" disabled={refreshing} onClick={onRefresh}><ArrowClockwise size={18} /></IconButton>}<button ref={close} type="button" className="agent-workspace-close" aria-label="Close agent workspace" onClick={onClose}><X size={20} /></button></div></header>
     {error && <div className="agent-workspace-error" role="alert">{error}{onRefresh && <Button size="sm" onClick={onRefresh}>Retry</Button>}</div>}
-    <Tabs label="Task results" value={tab} onChange={setTab} items={tabs.map(item => ({ ...item, panelId: `${id}-${item.id}` }))} />
+    <ResultActions actions={outputs?.actions}/><Tabs label="Task results" value={tab} onChange={setTab} items={tabs.map(item => ({ ...item, panelId: `${id}-${item.id}` }))} />
     <div className="agent-workspace-content" role="tabpanel" id={`${id}-${tab}`} aria-label={tabs.find(item => item.id === tab)?.label} tabIndex={0}>
       {tab === 'preview' && <TaskPreview key={outputs?.preview?.url ?? 'preview'} preview={outputs?.preview} />}
       {tab === 'files' && <TaskFiles files={files} />}
@@ -100,7 +96,7 @@ export function TaskPreview({ preview }: { preview?: TaskOutputs['preview'] }) {
 function downloadText(name: string, content: string) {
   const url = URL.createObjectURL(new Blob([content], { type: 'text/plain;charset=utf-8' }));
   const link = document.createElement('a'); link.href = url; link.download = name; link.click();
-  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  window.setTimeout(URL.revokeObjectURL.bind(URL, url), 1000);
 }
 export function TaskFiles({ files }: { files: TaskOutputs['files'] }) {
   const [selected, setSelected] = useState(''), [query, setQuery] = useState(''), [error, setError] = useState('');
@@ -110,9 +106,38 @@ export function TaskFiles({ files }: { files: TaskOutputs['files'] }) {
   const filename = file?.path.split('/').at(-1) ?? 'output.txt';
   return <div className="agent-files"><div className="agent-files-list"><input type="search" aria-label="Search task files" placeholder="Find a file…" value={query} onChange={event => setQuery(event.target.value)} /><nav aria-label="Task files">{visible.map(item => <button type="button" key={item.path} aria-current={file?.path === item.path ? 'true' : undefined} onClick={() => { setSelected(item.path); setError(''); }}><FileCode size={16} /><span>{item.path}</span></button>)}</nav></div>{file ? <div className="agent-file-view"><div className="agent-file-header"><strong>{file.path}</strong><Button size="sm" onClick={() => { try { downloadText(filename, file.content); } catch { setError('Could not download this file. Try again.'); } }} aria-label={`Download ${filename}`}><DownloadSimple size={15} /> Download</Button></div>{error && <p role="alert">{error}</p>}<CodeBlock code={file.content} language={file.language ?? 'text'} /></div> : <EmptyOutput icon={<Files size={28} />} title="No matching files">Try a different filename.</EmptyOutput>}</div>;
 }
-export function TaskChanges({ changes }: { changes: TaskOutputs['changes'] }) {
-  if (!changes.length) return <EmptyOutput icon={<Code size={28} />} title="No code changes attached">Code changes will appear here when an agent supplies a diff.</EmptyOutput>;
-  return <div className="agent-changes"><div className="agent-changes-heading"><ListChecks size={17} /><strong>{changes.length} {changes.length === 1 ? 'file' : 'files'} changed</strong><span>Changes reported by the agent</span></div>{changes.map(change => <details key={change.path} open><summary><FileCode size={16} /><strong>{change.path}</strong><span className="agent-diff-added">+{change.patch.split('\n').filter(line => line.startsWith('+') && !line.startsWith('+++')).length}</span><span className="agent-diff-removed">−{change.patch.split('\n').filter(line => line.startsWith('-') && !line.startsWith('---')).length}</span></summary><pre aria-label={`Changes in ${change.path}`}>{change.patch.split('\n').map((line, index) => <span key={index} className={line.startsWith('+') && !line.startsWith('+++') ? 'agent-diff-added' : line.startsWith('-') && !line.startsWith('---') ? 'agent-diff-removed' : line.startsWith('@@') ? 'agent-diff-context' : ''}>{line}{'\n'}</span>)}</pre></details>)}</div>;
+export function TaskChanges({ changes, onReview }: { changes: TaskOutputs['changes']; onReview?: SubmitReview }) {
+  const review = usePatchReview(onReview);
+  const files = useMemo(() => changes.map(({path, patch}) => ({path, patch, lines: patchLines(patch)})), [changes]);
+  const [lineLimits, setLineLimits] = useState<Record<string,number>>({});
+  if (!changes.length && !review.editor) return <EmptyOutput icon={<Code size={28} />} title="No code changes attached">Code changes will appear here when an agent supplies a diff.</EmptyOutput>;
+  return <div className="agent-changes">
+    <div className="agent-changes-heading"><ListChecks size={17}/><strong>{changes.length} {changes.length === 1 ? 'file' : 'files'} changed</strong></div>
+    {review.editor}
+    {files.map(({path, patch, lines}) => {
+      const limit = lineLimits[path] ?? 120;
+      return <details key={path} open><summary><FileCode size={16}/><strong>{path}</strong>
+        <span className="agent-diff-added">+{lines.filter(({line}) => line.startsWith('+') && !line.startsWith('+++')).length}</span>
+        <span className="agent-diff-removed">−{lines.filter(({line}) => line.startsWith('-') && !line.startsWith('---')).length}</span>
+      </summary><pre aria-label={`Changes in ${path}`}>{lines.slice(0,limit).map(({line, index, location}) =>
+        <span key={index} className={line.startsWith('+') && !line.startsWith('+++') ? 'agent-diff-added' : line.startsWith('-') && !line.startsWith('---') ? 'agent-diff-removed' : line.startsWith('@@') ? 'agent-diff-context' : ''}>
+          {onReview && <button className="agent-diff-comment" type="button" disabled={review.disabled}
+            aria-label={`Comment on ${path}, ${location}`} onClick={() => review.select({path, patch, index, location, line})}>+</button>}{line}
+        </span>)}</pre>{limit < lines.length && <Button size="sm" variant="ghost" onClick={() => setLineLimits(current => ({...current, [path]:limit + 120}))}>Show more lines in {path}</Button>}</details>;
+    })}
+  </div>;
+}
+
+export function ResultActions({ actions }: { actions?: TaskOutputs['actions'] }) {
+  const links = actions?.flatMap(action => {
+    const url = previewUrl(action.url);
+    return url ? [{...action, url}] : [];
+  });
+  if (!links?.length) return null;
+  return <nav className="agent-result-actions" aria-label="Result actions">{links.map((action, index) =>
+    <a key={index} href={action.url} rel="noopener noreferrer" target="_blank" title={action.url}>
+      {action.label}<ArrowSquareOut size={14} aria-hidden="true"/>
+    </a>)}</nav>;
 }
 type ConnectedProps = { taskId: string; ownerId: string; viewerId: string; channelName?: string; revision?: string; onClose: () => void; onAccessLost?: () => void };
 export function AgentTaskWorkspace(props: ConnectedProps) { return <ConnectedWorkspace key={props.taskId} {...props} />; }

@@ -117,7 +117,7 @@ export class PostgresStore implements DeliveryStore {
     const hash = createHash('sha256').update(JSON.stringify(input)).digest('hex');
     return sessionTransaction(this.db, c => this.createTaskIn(c, actor, input, key, hash));
   }
-  async createTaskIn(c: DbSession, actor: string, input: ReturnType<typeof parseTaskInput> & { request_document?: RichDocument }, key: string, hash = createHash('sha256').update(JSON.stringify(input)).digest('hex'), managedSessionId?: string): Promise<Task> {
+  async createTaskIn(c: DbSession, actor: string, input: ReturnType<typeof parseTaskInput> & { browser_url?:string; request_document?: RichDocument; }, key: string, hash = createHash('sha256').update(JSON.stringify(input)).digest('hex'), managedSessionId?: string): Promise<Task> {
       if (!await hasThreadAccess(c, actor, input.thread_id)) throw notFound();
       const [thread] = await c.select().from(s.threads).where(eq(s.threads.id, input.thread_id));
       if (thread?.workspace_id !== input.workspace_id) throw notFound();
@@ -271,33 +271,38 @@ export class PostgresStore implements DeliveryStore {
       if (!lease.length) throw new AppError(409, 'stale_lease');
       const installation = await this.eligible(c, task);
       await this.localConnection(c, installation.id, connectionId, await this.managed(c, task.session_id));
-      const [origin]=await navigatorPresent(c)?(await c.execute<{through_sequence:string}>(sql`SELECT through_sequence::text FROM navigator_decisions WHERE decision->>'task_id'=${task.id} LIMIT 1`)).rows:[];
-      const thread=(await c.select().from(s.threads).where(eq(s.threads.id,task.thread_id)))[0]!;
-      const working_memory = await readThreadContext(c, thread.channel_id, task.thread_id, origin?.through_sequence);
-      const context: NonNullable<InvocationRequest['context']> = { thread_id: task.thread_id, working_memory, messages: working_memory.messages.filter(m => m.text.trim()).map(m => ({ id: m.id, text: m.text, author_type: m.author.kind })) };
-      context.channel_memory = await readChannelMemory(c, thread.channel_id, undefined, undefined, undefined, { countTopics: false });
-      const notes = await readKnowledgeContext(c, thread.channel_id, task);
-      if (notes) {
-        context.knowledge_notes = notes;
-        const human = working_memory.messages.findLast(message => message.author.kind === 'human')
-          ?? (working_memory.root?.author.kind === 'human' ? working_memory.root : undefined);
-        // A retried execution can receive a different context. Only use an unambiguous fallback.
-        await c.execute(sql`INSERT INTO execution_note_evidence (execution_id, message_id, revision)
-          VALUES (${delivery.execution_id}, ${human?.id ?? null}, (SELECT search_revision FROM messages
-            WHERE channel_id=${thread.channel_id} AND id=${human?.id ?? null}))
-          ON CONFLICT (execution_id) DO UPDATE SET message_id=NULL, revision=NULL
-          WHERE (execution_note_evidence.message_id, execution_note_evidence.revision)
-            IS DISTINCT FROM (excluded.message_id, excluded.revision)`);
-      }
-      if (task.session_id) {
-        const own = await readSessionMemory(c, thread.channel_id, task.session_id, task.installation_id).catch(error => {
-          if (error instanceof AppError && (error.code === 'session_ended' || error.code === 'session_private')) return undefined;
-          throw error;
-        });
-        if (own) context.agent_session_memory = own;
-      }
       const [session] = await c.select().from(s.agentSessions).where(eq(s.agentSessions.id, task.session_id!));
-      if (session?.handoff_context) context.handoff = session.handoff_context;
+      let context: NonNullable<InvocationRequest['context']> = { thread_id: task.thread_id, messages: [] };
+      // Browser and helper sessions carry their explicitly selected context.
+      if (!session?.handoff_context?.browser_url && !session?.parent_session_id) {
+        const [origin]=await navigatorPresent(c)?(await c.execute<{through_sequence:string}>(sql`SELECT through_sequence::text FROM navigator_decisions WHERE decision->>'task_id'=${task.id} LIMIT 1`)).rows:[];
+        const thread=(await c.select().from(s.threads).where(eq(s.threads.id,task.thread_id)))[0]!;
+        const working_memory = await readThreadContext(c, thread.channel_id, task.thread_id, origin?.through_sequence);
+        context = { thread_id: task.thread_id, working_memory, messages: working_memory.messages.filter(m => m.text.trim()).map(m => ({ id: m.id, text: m.text, author_type: m.author.kind })) };
+        context.channel_memory = await readChannelMemory(c, thread.channel_id, undefined, undefined, undefined, { countTopics: false });
+        const notes = await readKnowledgeContext(c, thread.channel_id, task);
+        if (notes) {
+          context.knowledge_notes = notes;
+          const human = working_memory.messages.findLast(message => message.author.kind === 'human')
+            ?? (working_memory.root?.author.kind === 'human' ? working_memory.root : undefined);
+          // A retried execution can receive a different context. Only use an unambiguous fallback.
+          await c.execute(sql`INSERT INTO execution_note_evidence (execution_id, message_id, revision)
+            VALUES (${delivery.execution_id}, ${human?.id ?? null}, (SELECT search_revision FROM messages
+              WHERE channel_id=${thread.channel_id} AND id=${human?.id ?? null}))
+            ON CONFLICT (execution_id) DO UPDATE SET message_id=NULL, revision=NULL
+            WHERE (execution_note_evidence.message_id, execution_note_evidence.revision)
+              IS DISTINCT FROM (excluded.message_id, excluded.revision)`);
+        }
+        if (task.session_id) {
+          const own = await readSessionMemory(c, thread.channel_id, task.session_id, task.installation_id).catch(error => {
+            if (error instanceof AppError && (error.code === 'session_ended' || error.code === 'session_private')) return undefined;
+            throw error;
+          });
+          if (own) context.agent_session_memory = own;
+        }
+      }
+      if (session?.handoff_context) context.handoff = session.handoff_context.browser_url && task.browser_url
+        ? { ...session.handoff_context, browser_url:task.browser_url } : session.handoff_context;
       const priorReady = session?.managed && (await c.execute(sql`SELECT 1 FROM tasks previous JOIN task_events e ON e.correlation_id=previous.id AND e.payload->>'session_ready'='true' WHERE previous.session_id=${task.session_id} AND previous.id<>${task.id} LIMIT 1`)).rows.length > 0;
       // Load only this turn's explicitly attached files. Session history stays bounded.
       images.length=0;
@@ -322,7 +327,7 @@ export class PostgresStore implements DeliveryStore {
       if (!this.attachmentImage) throw new AppError(503,'uploads_unavailable');
       prepared.request.attachments![image.index]!.content = {kind:'image', webp:await this.attachmentImage(image.id,image.animated)};
     }
-    const readMemory = this.memoryReader && !prepared.request.context?.handoff;
+    const readMemory = this.memoryReader && !!prepared.request.context?.working_memory && !prepared.request.context.handoff;
     if (!readMemory && !images.length) return prepared;
     const task = await this.task(this.db, delivery.task_id);
     const memory = readMemory ? await this.memoryReader!(task) : undefined;
@@ -348,7 +353,8 @@ export class PostgresStore implements DeliveryStore {
       const task = await this.task(c, ref.task_id);
       const optimistic = await this.managed(c, task.session_id);
       if (delivery) {
-        await this.eligible(c, task);
+        const archiveReplay = task.status === 'completed' && event.payload.session_lifecycle === 'archive';
+        await this.eligible(c, task, false, archiveReplay);
         await this.localConnection(c, installationId, connectionId, await this.managed(c, task.session_id));
         if (delivery.execution_id !== event.execution_id || delivery.task_id !== task.id) throw new AppError(409, 'stale_execution');
         const leaseQuery = c.select({ id: s.outbox.id }).from(s.outbox).where(this.liveAttempt(delivery));
@@ -366,6 +372,23 @@ export class PostgresStore implements DeliveryStore {
       const execution = (await executionQuery)[0]!;
       if (event.sequence !== execution.last_sequence + 1) throw new AppError(409, 'event_out_of_order');
       if ((event.type === 'execution.started' && execution.status !== 'queued') || (event.type !== 'execution.started' && execution.status !== 'running')) throw new AppError(409, 'invalid_transition');
+      if (event.payload.session_lifecycle) {
+        const lifecycle = event.payload.session_lifecycle;
+        const [installation] = await c.select({connector:s.agentInstallations.connector_id, capabilities:s.agentDefinitions.capabilities})
+          .from(s.agentInstallations).innerJoin(s.agentDefinitions,eq(s.agentDefinitions.id,s.agentInstallations.definition_id))
+          .where(eq(s.agentInstallations.id,installationId));
+        if (!delivery || installation?.connector !== 'ag-ui' || !installation.capabilities.persistent_sessions || !task.session_id)
+          throw new AppError(403,'session_lifecycle_forbidden');
+        if (lifecycle === 'open' && !optimistic) {
+          const promoted = await c.update(s.agentSessions).set({managed:true,created_by:task.requester_id,title:task.goal.slice(0,160),
+            skill:task.skill,revision:sql`revision+1`}).where(and(eq(s.agentSessions.id,task.session_id),eq(s.agentSessions.managed,false))).returning({id:s.agentSessions.id});
+          if (!promoted.length) throw new SessionConflict();
+          const [origin] = await c.select({channel:s.threads.channel_id}).from(s.threads).where(eq(s.threads.id,task.thread_id));
+          await c.insert(s.messages).values({id:randomUUID(),workspace_id:task.workspace_id,channel_id:origin!.channel,
+            thread_id:task.thread_id,task_id:task.id,installation_id:installationId,agent_session_id:task.session_id,text:task.goal.slice(0,160)});
+        }
+        if (lifecycle === 'archive' && !optimistic) throw new AppError(409,'session_unmanaged');
+      }
       if (event.payload.session_ready) {
         const ready = await c.execute(sql`SELECT 1 FROM agent_sessions a JOIN agent_installations i ON i.id=a.installation_id JOIN agent_definitions d ON d.id=i.definition_id WHERE a.id=${task.session_id} AND a.managed AND d.capabilities->>'persistent_sessions'='true'`);
         if (!ready.rows.length) throw new AppError(400, 'invalid_session_ready');
@@ -386,6 +409,7 @@ export class PostgresStore implements DeliveryStore {
       if (managed && incomingOutputs) {
         const changedSession = await c.update(s.agentSessions).set({ revision: session.revision + 1, outputs: {
           ...(incomingOutputs.preview ?? session.outputs.preview ? { preview: incomingOutputs.preview ?? session.outputs.preview } : {}),
+          ...(incomingOutputs.actions ?? session.outputs.actions ? { actions: incomingOutputs.actions ?? session.outputs.actions } : {}),
           files: mergeOutputPaths(session.outputs.files, incomingOutputs.files),
           changes: mergeOutputPaths(session.outputs.changes, incomingOutputs.changes),
         } }).where(and(eq(s.agentSessions.id, session.id), eq(s.agentSessions.revision, session.revision))).returning({ id: s.agentSessions.id });
@@ -398,6 +422,13 @@ export class PostgresStore implements DeliveryStore {
       if (next === 'completed') {
         const thread = (await c.select().from(s.threads).where(eq(s.threads.id, task.thread_id)))[0]!;
         if (!managed) await c.insert(s.messages).values({ id: randomUUID(), channel_id: thread.channel_id, workspace_id: task.workspace_id, thread_id: task.thread_id, task_id: task.id, installation_id: installationId, text: event.payload.text, agent_response: event.payload.response });
+        if (event.payload.session_lifecycle === 'archive') {
+          // The provider can finish its own session only when no human follow-up is waiting.
+          await c.execute(sql`UPDATE agent_sessions a SET state='ended',revision=revision+1 WHERE a.id=${task.session_id}
+            AND state='active' AND NOT EXISTS (SELECT 1 FROM agent_session_inputs i WHERE i.session_id=a.id
+              AND i.kind='queue' AND i.state IN ('blocked','pending','sending'))
+            AND NOT EXISTS (SELECT 1 FROM navigator_followups f WHERE f.session_id=a.id AND f.status='pending')`);
+        }
         await this.append(c, task, 'task.completed', installationId, { result: event.payload.text, ...(event.payload.response ? { response: event.payload.response } : {}) }, event.id);
         const memory = event.payload.response?.memory;
         if (memory) {

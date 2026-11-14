@@ -111,8 +111,10 @@ export function registerDirectTurns(socket:Socket,connections:AgentConnectionSto
           if(!await tasks.executionTerminal(delivery.execution_id))throw new AppError(409,'missing_terminal_event');
           await tasks.ackDelivery(delivery);active.delete(id);
         }else {await tasks.failDelivery(delivery,'local_execution_failed',true);active.delete(id);}
-        const changed=await tasks.pool.query('SELECT t.workspace_id,t.thread_id,th.channel_id FROM tasks t JOIN threads th ON th.id=t.thread_id WHERE t.id=$1',[id]);
-        const row=changed.rows[0];if(row)await tasks.pool.query("SELECT pg_notify('space_direct_turn',$1)",[JSON.stringify({keys:[`task:${id}`,`thread:${row.thread_id}`,`channel:${row.channel_id}`,`workspace:${row.workspace_id}`]})]);
+        // Workspace and origin reports wake on committed state transitions. Token
+        // updates only need to wake people watching this task or session.
+        const changed=await tasks.pool.query('SELECT thread_id FROM tasks WHERE id=$1',[id]);
+        const row=changed.rows[0];if(row)await tasks.pool.query("SELECT pg_notify('space_direct_turn',$1)",[JSON.stringify({keys:[`task:${id}`,`thread:${row.thread_id}`]})]);
         ack({data:true});
       }catch(error){ack({error:error instanceof AppError?error.code:'internal_error'});}
     }).catch(()=>ack({error:'internal_error'})).finally(()=>pending--);

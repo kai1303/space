@@ -8,6 +8,7 @@ import { bootstrap } from '@space/postgres/bootstrap';
 import { AgentSessionStore } from '@space/postgres/agent-sessions';
 import { PostgresStore } from '@space/postgres/store';
 import { createApi } from '@space/server/api';
+import { AppError } from '@space/contracts';
 
 const url = process.env.TEST_DATABASE_URL;
 if (!url) throw new Error('TEST_DATABASE_URL is required');
@@ -649,4 +650,116 @@ test('session queue replays FIFO once under concurrent drains, rechecks approval
  await sessions.drainQueue(s.id);
  assert.equal((await sessions.read(a.owner_id,s.id)).turns.at(-1)?.task.goal,'Finally');
  assert.deepEqual((await sessions.read(a.owner_id,s.id)).inputs,[]);
+});
+
+test('sidebar moves and archives are personal, reversible, and check both session permissions', async () => {
+  const a = await fixture(), foreign = await fixture();
+  const first = await session(a,'First'), second = await session(a,'Second'), third = await session(a,'Third');
+  const path = `/workspaces/${a.workspace_id}/agent-sessions`;
+  const rows = async (token=a.owner_token,query='') => (await api(token,'GET',path+query)).items.map((item:{id:string}) => item.id);
+  const patch = (id:string,body:object,status=200) => api(a.owner_token,'PATCH',`/agent-sessions/${id}/sidebar`,body,status);
+  await patch(first.id,{target:third.id,side:'before'});
+  assert.deepEqual(await rows(),[first.id,third.id,second.id]);
+  await patch(second.id,{target:first.id,side:'after'});
+  assert.deepEqual(await rows(),[first.id,second.id,third.id]);
+  assert.deepEqual(await rows(a.owner_token,'?before='+first.id),[second.id,third.id]);
+  assert.deepEqual(await rows(a.collaborator_token),[third.id,second.id,first.id]);
+  const stars = `/workspaces/${a.workspace_id}/hub/starred-sessions`;
+  await api(a.owner_token,'POST',stars+'/'+second.id,{active:true});
+  await Promise.all([patch(second.id,{archived:true}),patch(second.id,{archived:true})]);
+  assert.deepEqual(await rows(),[first.id,third.id]);
+  assert.deepEqual(await rows(a.owner_token,'?archived=true'),[second.id]);
+  assert.deepEqual((await api(a.owner_token,'GET',stars)).items,[]);
+  assert.deepEqual(await rows(a.collaborator_token,'?archived=true'),[]);
+  await patch(first.id,{target:second.id,side:'before'},409);
+  await patch(second.id,{archived:false});
+  assert.deepEqual(await rows(),[first.id,second.id,third.id]);
+  assert.equal((await api(a.owner_token,'GET',stars)).items[0].id,second.id);
+  await Promise.all([
+    patch(first.id,{target:third.id,side:'after'}),
+    patch(second.id,{target:third.id,side:'after'}),
+  ]);
+  const concurrent = await rows();
+  assert.equal(concurrent[0],third.id);
+  assert.deepEqual(new Set(concurrent),new Set([first.id,second.id,third.id]));
+  assert.deepEqual(await rows(a.owner_token,'?before='+concurrent[1]),[concurrent[2]]);
+  const other = await session(foreign);
+  await patch(first.id,{target:other.id,side:'after'},404);
+  await patch(other.id,{archived:true},404);
+});
+
+test('session-only reviewer can discuss an explicit output snapshot without gaining source or execution access', async () => {
+  const a=await fixture(), stranger=await fixture();
+  const sessionId=(await session(a)).id;
+  const url='/agent-sessions/'+sessionId, team=url+'/team', token=a.collaborator_token;
+  await pool.query('DELETE FROM channel_members WHERE channel_id=$1 AND user_id=$2',[a.channel_id,a.collaborator_id]);
+  const invite=(user:string)=>app.inject({method:'PUT',url:'/v1'+team+'/reviewers/'+user,headers:{authorization:'Bearer '+a.owner_token},payload:{}});
+  const patch={path:'app.ts',patch:'@@ -1 +1 @@\n-old\n+new'};
+  const file={path:'internal.txt',content:'private data'};
+  await pool.query('UPDATE agent_sessions SET outputs=$1 WHERE id=$2',[{files:[file],changes:[patch]},sessionId]);
+  const share=(actor:string,output:unknown)=>app.inject({method:'PUT',url:'/v1'+team+'/shared',headers:{authorization:'Bearer '+actor},payload:{kind:'change',path:patch.path,output}});
+  await api(token,'GET',team,undefined,404);
+  assert.equal((await invite(stranger.owner_id)).statusCode,404);
+  assert.equal((await invite(a.collaborator_id)).statusCode,200);
+  const viewerSocket=io(origin,{transports:['websocket'],auth:{token},autoConnect:false,reconnection:false});
+  sockets.push(viewerSocket);
+  viewerSocket.on('updates.changed',(_notice,ack:()=>void)=>ack());
+  const connected=new Promise<void>((resolve,reject)=>{viewerSocket.once('connect',resolve);viewerSocket.once('connect_error',reject);});
+  viewerSocket.connect(); await connected;
+  const sub={scope:'session-team',id:sessionId};
+  const subscribe=()=>viewerSocket.timeout(2500).emitWithAck('updates.subscribe',sub);
+  assert.deepEqual((await subscribe()).data,sub);
+  assert.ok((await viewerSocket.timeout(2500).emitWithAck('updates.subscribe',{scope:'thread',id:a.thread_id})).error);
+  let view=await api(token,'GET',team);
+  assert.equal(view.can_manage,false);
+  assert.deepEqual(view.shared,[]);
+  assert.equal(view.origin_thread_id,undefined);
+  await api(token,'GET',url,undefined,404);
+  await api(token,'POST',url+'/messages',{text:'Run a command'},404);
+  assert.equal((await share(token,patch)).statusCode,403);
+  assert.equal((await share(a.owner_token,{...patch,patch:'wrong version'})).statusCode,409);
+  assert.equal((await share(a.owner_token,patch)).statusCode,200);
+  await pool.query('UPDATE agent_sessions SET outputs=$1 WHERE id=$2',[{files:[file],changes:[{...patch,patch:'different'}]},sessionId]);
+  view=await api(token,'GET',team);
+  assert.deepEqual(view.shared,[{kind:'change',path:patch.path,output:patch}]);
+  assert.ok(!JSON.stringify(view).includes(file.content));
+  const key=randomUUID();
+  const posts=Array.from({length:4},()=>api(token,'POST',team+'/discussion',{text:'Please review this line'},200,key));
+  await Promise.all(posts);
+  await api(token,'POST',team+'/discussion',{text:'Different text'},409,key);
+  assert.equal((await api(a.owner_token,'GET',team)).messages.length,1);
+  assert.equal((await pool.query('SELECT id FROM tasks WHERE session_id=$1',[sessionId])).rowCount,0);
+  assert.equal((await share(a.owner_token,null)).statusCode,200);
+  assert.deepEqual((await api(token,'GET',team)).shared,[]);
+  const revoked=new Promise<void>((resolve,reject)=>{
+    const timer=setTimeout(()=>reject(new Error('missing review access revocation')),8000);
+    viewerSocket.once('updates.revoked', (notice:{scope:string;id:string})=>{
+      clearTimeout(timer);
+      if(notice.scope===sub.scope && notice.id===sessionId) resolve();
+      else reject(new Error('wrong revoked subscription'));
+    });
+  });
+  const removed=await app.inject({method:'DELETE',url:'/v1'+team+'/reviewers/'+a.collaborator_id,headers:{authorization:'Bearer '+a.owner_token}});
+  assert.equal(removed.statusCode,200);
+  await revoked;
+  assert.equal((await subscribe()).error,'not_found');
+  viewerSocket.disconnect();
+
+  await api(token,'GET',team,undefined,404);
+  await api(token,'POST',team+'/discussion',{text:'After revocation'},404);
+  const visibility=(actor:string,value:boolean)=>app.inject({method:'PUT',url:'/v1'+team+'/visibility',headers:{authorization:'Bearer '+actor},payload:{workspace_visible:value}});
+  assert.equal((await visibility(a.owner_token,true)).statusCode,200);
+  assert.equal((await api(token,'GET',team)).workspace_visible,true);
+  await api(token,'GET',url,undefined,404);
+  await api(stranger.owner_token,'GET',team,undefined,404);
+  assert.equal((await visibility(token,false)).statusCode,403);
+  assert.equal((await visibility(a.owner_token,false)).statusCode,200);
+  await api(token,'GET',team,undefined,404);
+  assert.equal((await invite(a.collaborator_id)).statusCode,200);
+  await pool.query('UPDATE workspace_members SET active=false WHERE workspace_id=$1 AND user_id=$2',[a.workspace_id,a.collaborator_id]);
+  await pool.query('UPDATE workspace_members SET active=true WHERE workspace_id=$1 AND user_id=$2',[a.workspace_id,a.collaborator_id]);
+  await api(token,'GET',team,undefined,404);
+  await api(a.owner_token,'POST',url+'/end',{});
+  await api(a.owner_token,'POST',team+'/discussion',{text:'After closing'},409);
+  assert.equal((await api(a.owner_token,'GET',team)).writable,false);
 });

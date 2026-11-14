@@ -14,3 +14,11 @@ test('saved turn-presentation snapshots remain readable in the original response
  const saved={...response,metadata:{model:'saved-model'},messages:[{id:'m',text:'Saved answer',status:'complete',phase:'final_answer'}],tools:[{id:'t',name:'Read',arguments:'{}',result:'Missing file',status:'failed',duration_ms:25,result_characters:12,arguments_characters:2}]};
  assert.deepEqual(parseAgentResponse(saved),{...response,messages:[{id:'m',text:'Saved answer',status:'complete',phase:'final_answer'}],tools:[{id:'t',name:'Read',arguments:'{}',result:'Missing file',status:'interrupted'}]});
 });
+
+test('provider result actions are bounded HTTPS links without embedded credentials',()=>{
+ const action={label:'Open PR',url:'https://git.example.test/repo/pull/42'};
+ const outputs={files:[],changes:[],actions:[action]};
+ assert.deepEqual(parseAgentResponse({...response,outputs}).outputs,outputs);
+ for(const actions of [Array(9).fill(action),[{...action,url:'javascript:alert(1)'}],[{...action,url:'https://user:secret@host.example'}]])
+   assert.throws(()=>parseAgentResponse({...response,outputs:{...outputs,actions}}));
+});

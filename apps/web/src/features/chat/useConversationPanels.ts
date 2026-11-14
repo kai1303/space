@@ -43,7 +43,7 @@ export function useConversationPanels(view: Snapshot<ConversationView> | undefin
     close: () => setPanel(undefined),
     clear: () => { setPanel(undefined); setSessionView(undefined); },
     openThread: (id:string) => open({kind:'thread', id}),
-    openSessions: (thread:string, selected:string) => { setSessionView({thread, selected}); open({kind:'session'}); },
+    openSessions: (thread:string, selected:string, artifact?:NonNullable<import('@space/contracts').SessionReport['artifact']>) => { setSessionView(previous => ({thread, selected, artifact, artifactRequest:(previous?.artifactRequest ?? 0) + 1})); open({kind:'session'}); },
     openFiles: () => open({kind:'files'}),
     openSidekick: (source:SidekickSource) => open({kind:'sidekick', source}),
   };

@@ -2,7 +2,14 @@ import { extractMemoryBlock, visibleText, parseAgentResponse, type AgentActivity
 
 // Accumulated snapshots share the existing backpressure and durable event path.
 export class AgentProgress {
-  constructor(private readonly rolling = false) {}
+  private readonly pullRequestAction?: {label: string; url: string};
+  constructor(private readonly rolling = false, pullRequestUrl = process.env.SPACE_PULL_REQUEST_URL) {
+    if (!rolling || !pullRequestUrl) return;
+    const url = new URL(pullRequestUrl);
+    if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash || url.href.length > 2000)
+      throw new Error('SPACE_PULL_REQUEST_URL requires an HTTPS URL without credentials, query, or fragment.');
+    this.pullRequestAction = {label: 'Open pull request page', url: url.href};
+  }
   activity: AgentActivity = 'working';
   readonly tools = new Map<string, AgentTool>();
   private readonly items: AgentResponseItem[] = [];
@@ -46,7 +53,7 @@ export class AgentProgress {
     const messageIds = new Set(messages.map(message => message.id));
     const items = this.items.filter(item => item.type === 'tool' ? this.tools.has(item.id) : messageIds.has(item.id));
     const originals = [...this.tools.values()];
-    const snapshot = parseAgentResponse({ messages, tools: originals.map(tool => ({ ...tool, arguments: '', ...(tool.result === undefined ? {} : { result: '' }), ...(terminal && ['calling', 'running'].includes(tool.status) ? { status: 'interrupted' } : {}) })), components: [], items, ...(this.changes.size ? { outputs: { files: [], changes: [...this.changes.keys()].map(path => ({ path, patch: '' })) } } : {}), ...(!terminal ? { activity: this.activity } : {}), ...(memory ? { memory } : {}) });
+    const snapshot = parseAgentResponse({ messages, tools: originals.map(tool => ({ ...tool, arguments: '', ...(tool.result === undefined ? {} : { result: '' }), ...(terminal && ['calling', 'running'].includes(tool.status) ? { status: 'interrupted' } : {}) })), components: [], items, ...(this.changes.size ? { outputs: { ...(terminal && this.pullRequestAction ? { actions: [this.pullRequestAction] } : {}), files: [], changes: [...this.changes.keys()].map(path => ({ path, patch: '' })) } } : {}), ...(!terminal ? { activity: this.activity } : {}), ...(memory ? { memory } : {}) });
     let remaining = 64000 - JSON.stringify(snapshot).length;
     if (snapshot.outputs) {
       let patchBudget = Math.min(32000, remaining);

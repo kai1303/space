@@ -61,3 +61,17 @@ test('coding changes and tool output share a bounded escaped response budget', (
   assert.ok(snapshot.outputs.changes.every(change=>change.patch.length<=32000));
   assert.match(snapshot.outputs.changes.at(-1).patch,/truncated/);
 });
+
+test('only coding results with changes expose a configured PR page to reviewers', () => {
+  const url = 'https://github.example.test/team/repo/compare/main...fix';
+  for (const coding of [true,false]) {
+    const progress = new AgentProgress(coding,url);
+    assert.equal(progress.snapshot([],true).outputs,undefined);
+    progress.change('index.ts','+fix');
+    assert.equal(progress.snapshot([]).outputs.actions,undefined);
+    assert.deepEqual(progress.snapshot([],true).outputs.actions,coding ? [{label:'Open pull request page',url}] : undefined);
+  }
+  for (const unsafe of ['javascript:alert(1)','https://user:secret@ghe.test/pr','https://ghe.test/signin?token=secret']) {
+    assert.throws(() => new AgentProgress(true,unsafe));
+  }
+});

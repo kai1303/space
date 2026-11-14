@@ -1,7 +1,7 @@
 import { acquireRealtime } from './socket-session.js';
 import { socketCommand } from './socket-command.js';
 
-type Scope = 'actor' | 'workspace' | 'channel' | 'thread' | 'task';
+type Scope = 'actor' | 'workspace' | 'channel' | 'thread' | 'task' | 'session-team';
 type Update = { scope: Scope; id: string; error?: string };
 type Listener = { refresh: () => unknown; onRevoked?: (code: string) => void; active: boolean; running: boolean; pending: boolean; completion?: Promise<void> };
 type Subscription = { listeners: Set<Listener>; close: () => void; version?: object };

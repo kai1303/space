@@ -75,7 +75,7 @@ it('switches between messages and outputs in one tab row without remounting the 
  await screen.findByText('Research prompt');
  await userEvent.type(editor,'Keep my draft');
  const tabs=screen.getByRole('tablist',{name:'Session views'});
- expect(within(tabs).getAllByRole('tab').map(tab=>tab.textContent)).toEqual(['Messages','Preview','Files 1','Changes 0']);
+ expect(within(tabs).getAllByRole('tab').map(tab=>tab.textContent)).toEqual(['Messages','Team','Preview','Files 1','Changes 0']);
  expect(screen.queryByRole('button',{name:'Session details',exact:true})).toBeNull();
  const messages=within(tabs).getByRole('tab',{name:'Messages',exact:true});
  await userEvent.click(within(tabs).getByRole('tab',{name:'Files 1'}));
@@ -294,7 +294,7 @@ it('uses the DM header and timeline with a fixed composer and shared output tabs
  expect(view.container.querySelectorAll('.chat-channel-header')).toHaveLength(1);
  expect(view.container.querySelector('.agent-session-header')).toBeNull();
  expect(view.container.querySelector('.chat-channel-topic')).toBeNull();
- expect(screen.getByRole('tablist',{name:'Session views'}).textContent).toBe('MessagesPreviewFiles 1Changes 0');
+ expect(screen.getByRole('tablist',{name:'Session views'}).textContent).toBe('MessagesTeamPreviewFiles 1Changes 0');
  expect(screen.queryByRole('button',{name:/unavailable/i})).toBeNull();
  expect(screen.getAllByRole('tablist')).toHaveLength(1);
  expect(screen.getByRole('button',{name:'Bold',exact:true})).toBeTruthy();
@@ -504,4 +504,29 @@ it('keeps a rejected immediate-turn draft and uses a fresh attempt when the conn
  await waitFor(()=>expect(editor.textContent?.trim()).toBe(''));
  const attempts=fetch.mock.calls.filter(([path])=>path.endsWith('/messages'));expect(attempts).toHaveLength(2);
  expect(new Headers(attempts[0]![1]?.headers).get('idempotency-key')).not.toBe(new Headers(attempts[1]![1]?.headers).get('idempotency-key'));
+});
+
+it('submits the patch review to this session without consuming the conversation draft',async()=>{
+ const {webcrypto}=await import('node:crypto');vi.stubGlobal('crypto',webcrypto);
+ const fetch=setup(),original=fetch.getMockImplementation()!;
+ fetch.mockImplementation(async(path,init)=>path==='/v1/agent-sessions/one'?{ok:true,json:async()=>({
+   session:session('one','Patch review'),turns:[turn('Review')],next_cursor:null,
+   outputs:{files:[],changes:[{path:'init.ts',patch:'@@ -0,0 +1 @@\n+init();'}]},
+ })}:original(path,init));
+ const user=userEvent.setup();
+ render(<AgentSessions thread="thread" channel="channel" viewerId="user" initialSessionId="one" onAccessLost={()=>{}}/>);
+ await user.type(await screen.findByRole('textbox',{name:'Message agent session'}),'Draft for later');
+ await user.click(screen.getByRole('tab',{name:'Changes 1'}));
+ await user.click(screen.getByRole('button',{name:'Comment on init.ts, new line 1'}));
+ await user.type(screen.getByRole('textbox',{name:/Comment on init.ts/}),'Handle initialization errors.');
+ await user.click(screen.getByRole('button',{name:'Add to review'}));
+ await user.click(screen.getByRole('tab',{name:'Messages'}));
+ await user.click(screen.getByRole('tab',{name:'Changes 1'}));
+ await user.click(screen.getByRole('button',{name:'Send review'}));
+ const composer=await screen.findByRole('textbox',{name:'Message agent session'});
+ expect(composer.textContent).toContain('Draft for later');
+ const req=fetch.mock.calls.filter(([path])=>path==='/v1/agent-sessions/one/queue');
+ expect(req).toHaveLength(1);
+ expect(JSON.parse(String(req[0]![1]!.body)).text).toContain('Handle initialization errors.');
+ expect(new Headers(req[0]![1]!.headers).get('idempotency-key')).toBeTruthy();
 });

@@ -3,13 +3,25 @@ import type { AgentSessionSummary } from './agent-sessions.js';
 
 export type SidekickSource = { channel_id: string; message_ids: string[]; thread_id?: never } | { channel_id: string; thread_id: string; message_ids?: never };
 export interface SidekickContext {
-  channel_id: string; channel_name: string; thread_id?: string; captured_at: string;
+  browser_url?: string; channel_id: string; channel_name: string; thread_id?: string; captured_at: string;
   messages: { id: string; thread_id: string; author: string; text: string; created_at: string; files: string[] }[];
 }
 export interface SidekickSession extends AgentSessionSummary { channel_id: string }
 export interface SidekickAgent { id: string; name: string; owner_id: string; enabled: boolean; capabilities: import('./index.js').AgentCapabilities }
+// Page context is the HTTP(S) origin and path. Query strings and fragments can contain credentials.
+export function sidekickPageUrl(value: unknown) {
+  let url: URL;
+  try { url = new URL(text(value, 8192)); } catch { throw new AppError(400, 'invalid_browser_page'); }
+  if (!['https:', 'http:'].includes(url.protocol) || url.username || url.password) throw new AppError(400, 'invalid_browser_page');
+  return url.origin + url.pathname;
+}
 export function parseSidekickInput(value: unknown) {
   const v = record(value, ['client_session_id', 'installation_id', 'skill', 'source']);
+  if (v.source && typeof v.source === 'object' && 'browser_url' in v.source) {
+    const source = record(v.source, ['browser_url']);
+    return { client_session_id: uuid(v.client_session_id), installation_id: uuid(v.installation_id), skill: text(v.skill, 80),
+      source: { browser_url: sidekickPageUrl(source.browser_url) } };
+  }
   const source = record(v.source, ['channel_id', 'thread_id', 'message_ids']);
   if ((source.thread_id === undefined) === (source.message_ids === undefined)) throw new AppError(400, 'invalid_sidekick_source');
   let selected: SidekickSource;
@@ -22,10 +34,11 @@ export function parseSidekickInput(value: unknown) {
   return { client_session_id: uuid(v.client_session_id), installation_id: uuid(v.installation_id), skill: text(v.skill, 80), source: selected };
 }
 export function parseSidekickContext(value: unknown): SidekickContext {
-  const v = record(value, ['channel_id', 'channel_name', 'thread_id', 'captured_at', 'messages']);
-  if (!Array.isArray(v.messages) || !v.messages.length || v.messages.length > 50 || new TextEncoder().encode(JSON.stringify(v)).length > 24000) throw new AppError(400, 'sidekick_context_too_large');
+  const v = record(value, ['channel_id', 'channel_name', 'thread_id', 'captured_at', 'messages', 'browser_url']);
+  if (!Array.isArray(v.messages) || (v.browser_url === undefined && !v.messages.length) || v.messages.length > 50 || new TextEncoder().encode(JSON.stringify(v)).length > 24000) throw new AppError(400, 'sidekick_context_too_large');
   const date = (value: unknown) => { const result = text(value, 40); if (!Number.isFinite(Date.parse(result))) throw new AppError(400, 'invalid_date'); return result; };
-  return { channel_id: uuid(v.channel_id), channel_name: text(v.channel_name, 160), ...(v.thread_id === undefined ? {} : { thread_id: uuid(v.thread_id) }), captured_at: date(v.captured_at), messages: v.messages.map(raw => {
+  if (v.browser_url !== undefined && (v.messages.length || v.thread_id !== undefined)) throw new AppError(400, 'invalid_sidekick_source');
+  return { ...(v.browser_url === undefined ? {} : { browser_url: sidekickPageUrl(v.browser_url) }), channel_id: uuid(v.channel_id), channel_name: text(v.channel_name, 160), ...(v.thread_id === undefined ? {} : { thread_id: uuid(v.thread_id) }), captured_at: date(v.captured_at), messages: v.messages.map(raw => {
     const m = record(raw, ['id', 'thread_id', 'author', 'text', 'created_at', 'files']);
     if (typeof m.text !== 'string' || m.text.length > 40000 || m.text.includes('\0') || !Array.isArray(m.files) || m.files.length > 20) throw new AppError(400, 'invalid_sidekick_message');
     return { id: uuid(m.id), thread_id: uuid(m.thread_id), author: text(m.author, 160), text: m.text, created_at: date(m.created_at), files: m.files.map(name => text(name, 255)) };

@@ -1,0 +1,12 @@
+.session-team { padding: 16px; overflow: auto; min-height: 0; flex: 1; }
+.session-team-page { margin: auto; max-width: 840px; height: 100dvh; box-sizing: border-box; }
+.session-team h3 { font-size: 1rem; margin-block: 1rem .5rem; }
+.session-team summary { cursor: pointer; font-weight: 600; padding-block: .4rem; }
+.session-team-section { margin-bottom: .75rem; }
+.session-team-row { display: flex; gap: .75rem; align-items: center; justify-content: space-between; padding-block: .25rem; }
+.session-team-row span { overflow-wrap: anywhere; }
+.session-team textarea, .session-team input[type=search] { display: block; width: 100%; box-sizing: border-box; margin-block: .4rem; padding: .5rem; font: inherit; border: 1px solid currentColor; border-radius: 5px; background: transparent; color: inherit; }
+.session-team ol { list-style: none; padding: 0; }
+.session-team li p { white-space: pre-wrap; overflow-wrap: anywhere; margin: .25rem 0 .8rem; }
+.session-team time,.session-team small { font-size: .8rem; opacity: .75; }
+.session-team-panel { display: flex; flex-direction: column; min-height: 0; flex: 1; overflow: auto; }

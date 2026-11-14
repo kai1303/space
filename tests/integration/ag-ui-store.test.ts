@@ -8,6 +8,8 @@ import { bootstrap } from '@space/postgres/bootstrap';
 import { PostgresStore } from '@space/postgres/store';
 import { ChatStore } from '@space/postgres/chat';
 import { FoundationStore } from '@space/postgres/foundation';
+import { readSessionReports } from '@space/postgres/session-reports';
+import { AgentSessionStore } from '@space/postgres/agent-sessions';
 import { AgUiConnector } from '@space/core/ag-ui';
 import { deliverOne } from '@space/core/worker';
 import type { AgentEvent, AgentResponse } from '@space/contracts';
@@ -105,4 +107,48 @@ test('interleaved response order survives persistence, duplicate receipts and th
  assert.equal(history.messages.length,1);assert.deepEqual(history.messages[0]?.agent_response,response);
  const replay=await chat.history(seed.owner_id,seed.channel_id);
  const message=replay.events.find(event=>event.type==='message.created');assert.ok(message?.type==='message.created');assert.deepEqual(message.payload.agent_response?.items,response.items);
+});
+
+test('an installed persistent backend opens a task session, publishes results and archives it on successful finish', async () => {
+  const seed = await bootstrap(pool), foreign = await bootstrap(pool);
+  const foundation = new FoundationStore(pool);
+  const source = await chat.send(seed.owner_id,seed.channel_id,{client_message_id:randomUUID(),thread_id:seed.thread_id,text:'Please review the release'});
+  const definition = await foundation.publishDefinition({name:'Release reviewer',capabilities:{persistent_sessions:true,skills:['ag-ui.run'],controls:{progress_stream:true}}});
+  const installation = await foundation.install(seed.owner_id,{workspace_id:seed.workspace_id,definition_id:definition.id,connector_id:'ag-ui'});
+  await foundation.grant(seed.owner_id,installation.id,{channel_id:seed.channel_id,skill:'ag-ui.run'});
+  const task = await store.createTask(seed.owner_id,{workspace_id:seed.workspace_id,thread_id:seed.thread_id,installation_id:installation.id,skill:'ag-ui.run',goal:'Review the release'},randomUUID());
+  const approved = await store.approveTask(seed.owner_id,task.id);
+  const server = createServer(async (req,res) => {
+    let body=''; for await (const chunk of req) body+=chunk;
+    const {runId,threadId}=JSON.parse(body);
+    res.writeHead(200,{'content-type':'text/event-stream'});
+    for (const data of [
+      {type:'RUN_STARTED',runId,threadId},
+      {type:'CUSTOM',name:'space.session.open',value:{}},
+      {type:'CUSTOM',name:'space.session.outputs',value:{files:[],changes:[{path:'README.md',patch:'@@ -1 +1 @@\n-old\n+release'}],actions:[{label:'Open pull request',url:'https://github.com/example/project/pull/12'}]}},
+      {type:'TEXT_MESSAGE_CHUNK',messageId:'m',role:'assistant',delta:'Ready for review'},
+      {type:'CUSTOM',name:'space.session.archive',value:{}},
+      {type:'RUN_FINISHED',runId,threadId}
+    ]) res.write(`data: ${JSON.stringify(data)}\n\n`);
+    res.end();
+  });
+  await new Promise<void>(resolve => server.listen(0,'127.0.0.1',resolve));
+  try {
+    const address=server.address(); assert.ok(address && typeof address!=='string');
+    const backend=new AgUiConnector({url:`http://127.0.0.1:${address.port}`});
+    await deliverOne(store,[{id:backend.id,discover:()=>backend.discover(),
+      invoke:(input,emit,signal)=>backend.invoke(input,async raw=>{
+        await emit(raw);
+        if ((raw as AgentEvent).payload.session_lifecycle==='archive') await emit(raw);
+      },signal)}]);
+    assert.equal((await store.readTask(seed.owner_id,task.id)).status,'completed');
+    assert.equal((await pool.query('SELECT state FROM outbox WHERE task_id=$1',[task.id])).rows[0]?.state,'done');
+    const detail=await new AgentSessionStore(pool).read(seed.owner_id,approved.session_id!);
+    assert.equal(detail.session.state,'ended'); assert.equal(detail.outputs?.changes[0]?.path,'README.md');
+    assert.equal(detail.outputs?.actions?.[0]?.label,'Open pull request');
+    const {items}=await readSessionReports(store.db,seed.collaborator_id,seed.channel_id,{threads:[seed.thread_id,foreign.thread_id]});
+    assert.equal(items.length,1); assert.equal(items[0]?.id,approved.session_id); assert.equal(items[0]?.source_message_id,source.id); assert.equal(items[0]?.result,'Ready for review');
+    assert.equal(items[0]?.artifact,'changes'); assert.equal(items[0]?.status,'archived');
+    await assert.rejects(readSessionReports(store.db,foreign.owner_id,seed.channel_id,{threads:[seed.thread_id]}),/not_found/);
+  } finally { server.closeAllConnections(); await new Promise<void>(resolve=>server.close(()=>resolve())); }
 });

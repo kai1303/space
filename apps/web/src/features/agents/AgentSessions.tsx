@@ -1,3 +1,5 @@
+import { SessionAgentHandoff } from './SessionAgentHandoff.js';
+import { SessionTeam } from './SessionTeam.js';
 import { SessionTitle } from '@space/ui/agents';
 import { SessionQueue, SteeringReceipt, FollowUpMenu, useFollowUpPreference, type QueueAction } from './SessionQueue.js';
 import type { Attachment } from '@space/ui/rich-text';
@@ -23,7 +25,7 @@ import {ArrowBendUpRight,ListBullets,Plus,Robot,Info,Stop,Paperclip,ChatCircle,B
 import { request } from '../../shared/api/request.js';
 import { type MessageAttempt } from '../composer/message-sender.js';
 import {subscribeUpdates} from '../../shared/realtime/live-updates.js';
-import {TaskPreview,TaskFiles,TaskChanges} from './AgentTaskWorkspace.js';
+import {ResultActions,TaskPreview,TaskFiles,TaskChanges} from './AgentTaskWorkspace.js';
 import {useMentionSearch,MentionDetails} from '../mentions/Mentions.js';
 import {AgentActivityIndicator} from './AgentActivityIndicator.js';
 import './agent-sessions.css';
@@ -33,8 +35,8 @@ const denied=(error:unknown)=>error instanceof Error&&['unauthorized','forbidden
 const errorText=(error:unknown)=>error instanceof Error?error.message.replaceAll('_',' '):'Unable to update the session';
 const busy=(task?:Task)=>!!task&&['awaiting_approval','queued','running'].includes(task.status);
 
-export function AgentSessions({uploads,drafts:externalDrafts,onDraftChange:externalDraftChange,attempt:externalAttempt,acknowledged:externalAcknowledged,onAccepted,thread,channel,viewerId,onAccessLost,initialSessionId,onOpenSession,archived=false,channelName,onBack,onClose}: {
- uploads?:UploadDrafts;acknowledged?:Record<string,RichDocument>;onAccepted?:(key:string,document:RichDocument,files:Attachment[])=>void;
+export function AgentSessions({initialArtifact,artifactRequest,uploads,drafts:externalDrafts,onDraftChange:externalDraftChange,attempt:externalAttempt,acknowledged:externalAcknowledged,onAccepted,thread,channel,viewerId,onAccessLost,initialSessionId,onOpenSession,archived=false,channelName,onBack,onClose}: {
+ artifactRequest?:number;initialArtifact?:NonNullable<import('@space/contracts').SessionReport['artifact']>;uploads?:UploadDrafts;acknowledged?:Record<string,RichDocument>;onAccepted?:(key:string,document:RichDocument,files:Attachment[])=>void;
  drafts?:Record<string,RichDocument>;onDraftChange?:(key:string,document:RichDocument)=>void;attempt?:(key:string)=>MessageAttempt;
  thread:string;channel:string;viewerId:string;onAccessLost:()=>void;initialSessionId?:string;onOpenSession?:(id:string)=>void;archived?:boolean;channelName?:string;onBack?:()=>void;onClose?:()=>void;
 }) {
@@ -125,19 +127,19 @@ export function AgentSessions({uploads,drafts:externalDrafts,onDraftChange:exter
   {loading&&(picker?<p role="status" className="agent-sessions-empty">Loading sessions…</p>:!current&&<div className="chat-timeline-shell"><div className="chat-timeline chat-timeline--virtual" aria-busy="true"><p className="sp-sr-only" role="status" aria-label="Loading messages">Loading messages…</p><ConversationSkeleton/></div></div>)}
   {picker&&<nav aria-label="Sessions in this thread" className="agent-sessions-list">{sessions.map(session=><button key={session.id} type="button" aria-label={session.title} onClick={()=>onOpenSession?.(session.id)}><span><SessionTitle title={session.title}/></span><small>{session.agent_name} · {session.state==='ended'?'Ended':`${session.turn_count} ${session.turn_count===1?'turn':'turns'}`}</small></button>)}</nav>}
   {picker&&creating&&<form className="agent-session-create" onSubmit={create}><h3>New agent session</h3><label>Session name<input required maxLength={120} value={title} onChange={event=>setTitle(event.target.value)} placeholder="What are we working on?"/></label><label>Agent<Select aria-label="Agent" value={agent} onChange={event=>setAgent(event.target.value)}>{catalog.map(item=><option key={`${item.installation_id}|${item.skill}`} value={`${item.installation_id}|${item.skill}`}>{item.name} · {item.skill}</option>)}</Select></label>{!catalog.length&&<p>No session-capable agent is available in this conversation.</p>}{local.filter(item=>item.persistent_sessions&&!item.inherits_owner_access).flatMap(item=>item.skills.filter(skill=>!item.granted_skills.includes(skill)).map(skill=><Button key={`${item.id}|${skill}`} size="sm" disabled={saving} onClick={()=>void enable(item.id,skill)}>Enable {item.name}{item.skills.length>1?` · ${skill}`:''} in this channel</Button>))}<div><Button type="submit" disabled={saving||!title.trim()||!agent}>Start session</Button><Button variant="ghost" onClick={()=>setCreating(false)}>Cancel</Button></div></form>}
-  {!picker&&current&&detail?.session.id===current.id&&<SessionConversation key={current.id} initial={detail} session={current} channel={channel} channelName={channelName} onBack={onBack} onClose={onClose} viewerId={viewerId} revision={revision} draft={getDraft(current.id)} acknowledged={externalAcknowledged?.[draftKey(current.id)]??acknowledged[current.id]} onDraftChange={document=>saveDraft(current.id,document)} uploads={uploads} onSend={(text,document,files,mode,execution)=>send(current.id,text,document,files,mode,execution)} onAccessLost={revoke} archived={archived}/>}
+  {!picker&&current&&detail?.session.id===current.id&&<SessionConversation initialArtifact={initialArtifact} artifactRequest={artifactRequest} key={current.id} initial={detail} session={current} channel={channel} channelName={channelName} onBack={onBack} onClose={onClose} viewerId={viewerId} revision={revision} draft={getDraft(current.id)} acknowledged={externalAcknowledged?.[draftKey(current.id)]??acknowledged[current.id]} onDraftChange={document=>saveDraft(current.id,document)} uploads={uploads} onSend={(text,document,files,mode,execution)=>send(current.id,text,document,files,mode,execution)} onAccessLost={revoke} archived={archived}/>}
   {picker&&!loading&&!creating&&!sessions.length&&<p className="agent-sessions-empty">No agent sessions yet.</p>}
   {!picker&&!loading&&!current&&!error&&<p role="alert" className="agent-sessions-empty">This session is unavailable.</p>}
  </div>;
 }
-function SessionConversation({uploads,initial,session,channel,channelName,onBack,onClose,viewerId,revision,draft,acknowledged,onDraftChange,onSend,onAccessLost,archived}: {
- uploads?:UploadDrafts;initial:AgentSessionDetail;session:AgentSessionSummary;channel:string;channelName?:string;onBack?:()=>void;onClose?:()=>void;viewerId:string;revision:number;draft?:RichDocument;acknowledged?:RichDocument;onDraftChange:(document:RichDocument)=>void;onSend:(text:string,document:RichDocument,files:Attachment[],mode:DeliveryMode,execution?:string)=>Promise<{id:string}>;onAccessLost:()=>void;archived:boolean;
+function SessionConversation({initialArtifact,artifactRequest,uploads,initial,session,channel,channelName,onBack,onClose,viewerId,revision,draft,acknowledged,onDraftChange,onSend,onAccessLost,archived}: {
+ artifactRequest?:number;initialArtifact?:NonNullable<import('@space/contracts').SessionReport['artifact']>;uploads?:UploadDrafts;initial:AgentSessionDetail;session:AgentSessionSummary;channel:string;channelName?:string;onBack?:()=>void;onClose?:()=>void;viewerId:string;revision:number;draft?:RichDocument;acknowledged?:RichDocument;onDraftChange:(document:RichDocument)=>void;onSend:(text:string,document:RichDocument,files:Attachment[],mode:DeliveryMode,execution?:string)=>Promise<{id:string}>;onAccessLost:()=>void;archived:boolean;
 }) {
  const starred=useStarredChannels(session.workspace_id,session.id,viewerId,'starred-sessions');
  const searchMentions=useMentionSearch(channel);
  const findReferences=useCallback(async(query:string)=>{const result=await searchMentions(query);return {...result,items:result.items.filter(item=>item.kind!=='broadcast').map(item=>({...item,detail:`${item.detail||'Member'} · Reference only`}))};},[searchMentions]);
  const [submittedTask,setSubmittedTask]=useState<string>();
- const [error,setError]=useState(''),[tab,setTab]=useState('messages'),[pending,setPending]=useState(false);
+ const [error,setError]=useState(''),[tab,setTab]=useState<string>(initialArtifact ?? 'messages'),[pending,setPending]=useState(false);
  const [refreshing,setRefreshing]=useState(false),[detailsOpen,setDetailsOpen]=useState(false);
  const profiles = useMemberProfile();
  const [selectedMention,setSelectedMention]=useState<MentionReference>();
@@ -159,7 +161,36 @@ function SessionConversation({uploads,initial,session,channel,channelName,onBack
  const staleSteer = !!draftExecution && (!canSteer || draftExecution !== latest?.active_execution_id);
  const mode:DeliveryMode=canSteer ? preference : busy(latest)||queue.length ? 'queue' : 'messages';
  const sendDisabled=staleSteer || Boolean(submittedTask&&!history.latest.turns.some(turn=>turn.task.id===submittedTask));
- const outputs=useMemo(()=>{if(history.latest.outputs)return history.latest.outputs;const files=new Map<string,AgentSessionOutputs['files'][number]>(),changes=new Map<string,AgentSessionOutputs['changes'][number]>();let preview:AgentSessionOutputs['preview'];for(const turn of turns){const output=turn.response?.outputs;if(output?.preview)preview=output.preview;for(const file of output?.files??[])files.set(file.path,file);for(const change of output?.changes??[])changes.set(change.path,change);}return{preview,files:[...files.values()],changes:[...changes.values()]};},[turns,history.latest.outputs]);
+ const [ending,setEnding]=useState(false);
+ const outputs=useMemo<AgentSessionOutputs>(() => {
+   if (history.latest.outputs) return history.latest.outputs;
+   const files = new Map<string, AgentSessionOutputs['files'][number]>(), changes = new Map<string, AgentSessionOutputs['changes'][number]>();
+   let preview: AgentSessionOutputs['preview'], actions: AgentSessionOutputs['actions'];
+   for (const turn of turns) {
+     const output = turn.response?.outputs;
+     if (output?.preview) preview = output.preview;
+     if (output?.actions) actions = output.actions;
+     for (const file of output?.files ?? []) files.set(file.path, file);
+     for (const change of output?.changes ?? []) changes.set(change.path, change);
+   }
+   return {preview, actions, files: [...files.values()], changes: [...changes.values()]};
+ }, [turns, history.latest.outputs]);
+ async function submitReview(text:string, key:string) {
+   try {
+     await request(`/agent-sessions/${session.id}/queue`, {text}, key, 'POST', undefined, viewerId);
+     pinned.current=true; setTab('messages'); await refresh();
+   } catch (cause) {
+     if (denied(cause)) lost.current();
+     throw new Error(errorText(cause));
+   }
+ }
+ const reviewAllowed = activeSession.managed && activeSession.state === 'active' && !archived;
+ const [openedChanges, setOpenedChanges] = useState(initialArtifact === 'changes');
+ useEffect(() => {
+   if (!initialArtifact) return;
+   if (initialArtifact === 'changes') setOpenedChanges(true);
+   setTab(initialArtifact);
+ }, [initialArtifact,artifactRequest]);
  async function action(path:string,body:object={},method:'POST'|'PATCH'='POST',key?:string){setPending(true);setError('');try{await request(path,body,key,method);if(alive.current){await refresh();}return true;}catch(reason){if(denied(reason)){lost.current();}else if(alive.current)setError(errorText(reason));return false;}finally{if(alive.current)setPending(false);}}
  const [renaming,setRenaming]=useState(false);
  const manage=viewerId===activeSession.owner_id||viewerId===activeSession.created_by;
@@ -201,7 +232,7 @@ function SessionConversation({uploads,initial,session,channel,channelName,onBack
  const footer=activeSession.state==='ended'?<p className="agent-session-notice">This session has ended. Its conversation and outputs are saved.</p>:!session.managed?<p className="agent-session-notice">Start a new session to continue this earlier run.</p>:!archived?<>
   {staleSteer && <div className="agent-session-system-notice" role="status">The turn you were steering has ended. <Button size="sm" onClick={()=>setDraftExecution(undefined)}>Use draft as follow-up</Button></div>}
   <AgentSessionComposer typingIndicator={<>
-    <AgentActivityIndicator name={session.agent_name} turn={latestTurn}/><SessionQueue items={queue} canManage={item => viewerId === item.actor_id || viewerId === activeSession.owner_id}
+    <ResultActions actions={outputs.actions}/><AgentActivityIndicator name={session.agent_name} turn={latestTurn}/><SessionQueue items={queue} canManage={item => viewerId === item.actor_id || viewerId === activeSession.owner_id}
     pending={pending} onAction={queueAction} canSteer={canSteer} paused={activeSession.queue_paused}
     onResume={manage?()=>void action(`/agent-sessions/${session.id}/queue/resume`):undefined} mode={preference} onModeChange={canSteer?setPreference:undefined}/>
     </>} submitLabel={mode==='messages'?undefined:mode==='queue'?'Queue':'Steer'}
@@ -216,9 +247,10 @@ function SessionConversation({uploads,initial,session,channel,channelName,onBack
   <ConversationHeader title="Agent session" topic={session.managed&&<div className="agent-session-header-title">
     <span title={session.title}><SessionTitle title={session.title}/></span>
     {manage&&<IconButton label="Rename session" onClick={()=>setRenaming(true)}><PencilSimple size={15}/></IconButton>}
-  </div>} backLabel={data?.context?"Back to my sidekick":undefined} heading={<ConversationHeading title={session.agent_name} label={`Conversation details for ${session.agent_name}`} onClick={()=>profiles ? profiles.open({kind:'agent',id:session.installation_id}) : setDetailsOpen(true)} leading={session.managed&&<IconButton label={starred.active?'Unstar conversation':'Star conversation'} aria-pressed={starred.active} aria-disabled={starred.busy||undefined} onClick={()=>void starred.toggle(session.id,{id:session.id,name:session.title,kind:'agent_session',private:false,working:latest?.status==='running',can_rename:manage,session:{id:session.id,agent_name:session.agent_name,origin_thread_id:session.origin_thread_id,channel_id:channel,channel_archived:archived}}).catch(reason=>setError(errorText(reason)))}><Star size={19} weight={starred.active?'fill':'regular'}/></IconButton>} icon={<Avatar name={session.agent_name} initials={session.agent_name.slice(0,2).toUpperCase()} tone="green"/>}/>} channel={channelName} icon={<Robot size={20}/>} onBack={onBack} onClose={onClose} actions={<>{manage&&busy(latest)&&<Button size="sm" disabled={pending} onClick={()=>void action(`/agent-sessions/${session.id}/stop`)}><Stop size={14}/>Stop</Button>}<Menu label="More conversation actions" floating trigger={<DotsThree size={22} weight="bold"/>} items={[{label:"Conversation details",onSelect:()=>setDetailsOpen(true)},...(profiles?[{label:"View full profile",onSelect:()=>profiles.open({kind:'agent',id:session.installation_id})}]:[]),{label:"Browse files",onSelect:()=>setTab("files")},...(onClose?[{label:"Close agent session",separatorBefore:true,onSelect:onClose}]:[])]}/></>}/>
-  <Tabs className="agent-session-tabs" label="Session views" value={tab} onChange={setTab} items={[
+  </div>} backLabel={data?.context?"Back to my sidekick":undefined} heading={<ConversationHeading title={session.agent_name} label={`Conversation details for ${session.agent_name}`} onClick={()=>profiles ? profiles.open({kind:'agent',id:session.installation_id}) : setDetailsOpen(true)} leading={session.managed&&<IconButton label={starred.active?'Unstar conversation':'Star conversation'} aria-pressed={starred.active} aria-disabled={starred.busy||undefined} onClick={()=>void starred.toggle(session.id,{id:session.id,name:session.title,kind:'agent_session',private:false,working:latest?.status==='running',can_rename:manage,session:{id:session.id,agent_name:session.agent_name,origin_thread_id:session.origin_thread_id,channel_id:channel,channel_archived:archived}}).catch(reason=>setError(errorText(reason)))}><Star size={19} weight={starred.active?'fill':'regular'}/></IconButton>} icon={<Avatar name={session.agent_name} initials={session.agent_name.slice(0,2).toUpperCase()} tone="green"/>}/>} channel={channelName} icon={<Robot size={20}/>} onBack={onBack} onClose={onClose} actions={<>{manage&&busy(latest)&&<Button size="sm" disabled={pending} onClick={()=>void action(`/agent-sessions/${session.id}/stop`)}><Stop size={14}/>Stop</Button>}<Menu label="More conversation actions" floating trigger={<DotsThree size={22} weight="bold"/>} items={[{label:"Conversation details",onSelect:()=>setDetailsOpen(true)},...(profiles?[{label:"View full profile",onSelect:()=>profiles.open({kind:'agent',id:session.installation_id})}]:[]),{label:"Browse files",onSelect:()=>setTab("files")},...(manage && session.managed && activeSession.state==='active' ? [{label:"End session for everyone",onSelect:()=>setEnding(true)}] : []),...(onClose?[{label:"Close agent session",separatorBefore:true,onSelect:onClose}]:[])]}/></>}/>
+  <Tabs className="agent-session-tabs" label="Session views" value={tab} onChange={value => {if(value==='changes') setOpenedChanges(true);setTab(value);}} items={[
    {id:'messages',label:'Messages',icon:<ChatCircle size={15}/>},
+   ...(session.managed && !data.context?[{id:'team',label:'Team',icon:<ChatCircle size={15}/>}]:[]),
    {id:'preview',label:'Preview',icon:<Browser size={15}/>},
    {id:'files',label:`Files ${outputs.files.length}`,icon:<Paperclip size={15}/>},
    {id:'changes',label:`Changes ${outputs.changes.length}`,icon:<GitDiff size={15}/>},
@@ -243,9 +275,16 @@ function SessionConversation({uploads,initial,session,channel,channelName,onBack
     {row.notice&&<div role="status" className="agent-session-system-notice"><Info size={16} aria-hidden="true"/><span><strong>Space</strong> · {row.notice}</span></div>}
    </div>;
   }}/>{footer}
-  </div>{tab!=='messages'&&<div className="agent-session-output-view" role="tabpanel" id={`${viewsId}-${tab}`} aria-label={tab==='preview'?'Preview':tab==='files'?'Files':'Changes'} tabIndex={0}>
-   <div className="agent-session-output">{tab==='preview'?<TaskPreview preview={outputs.preview}/>:tab==='files'?<TaskFiles files={outputs.files}/>:<TaskChanges changes={outputs.changes}/>}</div>
+  </div>{tab==='team' && <div id={viewsId+'-team'} className="session-team-panel" role="tabpanel" aria-label="Team"><SessionAgentHandoff session={activeSession} channel={channel} viewer={viewerId} writable={reviewAllowed} turns={turns} related={history.latest.related_agents??[]} refresh={refresh}/><SessionTeam key={session.id+viewerId} id={session.id} viewer={viewerId} outputs={outputs}/></div>}{(tab==='preview'||tab==='files')&&<div className="agent-session-output-view" role="tabpanel" id={`${viewsId}-${tab}`} aria-label={tab==='preview'?'Preview':'Files'} tabIndex={0}>
+   <div className="agent-session-output">{tab==='preview'?<TaskPreview preview={outputs.preview}/>:<TaskFiles files={outputs.files}/>}</div>
+  </div>}
+  {openedChanges&&<div hidden={tab!=='changes'} className="agent-session-output-view" role="tabpanel" id={`${viewsId}-changes`} aria-label="Changes" tabIndex={0}>
+    <div className="agent-session-output"><ResultActions actions={outputs.actions}/><TaskChanges changes={outputs.changes} onReview={reviewAllowed?submitReview:undefined}/></div>
   </div>}</div>
+  {ending && <Dialog open title="End this session?" description="This stops the active turn, cancels queued requests and keeps the conversation and results available for review." onClose={()=>setEnding(false)} onBeforeClose={()=>!pending}>
+    <Button variant="ghost" disabled={pending} onClick={()=>setEnding(false)}>Cancel</Button>
+    <Button disabled={pending} onClick={()=>{void action(`/agent-sessions/${session.id}/end`).then(ok=>{if(ok)setEnding(false);});}}>End session</Button>
+  </Dialog>}
   {renaming&&manage&&<RenameSessionDialog id={session.id} title={session.title} workspace={session.workspace_id}
     thread={session.origin_thread_id} viewerId={viewerId} onClose={()=>setRenaming(false)}/>}
   <Dialog open={detailsOpen} title="Conversation details" onClose={()=>setDetailsOpen(false)}><div className="agent-session-details"><h3>{session.title}</h3><p>{session.agent_name}</p><p>{activeSession.state==='ended'?'Ended':'Active'} · {activeSession.turn_count} turns</p>{channelName&&<p>From #{channelName}</p>}<p>Started {new Date(session.created_at).toLocaleString()}</p></div></Dialog>

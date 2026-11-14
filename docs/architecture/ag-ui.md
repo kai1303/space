@@ -32,11 +32,11 @@ try {
 JS
 ```
 
-This creates a new installation each time. Then start the updated worker and request `ag-ui.run` from **Ask an agent** in a thread. The agent owner approves the task through the existing approval flow. Without `AG_UI_URL`, no AG-UI connector is registered and the mock continues to work.
+This creates a new installation each time. Start the updated worker and invoke the granted agent from its source conversation. The agent owner approves the task through the existing approval flow. Without `AG_UI_URL`, no AG-UI connector is registered and the mock continues to work.
 
 ## Backend contract
 
-The HTTP client posts standard AG-UI input with `threadId` equal to Space's agent session ID, `runId` equal to the execution ID, and the user's goal as the input message. `forwardedProps` includes `taskId` and `skill`. No channel history or local filesystem is sent. The backend may keep its own session history keyed by `threadId`.
+The HTTP client posts standard AG-UI input with `threadId` equal to Space's agent session ID, `runId` equal to the execution ID, and the user's goal as the input message. `forwardedProps` includes `taskId` and `skill`. The backend also receives the context and attachments supplied for the authorized turn. The backend may keep its own session history keyed by `threadId`.
 
 The `Idempotency-Key` header is the execution ID. Retries must replay the same ordered stream, including stable timestamps when supplied. Space derives receipt IDs from the execution and event sequence. Changed replay envelopes are rejected; the adapter cannot make a backend's external effects idempotent. The worker has a 10-second invocation deadline and an attempt token with a 30-second execution deadline. Failures known to occur before invocation may retry; an interrupted external invocation fails uncertain and is never automatically invoked again. A targeted durable deadline settles a crashed attempt. Long-running agents need an explicit deadline-renewal design before raising this limit.
 
@@ -48,7 +48,7 @@ Supported parent-run events:
 | `TEXT_MESSAGE_START/CONTENT/END` | Accumulate assistant Markdown by message ID |
 | `TOOL_CALL_START/ARGS/END/RESULT` | Display backend tool activity; END means arguments finished, RESULT means execution completed |
 | `STEP_STARTED/FINISHED` | Live progress label |
-| `CUSTOM` named `space.ui` | Upsert a registered card/table by component ID |
+| `CUSTOM` named `space.ui` | Upsert a card, table, alert, carousel, or document edit by component ID |
 
 The official client expands text/tool chunk convenience events before mapping. Unknown custom events, raw events, reasoning, subagent output, shared-state payloads, and activity surfaces are not rendered. Space does not execute client-side tools. Pending tools at completion are marked interrupted. Interrupt/cancel outcomes fail visibly because resume and mid-run approvals are not implemented. Existing task-owner approval is distinct from those interactions. A truncated stream never counts as success.
 
@@ -63,6 +63,37 @@ Emit a standard CUSTOM event for each complete component. Reusing an ID replaces
 ```json
 {"type":"CUSTOM","name":"space.ui","value":{"id":"plans","type":"table","title":"Retention by plan","columns":["Plan","Retention"],"rows":[["Pro","98%"],["Starter","94%"]]}}
 ```
+
+A carousel groups one to ten options under a title. Each card has a unique ID within the carousel, a plain-text title, and a plain-text body. Keep card IDs stable when updating the group.
+
+```json
+{"type":"CUSTOM","name":"space.ui","value":{"type":"carousel","id":"rollout","title":"Rollout options","cards":[{"id":"pilot","title":"Pilot","body":"Start with one team."},{"id":"phased","title":"Phased rollout","body":"Add one team each week."}]}}
+```
+
+Text-only agents can write the same group as a quoted list.
+
+```markdown
+> [!CAROUSEL] Rollout options
+>
+> - **Pilot** Start with one team.
+> - **Phased rollout** Add one team each week.
+```
+
+An alert appears in the reply where its event first arrives. Emit the same ID to update it in place. Use `warning` for a condition to review and `error` for a problem that occurred. The title allows up to 200 characters and the optional Markdown body allows up to 8,000.
+
+```json
+{"type":"CUSTOM","name":"space.ui","value":{"id":"dependency","type":"alert","level":"warning","title":"Dependency conflict","body":"Review the version of `lodash` before deploying."}}
+```
+
+Text-only agents can put a Markdown callout directly between paragraphs. Start the quote with `> [!WARNING]` or `> [!ERROR]` on its own line, then quote the explanation on the following lines.
+
+A document edit carries the two passages as plain text. The active Office editor supplies the review actions. Other agent messages display the comparison read-only.
+
+```json
+{"type":"CUSTOM","name":"space.ui","value":{"id":"edit","type":"document_edit","title":"Runbook.docx","original":"Restart all services.","replacement":"Restart the worker."}}
+```
+
+Each passage is limited to 16,000 characters, subject to the event and response limits below.
 
 Cards accept only `id`, `type`, `title`, `body`. Tables accept only `id`, `type`, `title`, `columns`, `rows`; all cells are strings and each row must match the column count. No HTML, arbitrary component names, JavaScript, or action handlers are accepted. Markdown ignores HTML, permits HTTP/S/mailto links, and renders image alt text without loading remote images. Code fences use Space's existing CodeBlock; tools use ToolExecution.
 
@@ -85,3 +116,16 @@ pnpm typecheck
 ```
 
 Database tests require `TEST_DATABASE_URL` and create isolated schemas. HTTP tests use a real loopback SSE server and do not call a production agent or perform model inference.
+
+
+## Code sessions
+
+For a backend that can retain its conversation by AG-UI `threadId`, set `capabilities.persistent_sessions` to `true` on its definition. The grant and owner approval still apply. An approved backend run can use these AG-UI `CUSTOM` events:
+
+| Name | Value and effect |
+| --- | --- |
+| `space.session.open` | Send `{}` to turn the current run into a named, shared Space session linked to its source thread. Already-managed sessions keep their identity. |
+| `space.session.outputs` | Send a Space outputs object containing `files`, `changes`, an optional `preview`, and optional HTTPS `actions`. Space validates and persists managed-session outputs. For example, an agent can supply a unified patch and an action linking to a review on its Git host. |
+| `space.session.archive` | Send `{}` before a successful `RUN_FINISHED` to end the session. Pending human follow-ups keep it open. Failed or interrupted executions do not archive. |
+
+These operations address the current authorized execution. The server derives the session and installation from the delivery. A backend cannot select a different channel or session in an event. The existing execution deadline applies.

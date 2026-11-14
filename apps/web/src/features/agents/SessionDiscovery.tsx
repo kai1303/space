@@ -1,0 +1,90 @@
+import { useEffect, useState, type FormEvent } from 'react';
+import { sessionPath, sessionWorkStatusLabels, type AgentSessionReference, type SessionDiscoveryPage } from '@space/contracts';
+import { Badge, Button } from '@space/ui/primitives';
+import { MagnifyingGlass } from '@phosphor-icons/react';
+import { request } from '../../shared/api/request.js';
+import { errorText } from '../../shared/api/error-text.js';
+import { invalidateUpdates, subscribeUpdates } from '../../shared/realtime/live-updates.js';
+import './session-discovery.css';
+
+const defaultFilters = {q:'',status:'',scope:'all',archived:'all',agent:'',channel:'',creator:''};
+const emptyPage:SessionDiscoveryPage = {items:[],next_cursor:null};
+
+export function SessionDiscovery({workspace,viewer,onOpen}: {workspace:string;viewer:string;onOpen?:(item:AgentSessionReference)=>void}) {
+  const [filters,setFilters] = useState(defaultFilters);
+  const [params,setParams] = useState('');
+  const [cursors,setCursors] = useState<string[]>([]);
+  const [attempt,setAttempt] = useState(0);
+  const cursor = cursors.at(-1);
+  const query = new URLSearchParams(params);
+  if (cursor) query.set('before',cursor);
+  const url = `/workspaces/${workspace}/agent-sessions/discover?${query}`;
+  const [result,setResult] = useState({url:'',page:emptyPage,loading:true,error:''});
+  const [mutation,setMutation] = useState({busy:'',error:''});
+  useEffect(() => {
+    let active = true;
+    const controller = new AbortController();
+    setResult({url,page:emptyPage,loading:true,error:''});
+    const unsub = subscribeUpdates('workspace',workspace,async () => {
+      try {
+        const page = await request<SessionDiscoveryPage>(url,undefined,undefined,'POST',controller.signal,viewer);
+        if (active) setResult({url,page,loading:false,error:''});
+      } catch (reason) {
+        if (active) setResult({url,page:emptyPage,loading:false,error:errorText(reason)});
+      }
+    },code => {
+      active = false; controller.abort();
+      setResult({url,page:emptyPage,loading:false,error:errorText(new Error(code))});
+    });
+    return () => { active=false; controller.abort(); unsub(); };
+  },[url,workspace,viewer,attempt]);
+  function apply(event:FormEvent) {
+    event.preventDefault();
+    const next = new URLSearchParams();
+    for (const [key,value] of Object.entries(filters)) if (value.trim() && (!['archived','scope'].includes(key) || value!=='all')) next.set(key,value.trim());
+    setCursors([]); setParams(next.toString());
+  }
+  async function restore(id:string) {
+    setMutation({busy:id,error:''});
+    try {
+      await request(`/agent-sessions/${id}/sidebar`,{archived:false},undefined,'PATCH',undefined,viewer);
+      await invalidateUpdates('workspace',workspace);
+      setMutation({busy:'',error:''});
+    } catch(reason) { setMutation({busy:'',error:errorText(reason)}); }
+  }
+  const {page,loading,error} = result.url===url ? result : {page:emptyPage,loading:true,error:''};
+  return <section className="session-discovery" aria-label="Browse agent sessions">
+    <form onSubmit={apply}>
+      <label className="session-discovery-search"><MagnifyingGlass size={18}/><input type="search" aria-label="Search session titles and conversations" placeholder="Search titles and conversations" maxLength={160} value={filters.q} onChange={e=>setFilters({...filters,q:e.target.value})}/></label>
+      <div className="session-discovery-filters">
+        <label>Visibility<select value={filters.scope} onChange={e=>setFilters({...filters,scope:e.target.value})}>
+          <option value="all">All I can access</option><option value="workspace">Shared with workspace</option>
+        </select></label>
+        <label>Status<select value={filters.status} onChange={e=>setFilters({...filters,status:e.target.value})}>
+          <option value="">All statuses</option>{Object.entries(sessionWorkStatusLabels).map(([value,label])=><option key={value} value={value}>{label}</option>)}
+        </select></label>
+        <label>Sidebar<select value={filters.archived} onChange={e=>setFilters({...filters,archived:e.target.value})}>
+          <option value="all">All sessions</option><option value="false">In sidebar</option><option value="true">Archived by you</option>
+        </select></label>
+        {(['agent','channel','creator'] as const).map(key=><label key={key}>{ {agent:'Agent',creator:'Created by',channel:'Source channel'}[key]}
+          <input maxLength={160} value={filters[key]} onChange={e=>setFilters({...filters,[key]:e.target.value})}/></label>)}
+      </div>
+      <Button size="sm" type="submit">Search sessions</Button>
+    </form>
+    {mutation.error && <p role="alert">{mutation.error}</p>}
+    {loading ? <p role="status">Loading sessions…</p> : error ? <p role="alert">{error} <Button size="sm" onClick={()=>setAttempt(n=>n+1)}>Retry</Button></p> :
+      page.items.length===0 ? <p>No sessions match.</p> : <ul className="session-discovery-list">{page.items.map(item=><li key={item.id}>
+        {item.access==='reviewer' ? <a href={`/review/${item.id}`}><strong>{item.title}</strong><small>Shared for review</small></a> : <>
+          <a href={sessionPath(item.id)} onClick={e=>{if(onOpen && !e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey){e.preventDefault();onOpen(item);}}}>
+            <strong>{item.title}</strong><small>{item.agent_name} · {item.channel_name}{item.creator_name && ' · '+item.creator_name}</small>
+          </a>
+          <Badge tone={item.status==='needs_attention'?'warning':item.status==='active'?'info':item.status==='done'?'success':'neutral'}>{sessionWorkStatusLabels[item.status]}</Badge>
+          {item.sidebar_archived && <Button size="sm" disabled={!!mutation.busy} onClick={()=>void restore(item.id)}>Restore to sidebar</Button>}
+        </>}
+      </li>)}</ul>}
+    {(cursors.length>0 || page.next_cursor) && <nav aria-label="Session result pages">
+      {cursors.length>0 && <Button size="sm" onClick={()=>setCursors(values=>values.slice(0,-1))}>Previous</Button>}
+      {page.next_cursor && <Button size="sm" onClick={()=>setCursors(values=>[...values,page.next_cursor!])}>Next</Button>}
+    </nav>}
+  </section>;
+}

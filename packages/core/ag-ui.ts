@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { HttpAgent } from '@ag-ui/client';
 import { EventSchema } from '@ag-ui/core/schemas';
-import { AppError, parseAgentComponent, parseAgentResponse, parseInvocation, type AgentConnector, type AgentEvent, type AgentResponse, type InvocationReceipt, type InvocationRequest } from '@space/contracts';
+import { AppError, parseAgentComponent, parseAgentResponse, parseSessionOutputs, parseInvocation, type AgentConnector, type AgentEvent, type AgentResponse, type InvocationReceipt, type InvocationRequest } from '@space/contracts';
 
 function eventId(execution: string, sequence: number) {
   const hex = createHash('sha256').update(`${execution}:ag-ui:${sequence}`).digest('hex');
@@ -15,7 +15,7 @@ export class AgUiConnector implements AgentConnector {
     const url = new URL(config.url);
     if (!['https:', 'http:'].includes(url.protocol) || url.username || url.password || url.hash) throw new Error('Invalid AG_UI_URL');
   }
-  async discover() { return { skills: ['ag-ui.run'], controls: { progress_stream: true } }; }
+  async discover() { return { persistent_sessions: true, skills: ['ag-ui.run'], controls: { progress_stream: true } }; }
   async invoke(input: InvocationRequest, emit: (event: unknown) => Promise<void>, signal: AbortSignal): Promise<InvocationReceipt> {
     const request = parseInvocation(input);
     signal.throwIfAborted();
@@ -26,10 +26,11 @@ export class AgUiConnector implements AgentConnector {
     const response: AgentResponse = { messages: [], tools: [], components: [] };
     let sequence = 0, started = false, terminal = false;
     let failure: unknown;
+    let archiveOnSuccess = false;
     const ignoredMessages = new Set<string>();
     const abort = () => agent.abortRun();
     signal.addEventListener('abort', abort, { once: true });
-    const send = async (type: AgentEvent['type'], timestamp?: number, error?: string) => {
+    const send = async (type: AgentEvent['type'], timestamp?: number, error?: string, lifecycle?: 'open'|'archive') => {
       signal.throwIfAborted();
       const snapshot = parseAgentResponse(response);
       const plain = snapshot.messages.map(message => message.text).join('\n\n');
@@ -37,7 +38,7 @@ export class AgUiConnector implements AgentConnector {
         ? plain || snapshot.components.map(component => component.title).join('\n') || 'Agent run completed.'
         : snapshot.step ?? 'Working');
       await emit({ id: eventId(request.execution_id, ++sequence), schema_version: '1.0', execution_id: request.execution_id,
-        sequence, type, occurred_at: new Date(timestamp ?? 0).toISOString(), payload: { text, response: snapshot } });
+        sequence, type, occurred_at: new Date(timestamp ?? 0).toISOString(), payload: { text, response: snapshot, ...(lifecycle ? { session_lifecycle:lifecycle } : {}) } });
     };
     const finish = () => {
       response.messages.forEach(message => { message.status = 'complete'; });
@@ -98,6 +99,15 @@ export class AgUiConnector implements AgentConnector {
               case 'STEP_STARTED': response.step = event.stepName; break;
               case 'STEP_FINISHED': delete response.step; break;
               case 'CUSTOM': {
+                if (event.name === 'space.session.outputs') {
+                  response.outputs = parseSessionOutputs(event.value);
+                  break;
+                }
+                if (event.name === 'space.session.open') {
+                  await send('execution.progress', event.timestamp, undefined, 'open');
+                  return;
+                }
+                if (event.name === 'space.session.archive') { archiveOnSuccess = true; return; }
                 if (event.name !== 'space.ui') return;
                 const component = parseAgentComponent(event.value);
                 const index = response.components.findIndex(item => item.id === component.id);
@@ -110,7 +120,7 @@ export class AgUiConnector implements AgentConnector {
                 finish();
                 const unsupported = event.outcome && event.outcome.type !== 'success';
                 await send(unsupported ? 'execution.failed' : 'execution.completed', event.timestamp,
-                  unsupported ? 'This agent requested an interaction that Space does not support yet.' : undefined);
+                  unsupported ? 'This agent requested an interaction that Space does not support yet.' : undefined, archiveOnSuccess && !unsupported ? 'archive' : undefined);
                 terminal = true;
                 return;
               }

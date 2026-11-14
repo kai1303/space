@@ -6,7 +6,8 @@ import { Pool } from 'pg';
 import { migrate } from '@space/postgres/migrate';
 import { bootstrap } from '@space/postgres/bootstrap';
 import {AgentConnectionStore} from '@space/postgres/agent-connections';
-import { OutboundStore } from '@space/postgres/outbound';
+import { AgentSessionStore } from '@space/postgres/agent-sessions';
+import { OutboundStore, outboundToolName } from '@space/postgres/outbound';
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 const schema = `outbound_gateway_${randomBytes(6).toString('hex')}`;
 const admin = new Pool({ connectionString: process.env.TEST_DATABASE_URL }),
@@ -21,7 +22,7 @@ after(async () => {
   await admin.query(`DROP SCHEMA ${schema} CASCADE`);
   await admin.end();
 });
-async function fixture() {
+async function fixture(browser = false) {
   const base=await bootstrap(pool),pairings=new AgentConnectionStore(pool);
   const pairing=await pairings.createPairing(base.owner_id,base.workspace_id,{provider:'codex'});
   const agent=await pairings.claim({code:pairing.code,credential:randomBytes(32).toString('base64url'),provider:'codex'});
@@ -29,7 +30,13 @@ async function fixture() {
     session = randomUUID(),
     task = randomUUID(),
     execution = randomUUID();
-  await pool.query('INSERT INTO agent_sessions(id,workspace_id,installation_id,origin_thread_id) VALUES($1,$2,$3,$4)', [
+  let threadId: string = seed.thread_id;
+  if (browser) {
+    const opened = await new AgentSessionStore(pool).sidekicks.create(seed.owner_id, seed.workspace_id, {
+      installation_id: seed.installation_id, client_session_id: session, skill: 'codex.run', source: {browser_url:'https://github.com/space/example'},
+    });
+    threadId = opened.origin_thread_id;
+  } else await pool.query('INSERT INTO agent_sessions(id,workspace_id,installation_id,origin_thread_id) VALUES($1,$2,$3,$4)', [
     session,
     seed.workspace_id,
     seed.installation_id,
@@ -37,14 +44,14 @@ async function fixture() {
   ]);
   await pool.query(
     "INSERT INTO tasks(id,workspace_id,thread_id,installation_id,goal,skill,requester_id,status,session_id,idempotency_key,request_hash) VALUES($1::uuid,$2,$3,$4,'test','demo.echo',$5,'running',$6,$1::text,'test')",
-    [task, seed.workspace_id, seed.thread_id, seed.installation_id, seed.owner_id, session],
+    [task, seed.workspace_id, threadId, seed.installation_id, seed.owner_id, session],
   );
   await pool.query(
     "INSERT INTO executions(id,workspace_id,task_id,installation_id,session_id,status) VALUES($1,$2,$3,$4,$5,'running')",
     [execution, seed.workspace_id, task, seed.installation_id, session],
   );
   await pool.query('UPDATE tasks SET active_execution_id=$2 WHERE id=$1', [task, execution]);
-  return { ...seed, task, execution };
+  return { ...seed, thread_id: threadId, task, execution };
 }
 test('gateway enforces personal grants, separates accounts and denies revoked access', async () => {
   assert.ok(existsSync('../apps/mcp-gateway/gateway.ts'), 'separate MCP gateway exists');
@@ -542,4 +549,28 @@ test('workspace knowledge plugins share discovery, scoped grants, cited search a
     assert.equal((await client.listTools()).tools.length, 3);
     assert.equal((await call(resolve.name, { ref })).isError, true);
   } finally { await client.close(); await gateway.close(); }
+});
+
+test('a browser session exposes only tools granted on the owner’s personal connection, even if a shared tool name is known', async () => {
+  const seed = await fixture(true);
+  const store = new OutboundStore(pool, randomBytes(32).toString('hex'));
+  async function grant(scope: string | {actor:string; workspace:string}) {
+    let c = await store.create(scope, { name:'GitHub', url:'https://example.com/mcp', auth_type:'none' });
+    c = await store.catalog(scope, c.id, c.revision, [{name:'lookup', inputSchema:{type:'object'}}]);
+    return store.grant(scope, c.id, {revision:c.revision, installation_id:seed.installation_id, tools:['lookup']});
+  }
+  const shared = await grant({actor:seed.owner_id, workspace:seed.workspace_id});
+  const issue = () => store.issue(seed.execution, seed.installation_id, 'http://localhost/mcp');
+  assert.equal(await issue(), undefined);
+  const personal = await grant(seed.owner_id);
+  const access = (await issue())!;
+  const name = outboundToolName(personal.id, 'lookup');
+  assert.deepEqual(access.tools, [name]);
+  const claims = store.security.verify(access.token, 'outbound');
+  assert.deepEqual((await store.allowed(claims)).map(t => t.connection_id), [personal.id]);
+  await assert.rejects(store.reserve(claims, 'shared', outboundToolName(shared.id, 'lookup'), {}), /tool_not_allowed/);
+  assert.ok((await store.reserve(claims, 'personal', name, {})).id);
+  await store.grant(seed.owner_id, personal.id, {revision:personal.revision, installation_id:seed.installation_id, tools:[]});
+  await assert.rejects(store.reserve(claims, 'after-revoke', name, {}), /tool_not_allowed/);
+  assert.equal(await issue(), undefined);
 });

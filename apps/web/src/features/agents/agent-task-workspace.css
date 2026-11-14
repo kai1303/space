@@ -26,3 +26,17 @@
 @media(max-width:520px){.agent-workspace{min-width:0}.agent-workspace-header{padding:12px}.agent-workspace>.sp-tabs{padding:0 4px;gap:0}.agent-workspace>.sp-tabs button{font-size:11px;padding:11px 5px;gap:4px}.agent-preview-toolbar{gap:4px;padding:5px 8px}.agent-preview-toolbar>span{max-width:140px}.agent-file-view,.agent-changes{padding:12px}.agent-workspace-footer{font-size:9px;padding:9px 12px}.agent-workspace-demo-conversation{padding:16px 12px}}
 
 .agent-preview-toolbar>.sp-tabs{flex-shrink:0}.agent-preview-toolbar>.sp-tabs button{font-size:11px;padding:8px 6px}
+
+.agent-diff-comment { width:1.45rem; height:1.4rem; margin-right:.5rem; border:0; border-radius:3px; background:transparent; color:var(--sp-text-secondary); cursor:pointer; vertical-align:baseline; font:inherit }
+.agent-diff-comment:hover, .agent-diff-comment:focus-visible { background:var(--sp-accent); color:white }
+.agent-patch-review { padding:12px; border:1px solid var(--sp-border); border-radius:6px; margin-bottom:12px; font-size:13px }
+.agent-patch-review label, .agent-patch-review label code, .agent-patch-review textarea { display:block; width:100%; box-sizing:border-box }
+.agent-patch-review label code { color:var(--sp-text-secondary); overflow-wrap:anywhere; padding:4px 0 }
+.agent-patch-review textarea { padding:8px; margin:4px 0 8px; min-height:60px; resize:vertical; color:var(--sp-text); background:var(--sp-surface); border:1px solid var(--sp-border); border-radius:4px; font:inherit }
+.agent-patch-review ol { margin:8px 0; padding:0; list-style:none }
+.agent-patch-review li { display:flex; justify-content:space-between; gap:8px; border-top:1px solid var(--sp-border); padding:6px 0; overflow-wrap:anywhere }
+.agent-patch-review li p { margin:4px 0; white-space:pre-wrap }
+.agent-result-actions { display:flex; flex-wrap:wrap; gap:6px; padding:4px 8px }
+.agent-result-actions a { display:inline-flex; align-items:center; gap:5px; padding:4px 8px; border:1px solid var(--sp-border); border-radius:5px; color:var(--sp-text); font-size:12px; text-decoration:none }
+.agent-result-actions a:hover { background:var(--sp-surface-hover) }
+.agent-session-output-view[hidden] {display:none}

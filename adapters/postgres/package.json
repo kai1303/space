@@ -11,6 +11,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "exports": {
+    "./session-reports": {"types":"./dist/session-reports.d.ts","default":"./dist/session-reports.js"},
     "./channel-knowledge": {"types":"./dist/channel-knowledge.d.ts","default":"./dist/channel-knowledge.js"},
     "./people-knowledge": {"types":"./dist/people-knowledge.d.ts","default":"./dist/people-knowledge.js"},
     "./tool-approvals": {"types":"./dist/tool-approvals.d.ts","default":"./dist/tool-approvals.js"},

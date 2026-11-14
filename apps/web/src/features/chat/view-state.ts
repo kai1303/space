@@ -1,1 +1,1 @@
-export type ConversationView = { thread?: string; sessionView?: {thread:string;selected:string}; sessionOpen: boolean };
+export type ConversationView = { thread?: string; sessionView?: {thread:string;selected:string;artifactRequest?:number;artifact?:NonNullable<import('@space/contracts').SessionReport['artifact']>}; sessionOpen: boolean };

@@ -22,7 +22,7 @@ export function App() {
   const chatLink = ['workspace', 'channel', 'message', 'invite', 'connect'].some(key => query.has(key)) || hash === '#chat-messages';
   const landingAnchor = ['', '#workspace', '#agents', '#connections', '#workflows', '#setup', '#toolkit', '#start', '#faq', '#launch-main'].includes(hash);
   const landing = pathname === '/' && !chatLink && landingAnchor;
-  const chat = pathname === '/chat' || pathname.startsWith('/c/') || pathname.startsWith('/s/') || pathname.startsWith('/w/') || (pathname === '/' && chatLink);
+  const chat = pathname === '/chat' || pathname.startsWith('/c/') || pathname.startsWith('/s/') || /^\/review\/[a-f0-9-]{36}\/?$/i.test(pathname) || pathname.startsWith('/w/') || (pathname === '/' && chatLink);
   return <Suspense fallback={pathname.startsWith('/c/') ? <ConversationLinkLoading /> : <p role="status" className="sp-sr-only">Loading Space…</p>}>
     {pathname === '/preview/agent-session' ? <AgentPreview /> : landing ? <LaunchPage /> : chat ? <Chat /> : pathname === '/workspace' ? <Preview /> : <Gallery />}
   </Suspense>;

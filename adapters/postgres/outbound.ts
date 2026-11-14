@@ -302,7 +302,7 @@ export class OutboundStore {
   async authority(claims: OutboundClaims, c: Query = this.pool) {
     if (claims.exp <= Date.now()) throw new AppError(401, 'unauthorized');
     const result = await c.query(
-      `SELECT e.id,i.workspace_id,th.channel_id FROM executions e
+      `SELECT e.id,i.workspace_id,th.channel_id, (s.handoff_context ? 'browser_url') IS TRUE AS personal_only FROM executions e
        JOIN tasks t ON t.id=e.task_id AND t.active_execution_id=e.id AND t.installation_id=e.installation_id AND t.session_id=e.session_id
        JOIN agent_installations i ON i.id=e.installation_id
        JOIN agent_sessions s ON s.id=e.session_id AND s.installation_id=i.id
@@ -324,16 +324,16 @@ export class OutboundStore {
       ],
     );
     if (!result.rows.length) throw new AppError(403, 'outbound_access_revoked');
-    return { workspaceId: String(result.rows[0].workspace_id), channelId: String(result.rows[0].channel_id) };
+    return { personalOnly: result.rows[0].personal_only === true, workspaceId: String(result.rows[0].workspace_id), channelId: String(result.rows[0].channel_id) };
   }
   async allowed(claims: OutboundClaims, c: Query = this.pool) {
-    await this.authority(claims, c);
+    const authority = await this.authority(claims, c);
     const { rows } = await c.query(
       `SELECT c.id,c.kind,c.url,c.name AS connection_name,c.workspace_id,c.revision,c.credential_revision,c.tools,g.tools AS allowed
        FROM outbound_connections c JOIN outbound_grants g ON g.connection_id=c.id
        WHERE ((c.owner_id=$1 AND c.owner_id=$3) OR c.workspace_id=$4) AND g.installation_id=$2
        AND c.enabled AND c.status='ready' ORDER BY c.id`,
-      [claims.owner, claims.installation, claims.requester ?? claims.owner, claims.workspace ?? null],
+      [claims.owner, claims.installation, claims.requester ?? claims.owner, authority.personalOnly ? null : claims.workspace ?? null],
     );
     return rows.flatMap((r) =>
       (r.tools as OutboundTool[])

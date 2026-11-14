@@ -1,3 +1,4 @@
+import { sessionWorkStatus } from './session-work-status.js';
 import type { Pool } from 'pg';
 import type { StarredAgentSession } from '@space/contracts';
 import { sql, type SQL } from 'drizzle-orm';
@@ -54,15 +55,18 @@ export class WorkspaceHubStore {
       const result=await c.execute<StarredAgentSession & Record<string,unknown>>(sql`
         SELECT a.id,a.title AS name,'agent_session' AS kind,c.private,
           EXISTS(SELECT 1 FROM tasks WHERE session_id=a.id AND status='running') AS working,
+          ${sessionWorkStatus(sql`a.id`,sql`a.state`)} AS status,
           (a.created_by IS NOT DISTINCT FROM ${actor}::uuid OR i.owner_id=${actor}) AS can_rename,
-          jsonb_build_object('id',a.id,'agent_name',d.name,'origin_thread_id',a.origin_thread_id,
+          jsonb_build_object('id',a.id,'agent_name',coalesce(ac.name,d.name),'origin_thread_id',a.origin_thread_id,
             'channel_id',c.id,'channel_archived',c.archived_at IS NOT NULL) AS session
         FROM hub_starred_agent_sessions star
         JOIN agent_sessions a ON a.workspace_id=star.workspace_id AND a.id=star.session_id
         JOIN threads t ON t.workspace_id=a.workspace_id AND t.id=a.origin_thread_id
         JOIN channels c ON c.workspace_id=t.workspace_id AND c.id=t.channel_id
-        JOIN agent_installations i ON i.id=a.installation_id JOIN agent_definitions d ON d.id=i.definition_id
+        JOIN agent_installations i ON i.id=a.installation_id JOIN agent_definitions d ON d.id=i.definition_id LEFT JOIN agent_connections ac ON ac.installation_id=i.id
         WHERE star.workspace_id=${workspace} AND star.user_id=${actor} AND a.managed AND ${channelAccess(actor,workspace)}
+          AND NOT EXISTS(SELECT 1 FROM session_sidebar_preferences p WHERE p.workspace_id=a.workspace_id
+            AND p.user_id=star.user_id AND p.session_id=a.id AND p.archived)
           ${after?sql`AND a.id>${after}::uuid`:sql``}
         ORDER BY a.id LIMIT ${limit+1}`);
       return page(result.rows,limit,row=>row.id);

@@ -1,9 +1,12 @@
+import { sessionWorkStatus } from './session-work-status.js';
+import { discoverSessions } from './session-discovery.js';
 import { directTurnTarget, runTurn, type TurnPlan } from './direct-turn-admission.js';
+import { SessionTeamStore } from './session-team.js';
 import { SidekickStore } from './sidekick.js';
 import { createHash } from 'node:crypto';
 import type { Pool } from 'pg';
 import { and, eq, sql } from 'drizzle-orm';
-import { AppError, parseAgentSessionInput, parseAgentSessionMessage, parseAgentResponse, record, text, uuid, type AgentSessionDetail, type AgentSessionSummary, type WorkspaceAgentSession, type AgentSessionTurn, type SessionInput, type Task } from '@space/contracts';
+import { AppError, parseAgentSessionInput, parseAgentSessionMessage, parseAgentResponse, record, text, uuid, type SessionRelatedAgent, type AgentSessionDetail, type AgentSessionSummary, type WorkspaceAgentSession, type AgentSessionTurn, type SessionInput, type Task } from '@space/contracts';
 import { database, type DbSession } from './database.js';
 import { hasThreadAccess, requireWorkspaceAccess } from './access.js';
 import { sessionTransaction, SessionConflict } from './session-concurrency.js';
@@ -11,14 +14,20 @@ import {sessionToolApprovals} from './tool-approvals.js';
 import { PostgresStore } from './store.js';
 import * as s from './schema.js';
 const notFound = () => new AppError(404, 'not_found');
-const summaryColumns = sql`a.id,a.workspace_id,a.installation_id,a.origin_thread_id,a.title,a.state,a.queue_paused,a.managed,a.created_by,a.created_at::text,d.name AS agent_name,i.owner_id,
+const summaryColumns = sql`a.id,a.workspace_id,a.installation_id,a.origin_thread_id,a.title,a.state,a.queue_paused,a.managed,a.created_by,a.created_at::text,coalesce(ac.name,d.name) AS agent_name,i.owner_id,
   (a.managed AND i.connector_id IN ('codex.local','claude.local')) AS supports_steering,
   CASE WHEN a.managed THEN a.skill ELSE coalesce((SELECT skill FROM tasks WHERE session_id=a.id ORDER BY created_at,id LIMIT 1),a.skill) END AS skill,
   (SELECT count(*)::integer FROM tasks WHERE session_id=a.id) AS turn_count`;
 
+// Unmoved sessions retain their creation-time/UUID order. Moved rows share
+// the target's anchor and have an exact numeric position on either side of it.
+const sidebarKey = sql`coalesce(p.anchor_time,a.created_at),coalesce(p.anchor_id,a.id),coalesce(p.position,0),a.id`;
+const sidebarJoin = (actor: string) => sql`LEFT JOIN session_sidebar_preferences p
+  ON p.workspace_id=a.workspace_id AND p.user_id=${actor} AND p.session_id=a.id`;
+
 export class AgentSessionStore {
-  readonly db; readonly tasks; readonly sidekicks;
-  constructor(readonly pool: Pool, tasks = new PostgresStore(pool)) { this.db = database(pool); this.tasks = tasks; this.sidekicks = new SidekickStore(this.db); }
+  readonly db; readonly tasks; readonly sidekicks; readonly team;
+  constructor(readonly pool: Pool, tasks = new PostgresStore(pool)) { this.db = database(pool); this.tasks = tasks; this.sidekicks = new SidekickStore(this.db); this.team = new SessionTeamStore(this.db); }
   private async visible(c: DbSession, actor: string, id: string) {
     const [session] = await c.select().from(s.agentSessions).where(eq(s.agentSessions.id, uuid(id)));
     if (!session || !await hasThreadAccess(c, actor, session.origin_thread_id)) throw notFound();
@@ -28,16 +37,16 @@ export class AgentSessionStore {
     return this.db.transaction(async c => {
       const session = await this.visible(c, actor, id);
       const { rows: [location] } = await c.execute<{ channel_id:string; channel_archived:boolean; agent_name:string }>(sql`
-        SELECT ch.id AS channel_id, ch.archived_at IS NOT NULL AS channel_archived, d.name AS agent_name
+        SELECT ch.id AS channel_id, ch.archived_at IS NOT NULL AS channel_archived, coalesce(ac.name,d.name) AS agent_name
         FROM threads t JOIN channels ch ON ch.id=t.channel_id
         JOIN agent_installations i ON i.id=${session.installation_id}
-        JOIN agent_definitions d ON d.id=i.definition_id WHERE t.id=${session.origin_thread_id}`);
+        JOIN agent_definitions d ON d.id=i.definition_id LEFT JOIN agent_connections ac ON ac.installation_id=i.id WHERE t.id=${session.origin_thread_id}`);
       if (!location) throw notFound();
       return { id:session.id, workspace_id:session.workspace_id, origin_thread_id:session.origin_thread_id, ...location };
     }, {isolationLevel:'repeatable read', accessMode:'read only'});
   }
   private async summary(c: DbSession, id: string): Promise<AgentSessionSummary> {
-    const result = await c.execute<AgentSessionSummary & Record<string, unknown>>(sql`SELECT ${summaryColumns} FROM agent_sessions a JOIN agent_installations i ON i.id=a.installation_id JOIN agent_definitions d ON d.id=i.definition_id WHERE a.id=${id}`);
+    const result = await c.execute<AgentSessionSummary & Record<string, unknown>>(sql`SELECT ${summaryColumns} FROM agent_sessions a JOIN agent_installations i ON i.id=a.installation_id JOIN agent_definitions d ON d.id=i.definition_id LEFT JOIN agent_connections ac ON ac.installation_id=i.id WHERE a.id=${id}`);
     const row = result.rows[0];
     if (!row) throw notFound();
     return { ...row, created_at: new Date(row.created_at).toISOString() };
@@ -45,12 +54,16 @@ export class AgentSessionStore {
   async list(actor: string, threadId: string): Promise<{ items: AgentSessionSummary[]; next_cursor: null }> {
     return this.db.transaction(async c => {
       if (!await hasThreadAccess(c, actor, uuid(threadId))) throw notFound();
-      const result = await c.execute<AgentSessionSummary & Record<string, unknown>>(sql`SELECT ${summaryColumns} FROM agent_sessions a JOIN agent_installations i ON i.id=a.installation_id JOIN agent_definitions d ON d.id=i.definition_id WHERE a.origin_thread_id=${threadId} ORDER BY a.created_at DESC,a.id DESC LIMIT 100`);
+      const result = await c.execute<AgentSessionSummary & Record<string, unknown>>(sql`SELECT ${summaryColumns} FROM agent_sessions a JOIN agent_installations i ON i.id=a.installation_id JOIN agent_definitions d ON d.id=i.definition_id LEFT JOIN agent_connections ac ON ac.installation_id=i.id WHERE a.origin_thread_id=${threadId} ORDER BY a.created_at DESC,a.id DESC LIMIT 100`);
       return { items: result.rows.map(row => ({ ...row, created_at: new Date(row.created_at).toISOString() })), next_cursor: null };
     }, { isolationLevel: 'repeatable read', accessMode: 'read only' });
   }
+  discover(actor: string, workspace: string, query: unknown) {
+    return discoverSessions(this.db, actor, workspace, query);
+  }
   async listWorkspace(actor: string, workspace: string, raw: unknown = {}) {
-    const input = record(raw, ['before']), before = input.before === undefined ? undefined : uuid(input.before);
+    const input = record(raw, ['before','archived']), before = input.before === undefined ? undefined : uuid(input.before);
+    if (input.archived !== undefined && input.archived !== 'true' && input.archived !== 'false') throw new AppError(400,'invalid_archive_filter');
     return this.db.transaction(async c => {
       await requireWorkspaceAccess(c, actor, workspace);
       if (before) {
@@ -59,36 +72,98 @@ export class AgentSessionStore {
       }
       const result = await c.execute<WorkspaceAgentSession & Record<string, unknown>>(sql`
         SELECT ${summaryColumns},EXISTS(SELECT 1 FROM tasks WHERE session_id=a.id AND status='running') AS working,
+          ${sessionWorkStatus(sql`a.id`,sql`a.state`)} AS status,
           t.channel_id,ch.archived_at IS NOT NULL AS channel_archived
         FROM agent_sessions a JOIN threads t ON t.id=a.origin_thread_id
         JOIN channels ch ON ch.id=t.channel_id
         JOIN channel_members m ON m.channel_id=t.channel_id AND m.workspace_id=a.workspace_id AND m.user_id=${actor}
-        JOIN agent_installations i ON i.id=a.installation_id JOIN agent_definitions d ON d.id=i.definition_id
-        WHERE a.workspace_id=${workspace} AND a.managed
-        ${before ? sql`AND (a.created_at,a.id)<(SELECT created_at,id FROM agent_sessions WHERE id=${before})` : sql``}
-        ORDER BY a.created_at DESC,a.id DESC LIMIT 21`);
+        JOIN agent_installations i ON i.id=a.installation_id JOIN agent_definitions d ON d.id=i.definition_id LEFT JOIN agent_connections ac ON ac.installation_id=i.id
+        ${sidebarJoin(actor)}
+        WHERE a.workspace_id=${workspace} AND a.managed AND coalesce(p.archived,false)=${input.archived === 'true'}
+        ${before ? sql`AND (${sidebarKey})<(SELECT ${sidebarKey} FROM agent_sessions a ${sidebarJoin(actor)} WHERE a.id=${before})` : sql``}
+        ORDER BY coalesce(p.anchor_time,a.created_at) DESC,coalesce(p.anchor_id,a.id) DESC,coalesce(p.position,0) DESC,a.id DESC LIMIT 21`);
       return { items: result.rows.slice(0,20).map(row => ({...row,created_at:new Date(row.created_at).toISOString()})), next_cursor: result.rows.length > 20 ? result.rows[19]!.id : null };
     }, { isolationLevel: 'repeatable read', accessMode: 'read only' });
   }
+  async updateSidebar(actor: string, id: string, raw: unknown) {
+    const input = record(raw, ['archived','target','side']);
+    const archive = input.archived;
+    const move = archive === undefined;
+    if (move ? !['before','after'].includes(String(input.side)) : typeof archive !== 'boolean' || input.target !== undefined || input.side !== undefined)
+      throw new AppError(400,'invalid_sidebar_action');
+    const targetId = move ? uuid(input.target) : undefined;
+    if (targetId === id) throw new AppError(400,'invalid_sidebar_target');
+    return sessionTransaction(this.db, async c => {
+      const session = await this.visible(c,actor,id);
+      if (!session.managed) throw notFound();
+      const workspace = session.workspace_id;
+      if (!move) {
+        await c.execute(sql`INSERT INTO session_sidebar_preferences(workspace_id,user_id,session_id,archived)
+          VALUES(${workspace},${actor},${id},${archive})
+          ON CONFLICT(workspace_id,user_id,session_id) DO UPDATE SET archived=excluded.archived`);
+      } else {
+        const target = await this.visible(c,actor,targetId!);
+        if (!target.managed || target.workspace_id !== workspace) throw notFound();
+        const before = input.side === 'before';
+        const result = await c.execute(sql`WITH anchor AS (
+          SELECT coalesce(p.anchor_time,a.created_at) AS time,coalesce(p.anchor_id,a.id) AS id,coalesce(p.position,0) AS position
+          FROM agent_sessions a ${sidebarJoin(actor)} WHERE a.id=${targetId} AND NOT coalesce(p.archived,false)
+        ), placement AS (
+          SELECT anchor.*, (SELECT ${before ? sql`min(n)` : sql`max(n)`} FROM (
+            SELECT position AS n FROM session_sidebar_preferences WHERE workspace_id=${workspace} AND user_id=${actor}
+              AND anchor_id=anchor.id AND session_id<>${id}
+            UNION ALL SELECT 0
+          ) neighbors WHERE n ${before ? sql`>` : sql`<`} anchor.position) AS neighbor FROM anchor
+        )
+        INSERT INTO session_sidebar_preferences(workspace_id,user_id,session_id,anchor_time,anchor_id,position)
+          SELECT ${workspace},${actor},${id},time,id,coalesce((position+neighbor)*0.5,position+${before ? 1 : -1}::numeric)
+          FROM placement
+        ON CONFLICT(workspace_id,user_id,session_id) DO UPDATE SET anchor_time=excluded.anchor_time,
+          anchor_id=excluded.anchor_id,position=excluded.position WHERE NOT session_sidebar_preferences.archived
+        RETURNING session_id`);
+        if (!result.rows.length) throw new AppError(409,'session_list_changed');
+      }
+      return {ok:true};
+    });
+  }
   async create(actor: string, threadId: string, raw: unknown): Promise<AgentSessionSummary> {
     const input = parseAgentSessionInput(raw); uuid(threadId);
+    return sessionTransaction(this.db, c => this.createIn(c,actor,threadId,input,null));
+  }
+  private async createIn(c:DbSession, actor:string, threadId:string, input:ReturnType<typeof parseAgentSessionInput>, parentId:string|null) {
+    if (!await hasThreadAccess(c, actor, threadId)) throw notFound();
+    const [thread] = await c.select().from(s.threads).where(eq(s.threads.id, threadId));
+    if (!thread) throw notFound();
+    const [ref] = await c.select().from(s.agentInstallations).where(eq(s.agentInstallations.id, input.installation_id));
+    const [definition] = ref ? await c.select().from(s.agentDefinitions).where(eq(s.agentDefinitions.id, ref.definition_id)) : [];
+    if (!definition?.capabilities.persistent_sessions) throw new AppError(409, 'session_connector_unsupported');
+    const grants = await c.select().from(s.agentGrants).where(and(eq(s.agentGrants.installation_id, input.installation_id), eq(s.agentGrants.channel_id, thread.channel_id)));
+    const [connection] = await c.select({revoked_at:s.agentConnections.revoked_at}).from(s.agentConnections).where(eq(s.agentConnections.installation_id,input.installation_id));
+    const skills = definition.capabilities.skills.filter(skill => connection ? !connection.revoked_at : grants.some(grant => grant.skill === skill));
+    const skill = input.skill ?? (skills.length === 1 ? skills[0] : undefined);
+    if (!skill) throw new AppError(400, 'session_skill_required');
+    const installation = await this.tasks.eligible(c, { thread_id: threadId, workspace_id: thread.workspace_id, installation_id: input.installation_id, requester_id: actor, skill }, true);
+    await c.insert(s.agentSessions).values({ id: input.client_session_id, parent_session_id: parentId, workspace_id: thread.workspace_id, installation_id: installation.id, origin_thread_id: threadId, title: input.title, managed: true, created_by: actor, skill }).onConflictDoNothing({ target: s.agentSessions.id });
+    const [existing] = await c.select().from(s.agentSessions).where(eq(s.agentSessions.id, input.client_session_id));
+    if (!existing || existing.parent_session_id !== parentId || !existing.managed || existing.origin_thread_id !== threadId || existing.installation_id !== input.installation_id || (existing.creation_title ?? existing.title) !== input.title || existing.created_by !== actor || existing.skill !== skill) throw new AppError(409, 'idempotency_conflict');
+    return this.summary(c, input.client_session_id);
+  }
+  async inviteAgent(actor:string, parentId:string, key:string, raw:unknown) {
+    const v = record(raw,['installation_id','skill','prompt','context']);
+    const prompt = text(v.prompt,2000).trim();
+    const context = v.context === undefined ? '' : text(v.context,1800).trim();
+    const message = context ? prompt+'\n\nContext selected by the requester:\n'+context : prompt;
+    const id = uuid(key);
+    const input = parseAgentSessionInput({client_session_id:id, installation_id:v.installation_id, skill:v.skill, title:prompt.slice(0,120)});
     return sessionTransaction(this.db, async c => {
-      if (!await hasThreadAccess(c, actor, threadId)) throw notFound();
-      const [thread] = await c.select().from(s.threads).where(eq(s.threads.id, threadId));
-      if (!thread) throw notFound();
-      const [ref] = await c.select().from(s.agentInstallations).where(eq(s.agentInstallations.id, input.installation_id));
-      const [definition] = ref ? await c.select().from(s.agentDefinitions).where(eq(s.agentDefinitions.id, ref.definition_id)) : [];
-      if (!definition?.capabilities.persistent_sessions) throw new AppError(409, 'session_connector_unsupported');
-      const grants = await c.select().from(s.agentGrants).where(and(eq(s.agentGrants.installation_id, input.installation_id), eq(s.agentGrants.channel_id, thread.channel_id)));
-      const [connection] = await c.select({revoked_at:s.agentConnections.revoked_at}).from(s.agentConnections).where(eq(s.agentConnections.installation_id,input.installation_id));
-      const skills = definition.capabilities.skills.filter(skill => connection ? !connection.revoked_at : grants.some(grant => grant.skill === skill));
-      const skill = input.skill ?? (skills.length === 1 ? skills[0] : undefined);
-      if (!skill) throw new AppError(400, 'session_skill_required');
-      const installation = await this.tasks.eligible(c, { thread_id: threadId, workspace_id: thread.workspace_id, installation_id: input.installation_id, requester_id: actor, skill }, true);
-      await c.insert(s.agentSessions).values({ id: input.client_session_id, workspace_id: thread.workspace_id, installation_id: installation.id, origin_thread_id: threadId, title: input.title, managed: true, created_by: actor, skill }).onConflictDoNothing({ target: s.agentSessions.id });
-      const [existing] = await c.select().from(s.agentSessions).where(eq(s.agentSessions.id, input.client_session_id));
-      if (!existing || !existing.managed || existing.origin_thread_id !== threadId || existing.installation_id !== input.installation_id || (existing.creation_title ?? existing.title) !== input.title || existing.created_by !== actor || existing.skill !== skill) throw new AppError(409, 'idempotency_conflict');
-      return this.summary(c, input.client_session_id);
+      const parent = await this.visible(c,actor,parentId);
+      if (!parent.managed || parent.handoff_context || parent.state !== 'active' || parent.installation_id === input.installation_id)
+        throw new AppError(409,'session_handoff_unavailable');
+      const [size] = (await c.execute<{count:number}>(sql`SELECT count(*)::int AS count FROM agent_sessions WHERE parent_session_id=${parent.id} AND id<>${id}`)).rows;
+      if (size!.count >= 32) throw new AppError(409,'session_helper_limit');
+      const child = await this.createIn(c,actor,parent.origin_thread_id,input,parent.id);
+      await this.addInputIn(c,actor,child.id,id,'queue',{text:message});
+      return {id:child.id};
     });
   }
   async read(actor: string, id: string, query: unknown = {}): Promise<AgentSessionDetail> {
@@ -121,7 +196,7 @@ export class AgentSessionStore {
       const origin=audience.rows[0];
       const audienceLabel=origin?.kind==='direct' ? origin.direct_user_low===origin.direct_user_high ? 'Private session: only you' : 'Participants in the source direct conversation' : `Members of #${origin?.name ?? 'the source channel'}`;
       const executions = turns.flatMap(turn => turn.task.active_execution_id ? [sql`${turn.task.active_execution_id}::uuid`] : []);
-      const inputs = await c.execute<SessionInput & Record<string,unknown>>(sql`SELECT i.id,actor_id,u.display_name AS actor_name,to_json(i.created_at) #>> '{}' AS created_at,kind,state,execution_id,detail,jsonb_array_length(body->'asset_ids') AS file_count,body->>'text' AS text
+      const inputs = await c.execute<SessionInput & Record<string,unknown>>(sql`SELECT i.id,actor_id,u.display_name AS actor_name,to_json(i.created_at) #>> '{}' AS created_at,kind,state,execution_id,detail,jsonb_array_length(body->'asset_ids') AS file_count,body->>'text' AS text,body->'document' AS document,body->>'browser_url' AS browser_url
         FROM agent_session_inputs i JOIN users u ON u.id=i.actor_id WHERE session_id=${id} AND (
           (kind='queue' AND state IN ('pending','blocked'))
           ${executions.length ? sql`OR (kind='steer' AND execution_id IN (${sql.join(executions, sql`,`)}))` : sql``})
@@ -134,7 +209,13 @@ export class AgentSessionStore {
         steering.set(input.execution_id, receipts);
       }
       for (const turn of turns) turn.steering = steering.get(turn.task.active_execution_id ?? '');
-      return { inputs:inputs.rows.filter(input => input.kind === 'queue'), audience:audienceLabel, tool_approvals:await sessionToolApprovals(c,id), ...(session.handoff_context ? {context:session.handoff_context} : {}), ...(session.managed ? { outputs: session.outputs } : {}), session: await this.summary(c, id), turns, next_cursor: (after || result.rows.length > 20) && turns.length ? turns[0]!.task.id : null, has_newer: after ? result.rows.length > 20 : !!before };
+      const related = await c.execute<SessionRelatedAgent>(sql`SELECT a.id, a.title, coalesce(ac.name,d.name) AS agent_name, u.display_name AS owner_name,
+        CASE WHEN a.id=${session.parent_session_id}::uuid THEN 'parent' ELSE 'helper' END AS relation
+        FROM agent_sessions a JOIN agent_installations i ON i.id=a.installation_id JOIN agent_definitions d ON d.id=i.definition_id
+        JOIN users u ON u.id=i.owner_id LEFT JOIN agent_connections ac ON ac.installation_id=i.id
+        WHERE a.origin_thread_id=${session.origin_thread_id} AND (a.id=${session.parent_session_id}::uuid OR a.parent_session_id=${session.id})
+        ORDER BY a.created_at,a.id LIMIT 33`);
+      return { related_agents:related.rows, inputs:inputs.rows.filter(input => input.kind === 'queue'), audience:audienceLabel, tool_approvals:await sessionToolApprovals(c,id), ...(session.handoff_context ? {context:session.handoff_context} : {}), ...(session.managed ? { outputs: session.outputs } : {}), session: await this.summary(c, id), turns, next_cursor: (after || result.rows.length > 20) && turns.length ? turns[0]!.task.id : null, has_newer: after ? result.rows.length > 20 : !!before };
     }, { isolationLevel: 'repeatable read', accessMode: 'read only' });
   }
   async send(actor: string, id: string, raw: unknown, key: string): Promise<Task> {
@@ -149,7 +230,8 @@ export class AgentSessionStore {
     const session = await this.visible(c, actor, id);
     if (!session.managed) throw new AppError(409, 'session_unmanaged');
     if (session.state === 'ended') throw new AppError(409, 'session_ended');
-    const taskInput = { workspace_id: session.workspace_id, thread_id: session.origin_thread_id, installation_id: session.installation_id, goal: input.text || 'Review the attached files.', skill: session.skill, ...(input.document ? { request_document: input.document } : {}) };
+    if (input.browser_url && !session.handoff_context?.browser_url) throw new AppError(400,'invalid_browser_page');
+    const taskInput = { ...(input.browser_url ? {browser_url:input.browser_url} : {}), workspace_id: session.workspace_id, thread_id: session.origin_thread_id, installation_id: session.installation_id, goal: input.text || 'Review the attached files.', skill: session.skill, ...(input.document ? { request_document: input.document } : {}) };
     const installation = await this.tasks.eligible(c, { ...taskInput, requester_id: actor, session_id: session.id }, true);
     const hash = createHash('sha256').update(JSON.stringify({ ...taskInput, ...(input.asset_ids.length ? { text:input.text, asset_ids:input.asset_ids, asset_descriptions:input.asset_descriptions } : {}), agent_session_id: id })).digest('hex');
     const [existing] = await c.select().from(s.tasks).where(and(eq(s.tasks.workspace_id, session.workspace_id), eq(s.tasks.requester_id, actor), eq(s.tasks.idempotency_key, key)));
@@ -190,54 +272,56 @@ export class AgentSessionStore {
     return { target, commit };
   }
   async addInput(actor:string,id:string,key:string,kind:'queue'|'steer',raw:unknown,execution?:string,sourceId?:string) {
+    return sessionTransaction(this.db,c=>this.addInputIn(c,actor,id,key,kind,raw,execution,sourceId));
+  }
+  private async addInputIn(c:DbSession,actor:string,id:string,key:string,kind:'queue'|'steer',raw:unknown,execution?:string,sourceId?:string) {
     key=uuid(key);
     const body=parseAgentSessionMessage(raw);
     if (kind==='steer' && (!body.text.trim() || body.asset_ids.length)) throw new AppError(400,'steer_requires_text');
     const hash=createHash('sha256').update(JSON.stringify([kind,execution,body,...(sourceId ? [sourceId] : [])])).digest('hex');
-    return sessionTransaction(this.db,async c=>{
-      const session=await this.visible(c,actor,id);
-      if (!session.managed || session.state!=='active') throw new AppError(409,'session_unavailable');
-      const installation=await this.tasks.eligible(c,{...session,session_id:id,thread_id:session.origin_thread_id,requester_id:actor},true);
-      if(kind==='steer' && actor!==installation.owner_id) throw new AppError(403,'owner_required');
-      const prior=(await c.execute<{actor_id:string;session_id:string;request_hash:string;state:string}>(sql`SELECT actor_id,session_id,request_hash,state FROM agent_session_inputs WHERE id=${key}`)).rows[0];
-      if(prior){
-        if(prior.actor_id!==actor || prior.session_id!==id || prior.request_hash!==hash) throw new AppError(409,'idempotency_conflict');
-        return {state:prior.state,connection:null};
-      }
-      let connection:string|null=null;
-      if(kind==='steer'){
-        if(!['codex.local','claude.local'].includes(installation.connector_id)) throw new AppError(409,'steer_unsupported');
-        const run=(await c.execute<{connection_id:string}>(sql`SELECT a.connection_id FROM tasks t JOIN agent_connections a ON a.installation_id=t.installation_id
-          WHERE t.session_id=${id} AND t.status='running' AND t.active_execution_id=${execution} AND a.last_seen_at>now()-interval '45 seconds' AND a.auth_status='ready' AND a.connection_id IS NOT NULL AND a.revoked_at IS NULL`)).rows[0];
-        if(!run) throw new AppError(409,'turn_not_running');
-        connection=run.connection_id;
-      }
-      const count=await c.execute(sql`SELECT count(*)::int AS n FROM agent_session_inputs WHERE session_id=${id} AND kind=${kind} AND
-        (kind='queue' AND state IN ('pending','blocked') OR kind='steer' AND execution_id=${execution??null})`);
-      if(Number(count.rows[0]?.n)>=32) throw new AppError(409,'session_input_limit');
-      if (sourceId) {
-        const claimed = await c.execute(sql`UPDATE agent_session_inputs SET state='cancelled'
-          WHERE id=${sourceId} AND session_id=${id} AND kind='queue' AND state='pending'
-            AND body->>'text'=${body.text} AND jsonb_array_length(body->'asset_ids')=0 RETURNING id`);
-        if (!claimed.rows.length) throw new AppError(409,'queue_item_changed');
-      }
-      // Keep the wire payload canonical and omit absent optional fields on replay.
-      const payload={text:body.text,document:body.document,asset_ids:body.asset_ids,asset_descriptions:body.asset_descriptions};
-      const state=kind==='queue'?'pending':'sending';
-      await c.execute(sql`INSERT INTO agent_session_inputs(id,session_id,actor_id,kind,execution_id,body,request_hash,state,source_input_id)
-        VALUES(${key},${id},${actor},${kind},${execution??null},${JSON.stringify(payload)}::jsonb,${hash},${state},${sourceId??null})`);
-      if (body.asset_ids.length) {
-        const ids = sql.join(body.asset_ids.map(assetId => sql`${assetId}::uuid`), sql`,`);
-        const reserved = await c.execute(sql`UPDATE assets SET queue_input_id=${key}
-          WHERE id IN (${ids}) AND channel_id=(SELECT channel_id FROM threads WHERE id=${session.origin_thread_id})
-            AND workspace_id=${session.workspace_id} AND uploader_id=${actor} AND status='ready'
-            AND message_id IS NULL AND task_id IS NULL AND queue_input_id IS NULL AND expires_at>clock_timestamp()
-            AND NOT EXISTS (SELECT 1 FROM scheduled_messages WHERE status IN ('pending','sending') AND asset_ids && ARRAY[${ids}])
-          RETURNING id`);
-        if (reserved.rows.length !== body.asset_ids.length) throw new AppError(409,'asset_unavailable');
-      }
-      return {state,connection};
-    });
+    const session=await this.visible(c,actor,id);
+    if (!session.managed || session.state!=='active') throw new AppError(409,'session_unavailable');
+    const installation=await this.tasks.eligible(c,{...session,session_id:id,thread_id:session.origin_thread_id,requester_id:actor},true);
+    if (body.browser_url && !session.handoff_context?.browser_url) throw new AppError(400,'invalid_browser_page');
+    if(kind==='steer' && actor!==installation.owner_id) throw new AppError(403,'owner_required');
+    const prior=(await c.execute<{actor_id:string;session_id:string;request_hash:string;state:string}>(sql`SELECT actor_id,session_id,request_hash,state FROM agent_session_inputs WHERE id=${key}`)).rows[0];
+    if(prior){
+      if(prior.actor_id!==actor || prior.session_id!==id || prior.request_hash!==hash) throw new AppError(409,'idempotency_conflict');
+      return {state:prior.state,connection:null};
+    }
+    let connection:string|null=null;
+    if(kind==='steer'){
+      if(!['codex.local','claude.local'].includes(installation.connector_id)) throw new AppError(409,'steer_unsupported');
+      const run=(await c.execute<{connection_id:string}>(sql`SELECT a.connection_id FROM tasks t JOIN agent_connections a ON a.installation_id=t.installation_id
+        WHERE t.session_id=${id} AND t.status='running' AND t.active_execution_id=${execution} AND a.last_seen_at>now()-interval '45 seconds' AND a.auth_status='ready' AND a.connection_id IS NOT NULL AND a.revoked_at IS NULL`)).rows[0];
+      if(!run) throw new AppError(409,'turn_not_running');
+      connection=run.connection_id;
+    }
+    const count=await c.execute(sql`SELECT count(*)::int AS n FROM agent_session_inputs WHERE session_id=${id} AND kind=${kind} AND
+      (kind='queue' AND state IN ('pending','blocked') OR kind='steer' AND execution_id=${execution??null})`);
+    if(Number(count.rows[0]?.n)>=32) throw new AppError(409,'session_input_limit');
+    if (sourceId) {
+      const claimed = await c.execute(sql`UPDATE agent_session_inputs SET state='cancelled'
+        WHERE id=${sourceId} AND session_id=${id} AND kind='queue' AND state='pending'
+          AND body->>'text'=${body.text} AND jsonb_array_length(body->'asset_ids')=0 RETURNING id`);
+      if (!claimed.rows.length) throw new AppError(409,'queue_item_changed');
+    }
+    // Keep the wire payload canonical and omit absent optional fields on replay.
+    const payload={browser_url:body.browser_url,text:body.text,document:body.document,asset_ids:body.asset_ids,asset_descriptions:body.asset_descriptions};
+    const state=kind==='queue'?'pending':'sending';
+    await c.execute(sql`INSERT INTO agent_session_inputs(id,session_id,actor_id,kind,execution_id,body,request_hash,state,source_input_id)
+      VALUES(${key},${id},${actor},${kind},${execution??null},${JSON.stringify(payload)}::jsonb,${hash},${state},${sourceId??null})`);
+    if (body.asset_ids.length) {
+      const ids = sql.join(body.asset_ids.map(assetId => sql`${assetId}::uuid`), sql`,`);
+      const reserved = await c.execute(sql`UPDATE assets SET queue_input_id=${key}
+        WHERE id IN (${ids}) AND channel_id=(SELECT channel_id FROM threads WHERE id=${session.origin_thread_id})
+          AND workspace_id=${session.workspace_id} AND uploader_id=${actor} AND status='ready'
+          AND message_id IS NULL AND task_id IS NULL AND queue_input_id IS NULL AND expires_at>clock_timestamp()
+          AND NOT EXISTS (SELECT 1 FROM scheduled_messages WHERE status IN ('pending','sending') AND asset_ids && ARRAY[${ids}])
+        RETURNING id`);
+      if (reserved.rows.length !== body.asset_ids.length) throw new AppError(409,'asset_unavailable');
+    }
+    return {state,connection};
   }
 
   async finishSteer(id:string, state:'sent'|'blocked'|'uncertain',detail:string|null){

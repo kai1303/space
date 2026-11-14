@@ -61,3 +61,10 @@
 
 .chat-compose > .agent-turn-inputs { margin-inline:0; }
 .chat-compose > .agent-turn-inputs + .sp-rich-composer .sp-rich-editor-shell { border-top-left-radius:0; border-top-right-radius:0; }
+
+.session-helper-agents { padding:12px 16px; border-bottom:1px solid var(--sp-border) }
+.session-helper-agents form { display:flex; align-items:start; flex-wrap:wrap; gap:8px }
+.session-helper-agents label, .session-helper-agents form>small { display:grid; gap:4px; width:100%; font-size:13px }
+.session-helper-agents textarea { padding:8px; min-height:3em; resize:vertical; border:1px solid var(--sp-border); border-radius:4px; font:inherit; color:var(--sp-text); background:var(--sp-surface) }
+.session-helper-agents ul { margin:0 0 8px; padding:0; list-style:none }
+.session-helper-agents li small { display:block; color:var(--sp-text-secondary) }
