@@ -190,15 +190,22 @@ test('cleanup removes abandoned objects and staging data while preserving attach
   await api(a.owner_token, 'GET', `/assets/${two.asset.id}/download`, undefined, 404);
 });
 
-test('cleanup retries provider failures without losing database records', async () => {
+test('cleanup retries provider failures without losing database records', async t => {
+  // Isolate the manual retry from the API's concurrent asset.deadline consumer.
+  const isolatedSchema = `asset_retry_${randomBytes(8).toString('hex')}`;
+  const isolated = new Pool({ connectionString: process.env.TEST_DATABASE_URL, options: `-c search_path=${isolatedSchema}` });
+  await admin.query(`CREATE SCHEMA ${isolatedSchema}`);
+  t.after(async () => { await isolated.end(); await admin.query(`DROP SCHEMA ${isolatedSchema} CASCADE`); });
+  await migrate(isolated);
+  const a = await bootstrap(isolated);
   const { AssetStore } = await import('@space/postgres/assets');
-  const a = await bootstrap(pool), { asset } = await upload(a);
-  await pool.query('UPDATE assets SET expires_at=now()-interval \'1 second\' WHERE id=$1', [asset.id]);
-  const assets = new AssetStore(pool);
-  await assert.rejects(assets.cleanup(async () => { throw new Error('offline'); }), /offline/);
-  assert.equal((await pool.query('SELECT id FROM assets WHERE id=$1', [asset.id])).rowCount, 1);
-  await assets.cleanup(key => storage.remove(key));
-  assert.equal((await pool.query('SELECT id FROM assets WHERE id=$1', [asset.id])).rowCount, 0);
+  const assets = new AssetStore(isolated);
+  const asset = await assets.create(a.owner_id, a.channel_id, {name:'retry.txt', size:12, type:'text/plain'});
+  await isolated.query("UPDATE assets SET expires_at=now()-interval '1 second' WHERE id=$1", [asset.id]);
+  await assert.rejects(assets.cleanup(async () => { throw new Error('offline'); }, 1, asset.id), /offline/);
+  assert.equal((await isolated.query('SELECT id FROM assets WHERE id=$1', [asset.id])).rowCount, 1);
+  assert.equal(await assets.cleanup(key => storage.remove(key), 1, asset.id), 1);
+  assert.equal((await isolated.query('SELECT id FROM assets WHERE id=$1', [asset.id])).rowCount, 0);
 });
 
 test('configuration disables uploads when storage is absent and upload creation is bounded', async () => {
