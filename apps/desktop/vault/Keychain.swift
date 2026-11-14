@@ -10,8 +10,43 @@ struct Request: Decodable {
     let agent: String?
     let endpoint: String?
     let item: UUID?
+    let title: String?
+    let token: String?
+    let change: WebItemChange?
     let tool: String?
     let arguments: String?
+}
+struct WebItemChange: Decodable {
+    let operation, title, site: String
+    let id, version: UUID?
+    let kind, username, endpoint, secret: String?
+
+    func apply(to store: VaultStore) throws -> [String:Any] {
+        let origin = try VaultDraft.site(site)
+        var entry: VaultEntry?
+        if operation != "create" {
+            guard let id, let version,
+                  let item = try readItems(vaultQuery(store.scope, origin: origin)).first(where: { $0.id == id }),
+                  (item.version ?? item.id) == version else { throw VaultIssue.stale }
+            entry = VaultEntry(item, origin: origin)
+        }
+        if operation == "delete", let entry {
+            guard title == entry.label else { throw VaultIssue.stale }
+            try store.remove(entry, expectedVersion: version)
+            return ["status":"deleted"]
+        }
+        guard operation == "edit" || operation == "create", kind == "token" || kind == "login",
+              entry == nil || entry?.kind == kind, let secret else { throw Failure.unavailable }
+        var draft = VaultDraft(entry: entry, origin: origin, token: kind == "token")
+        draft.label = title; draft.secret = secret; draft.username = username ?? ""
+        draft.endpoint = endpoint ?? ""
+        if let entry, entry.isToken, draft.endpoint != (entry.endpoint ?? ""), secret.isEmpty {
+            throw VaultIssue("Enter a new token when changing its endpoint.")
+        }
+        let saved = try store.save(draft, expectedVersion: version)
+        guard let item = try readItems(vaultQuery(store.scope, origin:origin)).first(where: { $0.id == saved }) else { throw Failure.unavailable }
+        return ["status":"saved", "item": VaultEntry(item, origin:origin).metadata]
+    }
 }
 func reply(_ result: [String: String]) -> Never {
     if let data = try? JSONEncoder().encode(result) { FileHandle.standardOutput.write(data) }
@@ -39,9 +74,33 @@ func picker(_ items: [Item]) -> NSPopUpButton {
     return menu
 }
 @MainActor func run(_ req: Request) throws {
-    if req.action == "web-list" {
+    if req.action == "change-item", let change = req.change {
+        do {
+            let result = try change.apply(to: VaultStore(scope:req.scope))
+            FileHandle.standardOutput.write(try JSONSerialization.data(withJSONObject: result))
+            exit(0)
+        } catch let issue as VaultIssue {
+            if issue.errorDescription == VaultIssue.stale.errorDescription { reply(["status":"stale"]) }
+            if issue.errorDescription == VaultIssue.duplicate.errorDescription { reply(["status":"duplicate"]) }
+            reply(["status":"invalid"])
+        }
+    }
+    if req.action == "save-linear" {
+        guard let title = req.title, let token = req.token, req.origin == "https://linear.app" else { throw Failure.unavailable }
+        let store = VaultStore(scope: req.scope)
+        var draft = VaultDraft(origin: req.origin, endpoint: "https://mcp.linear.app/mcp", token: true)
+        draft.label = title; draft.secret = token
+        do { _ = try store.save(draft) }
+        catch let issue as VaultIssue where issue.errorDescription == VaultIssue.duplicate.errorDescription {
+            reply(["status":"duplicate"])
+        }
+        let result: [String:Any] = ["status":"saved", "item":["title":title, "site":draft.website, "kind":"token"]]
+        FileHandle.standardOutput.write(try JSONSerialization.data(withJSONObject: result))
+        exit(0)
+    }
+    if req.action == "web-list" || req.action == "list-items" {
         let entries = try VaultStore(scope: req.scope).entries()
-        let items = entries.map { ["title": $0.label, "site": $0.origin, "kind": $0.kind] }
+        let items = req.action == "list-items" ? entries.map(\.metadata) : entries.map { ["title": $0.label, "site": $0.origin, "kind": $0.kind] }
         let data = try JSONSerialization.data(withJSONObject: ["status": "listed", "more": false, "items": items])
         FileHandle.standardOutput.write(data)
         exit(0)

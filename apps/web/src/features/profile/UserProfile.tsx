@@ -5,11 +5,10 @@ import { AnimatePresence } from 'motion/react';
 import { Select, Avatar, Button, Dialog, IconButton, Popover, SidePanel, TextField } from '@space/ui/primitives';
 import { EmojiPicker } from '@space/ui/emoji';
 import { Clock, EnvelopeSimple, Phone, Plus, Smiley, X } from '@phosphor-icons/react';
-import { visibleStatus, type ProfileUpdate, type UserProfile, type UserStatus } from '@space/contracts';
+import { workspacePath, visibleStatus, type ProfileUpdate, type UserProfile, type UserStatus } from '@space/contracts';
 import { request } from '../../shared/api/request.js';
 import { SignOutButton } from '../auth/AuthScreen.js';
 import { Connections } from '../connections/Connections.js';
-import { WebVault } from '../vault/WebVault.js';
 import { AccountNotificationMenu } from '../notifications/AccountNotificationMenu.js';
 import { NotificationPreferences } from '../notifications/Notifications.js';
 import './profile.css';
@@ -24,13 +23,12 @@ const presets = [
 ];
 
 
-export function UserSettings({ user, userId, workspace, onNameChange }: { workspace?: string; user: string; userId?: string; onNameChange?: (name: string) => void }) {
+export function UserSettings({ user, userId, workspace, onNameChange, onOpenVault }: { onOpenVault?: () => void; workspace?: string; user: string; userId?: string; onNameChange?: (name: string) => void }) {
   const profiles = useMemberProfile();
   useEffect(() => { if (profiles?.selected) setPanel(false); }, [profiles?.selected]);
   const [profile, setProfile] = useState<UserProfile>({ id: userId ?? '', display_name: user, full_name: '', title: '', name_pronunciation: '', phone: '', time_zone: 'UTC', image: null, email: null, status: null, presence: 'active' });
   const [loaded, setLoaded] = useState(false), [loading, setLoading] = useState(true), [error, setError] = useState(''), [busy, setBusy] = useState(false);
   const [panel, setPanel] = useState(false), [editor, setEditor] = useState<'profile' | 'status' | null>(null);
-  const [webVault, setWebVault] = useState(false);
   const [preferences, setPreferences] = useState(false);
   const [connections, setConnections] = useState(false);
   const [, tick] = useState(0);
@@ -71,16 +69,6 @@ export function UserSettings({ user, userId, workspace, onNameChange }: { worksp
     } catch (e) { if (alive.current) setError(errorText(e)); throw e; }
     finally { if (alive.current) setBusy(false); }
   }
-  async function openVault() {
-    setError('');
-    if (!window.spaceDesktop?.openVault) { setWebVault(true); return; }
-    try {
-      const status = await window.spaceDesktop?.openVault?.(userId ?? profile.id);
-      if (!alive.current) return;
-      if (status === 'busy') setError('Your Vault is already open or in use.');
-      if (status === 'unavailable') setError('Could not open your personal Vault on this Mac.');
-    } catch { if (alive.current) setError('Could not open your personal Vault on this Mac.'); }
-  }
   function open(next: 'profile' | 'status') { setError(''); if (next === 'profile') { profiles?.close(); setPanel(true); } else setEditor('status'); }
   return <div className={`space-user-settings ${panel ? 'is-profile-open' : ''}`} ref={root}>
     <Popover label="Your account" panelLabel="Your account" role="menu" floating align="start" className="space-account-menu" panelClassName="space-account-popover" trigger={<ProfilePhoto profile={profile} small />}>
@@ -92,14 +80,17 @@ export function UserSettings({ user, userId, workspace, onNameChange }: { worksp
           <button role="menuitem" disabled={busy} onClick={() => { close(); void save({ presence: profile.presence === 'active' ? 'away' : 'active' }).catch(() => {}); }}>Set yourself as {profile.presence === 'active' ? 'away' : 'active'}</button>
           {workspace && <AccountNotificationMenu workspace={workspace} actor={profile.id} onClose={close}/>}
           <hr /><button role="menuitem" onClick={() => { close(); open('profile'); }}>Profile</button>
-          <button role="menuitem" onClick={() => { close(); void openVault(); }}>Vault</button>
+          <a role="menuitem" href={workspace && workspacePath(workspace).startsWith('/w/') ? workspacePath(workspace) + '/vault' : '/vault'} onClick={event => {
+            if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return;
+            close();
+            if (onOpenVault) { event.preventDefault(); onOpenVault(); }
+          }}>Vault</a>
           {workspace && <button role="menuitem" onClick={() => { close(); setPreferences(true); }}>Preferences</button>}
           <button role="menuitem" onClick={() => { close(); setConnections(true); }}>Connections</button>
         </>}
-        <hr /><SignOutButton />
+        <hr /><SignOutButton role="menuitem" />
       </>}
     </Popover>
-    {webVault && <WebVault key={userId ?? profile.id} actor={userId ?? profile.id} close={() => setWebVault(false)} />}
     {error && !panel && !editor && <div role="alert" className="space-profile-notice">{error}<button aria-label="Dismiss profile error" onClick={() => setError('')}><X size={16} /></button></div>}
     {createPortal(<AnimatePresence>{panel && <SidePanel key="profile" className="space-profile-panel" role="dialog" aria-label="Your profile">
       <header><strong>Profile</strong><button ref={closePanelButton} aria-label="Close profile" onClick={closePanel}><X size={20} /></button></header>
@@ -124,7 +115,7 @@ export function UserSettings({ user, userId, workspace, onNameChange }: { worksp
     {editor === 'profile' && <ProfileEditor profile={profile} busy={busy} error={error} save={save} onClose={() => setEditor(null)} />}
     {editor === 'status' && <StatusEditor profile={{ ...profile, status }} busy={busy} error={error} save={save} onClose={() => setEditor(null)} />}
     {preferences && workspace && <NotificationPreferences key={workspace} title="Preferences" workspace={workspace} onClose={() => setPreferences(false)}/>}
-    {connections && <Connections key={userId ?? profile.id} userId={userId ?? profile.id} onClose={() => setConnections(false)} />}
+    {connections && <Connections onOpenVault={onOpenVault} key={userId ?? profile.id} userId={userId ?? profile.id} onClose={() => setConnections(false)} />}
   </div>;
 }
 

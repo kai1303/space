@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { io } from 'socket.io-client';
-import { sidekickPageUrl, parseGoalAction, parseInvocation, parseAgentEvent, parseLocalProvider, localProviders, type LocalProvider, type AgentEvent, type InvocationRequest, uuid, text, record } from '@space/contracts';
+import { sidekickPageUrl, parseGoalAction, parseInvocation, parseAgentEvent, parseLocalProvider, localProviders, type LocalProvider, type AgentEvent, type InvocationRequest, uuid, text, record, webVaultCommand, type WebVaultAction } from '@space/contracts';
 import { AgentSessionStopped, type InvokeAgent, type SteerHandler } from './agent-runtime.js';
 import {CODING_TURN_TIMEOUT_MS} from '@space/contracts';
 import {webVaultPages} from './web-vault-pages.js';
@@ -37,7 +37,7 @@ function unauthorized(error: unknown): boolean {
   const value = error as { code?: unknown; message?: unknown; data?: { code?: unknown } };
   return [value.code, value.data?.code, value.message].some(item => typeof item === 'string' && /unauthorized|unauthenticated|revoked|invalid.token/i.test(item));
 }
-export interface WebVaultRequest { id: string; actor: string; installation: string; action: 'list' | 'manage'; expires: number; cursor?: string }
+export interface WebVaultRequest { id: string; actor: string; installation: string; action: WebVaultAction; expires: number; cursor?: string; transfer?: string; sealed?: string; title?: string; token?: string; publicKey?:string; change?:import('@space/contracts').VaultChange }
 export type WebVaultHandler = (request: WebVaultRequest, signal: AbortSignal) => Promise<unknown>;
 export function connectPlatform(connection: Connection, status: () => AuthStatus, onUnauthorized: () => void, invoke?: InvokeAgent, models?: () => import('@space/contracts').AgentModel[] | undefined, webVault?: WebVaultHandler) {
   const origin = platformOrigin(connection.origin);
@@ -62,15 +62,14 @@ export function connectPlatform(connection: Connection, status: () => AuthStatus
       if (vaultRequest) { ack({status: 'busy'}); return; }
       const controller = vaultRequest = new AbortController();
       try {
-        const value = record(raw, ['id', 'actor', 'installation', 'action', 'expires', 'cursor']);
-        if (value.installation !== connection.installation_id || (value.action !== 'list' && value.action !== 'manage') ||
-            typeof value.expires !== 'number' || !Number.isSafeInteger(value.expires)) throw new Error();
-        const remaining = Math.min(value.expires - Date.now(), 65000);
+        const {id, actor, installation, expires, ...fields} = record(raw, ['id', 'actor', 'installation', 'expires', 'action', 'cursor', 'sealed', 'transfer', 'publicKey']);
+        const command = webVaultCommand(fields);
+        if (installation !== connection.installation_id ||
+            typeof expires !== 'number' || !Number.isSafeInteger(expires)) throw new Error();
+        const remaining = Math.min(expires - Date.now(), 65000);
         if (remaining <= 0) throw new Error();
-        if (value.cursor !== undefined && value.action !== 'list') throw new Error();
-        const continuation = value.cursor === undefined ? {} : {cursor: uuid(value.cursor)};
-        const result = await pages.dispatch({id: uuid(value.id), actor: uuid(value.actor), installation: connection.installation_id,
-          action: value.action, ...continuation, expires: value.expires}, AbortSignal.any([controller.signal, AbortSignal.timeout(remaining)]));
+        const result = await pages.dispatch({id: uuid(id), actor: uuid(actor), installation: connection.installation_id,
+          ...command, expires}, AbortSignal.any([controller.signal, AbortSignal.timeout(remaining)]));
         if (!controller.signal.aborted) ack(result);
       } catch { if (!controller.signal.aborted) ack({status: 'unavailable'}); }
       finally { vaultRequest = undefined; }

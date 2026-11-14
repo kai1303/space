@@ -13,7 +13,7 @@ import LocalAuthentication
     private var context: LAContext?
     private weak var window: NSWindow?
     private weak var previousResponder: NSResponder?
-    private var host: NSView?
+    private var sheet: NSPanel?
     private var done: ((Int32) -> Void)?
 
     init(store: VaultStore, site: String, endpoint: String, tokenSetup: Bool, done: @escaping (Int32) -> Void) {
@@ -21,16 +21,22 @@ import LocalAuthentication
         self.tokenSetup = tokenSetup; self.done = done
     }
 
-    func attach(to content: NSView, dark: Bool) {
+    func attach(to content: NSView, dark: Bool) -> Bool {
+        guard let parent = content.window, parent.attachedSheet == nil else { return false }
         _ = VaultStyle.bundledFonts
         let view = NSHostingView(rootView: EmbeddedVaultPage(session: self))
         view.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
-        window = content.window; previousResponder = window?.firstResponder
-        view.frame = content.bounds
-        view.autoresizingMask = [.width, .height]
-        content.addSubview(view, positioned: .above, relativeTo: nil)
-        host = view
-        window?.makeFirstResponder(view)
+        window = parent; previousResponder = parent.firstResponder
+        let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: min(680, parent.frame.width),
+                                                height: min(480, parent.frame.height - 48)),
+                            styleMask: [.titled], backing: .buffered, defer: false)
+        panel.titleVisibility = .hidden
+        panel.titlebarAppearsTransparent = true
+        panel.appearance = view.appearance
+        panel.contentView = view
+        sheet = panel
+        parent.beginSheet(panel)
+        return true
     }
 
     func unlock() {
@@ -57,9 +63,13 @@ import LocalAuthentication
     func finish(_ status: Int32) {
         guard let callback = done else { return }
         done = nil
-        if let sheet = window?.attachedSheet, entries != nil { window?.endSheet(sheet, returnCode: .cancel) }
+        if let sheet {
+            if let editor = sheet.attachedSheet { sheet.endSheet(editor, returnCode: .cancel) }
+            window?.endSheet(sheet)
+            sheet.orderOut(nil)
+        }
         lock()
-        host?.removeFromSuperview(); host = nil
+        sheet = nil
         if let previousResponder { window?.makeFirstResponder(previousResponder) }
         callback(status)
     }
@@ -76,21 +86,19 @@ private struct EmbeddedVaultPage: View {
             } else {
                 VStack(spacing: 0) {
                     VaultPageHeader(back: { session.finish(0) })
-                    VStack(alignment: .leading, spacing: 16) {
-                        Image(systemName: "lock").font(.system(size: 22, weight: .medium))
-                            .frame(width: 44, height: 44).foregroundColor(VaultStyle.accent)
-                            .background(VaultStyle.accentSoft).cornerRadius(8).accessibilityHidden(true)
+                    VStack(spacing: 12) {
+                        Image(systemName: "touchid").font(.system(size: 34))
+                            .frame(width: 64, height: 64).foregroundColor(VaultStyle.accent)
+                            .background(VaultStyle.accentSoft).cornerRadius(16).accessibilityHidden(true)
                         Text("Unlock your Vault").font(VaultStyle.font(22, bold: true))
-                        Text("Use Touch ID or your Mac password to access your saved logins and API tokens.")
+                        Text("Use Touch ID or your Mac password to manage your saved logins and API tokens.")
                             .foregroundColor(VaultStyle.textSecondary).fixedSize(horizontal: false, vertical: true)
                         if !session.message.isEmpty { Text(session.message).foregroundColor(VaultStyle.textSecondary) }
                         Button(session.unlocking ? "Unlocking…" : "Unlock Vault", action: session.unlock)
                             .buttonStyle(VaultButtonStyle(primary: true)).keyboardShortcut(.defaultAction)
                             .disabled(session.unlocking)
-                    }.padding(24).frame(width: 376, alignment: .leading)
-                        .background(VaultStyle.surfaceRaised).cornerRadius(12)
-                        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(VaultStyle.border).allowsHitTesting(false))
-                        .frame(maxWidth: .infinity, maxHeight: .infinity).background(VaultStyle.surfaceSubtle)
+                    }.multilineTextAlignment(.center).padding(24).frame(maxWidth: 428)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
             }
         }.frame(maxWidth: .infinity, maxHeight: .infinity).font(VaultStyle.font()).foregroundColor(VaultStyle.text).background(VaultStyle.surface)
@@ -101,10 +109,10 @@ private struct EmbeddedVaultPage: View {
 @_cdecl("space_vault_attach")
 @MainActor func attachVault(_ parent: UnsafeMutableRawPointer, _ scope: UnsafePointer<CChar>, _ site: UnsafePointer<CChar>,
                             _ endpoint: UnsafePointer<CChar>, _ setup: Bool, _ dark: Bool, _ cookie: UnsafeMutableRawPointer,
-                            _ complete: @escaping @convention(c) (UnsafeMutableRawPointer, Int32) -> Void) -> UnsafeMutableRawPointer {
+                            _ complete: @escaping @convention(c) (UnsafeMutableRawPointer, Int32) -> Void) -> UnsafeMutableRawPointer? {
     let session = EmbeddedVault(store: VaultStore(scope: String(cString: scope)), site: String(cString: site),
                                 endpoint: String(cString: endpoint), tokenSetup: setup, done: { complete(cookie, $0) })
-    session.attach(to: Unmanaged<NSView>.fromOpaque(parent).takeUnretainedValue(), dark: dark)
+    guard session.attach(to: Unmanaged<NSView>.fromOpaque(parent).takeUnretainedValue(), dark: dark) else { return nil }
     return Unmanaged.passRetained(session).toOpaque()
 }
 

@@ -3,9 +3,6 @@ import AppKit
 
 private enum Category: String, CaseIterable {
     case all = "All items", login = "Logins", token = "API tokens"
-    var icon: String {
-        switch self { case .all: return "square.grid.2x2"; case .login: return "key"; case .token: return "terminal" }
-    }
     func includes(_ item: VaultEntry) -> Bool { self == .all || (self == .token) == item.isToken }
 }
 
@@ -35,29 +32,26 @@ struct VaultManager: View {
     var body: some View {
         VStack(spacing: 0) {
             VaultPageHeader(back: { finished(false) })
+            HStack(spacing: 12) {
+                ForEach(Category.allCases, id: \.self) { section in
+                    Button {
+                        category = section
+                    } label: {
+                        Text("\(section.rawValue) (\(entries.filter(section.includes).count))")
+                            .font(VaultStyle.font(14, bold: category == section))
+                            .padding(.vertical, 10)
+                            .overlay(alignment: .bottom) {
+                                if category == section { Rectangle().fill(VaultStyle.accent).frame(height: 2) }
+                            }
+                    }.buttonStyle(.plain)
+                    .accessibilityAddTraits(category == section ? .isSelected : [])
+                }
+                Spacer()
+                Button(action: lock) { Label("Lock Vault", systemImage: "lock") }
+                    .buttonStyle(VaultButtonStyle(compact: true)).keyboardShortcut("l", modifiers: [.command, .shift])
+            }.padding(.horizontal, 16)
+            Divider()
             HStack(spacing: 0) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Personal Vault").font(VaultStyle.font(18, bold: true))
-                        .foregroundColor(VaultStyle.text).padding(.horizontal, 8).padding(.bottom, 12)
-                    ForEach(Category.allCases, id: \.self) { section in
-                        Button { category = section } label: {
-                            HStack(spacing: 9) {
-                                Image(systemName: section.icon).frame(width: 16)
-                                Text(section.rawValue)
-                                Spacer()
-                                Text(String(entries.filter(section.includes).count)).font(VaultStyle.font(12))
-                            }.padding(8).contentShape(Rectangle())
-                        }.buttonStyle(.plain).foregroundColor(section == category ? VaultStyle.sidebarContentActive : VaultStyle.sidebarText)
-                            .background(section == category ? VaultStyle.sidebarSelection : .clear)
-                            .cornerRadius(6)
-                    }
-                    Spacer()
-                    Divider().padding(.bottom, 6)
-                    Button(action: lock) { Label("Lock Vault", systemImage: "lock") }
-                        .buttonStyle(.plain).keyboardShortcut("l", modifiers: [.command, .shift])
-                }.padding(.vertical, 20).padding(.horizontal, 12).frame(width: 200).frame(maxHeight: .infinity)
-                    .foregroundColor(VaultStyle.sidebarText).background(VaultStyle.sidebar)
-                Divider()
                 VStack(alignment: .leading, spacing: 0) {
                     HStack {
                         Text(category.rawValue).font(VaultStyle.font(18, bold: true))
@@ -120,7 +114,7 @@ struct VaultManager: View {
                 }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
         }.font(VaultStyle.font()).foregroundColor(VaultStyle.text)
-            .background(VaultStyle.surface).accentColor(VaultStyle.focus).frame(minWidth: 760, minHeight: 425)
+            .background(VaultStyle.surface).accentColor(VaultStyle.focus).frame(minWidth: 500, minHeight: 360)
         .onAppear { if tokenSetup { draft = VaultDraft(origin: origin, endpoint: endpoint, token: true) } }
         .sheet(item: $draft) { item in
             VaultEditor(draft: item, save: { value in

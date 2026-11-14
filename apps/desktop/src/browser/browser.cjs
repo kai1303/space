@@ -38,11 +38,14 @@ function createBrowser(win, base, workspace, keychain = openVault, vaultManager 
 
   const vaultResources = app.isPackaged ? join(process.resourcesPath, 'runner') : join(__dirname, '../../dist/runner');
   let vaultOperation, manager;
-  function lockVault() { manager?.abort(); cancelVault(); }
+  function lockVault() {
+    manager?.abort(); cancelVault();
+    if (!owner.isDestroyed()) owner.send('space-vault-locked');
+  }
   async function showVault(target, expectedActor, action = 'manager', presented, remoteSignal) {
     if (process.platform !== 'darwin' || !owner.mainFrame || owner.mainFrame.origin !== origin) return 'unavailable';
     if (manager || vaultOperation) return 'busy';
-    const endpoint = target ? registryCache.get(currentSite())?.site?.url : undefined;
+    const endpoint = target?.origin ? registryCache.get(currentSite())?.site?.url : undefined;
     const operation = manager = new AbortController();
     const abort = () => operation.abort();
     remoteSignal?.addEventListener('abort', abort, {once: true});
@@ -58,8 +61,10 @@ function createBrowser(win, base, workspace, keychain = openVault, vaultManager 
       if (operation.signal.aborted || typeof id !== 'string' || !id || id.length > 128 ||
           (expectedActor && expectedActor !== id) || (currentActor && currentActor !== id)) return 'unavailable';
       currentActor = id;
-      if (action === 'web-list') {
-        const result = await keychain(vaultResources, {action, platform: origin, actor: id, origin}, operation.signal);
+      if (['web-list','list-items','change-item','save-linear'].includes(action)) {
+        const fields = action === 'save-linear' ? {origin:'https://linear.app', title:target.title, token:target.token} :
+          action === 'change-item' ? {origin:target.change.site, change:target.change} : {origin};
+        const result = await keychain(vaultResources, {action, platform: origin, actor: id, ...fields}, operation.signal);
         return !operation.signal.aborted && currentActor === id ? result : {status: 'unavailable'};
       }
       const result = await vaultManager(vaultResources, { action, platform: origin, actor: id,
@@ -503,9 +508,8 @@ function createBrowser(win, base, workspace, keychain = openVault, vaultManager 
         });
         break;
       case 'vault':
-        void showVault(vaultTarget(), currentActor).then(status => {
-          if (tabs.get(active)?.view.webContents === guest && status === 'unavailable') stop('Vault could not be opened on this Mac.');
-        });
+        hide();
+        owner.send('space-vault-page');
         break;
       case 'resume-control':
         if (tabs.get(active)?.manualSignIn && !vaultOperation) {
@@ -639,6 +643,28 @@ function createBrowser(win, base, workspace, keychain = openVault, vaultManager 
       void dialog.showMessageBox(win, { message: 'Sign in to Space to open your browser.', detail: 'Space needs a connection to verify your account.' });
     } finally { opening = false; }
   }
+  owner.ipc.handle('space-vault-items', async (event, actor) => {
+    if (event.senderFrame !== owner.mainFrame || event.senderFrame.origin !== origin || typeof actor !== 'string' || !actor) return {status: 'unavailable'};
+    const result = await showVault(undefined, actor, 'web-list');
+    if (result?.status === 'listed' && Array.isArray(result.items)) {
+      return {status: 'listed', more: result.more === true, items: result.items.map(({title, site, kind}) => ({title, site, kind}))};
+    }
+    return {status: result === 'busy' ? 'busy' : result?.status === 'cancelled' ? 'cancelled' : 'unavailable'};
+  });
+  owner.ipc.handle('space-vault-item-request', async (event, actor, change) => {
+    if (event.senderFrame !== owner.mainFrame || event.senderFrame.origin !== origin || !uuid.test(actor)) return {status:'unavailable'};
+    if (change && (!['create','edit','delete'].includes(change.operation) || typeof change.site !== 'string' ||
+        typeof change.title !== 'string' || JSON.stringify(change).length > 24000)) return {status:'invalid'};
+    const result = await showVault(change ? {change} : undefined, actor, change ? 'change-item' : 'list-items');
+    return typeof result === 'object' ? result : {status:result === 'busy' ? 'busy' : 'unavailable'};
+  });
+  owner.ipc.handle('space-vault-save-linear', async (event, actor, title, token) => {
+    if (event.senderFrame !== owner.mainFrame || event.senderFrame.origin !== origin || !uuid.test(actor) ||
+        typeof title !== 'string' || !title.trim() || title.length > 100 ||
+        typeof token !== 'string' || !token.trim() || Buffer.byteLength(token) > 4096) return {status:'unavailable'};
+    const result = await showVault({title:title.trim(), token}, actor, 'save-linear');
+    return typeof result === 'object' ? result : {status:result === 'busy' ? 'busy' : 'unavailable'};
+  });
   owner.ipc.handle('space-vault-open', (event, actor) => {
     if (event.senderFrame !== owner.mainFrame || event.senderFrame.origin !== origin || typeof actor !== 'string' || !actor) return 'unavailable';
     return showVault(undefined, actor);
@@ -694,9 +720,10 @@ function createBrowser(win, base, workspace, keychain = openVault, vaultManager 
   }
   return { open, openOffice, hide, togglePanel, showVault,
     async webVault(request, signal) {
-      if (!uuid.test(request.actor) || signal.aborted || !['list','manage'].includes(request.action)) return {status: 'unavailable'};
-      if (request.action === 'list') {
-        const result = await showVault(undefined, request.actor, 'web-list', undefined, signal);
+      if (!uuid.test(request.actor) || signal.aborted || !['list','list-items','manage','change-item','save-linear'].includes(request.action)) return {status: 'unavailable'};
+      if (request.action !== 'manage') {
+        const action = request.action === 'list' ? 'web-list' : request.action;
+        const result = await showVault(request, request.actor, action, undefined, signal);
         return typeof result === 'object' ? result : {status: result === 'busy' ? 'busy' : 'unavailable'};
       }
       // A remote request can show the locked manager. Only the Mac user can unlock it.

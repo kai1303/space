@@ -65,6 +65,10 @@ static napi_value open_vault(napi_env env, napi_callback_info info) {
     napi_create_string_utf8(env, "Space Vault", NAPI_AUTO_LENGTH, &name);
     if (napi_create_threadsafe_function(env, args[6], NULL, name, 1, 1, NULL, NULL, NULL, deliver, &p->callback) != napi_ok) goto error;
     p->session = space_vault_attach(view, scope, site, endpoint, setup, dark, p, finished);
+    if (!p->session) {
+        napi_release_threadsafe_function(p->callback, napi_tsfn_abort);
+        goto error;
+    }
     return handle;
 error:
     napi_throw_error(env, NULL, "Cannot attach the personal Vault.");

@@ -24,7 +24,7 @@ type AgentPage = { items: OutboundAgent[]; next_cursor?: string | null };
 const firstAgentPage: AgentPage & { cursors: string[] } = { items: [], cursors: [] };
 
 type ConnectionPreset = { name: string; url: string; showGuide?: boolean };
-type ConnectionsProps = { userId: string; suggested?: ConnectionPreset; onClose: () => void } | { workspaceId: string };
+type ConnectionsProps = { userId: string; onOpenVault?: () => void; suggested?: ConnectionPreset; onClose: () => void } | { workspaceId: string };
 
 function BrowserVaultSetup({ site, close }: { site: ConnectionPreset; close: () => void }) {
   const [busy, setBusy] = useState(false), [status, setStatus] = useState('');
@@ -154,13 +154,10 @@ function ConnectionSettings(props: ConnectionsProps) {
   const selected = items.find(item => item.id === access);
   const canManage = !revoked && (!workspace || role === 'manager');
   const content = <div className="space-connections">
-      {!workspace && !revoked && window.spaceDesktop?.openVault && <button type="button" onClick={async () => {
-        try {
-          const result = await window.spaceDesktop?.openVault?.(scopeId);
-          if (active.current && result === 'busy') setError('Your Vault is already open or in use.');
-          if (active.current && result === 'unavailable') setError('Could not open your personal Vault on this Mac.');
-        } catch { if (active.current) setError('Could not open your personal Vault on this Mac.'); }
-      }}>Open personal Vault</button>}
+      {!workspace && !revoked && <a href="/vault" onClick={event => {
+        if (!props.onOpenVault || event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return;
+        event.preventDefault(); props.onClose(); props.onOpenVault();
+      }}>Open personal Vault</a>}
       {workspace && <h2>Workspace MCP servers</h2>}
       {role === 'member' && !revoked && <p>Workspace owners and admins manage MCP servers for this workspace.</p>}
       {canManage && <><p className="space-connections-hint">Connect a remote MCP server using Streamable HTTP over public HTTPS, with a bearer token or no authentication. OAuth and local stdio servers are not supported.</p>

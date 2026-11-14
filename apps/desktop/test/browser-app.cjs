@@ -72,6 +72,9 @@ app.whenReady().then(async () => {
       assert.deepEqual(request, {action: 'web-list', platform: base, origin: base, actor});
       return {status: 'listed', items: [{title:'Linear',kind:'token',site:'https://linear.app'}], more:false};
     };
+    assert.deepEqual(await win.webContents.executeJavaScript("spaceDesktop.listVaultItems('someone-else')"), {status:'unavailable'});
+    assert.deepEqual(await win.webContents.executeJavaScript('spaceDesktop.listVaultItems(' + JSON.stringify(actor) + ')'),
+      {status:'listed',items:[{title:'Linear',kind:'token',site:'https://linear.app'}],more:false});
     assert.deepEqual(await win.spaceBrowser.webVault({action:'list', actor:vaultInstallation},signal), {status:'unavailable'});
     assert.equal((await win.spaceBrowser.webVault({action:'list',actor},signal)).status, 'listed');
     await win.webContents.executeJavaScript("spaceDesktop.browserAccountChanged(null)");
@@ -98,6 +101,8 @@ app.whenReady().then(async () => {
     assert.equal(await win.webContents.executeJavaScript("spaceDesktop.openVault('alice')"), 'busy');
     await win.webContents.executeJavaScript("spaceDesktop.browserAccountChanged(null)");
     assert.equal(await opened, 'closed');
+    // AppKit can surface the parent when presenting a sheet. Restore the headless fixture.
+    win.hide();
     testVault = async () => ({ status: 'cancelled' });
   }
   const created = once(app, 'web-contents-created');

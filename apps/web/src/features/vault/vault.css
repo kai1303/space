@@ -1,14 +1,33 @@
-.space-web-vault { display: grid; gap: var(--sp-space-4); color: var(--sp-text); }
-.space-web-vault p { margin: 0; color: var(--sp-text-secondary); }
-.space-web-vault label, .space-web-vault-actions, .space-web-vault li { display: flex; gap: var(--sp-space-2); align-items: center; }
+.space-vault-page { display: flex; flex: 1; min-width: 0; min-height: 0; flex-direction: column; background: var(--sp-surface); color: var(--sp-text); }
+.space-vault-header { display: flex; align-items: center; justify-content: space-between; flex: none; gap: 12px; min-height: 58px; padding: 10px clamp(16px, 3vw, 28px); border-bottom: 1px solid var(--sp-border); }
+.space-vault-header h1 { display: flex; align-items: center; gap: 10px; font-size: 19px; line-height: 1.25; margin: 0; }
+.space-vault-header h1 svg { color: var(--sp-text-secondary); }
+.space-web-vault { display: flex; flex: 1; min-height: 0; flex-direction: column; align-items: center; justify-content: safe center; gap: 16px; overflow: auto; padding: 28px clamp(16px, 4vw, 48px); }
+.space-web-vault > * { flex: none; max-width: 100%; }
+.space-web-vault > .sp-field { width: min(368px, 100%); }
+.space-web-vault p { margin: 0; line-height: 1.5; color: var(--sp-text-secondary); }
+.space-web-vault label, .space-web-vault-actions, .space-web-vault li { display: flex; gap: 8px; align-items: center; }
 .space-web-vault .sp-field > label { flex-direction: row; }
-.space-web-vault input[type="search"] { box-sizing: border-box; width: 100%; min-height: var(--sp-control-md); padding: 0 var(--sp-space-3); font: inherit; color: var(--sp-text); background: var(--sp-surface); border: 1px solid var(--sp-border-strong); border-radius: var(--sp-radius-sm); }
-.space-web-vault ul { list-style: none; max-height: min(32vh, 320px); overflow: auto; padding: 0; margin: var(--sp-space-2) 0; }
-.space-web-vault li { padding: var(--sp-space-2); border-bottom: 1px solid var(--sp-border); overflow-wrap: anywhere; }
-.space-web-vault li svg { flex-shrink: 0; color: var(--sp-accent); }
-.space-web-vault small { display: block; color: var(--sp-text-secondary); }
-.space-web-vault-unlock, .space-web-vault-list { display: grid; gap: var(--sp-space-3); min-width: 0; }
-.space-web-vault-unlock > svg { box-sizing: content-box; padding: 10px; border-radius: var(--sp-radius-md); color: var(--sp-accent); background: var(--sp-accent-soft); }
-.space-web-vault-unlock h3 { margin: 0; font-size: 20px; }
-.space-web-vault-unlock > button { justify-self: start; }
+.space-web-vault-unlock { display: grid; justify-items: center; text-align: center; gap: 12px; width: min(380px, 100%); }
+.space-web-vault-unlock > svg { box-sizing: content-box; padding: 15px; color: var(--sp-accent); background: var(--sp-accent-soft); border-radius: 16px; }
+.space-web-vault h2 { margin: 0; font-size: 22px; line-height: 1.25; }
+.space-web-vault-unlock > button { margin-top: 6px; }
+.space-web-vault.is-unlocked { justify-content: flex-start; align-items: stretch; padding-block: 12px 24px; }
+.space-web-vault-list { display: grid; gap: 16px; min-width: 0; }
 .space-web-vault-list .sp-tabs { overflow-x: auto; }
+.space-web-vault input[type="search"] { box-sizing: border-box; width: min(100%, 440px); min-height: var(--sp-control-md); padding: 0 12px; font: inherit; color: var(--sp-text); background: var(--sp-surface); border: 1px solid var(--sp-border-strong); border-radius: var(--sp-radius-sm); }
+.space-web-vault ul { list-style: none; padding: 0; margin: 0; }
+.space-web-vault li { gap: 12px; padding: 0; border-bottom: 1px solid var(--sp-border); overflow-wrap: anywhere; }
+.space-web-vault li svg { flex: none; box-sizing: content-box; padding: 8px; border-radius: var(--sp-radius-md); color: var(--sp-accent); background: var(--sp-accent-soft); }
+.space-web-vault small { display: block; color: var(--sp-text-secondary); }
+
+.space-vault-editor { display: grid; gap: 16px; width: min(100%, 420px); align-self: center; }
+.space-vault-editor .sp-input { width: 100%; box-sizing: border-box; }
+
+.space-vault-list-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.space-vault-row { display: flex; align-items: center; gap: 12px; width: 100%; padding: 12px 8px; color: inherit; background: transparent; font: inherit; text-align: left; border: 0; cursor: pointer; }
+.space-vault-row:hover, .space-vault-row:focus-visible { background: var(--sp-surface-raised); }
+.space-vault-editor { padding-block: 16px; }
+.space-vault-editor dl { margin: 0; overflow-wrap: anywhere; }
+.space-vault-editor dt { color: var(--sp-text-secondary); font-size: 13px; }
+.space-vault-editor dd { margin: 3px 0 14px; }

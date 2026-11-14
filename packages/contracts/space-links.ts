@@ -78,7 +78,7 @@ export function workspacePath(id: string) {
 }
 
 export function workspaceIdFromPath(path: string) {
-  const match = /^\/w\/(~?)([A-Za-z0-9_-]{21}[AQgw])(?:\/(?:activity|dms|spacebot|files|todos|agents|threads|huddles|drafts|saved|directories))?\/?$/.exec(path);
+  const match = /^\/w\/(~?)([A-Za-z0-9_-]{21}[AQgw])(?:\/(?:activity|dms|spacebot|files|todos|agents|threads|huddles|drafts|saved|directories|vault))?\/?$/.exec(path);
   if (!match || (!match[1] && slugShape.test(match[2]!))) return undefined;
   return expand(match[2]!);
 }

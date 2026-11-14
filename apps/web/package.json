@@ -24,6 +24,7 @@
     "@tanstack/react-virtual": "3.14.25",
     "better-auth": "1.7.15",
     "gsap": "^3.15.1",
+    "jose": "6.2.15",
     "livekit-client": "2.23.0",
     "lottie-web": "5.13.0",
     "motion": "^14.9.0",

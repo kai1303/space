@@ -26,7 +26,7 @@ function openVault(resources, { platform, actor, ...request }, signal) {
   const scope = vaultScope(platform, actor);
   return new Promise((resolve, reject) => {
     const child = execFile(join(resources, 'space-vault'), [], {
-      signal, timeout: 90000, maxBuffer: request.action === 'web-list' ? 8 * 1024 * 1024 : 32768, env: { PATH: '/usr/bin:/bin', HOME: process.env.HOME },
+      signal, timeout: 90000, maxBuffer: ['web-list','list-items'].includes(request.action) ? 8 * 1024 * 1024 : 32768, env: { PATH: '/usr/bin:/bin', HOME: process.env.HOME },
     }, (error, output) => {
       if (!error) try { return resolve(JSON.parse(output)); } catch {}
       reject(new Error('Vault unavailable.'));

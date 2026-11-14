@@ -57,14 +57,12 @@ struct VaultButtonStyle: ButtonStyle {
 struct VaultPageHeader: View {
     let back: () -> Void
     var body: some View {
-        HStack(spacing: 12) {
-            Button(action: back) { Label("Back to Space", systemImage: "chevron.left") }
-                .buttonStyle(.plain).foregroundColor(VaultStyle.sidebarText)
-            Divider().frame(height: 20)
-            Label("Vault", systemImage: "lock").font(VaultStyle.font(18, bold: true))
+        HStack(spacing: 10) {
+            Label("Manage items on Mac", systemImage: "lock").font(VaultStyle.font(19, bold: true))
             Spacer()
-        }.font(VaultStyle.font()).padding(.horizontal, 20).frame(height: 48)
-            .foregroundColor(VaultStyle.text).background(VaultStyle.sidebar)
+            Button("Done", action: back).buttonStyle(VaultButtonStyle(compact: true)).keyboardShortcut(.cancelAction)
+        }.padding(.horizontal, 20).frame(height: 54)
+            .foregroundColor(VaultStyle.text).background(VaultStyle.surface)
             .overlay(alignment: .bottom) { Rectangle().fill(VaultStyle.border).frame(height: 1) }
     }
 }

@@ -22,7 +22,8 @@ import { ConversationListContext, PHONE_QUERY, usePhoneLayout } from '../../shar
 // The address the app was opened with, before it restores the last conversation. A deep link keeps its conversation.
 let launchList = typeof window !== 'undefined' && ['/', '/chat'].includes(window.location.pathname);
 
-export function ChatShell({ renderPreview, notificationDelivery, onNavigate, activeDestination, adminItems, onActivity, activityActive = false, notificationCount = 0, onHome, onDirectMessages, directMessagesActive = false, name, user, userId, onNameChange, onSearch, onMembers, workspaces = [], workspace = '', onWorkspaceChange, onCreateWorkspace, sidebarWidth = 220, onBack, onForward, history = [], activity, children }: {
+export function ChatShell({ onOpenVault, renderPreview, notificationDelivery, onNavigate, activeDestination, adminItems, onActivity, activityActive = false, notificationCount = 0, onHome, onDirectMessages, directMessagesActive = false, name, user, userId, onNameChange, onSearch, onMembers, workspaces = [], workspace = '', onWorkspaceChange, onCreateWorkspace, sidebarWidth = 220, onBack, onForward, history = [], activity, children }: {
+  onOpenVault?: () => void;
   renderPreview?: RailProps['renderPreview'];
   notificationDelivery?: {workspace:string;channel?:string;onOpen:(item:NotificationItem)=>void};
   onNavigate?: (destination: RailDestination) => void;
@@ -171,7 +172,7 @@ export function ChatShell({ renderPreview, notificationDelivery, onNavigate, act
         : window.spaceDesktop?.openBrowser && <IconButton label="Open browser" onClick={() => window.spaceDesktop?.openBrowser?.()}><Globe size={19}/></IconButton>}{activity}<a className="chat-system-link" href="/design-system" aria-label="Open design system"><BookOpen size={19} /></a></div>
     </header>
     {/* Phones: your picture sits at the right end of the Home header, as in Slack. */}
-    {phone && <div className="chat-phone-account"><UserSettings workspace={workspace} user={user} userId={userId} onNameChange={onNameChange} /></div>}
+    {phone && <div className="chat-phone-account"><UserSettings onOpenVault={onOpenVault} workspace={workspace} user={user} userId={userId} onNameChange={onNameChange} /></div>}
     <div className="chat-body">
       <LayoutGroup id={railId}><nav className={`chat-rail${moreOpen ? ' chat-rail--more-open' : ''}`} aria-label="Main navigation" onClick={event => {
         // Choosing a destination from the More sheet closes it; Admin opens its own menu in place.
@@ -193,7 +194,7 @@ export function ChatShell({ renderPreview, notificationDelivery, onNavigate, act
           <IconButton className="chat-theme-toggle" label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} theme`} onClick={event => toggleTheme(event.currentTarget)}>
             {theme === 'dark' ? <Sun size={21} /> : <Moon size={21} />}
           </IconButton>
-          {!phone && <UserSettings workspace={workspace} user={user} userId={userId} onNameChange={onNameChange} />}
+          {!phone && <UserSettings onOpenVault={onOpenVault} workspace={workspace} user={user} userId={userId} onNameChange={onNameChange} />}
         </div>
       </nav></LayoutGroup>
       <div className="chat-main-area" onClick={event => {

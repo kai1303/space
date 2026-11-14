@@ -10,6 +10,11 @@ declare global {
       onClose(fn: (close: () => void) => void): () => void;
     };
     spaceDesktop?: {
+      vaultItemRequest?(actor:string, change?:import('@space/contracts').VaultChange): Promise<import('@space/contracts').VaultPage | import('@space/contracts').VaultChangeResult>;
+      saveLinearToken?(actor: string, title: string, token: string): Promise<import('@space/contracts').WebVaultResult>;
+      listVaultItems?(actor: string): Promise<import('@space/contracts').WebVaultResult>;
+      onVaultLocked?(fn: () => void): () => void;
+      onVaultPage?(fn: () => void): () => void;
       openVault?(actor: string): Promise<string>;
       saveBrowserVaultToken?(endpoint: string): Promise<string>;
       onBrowserMcpSetup?(fn: (site: {name: string; url: string; showGuide?: boolean; actor: string}) => void): () => void;

@@ -1,7 +1,20 @@
 const { contextBridge, ipcRenderer } = require('electron');
 if (process.isMainFrame) contextBridge.exposeInMainWorld('spaceDesktop', {
   browserAccountChanged: id => ipcRenderer.send('space-browser-account', id),
-  ...(process.platform === 'darwin' && { openVault: actor => ipcRenderer.invoke('space-vault-open', actor), saveBrowserVaultToken: endpoint => ipcRenderer.invoke('space-browser-save-token', endpoint) }),
+  ...(process.platform === 'darwin' && { listVaultItems: actor => ipcRenderer.invoke('space-vault-items', actor),
+    vaultItemRequest: (actor, change) => ipcRenderer.invoke('space-vault-item-request', actor, change),
+    saveLinearToken: (actor, title, token) => ipcRenderer.invoke('space-vault-save-linear', actor, title, token),
+    onVaultLocked: fn => {
+      const handler = () => fn();
+      ipcRenderer.on('space-vault-locked', handler);
+      return () => ipcRenderer.removeListener('space-vault-locked', handler);
+    },
+    onVaultPage: fn => {
+      const handler = () => fn();
+      ipcRenderer.on('space-vault-page', handler);
+      return () => ipcRenderer.removeListener('space-vault-page', handler);
+    },
+    openVault: actor => ipcRenderer.invoke('space-vault-open', actor), saveBrowserVaultToken: endpoint => ipcRenderer.invoke('space-browser-save-token', endpoint) }),
   onBrowserMcpSetup: fn => {
     const handler = (_event, site) => fn(site);
     ipcRenderer.on('space-browser-connect-mcp', handler);

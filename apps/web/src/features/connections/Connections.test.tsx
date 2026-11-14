@@ -97,14 +97,13 @@ it('prefills a suggested personal MCP and waits for the user to provide credenti
   expect(writes.map(([url]) => url)).toEqual(['/v1/me/connections']);
   expect(JSON.parse(writes[0][1]!.body as string)).toMatchObject(site);
 });
-it('opens the signed-in user’s native Vault from personal Connections', async () => {
-  const fetcher = setup();
-  const openVault = vi.fn(async () => 'closed');
-  vi.stubGlobal('spaceDesktop', { openVault });
-  render(<Connections userId="user" onClose={() => {}}/>);
-  await userEvent.click(await screen.findByRole('button', { name: 'Open personal Vault' }));
-  expect(openVault).toHaveBeenCalledWith('user');
-  expect(fetcher.mock.calls.every(([, opts]) => opts?.method === 'GET')).toBe(true);
+it('navigates from personal Connections to the Vault subpage', async () => {
+  setup();
+  const open = vi.fn(), close = vi.fn();
+  render(<Connections userId="user" onClose={close} onOpenVault={open}/>);
+  await userEvent.click(await screen.findByRole('link', {name:'Open personal Vault'}));
+  expect(close).toHaveBeenCalledOnce();
+  expect(open).toHaveBeenCalledOnce();
 });
 it('hands a Mac browser credential to native Vault without a web password field or server write', async () => {
   const fetcher = setup();

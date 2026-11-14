@@ -98,9 +98,9 @@ if (!app.requestSingleInstanceLock()) {
         openWindow();
         if (win.webContents.isLoadingMainFrame()) await require('node:events').once(win.webContents, 'did-finish-load');
         if (!win || win.isDestroyed()) return;
-        const status = await win.spaceBrowser.showVault();
-        if (status === 'busy') void dialog.showMessageBox({ message: 'Your Vault is already open or in use.' });
-        if (status === 'unavailable') void dialog.showMessageBox({ message: 'Could not open your personal Vault.', detail: 'Sign in to Space Desktop and try again.' });
+        win.spaceBrowser.hide();
+        if (new URL(win.webContents.getURL()).origin === new URL(url).origin)
+          win.webContents.send('space-vault-page');
       } }] : []), { label: 'New Browser Tab', accelerator: 'CmdOrCtrl+T', click: () => {
         if (!win || win.isDestroyed()) openWindow();
         void win.spaceBrowser.open(true);

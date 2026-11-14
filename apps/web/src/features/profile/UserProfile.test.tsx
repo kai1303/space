@@ -34,16 +34,14 @@ it('opens the personal Vault directly below Profile on desktop', async () => {
   await userEvent.click(screen.getByRole('button', { name: 'Your account' }));
   const entry = await screen.findByRole('menuitem', { name: 'Vault' });
   expect(entry.previousElementSibling?.textContent).toBe('Profile');
-  await userEvent.click(entry);
-  expect(openVault).toHaveBeenCalledWith(profile.id);
-  expect(screen.queryByRole('menuitem', { name: 'Vault' })).toBeNull();
+  expect(entry.getAttribute('href')).toBe('/vault');
+  expect(openVault).not.toHaveBeenCalled();
 });
-it('opens the web Vault for the signed-in user', async () => {
-  const fetcher = setup();
-  fetcher.mockImplementation(async url => ({ok: true, json: async () => String(url).endsWith('/vault/macs') ? [] : profile}));
-  await open('Vault');
-  expect(await screen.findByText(/Pair a local agent in Space Desktop/)).toBeTruthy();
-  expect(screen.getByRole('dialog', {name: 'Vault'})).toBeTruthy();
+it('links to the personal Vault page on the web', async () => {
+  setup();
+  await userEvent.click(screen.getByRole('button', { name: 'Your account' }));
+  const vault = await screen.findByRole('menuitem', { name: 'Vault' });
+  expect(vault.getAttribute('href')).toBe('/vault');
 });
 it('edits and persists a profile, then displays the saved name', async () => {
   const fetcher = setup();

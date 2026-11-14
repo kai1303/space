@@ -8,6 +8,7 @@ struct Item: Codable {
     let secret: String
     let kind: String
     let endpoint: String?
+    var version: UUID? = nil
 }
 enum Failure: Error { case unavailable }
 func readItems(_ query: [String: Any]) throws -> [Item] {
@@ -44,16 +45,25 @@ struct VaultEntry: Identifiable {
     let id: UUID
     let origin, label, username, kind: String
     let endpoint: String?
+    let version: UUID
+    var metadata: [String:String] {
+        var result = ["id":id.uuidString.lowercased(), "version":version.uuidString.lowercased(),
+                      "site":origin, "title":label, "kind":kind]
+        if isToken { result["endpoint"] = endpoint } else { result["username"] = username }
+        return result
+    }
     var isToken: Bool { kind == "token" }
     var category: String { isToken ? "API token" : "Login" }
     var icon: String { isToken ? "terminal" : "key.fill" }
     init(_ item: Item, origin: String) {
-        id = item.id; self.origin = origin; label = item.label
+        id = item.id; version = item.version ?? item.id; self.origin = origin; label = item.label
         username = item.username; kind = item.kind; endpoint = item.endpoint
     }
 }
 
 struct VaultIssue: LocalizedError {
+    static let stale = VaultIssue("This item changed. Unlock again to load the latest version.")
+    static let duplicate = VaultIssue("An item with this title already exists for this website.")
     let errorDescription: String?
     init(_ message: String) { errorDescription = message }
 }
@@ -81,10 +91,14 @@ struct VaultStore {
         return item.secret
     }
 
-    func remove(_ entry: VaultEntry) throws {
+    func remove(_ entry: VaultEntry, expectedVersion: UUID? = nil) throws {
         let query = vaultQuery(scope, origin: entry.origin)
         var items = try readItems(query)
-        guard let index = items.firstIndex(where: { $0.id == entry.id }) else { return }
+        guard let index = items.firstIndex(where: { $0.id == entry.id }) else {
+            if expectedVersion != nil { throw VaultIssue.stale }
+            return
+        }
+        if let expectedVersion, (items[index].version ?? items[index].id) != expectedVersion { throw VaultIssue.stale }
         items.remove(at: index)
         if items.isEmpty {
             let status = SecItemDelete(query as CFDictionary)
@@ -92,14 +106,17 @@ struct VaultStore {
         } else { try saveItems(items, query) }
     }
 
-    func save(_ draft: VaultDraft) throws -> UUID {
+    func save(_ draft: VaultDraft, expectedVersion: UUID? = nil) throws -> UUID {
         let name = draft.label.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty, name.count <= 100 else { throw VaultIssue("Enter a title of up to 100 characters.") }
         let origin = try VaultDraft.site(draft.website)
-        let endpoint = draft.token ? try VaultDraft.server(draft.endpoint) : nil
+        let endpoint = draft.token && !draft.endpoint.isEmpty ? try VaultDraft.server(draft.endpoint) : nil
         let query = vaultQuery(scope, origin: origin)
         var items = try readItems(query)
         let index = items.firstIndex { $0.id == draft.id }
+        if let expectedVersion {
+            guard let index, (items[index].version ?? items[index].id) == expectedVersion else { throw VaultIssue.stale }
+        }
         guard !draft.editing || index != nil else { throw VaultIssue("This item is no longer available.") }
         guard index != nil || items.count < 32 else { throw VaultIssue("This website already has 32 saved items.") }
         let username = draft.token ? "" : draft.username
@@ -109,9 +126,9 @@ struct VaultStore {
         guard !secret.isEmpty, secret.utf8.count <= 4096 else { throw VaultIssue("Enter a password or token of up to 4096 bytes.") }
         let kind = draft.token ? "token" : "login"
         guard !items.contains(where: { $0.id != draft.id && $0.label == name && $0.kind == kind && $0.endpoint == endpoint }) else {
-            throw VaultIssue("An item with this title already exists for this website.")
+            throw VaultIssue.duplicate
         }
-        let item = Item(id: draft.id, label: name, username: username, secret: secret, kind: kind, endpoint: endpoint)
+        let item = Item(id: draft.id, label: name, username: username, secret: secret, kind: kind, endpoint: endpoint, version: UUID())
         if let index { items[index] = item } else { items.append(item) }
         try saveItems(items, query)
         return draft.id

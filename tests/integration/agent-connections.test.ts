@@ -77,6 +77,14 @@ test('web Vault sends only owner requests to the current Mac and filters replies
   await api(owner.owner_token,'POST',path,{action:'list'},502);
   socket.once('vault.request', (_, ack) => ack({status:'opened'}));
   assert.deepEqual(await api(owner.owner_token,'POST',path,{action:'manage'}), {status:'opened'});
+  await api(owner.owner_token,'POST',path,{action:'save-linear',token:'fixture'},400);
+  await api(other.owner_token,'POST',path,{action:'prepare-linear'},404);
+  const sealed = 'header..' + 'i'.repeat(16) + '.ciphertext.' + 'a'.repeat(22);
+  socket.once('vault.request', (input, ack) => {
+    assert.equal(input.action,'save-linear'); assert.equal(input.sealed,sealed); assert.equal(input.transfer,cursor);
+    ack({status:'saved',item});
+  });
+  assert.deepEqual(await api(owner.owner_token,'POST',path,{action:'save-linear',transfer:cursor,sealed}), {status:'saved',item});
   const replacement = await connect(credential);
   assert.deepEqual(await api(owner.owner_token, 'GET', '/me/vault/macs'), []);
   await api(owner.owner_token, 'POST', path, {action:'list'},404);
