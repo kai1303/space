@@ -522,7 +522,7 @@ it('extends the same agent conversation with selected context instead of replaci
  expect(selected.compareDocumentPosition(request)&Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
  expect(screen.getByRole('button',{name:'Close agent session'})).toBeTruthy();
  expect(screen.getByRole('tablist',{name:'Session views'})).toBeTruthy();
- expect(screen.getByRole('textbox',{name:'Message agent session'})).toBeTruthy();
+ expect(await screen.findByRole('textbox',{name:'Message agent session'})).toBeTruthy();
  expect(screen.getAllByRole('log',{name:'Session conversation'})).toHaveLength(1);
 });
 

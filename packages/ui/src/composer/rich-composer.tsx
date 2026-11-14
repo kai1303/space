@@ -149,6 +149,7 @@ export function RichComposer({
   callbacks.current = { onDraftChange, onAttachmentsChange, onSend, onSchedule };
   const initial = useRef(draftValue === undefined ? defaultValue : draftValue);
   const restoreOnFocus = useRef(false);
+  const editRevision = useRef(0);
   const liveKey = useRef(draftValue === undefined ? undefined : conversationKey);
   const seenDraft = useRef(draftValue);
   const deferredDraft = useRef<RichDocument | null | undefined>(undefined);
@@ -510,6 +511,7 @@ export function RichComposer({
         });
         setText(q.getText());
         const change = () => {
+          editRevision.current++;
           // The committed IME change is the newest local edit.
           deferredDraft.current = undefined;
           setText(q.getText());
@@ -737,8 +739,10 @@ export function RichComposer({
             if (restoreOnFocus.current) {
               const range = selection.current;
               const version = generation.current;
+              const revision = editRevision.current;
               queueMicrotask(() => {
-                if (editor.current === q && generation.current === version && q.hasFocus()) q.setSelection(range, "silent");
+                // A toolbar action can focus the editor and insert text before this runs.
+                if (editor.current === q && generation.current === version && editRevision.current === revision && q.hasFocus()) q.setSelection(range, "silent");
               });
             }
             restoreOnFocus.current = false;
