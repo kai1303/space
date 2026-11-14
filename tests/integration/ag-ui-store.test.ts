@@ -134,6 +134,9 @@ test('an installed persistent backend opens a task session, publishes results an
   await foundation.grant(seed.owner_id,installation.id,{channel_id:seed.channel_id,skill:'ag-ui.run'});
   const task = await store.createTask(seed.owner_id,{workspace_id:seed.workspace_id,thread_id:seed.thread_id,installation_id:installation.id,skill:'ag-ui.run',goal:'Review the release'},randomUUID());
   const approved = await store.approveTask(seed.owner_id,task.id);
+  const context = {repository:{label:'example/project',url:'https://github.com/example/project'},base_branch:'main',head_branch:'release'};
+  const plan = {key:'plan',name:'Plan',type:'canvas',content:'# Plan'};
+  const preview = {key:'coverage',name:'Coverage',type:'html',content:'<h1>Coverage</h1>'};
   const server = createServer(async (req,res) => {
     let body=''; for await (const chunk of req) body+=chunk;
     const {runId,threadId}=JSON.parse(body);
@@ -141,7 +144,10 @@ test('an installed persistent backend opens a task session, publishes results an
     for (const data of [
       {type:'RUN_STARTED',runId,threadId},
       {type:'CUSTOM',name:'space.session.open',value:{}},
-      {type:'CUSTOM',name:'space.session.outputs',value:{files:[],changes:[{path:'README.md',patch:'@@ -1 +1 @@\n-old\n+release'}],actions:[{label:'Open pull request',url:'https://github.com/example/project/pull/12'}]}},
+      {type:'CUSTOM',name:'space.session.outputs',value:{context,views:[plan,preview],files:[],changes:[{path:'README.md',patch:'@@ -1 +1 @@\n-old\n+release'}],actions:[{label:'Open pull request',url:'https://github.com/example/project/pull/12'}]}},
+      {type:'CUSTOM',name:'space.session.setView',value:{...plan,content:'# Final plan'}},
+      {type:'CUSTOM',name:'space.session.removeView',value:{key:'coverage'}},
+      {type:'CUSTOM',name:'space.session.setView',value:{key:'checks',name:'Checks',type:'blocks',blocks:[]}},
       {type:'TEXT_MESSAGE_CHUNK',messageId:'m',role:'assistant',delta:'Ready for review'},
       {type:'CUSTOM',name:'space.session.archive',value:{}},
       {type:'RUN_FINISHED',runId,threadId}
@@ -155,13 +161,15 @@ test('an installed persistent backend opens a task session, publishes results an
     await deliverOne(store,[{id:backend.id,discover:()=>backend.discover(),
       invoke:(input,emit,signal)=>backend.invoke(input,async raw=>{
         await emit(raw);
-        if ((raw as AgentEvent).payload.session_lifecycle==='archive') await emit(raw);
+        if ((raw as AgentEvent).payload.session_lifecycle==='archive' || (raw as AgentEvent).payload.session_view) await emit(raw);
       },signal)}]);
     assert.equal((await store.readTask(seed.owner_id,task.id)).status,'completed');
     assert.equal((await pool.query('SELECT state FROM outbox WHERE task_id=$1',[task.id])).rows[0]?.state,'done');
     const detail=await new AgentSessionStore(pool).read(seed.owner_id,approved.session_id!);
     assert.equal(detail.session.state,'ended'); assert.equal(detail.outputs?.changes[0]?.path,'README.md');
     assert.equal(detail.outputs?.actions?.[0]?.label,'Open pull request');
+    assert.deepEqual(detail.outputs?.context,context);
+    assert.deepEqual(detail.outputs?.views,[{...plan,content:'# Final plan'},{key:'checks',name:'Checks',type:'blocks',blocks:[]}]);
     const {items}=await readSessionReports(store.db,seed.collaborator_id,seed.channel_id,{threads:[seed.thread_id,foreign.thread_id]});
     assert.equal(items.length,1); assert.equal(items[0]?.id,approved.session_id); assert.equal(items[0]?.source_message_id,source.id); assert.equal(items[0]?.result,'Ready for review');
     assert.equal(items[0]?.artifact,'changes'); assert.equal(items[0]?.status,'archived');

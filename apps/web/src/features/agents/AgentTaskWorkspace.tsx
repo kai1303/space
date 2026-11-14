@@ -1,10 +1,10 @@
 import { subscribeUpdates } from '../../shared/realtime/live-updates.js';
-import { useEffect, useId, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
+import { Fragment, useEffect, useId, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { patchLines, usePatchReview, type SubmitReview } from './PatchReview.js';
 import type { Task, TaskStatus, AgentSessionOutputs } from '@space/contracts';
 import { Badge, Button, IconButton, SidePanel, Tabs, type Tone } from '@space/ui/primitives';
 import { CodeBlock } from '@space/ui/rich-text';
-import { ArrowClockwise, ArrowSquareOut, Clock, Code, Desktop, DownloadSimple, FileCode, Files, Globe, Lightning, ListChecks, X } from '@phosphor-icons/react';
+import { ArrowClockwise, ArrowSquareOut, Clock, Code, Desktop, DownloadSimple, FileCode, Files, GitBranch, Globe, Lightning, X } from '@phosphor-icons/react';
 import { request } from '../../shared/api/request.js';
 import './agent-task-workspace.css';
 
@@ -70,7 +70,7 @@ export function AgentWorkspaceView({ task, outputs, channelName, example = false
     <div className="agent-workspace-content" role="tabpanel" id={`${id}-${tab}`} aria-label={tabs.find(item => item.id === tab)?.label} tabIndex={0}>
       {tab === 'preview' && <TaskPreview key={outputs?.preview?.url ?? 'preview'} preview={outputs?.preview} />}
       {tab === 'files' && <TaskFiles files={files} />}
-      {tab === 'changes' && <TaskChanges changes={changes} />}
+      {tab === 'changes' && <TaskChanges changes={changes} baseBranch={outputs?.context?.base_branch} headBranch={outputs?.context?.head_branch} />}
 
     </div>
     <footer className="agent-workspace-footer"><span><span className={task.status === 'running' ? 'is-live' : ''} />{example ? 'Sample data · no agent is executing' : refreshing ? 'Updating task…' : 'Saved task activity'}</span><span>{task.id.slice(0, 8)}</span></footer>
@@ -106,25 +106,55 @@ export function TaskFiles({ files }: { files: TaskOutputs['files'] }) {
   const filename = file?.path.split('/').at(-1) ?? 'output.txt';
   return <div className="agent-files"><div className="agent-files-list"><input type="search" aria-label="Search task files" placeholder="Find a file…" value={query} onChange={event => setQuery(event.target.value)} /><nav aria-label="Task files">{visible.map(item => <button type="button" key={item.path} aria-current={file?.path === item.path ? 'true' : undefined} onClick={() => { setSelected(item.path); setError(''); }}><FileCode size={16} /><span>{item.path}</span></button>)}</nav></div>{file ? <div className="agent-file-view"><div className="agent-file-header"><strong>{file.path}</strong><Button size="sm" onClick={() => { try { downloadText(filename, file.content); } catch { setError('Could not download this file. Try again.'); } }} aria-label={`Download ${filename}`}><DownloadSimple size={15} /> Download</Button></div>{error && <p role="alert">{error}</p>}<CodeBlock code={file.content} language={file.language ?? 'text'} /></div> : <EmptyOutput icon={<Files size={28} />} title="No matching files">Try a different filename.</EmptyOutput>}</div>;
 }
-export function TaskChanges({ changes, onReview }: { changes: TaskOutputs['changes']; onReview?: SubmitReview }) {
+export function TaskChanges({ changes, baseBranch, headBranch, onReview }: {
+  changes: TaskOutputs['changes']; baseBranch?: string; headBranch?: string; onReview?: SubmitReview;
+}) {
   const review = usePatchReview(onReview);
-  const files = useMemo(() => changes.map(({path, patch}) => ({path, patch, lines: patchLines(patch)})), [changes]);
-  const [lineLimits, setLineLimits] = useState<Record<string,number>>({});
-  if (!changes.length && !review.editor) return <EmptyOutput icon={<Code size={28} />} title="No code changes attached">Code changes will appear here when an agent supplies a diff.</EmptyOutput>;
+  const [selectedPath, setSelectedPath] = useState('');
+  const [lineLimits, setLineLimits] = useState<Record<string, number>>({});
+  const file = changes.find(item => item.path === selectedPath) ?? changes[0];
+  const lines = useMemo(() => file ? patchLines(file.patch) : [], [file?.patch]);
+  if (!file && !review.editor && !review.summary) return <EmptyOutput icon={<Code size={28} />} title="No code changes attached">Code changes will appear here when an agent supplies a diff.</EmptyOutput>;
+  const limit = file ? lineLimits[file.path] ?? 120 : 0;
+  const inline = file && review.anchor?.path === file.path && review.anchor.patch === file.patch && review.anchor.index < limit;
   return <div className="agent-changes">
-    <div className="agent-changes-heading"><ListChecks size={17}/><strong>{changes.length} {changes.length === 1 ? 'file' : 'files'} changed</strong></div>
-    {review.editor}
-    {files.map(({path, patch, lines}) => {
-      const limit = lineLimits[path] ?? 120;
-      return <details key={path} open><summary><FileCode size={16}/><strong>{path}</strong>
-        <span className="agent-diff-added">+{lines.filter(({line}) => line.startsWith('+') && !line.startsWith('+++')).length}</span>
-        <span className="agent-diff-removed">−{lines.filter(({line}) => line.startsWith('-') && !line.startsWith('---')).length}</span>
-      </summary><pre aria-label={`Changes in ${path}`}>{lines.slice(0,limit).map(({line, index, location}) =>
-        <span key={index} className={line.startsWith('+') && !line.startsWith('+++') ? 'agent-diff-added' : line.startsWith('-') && !line.startsWith('---') ? 'agent-diff-removed' : line.startsWith('@@') ? 'agent-diff-context' : ''}>
-          {onReview && <button className="agent-diff-comment" type="button" disabled={review.disabled}
-            aria-label={`Comment on ${path}, ${location}`} onClick={() => review.select({path, patch, index, location, line})}>+</button>}{line}
-        </span>)}</pre>{limit < lines.length && <Button size="sm" variant="ghost" onClick={() => setLineLimits(current => ({...current, [path]:limit + 120}))}>Show more lines in {path}</Button>}</details>;
-    })}
+    <header className="agent-changes-heading">
+      <Code size={18} aria-hidden="true"/><strong>{changes.length} {changes.length === 1 ? 'file' : 'files'} changed</strong>
+      {(baseBranch || headBranch) && <div className="agent-diff-branches" aria-label="Branch comparison">
+        <GitBranch size={15} aria-hidden="true"/>
+        {baseBranch && <code title={`Base branch ${baseBranch}`}>{baseBranch}</code>}
+        {baseBranch && headBranch && <span aria-hidden="true">←</span>}
+        {headBranch && <code title={`Head branch ${headBranch}`}>{headBranch}</code>}
+      </div>}
+    </header>
+    {review.summary}
+    {!inline && review.editor}
+    {file && <div className="agent-diff-review">
+      {changes.length > 1 && <nav className="agent-diff-paths" aria-label="Changed files">
+        {changes.map(item => <button type="button" key={item.path} title={item.path}
+          aria-current={item.path === file.path ? 'true' : undefined} onClick={() => setSelectedPath(item.path)}>
+          <FileCode size={15} aria-hidden="true"/><span>{item.path}</span>
+        </button>)}
+      </nav>}
+      <section className="agent-diff-file" aria-label={`Changes in ${file.path}`}>
+        <header><FileCode size={16} aria-hidden="true"/><strong>{file.path}</strong>
+          <span className="agent-diff-added">+{lines.filter(item => item.kind === 'added').length}</span>
+          <span className="agent-diff-removed">−{lines.filter(item => item.kind === 'removed').length}</span>
+        </header>
+        <div className="agent-diff-lines" tabIndex={0} aria-label={`Patch for ${file.path}`}>
+          {lines.slice(0, limit).map(({line, index, location, kind, oldNumber, newNumber}) => <Fragment key={index}>
+            <div className={`agent-diff-line agent-diff-line--${kind}`}>
+              <span className="agent-diff-number" aria-hidden="true">{oldNumber}</span><span className="agent-diff-number" aria-hidden="true">{newNumber}</span>
+              {onReview && <button className="agent-diff-comment" type="button" disabled={review.disabled}
+                aria-label={`Comment on ${file.path}, ${location}`} onClick={() => review.select({path:file.path, patch:file.patch, index, location, line})}>+</button>}
+              <code>{line}</code>
+            </div>
+            {inline && review.anchor?.index === index && review.editor}
+          </Fragment>)}
+        </div>
+        {limit < lines.length && <Button size="sm" variant="ghost" onClick={() => setLineLimits(current => ({...current, [file.path]:limit + 120}))}>Show more lines in {file.path}</Button>}
+      </section>
+    </div>}
   </div>;
 }
 

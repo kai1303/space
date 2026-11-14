@@ -6,6 +6,8 @@ import type { AgentResponse } from './agent-response.js';
 export interface MessageReaction { emoji: string; count: number; user_ids: string[] }
 export interface MessageAgentSession { id: string; title: string; agent_name: string }
 export interface ChatMessage {
+  viewer_saved?: boolean;
+  channel_broadcast_sequence?: string;
   encrypted?: import('./encrypted-dm.js').EncryptedDm;
   agent_sessions?: MessageAgentSession[];
   agent_session_id?: string | null;
@@ -18,10 +20,14 @@ export interface ChatMessage {
   sequence?: string;
   thread_root_id?: string;
   reply_count?: number;
+  reply_summary?: {
+    count: number; participant_count: number; revision: string; last_reply_at: string | null;
+    participants: ChatMessage['author'][];
+  };
   document?: RichDocument | null;
   agent_response?: AgentResponse | null;
   attachments?: AssetAttachment[];
-  author: { kind: 'human' | 'agent' | 'app' | 'workflow'; id: string; name: string };
+  author: { kind: 'human' | 'agent' | 'app' | 'workflow'; id: string; name: string; image?: string | null };
 }
 export const defaultChannelTabOrder = ['files', 'pins', 'memory', 'navigator'] as const;
 export type ManagedChannelTab = (typeof defaultChannelTabOrder)[number];
@@ -58,7 +64,8 @@ export function chatCursor(value: unknown = '0'): string {
   return value;
 }
 export function parseMessageInput(input: unknown) {
-  const v = record(input, ['client_message_id', 'thread_id', 'text', 'document', 'asset_ids', 'asset_descriptions', 'broadcast_confirmed']);
+  const v = record(input, ['client_message_id', 'thread_id', 'text', 'document', 'asset_ids', 'asset_descriptions', 'broadcast_confirmed', 'also_send_to_channel']);
+  if (v.also_send_to_channel !== undefined && (typeof v.also_send_to_channel !== 'boolean' || (v.also_send_to_channel && !v.thread_id))) throw new AppError(400, 'invalid_thread_broadcast');
   if (v.broadcast_confirmed !== undefined && typeof v.broadcast_confirmed !== 'boolean') throw new AppError(400, 'invalid_confirmation');
   const asset_ids = v.asset_ids === undefined ? undefined : parseAssetIds(v.asset_ids);
   const asset_descriptions = v.asset_descriptions === undefined ? undefined : parseAssetDescriptions(v.asset_descriptions, asset_ids ?? []);
@@ -66,7 +73,7 @@ export function parseMessageInput(input: unknown) {
   if (typeof v.text !== 'string' || v.text.length > 16000 || v.text.includes('\0')) throw new AppError(400, 'invalid_text');
   const document = v.document === undefined ? undefined : parseRichDocument(v.document);
   if (document && document.ops.map(op => op.insert).join('').trim() !== plain) throw new AppError(400, 'document_text_mismatch');
-  return { ...(v.broadcast_confirmed === true ? { broadcast_confirmed: true } : {}), client_message_id: uuid(v.client_message_id), text: plain, thread_id: v.thread_id === undefined ? null : uuid(v.thread_id), ...(document ? { document } : {}), ...(asset_ids ? { asset_ids } : {}), ...(asset_descriptions ? { asset_descriptions } : {}) };
+  return { ...(v.also_send_to_channel === true ? { also_send_to_channel: true } : {}), ...(v.broadcast_confirmed === true ? { broadcast_confirmed: true } : {}), client_message_id: uuid(v.client_message_id), text: plain, thread_id: v.thread_id === undefined ? null : uuid(v.thread_id), ...(document ? { document } : {}), ...(asset_ids ? { asset_ids } : {}), ...(asset_descriptions ? { asset_descriptions } : {}) };
 }
 export function parseChannelInput(input: unknown) {
   const v = record(input, ['name', 'private']);
@@ -84,6 +91,8 @@ export type ChannelNotificationPreferences = {
   thread_replies: boolean | null;
 };
 export interface ChannelSummary {
+  member_count?: number;
+  active_huddle?: boolean;
   encrypted_since?: string | null;
   notification_preferences?: ChannelNotificationPreferences;
   kind?: 'channel' | 'direct';
@@ -146,5 +155,5 @@ export interface SessionReport {
   title: string;
   status: import('./session-discovery.js').SessionWorkStatus;
   result: string | null;
-  artifact: 'changes' | 'preview' | 'files' | null;
+  artifact: 'changes' | 'preview' | 'files' | 'artifacts' | null;
 }

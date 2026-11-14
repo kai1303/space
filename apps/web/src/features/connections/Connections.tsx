@@ -3,6 +3,7 @@ import type { ConnectionKind, OutboundAgent, OutboundCall, OutboundConnection, W
 import { Button, Dialog, Select, TextField, toast } from '@space/ui/primitives';
 import { request } from '../../shared/api/request.js';
 import { subscribeUpdates } from '../../shared/realtime/live-updates.js';
+import { TokenGuide } from './TokenGuide.js';
 import './connections.css';
 
 const statusText = { untested: 'Not tested', ready: 'Ready', error: 'Needs attention' };
@@ -22,9 +23,38 @@ function failure(error: unknown) {
 type AgentPage = { items: OutboundAgent[]; next_cursor?: string | null };
 const firstAgentPage: AgentPage & { cursors: string[] } = { items: [], cursors: [] };
 
-type ConnectionsProps = { userId: string; onClose: () => void } | { workspaceId: string };
+type ConnectionPreset = { name: string; url: string; showGuide?: boolean };
+type ConnectionsProps = { userId: string; suggested?: ConnectionPreset; onClose: () => void } | { workspaceId: string };
+
+function BrowserVaultSetup({ site, close }: { site: ConnectionPreset; close: () => void }) {
+  const [busy, setBusy] = useState(false), [status, setStatus] = useState('');
+  async function save() {
+    setBusy(true); setStatus('');
+    try {
+      const result = await window.spaceDesktop?.saveBrowserVaultToken?.(site.url);
+      if (result === 'saved') close();
+      else if (result !== 'cancelled') setStatus('Reopen this website in the Space browser and try again.');
+    } catch { setStatus('Vault is unavailable on this Mac.'); }
+    finally { setBusy(false); }
+  }
+  return <Dialog open title={site.name + ' connection'} onClose={close} onBeforeClose={() => !busy}>
+    <section className="space-connections">
+      <p className="space-connection-url">{site.url}</p>
+      <p>Save a token in Keychain on this Mac. In your private browser chat, your paired agent can ask to use a saved token.</p>
+      <TokenGuide endpoint={site.url} expanded={!!site.showGuide} local />
+      {status && <p role="alert">{status}</p>}
+      <Button variant="primary" loading={busy} disabled={busy} onClick={() => void save()}>Save token on this Mac</Button>
+    </section>
+  </Dialog>;
+}
 
 export function Connections(props: ConnectionsProps) {
+  if ('suggested' in props && props.suggested && window.spaceDesktop?.saveBrowserVaultToken)
+    return <BrowserVaultSetup site={props.suggested} close={props.onClose} />;
+  return <ConnectionSettings {...props}/>;
+}
+
+function ConnectionSettings(props: ConnectionsProps) {
   const workspace = 'workspaceId' in props;
   const scopeId = workspace ? props.workspaceId : props.userId;
   const base = workspace ? `/workspaces/${encodeURIComponent(scopeId)}` : '/me';
@@ -35,6 +65,8 @@ export function Connections(props: ConnectionsProps) {
   const [items, setItems] = useState<OutboundConnection[]>([]), [calls, setCalls] = useState<OutboundCall[]>([]);
   const [loaded, setLoaded] = useState(false), [busy, setBusy] = useState(false), [error, setError] = useState(''), [revoked, setRevoked] = useState(false);
   const [editing, setEditing] = useState<OutboundConnection | 'new' | null>(null), [access, setAccess] = useState<string | null>(null), [deleting, setDeleting] = useState<string | null>(null);
+  const initialPreset = useRef(workspace ? undefined : props.suggested);
+  const [preset, setPreset] = useState<ConnectionPreset>();
   const active = useRef(true), generation = useRef(0);
   function clearAccess(nextRole?: 'member') {
     generation.current++;
@@ -73,6 +105,14 @@ export function Connections(props: ConnectionsProps) {
       }
       if (current()) {
         setItems(page.items); setAgentPage({ ...page.agents, cursors }); setCalls(calls);
+        if (initialPreset.current) {
+          const site = initialPreset.current;
+          initialPreset.current = undefined;
+          const endpoint = site.url.replace(/\/$/, '') + '/';
+          if (!page.items.some(item => (item.url.split(/[?#]/, 1)[0] + '/').startsWith(endpoint))) {
+            setPreset(site); setEditing('new');
+          }
+        }
         if (workspace) setRole('manager');
         setLoaded(true); setError('');
       }
@@ -94,7 +134,7 @@ export function Connections(props: ConnectionsProps) {
     if (busy || !active.current || (workspace && role !== 'manager')) return false;
     setBusy(true); setError(''); generation.current++;
     try {
-      await request(path, body, undefined, method);
+      await request(path, body, undefined, method, undefined, workspace ? undefined : scopeId);
       if (!active.current) return false;
       await refresh();
       return true;
@@ -114,15 +154,22 @@ export function Connections(props: ConnectionsProps) {
   const selected = items.find(item => item.id === access);
   const canManage = !revoked && (!workspace || role === 'manager');
   const content = <div className="space-connections">
+      {!workspace && !revoked && window.spaceDesktop?.openVault && <button type="button" onClick={async () => {
+        try {
+          const result = await window.spaceDesktop?.openVault?.(scopeId);
+          if (active.current && result === 'busy') setError('Your Vault is already open or in use.');
+          if (active.current && result === 'unavailable') setError('Could not open your personal Vault on this Mac.');
+        } catch { if (active.current) setError('Could not open your personal Vault on this Mac.'); }
+      }}>Open personal Vault</button>}
       {workspace && <h2>Workspace MCP servers</h2>}
       {role === 'member' && !revoked && <p>Workspace owners and admins manage MCP servers for this workspace.</p>}
       {canManage && <><p className="space-connections-hint">Connect a remote MCP server using Streamable HTTP over public HTTPS, with a bearer token or no authentication. OAuth and local stdio servers are not supported.</p>
       <p className="space-connections-hint">{workspace ? 'Choose which tools each workspace agent can use with the shared account.' : 'Connections belong to you. Add separate connections for multiple accounts, then choose tools for each of your agents.'} New tools are never granted automatically.</p></>}
       {error && <p role="alert" className="space-connections-error">{error}</p>}
-      {canManage && <div className="space-connections-actions"><Button variant="primary" disabled={busy || !loaded} onClick={() => { setEditing('new'); setAccess(null); setDeleting(null); setError(''); }}>{workspace ? 'Add MCP server' : 'Add connection'}</Button><Button disabled={busy} onClick={() => { setError(''); void refresh(); }}>Refresh</Button></div>}
+      {canManage && <div className="space-connections-actions"><Button variant="primary" disabled={busy || !loaded} onClick={() => { setPreset(undefined); setEditing('new'); setAccess(null); setDeleting(null); setError(''); }}>{workspace ? 'Add MCP server' : 'Add connection'}</Button><Button disabled={busy} onClick={() => { setError(''); void refresh(); }}>Refresh</Button></div>}
       {workspace && error && !canManage && !revoked && <Button onClick={() => void refresh()}>Retry</Button>}
       {!loaded ? <p role="status">Loading connections…</p> : canManage && !items.length && <p>No connections yet. Add an account to get started.</p>}
-      {editing && <ConnectionEditor workspace={workspace} key={editing === 'new' ? 'new' : editing.id} connection={editing === 'new' ? undefined : editing} busy={busy} onCancel={() => setEditing(null)} onSave={async body => {
+      {editing && <ConnectionEditor preset={editing === 'new' ? preset : undefined} workspace={workspace} key={editing === 'new' ? 'new' : editing.id} connection={editing === 'new' ? undefined : editing} busy={busy} onCancel={() => setEditing(null)} onSave={async body => {
         const saved = await mutate(editing === 'new' ? connectionsPath : `${connectionsPath}/${editing.id}`, editing === 'new' ? body : { revision: editing.revision, ...body }, editing === 'new' ? 'POST' : 'PATCH');
         if (saved && active.current) setEditing(null);
       }} />}
@@ -155,8 +202,8 @@ export function Connections(props: ConnectionsProps) {
   return workspace ? content : <Dialog open title="Connections" description="Your accounts and the tools your agents can use." onClose={props.onClose} onBeforeClose={() => !busy}>{content}</Dialog>;
 }
 
-function ConnectionEditor({ connection, busy, workspace, onSave, onCancel }: { workspace: boolean; connection?: OutboundConnection; busy: boolean; onSave: (body: object) => Promise<void>; onCancel: () => void }) {
-  const [name, setName] = useState(connection?.name ?? ''), [url, setUrl] = useState(connection?.url ?? ''), [auth, setAuth] = useState<'bearer' | 'none'>(connection?.auth_type ?? 'bearer'), [token, setToken] = useState('');
+function ConnectionEditor({ connection, preset, busy, workspace, onSave, onCancel }: { preset?: ConnectionPreset; workspace: boolean; connection?: OutboundConnection; busy: boolean; onSave: (body: object) => Promise<void>; onCancel: () => void }) {
+  const [name, setName] = useState(connection?.name ?? preset?.name ?? ''), [url, setUrl] = useState(connection?.url ?? preset?.url ?? ''), [auth, setAuth] = useState<'bearer' | 'none'>(connection?.auth_type ?? 'bearer'), [token, setToken] = useState('');
   const [kind, setKind] = useState<ConnectionKind>(connection?.kind ?? 'mcp');
   const directory = kind === 'people' || kind === 'channels';
   const endpointChanged = workspace && connection && url.trim() !== connection.url;
@@ -183,7 +230,7 @@ function ConnectionEditor({ connection, busy, workspace, onSave, onCancel }: { w
       <TextField label="Connection name" required maxLength={100} value={name} onChange={event => setName(event.target.value)} placeholder={workspace ? "Team GitHub" : "GitHub personal"} />
       {!directory && <><TextField label="MCP endpoint" type="url" required maxLength={2000} value={url} onChange={event => setUrl(event.target.value)} placeholder="https://example.com/mcp" hint="Public HTTPS only. Put credentials in the token field, never in the URL." />
       <label className="space-connection-select">Authentication<Select aria-label="Authentication" value={auth} onChange={event => { setAuth(event.target.value as 'bearer' | 'none'); setToken(''); }}><option value="bearer">Bearer token</option><option value="none">No authentication</option></Select></label>
-      {auth === 'bearer' && <TextField label="Bearer token" type="password" autoComplete="new-password" required={requiresToken} maxLength={4096} value={token} onChange={event => setToken(event.target.value)} hint={endpointChanged ? 'Enter a token for the new endpoint.' : connection?.auth_type === 'bearer' ? 'Leave blank to keep the saved token. Tokens are never shown again.' : 'Stored securely and sent only to this MCP server.'} />}</>}
+      {auth === 'bearer' && <><TokenGuide endpoint={url} expanded={!!preset?.showGuide} /><TextField label="Bearer token" type="password" autoComplete="new-password" required={requiresToken} maxLength={4096} value={token} onChange={event => setToken(event.target.value)} hint={endpointChanged ? 'Enter a token for the new endpoint.' : connection?.auth_type === 'bearer' ? 'Leave blank to keep the saved token. Tokens are never shown again.' : 'Stored securely and sent only to this MCP server.'} /></>}</>}
     </fieldset>
     {connection && !directory && <p className="space-connections-hint">Changing the endpoint or credentials clears discovered tools and agent grants. Test the connection and grant access again afterward.</p>}
     <div className="space-connections-actions"><Button disabled={busy} onClick={onCancel}>Cancel</Button><Button type="submit" variant="primary" loading={busy} disabled={!name.trim() || (!directory && !url.trim()) || (requiresToken && !token)}>Save connection</Button></div>

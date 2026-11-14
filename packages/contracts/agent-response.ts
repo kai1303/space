@@ -13,7 +13,19 @@ export type AgentComponent =
   | { id: string; type: 'alert'; level: 'warning' | 'error'; title: string; body?: string }
   | { id: string; type: 'card'; title: string; body: string }
   | { id: string; type: 'table'; title: string; columns: string[]; rows: string[][] };
+export type AgentSessionView =
+  | { key: string; name: string; type: 'html' | 'canvas'; content: string }
+  | { key: string; name: string; type: 'blocks'; blocks: AgentComponent[] };
+export type AgentSessionViewUpdate = {set: AgentSessionView} | {remove: string};
+export type AgentSessionCodeContext = {
+  repository?: { label: string; url?: string };
+  base_branch?: string;
+  head_branch?: string;
+  pull_request?: { label: string; url: string };
+};
 export type AgentSessionOutputs = {
+  views?: AgentSessionView[];
+  context?: AgentSessionCodeContext;
   actions?: { label: string; url: string }[];
   preview?: { state: 'starting' | 'ready' | 'stopped'; label: string; url?: string; document?: string };
   files: { path: string; content: string; language?: string }[];
@@ -23,8 +35,61 @@ export type AgentActivity = 'working' | 'thinking' | 'responding' | 'using_tools
 export type AgentResponseItem = { type: 'message' | 'tool' | 'component'; id: string };
 export type AgentResponse = { messages: AgentText[]; tools: AgentTool[]; components: AgentComponent[]; items?: AgentResponseItem[]; activity?: AgentActivity; step?: string; outputs?: AgentSessionOutputs; memory?: AgentMemoryUpdate };
 
+function resultLink(value: unknown): { label: string; url: string } {
+  const item = record(value, ['label', 'url']);
+  let url: URL;
+  try { url = new URL(text(item.url, 2000)); } catch { throw new AppError(400, 'invalid_result_action'); }
+  if (url.protocol !== 'https:' || url.username || url.password) throw new AppError(400, 'invalid_result_action');
+  return { label: text(item.label, 64), url: url.href };
+}
+
+function codeContext(input: unknown): AgentSessionCodeContext {
+  const fields = record(input, ['repository', 'base_branch', 'head_branch', 'pull_request']);
+  const value: AgentSessionCodeContext = {};
+  if (fields.repository !== undefined) {
+    const repo = record(fields.repository, ['label', 'url']);
+    value.repository = repo.url === undefined ? {label: text(repo.label, 64)} : resultLink(repo);
+  }
+  if (fields.base_branch !== undefined) value.base_branch = text(fields.base_branch, 200);
+  if (fields.head_branch !== undefined) value.head_branch = text(fields.head_branch, 200);
+  if (fields.pull_request !== undefined) value.pull_request = resultLink(fields.pull_request);
+  return value;
+}
+
+function viewKey(value: unknown): string {
+  const key = text(value, 128);
+  if (!/^[a-z\d][a-z\d._/-]*$/i.test(key)) throw new AppError(400, 'invalid_view_key');
+  return key;
+}
+
+function sessionView(input: unknown): AgentSessionView {
+  const fields = record(input, ['key', 'name', 'type', 'content', 'blocks']);
+  const key = viewKey(fields.key), name = text(fields.name, 64);
+  if (fields.type === 'blocks' && fields.content === undefined) {
+    return {key, name, type: 'blocks', blocks: unique(list(fields.blocks, 20, parseAgentComponent))};
+  }
+  if ((fields.type === 'html' || fields.type === 'canvas') && fields.blocks === undefined) {
+    return {key, name, type: fields.type, content: string(fields.content, 32000)};
+  }
+  throw new AppError(400, 'invalid_session_view');
+}
+
+export function parseSessionViewUpdate(input: unknown): AgentSessionViewUpdate {
+  const fields = record(input, ['set', 'remove']);
+  if (fields.set === undefined) return {remove:viewKey(fields.remove)};
+  if (fields.remove !== undefined || JSON.stringify(input).length > 32000) throw new AppError(400, 'invalid_session_view');
+  return {set:sessionView(fields.set)};
+}
+
+export function updateSessionViews(views: AgentSessionView[], update: AgentSessionViewUpdate): AgentSessionView[] {
+  if ('remove' in update) return views.filter(view => view.key !== update.remove);
+  if (views.some(view => view.key === update.set.key)) return views.map(view => view.key === update.set.key ? update.set : view);
+  if (views.length >= 8) throw new AppError(400, 'too_many_session_views');
+  return [...views, update.set];
+}
+
 export function parseSessionOutputs(input: unknown): AgentSessionOutputs {
-  const v = record(input, ['preview', 'files', 'changes', 'actions']);
+  const v = record(input, ['preview', 'files', 'changes', 'actions', 'views', 'context']);
   const files = list(v.files, 20, item => {
     const f = record(item, ['path', 'content', 'language']);
     return { path: text(f.path, 300), content: string(f.content, 32000), ...(f.language === undefined ? {} : { language: text(f.language, 50) }) };
@@ -44,14 +109,12 @@ export function parseSessionOutputs(input: unknown): AgentSessionOutputs {
     if (url && (url.protocol !== 'https:' || url.username || url.password)) throw new AppError(400, 'invalid_preview');
     preview = { state: p.state as NonNullable<typeof preview>['state'], label: text(p.label, 200), ...(url ? {url: url.href} : {}), ...(p.document === undefined ? {} : {document: string(p.document, 32000)}) };
   }
-  const actions = v.actions === undefined ? undefined : list(v.actions, 8, input => {
-    const item = record(input, ['label', 'url']);
-    let url: URL;
-    try { url = new URL(text(item.url, 2000)); } catch { throw new AppError(400, 'invalid_result_action'); }
-    if (url.protocol !== 'https:' || url.username || url.password) throw new AppError(400, 'invalid_result_action');
-    return { label: text(item.label, 64), url: url.href };
-  });
-  return { ...(preview ? {preview} : {}), ...(actions ? {actions} : {}), files, changes };
+  const actions = v.actions === undefined ? undefined : list(v.actions, 8, resultLink);
+  const context = v.context === undefined ? undefined : codeContext(v.context);
+  const views = v.views === undefined ? undefined : list(v.views, 8, sessionView);
+  if (views && new Set(views.map(view => view.key)).size !== views.length) throw new AppError(400, 'duplicate_view_key');
+  return { ...(preview ? {preview} : {}), ...(actions ? {actions} : {}), ...(context ? {context} : {}),
+    ...(views ? {views} : {}), files, changes };
 }
 
 function string(value: unknown, max: number): string {

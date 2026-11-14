@@ -1,0 +1,6 @@
+.session-shared-resources {padding:12px 16px;font-size:13px}
+.session-shared-resources p,.session-resource-group small {color:var(--sp-text-secondary)}
+.session-resource-group {display:grid;gap:6px;padding:10px 0;border-bottom:1px solid var(--sp-border)}
+.session-resource-group a {display:flex;align-items:baseline;gap:8px;overflow-wrap:anywhere;color:var(--sp-accent)}
+.session-resource-group svg {flex:none;align-self:flex-start}
+.session-resources-paging {display:flex;gap:8px;margin-top:8px}

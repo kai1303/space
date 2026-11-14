@@ -1,6 +1,7 @@
-import type { AgentSessionOutputs } from './agent-response.js';
+import type { AgentSessionOutputs, AgentSessionView } from './agent-response.js';
 
 export type SharedSessionOutput =
+  | { kind: 'view'; path: string; output: AgentSessionView }
   | { kind: 'file'; path: string; output: AgentSessionOutputs['files'][number] }
   | { kind: 'change'; path: string; output: AgentSessionOutputs['changes'][number] }
   | { kind: 'preview'; path: ''; output: NonNullable<AgentSessionOutputs['preview']> };

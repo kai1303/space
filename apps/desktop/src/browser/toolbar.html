@@ -24,15 +24,24 @@
         <button id="reload" class="icon" aria-label="Reload" title="Reload"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M13 6a5.2 5.2 0 1 0 .1 4M13 2.5V6H9.5"/></svg></button>
       </div>
       <div id="address-slot"><form id="navigate"><svg class="site-icon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6"/><ellipse cx="8" cy="8" rx="2.6" ry="6"/><path d="M2 8h12"/></svg><input id="address" type="text" autocomplete="off" spellcheck="false" aria-label="Website address" placeholder="Enter a website address" required><button class="icon" id="visit" aria-label="Open website" title="Open website"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8h10m-5-5 5 5-5 5"/></svg></button></form></div>
+      <button id="vault" hidden title="Open your personal Vault on this Mac">Vault</button>
       <button id="sidekick" class="action" title="Open a private session with your paired agent">Ask my agent</button>
       <button id="ask" class="action" aria-expanded="false" aria-controls="task"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m7 2 1.5 4.5L13 8l-4.5 1.5L7 14l-1.5-4.5L1 8l4.5-1.5Z"/></svg>Control tab</button><button id="stop" class="action" hidden>Take over</button>
     </div>
+    <section id="mcp-suggestion" aria-label="MCP connection suggestion" hidden>
+      <strong id="mcp-title"></strong>
+      <div id="mcp-endpoint"></div>
+      <p>Connect your account and choose which tools your agent can use.</p>
+      <button id="connect-mcp" class="primary">Connect</button><button id="mcp-guide">Setup guide</button><button id="dismiss-mcp">Not now</button>
+    </section>
+    <div id="manual-sign-in" hidden>Finish signing in on this tab. <button id="resume-control">Resume browser control</button></div>
     <form id="task" hidden><label for="goal">What would you like Codex to do?</label><div class="row task-entry"><input id="goal" maxlength="1000" required aria-describedby="task-scope" placeholder="Describe a task"><button id="cancel" type="button">Cancel</button><button class="primary">Start task</button></div><p id="task-scope">Codex can see and control this tab until you take over.</p></form>
     <div id="feedback" hidden><output id="notice" aria-live="polite"></output><button id="dismiss" aria-label="Dismiss message">×</button></div>
   </header>
   <main id="workspace-start" hidden>
     <section><h1 id="tools-heading">Open a tool</h1><div id="start-tools">
       <div id="tools" role="group" aria-label="Workspace tools">
+        <button id="fill-login" hidden>Fill saved login</button>
         <div id="launch-tools">
         <button id="new"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6"/><ellipse cx="8" cy="8" rx="2.6" ry="6"/><path d="M2 8h12"/></svg>Web Browser</button>
         <button id="office"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 1.5h6l4 4v9H3zM9 1.5v4h4M5.5 9h5m-5 2.5h4"/></svg>Office editor</button>

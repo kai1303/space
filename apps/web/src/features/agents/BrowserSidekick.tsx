@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { AgentSessionDetail, SidekickAgent, SidekickSession } from '@space/contracts';
 import { Button, Select } from '@space/ui/primitives';
 import { request } from '../../shared/api/request.js';
+import { Connections } from '../connections/Connections.js';
 import { AgentSessions } from './AgentSessions.js';
 import './sidekick.css';
 
@@ -11,6 +12,11 @@ type Session = Pick<SidekickSession, 'id' | 'channel_id' | 'origin_thread_id'>;
 export function BrowserSidekick({ workspace, viewer }: { workspace: string; viewer: string }) {
   const [tab, setTab] = useState<BrowserTab | null>(null);
   useEffect(() => window.spaceDesktop?.onBrowserSidekick?.(next => setTab(next?.actor === viewer ? next : null)), [viewer]);
+  const [setup, setSetup] = useState<{ name: string; url: string; showGuide?: boolean; actor: string }>();
+  useEffect(() => window.spaceDesktop?.onBrowserMcpSetup?.(site => {
+    if (site.actor === viewer) setSetup(site);
+  }), [viewer]);
+  if (setup?.actor === viewer) return <Connections key={viewer} userId={viewer} suggested={setup} onClose={() => setSetup(undefined)} />;
   if (!tab) return null;
   function close() {
     if (tab) window.spaceDesktop?.dismissBrowserSidekick?.(tab.tab);

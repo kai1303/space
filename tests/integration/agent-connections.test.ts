@@ -36,8 +36,8 @@ async function offboardOwner(owner: Awaited<ReturnType<typeof bootstrap>>) {
   await pool.query('UPDATE workspaces SET primary_owner_id=$2 WHERE id=$1', [owner.workspace_id, owner.collaborator_id]);
   await pool.query('UPDATE workspace_members SET active=false WHERE workspace_id=$1 AND user_id=$2', [owner.workspace_id, owner.owner_id]);
 }
-async function connect(credential: string, namespace = '/agents') {
-  const socket = io(`${origin}${namespace}`, { transports: ['websocket'], auth: { token: credential }, autoConnect: false, reconnection: false });
+async function connect(credential: string, namespace = '/agents', vaultMac = false) {
+  const socket = io(`${origin}${namespace}`, { transports: ['websocket'], auth: { token: credential, ...(vaultMac && {vault_mac:true}) }, autoConnect: false, reconnection: false });
   sockets.push(socket);
   const ready = new Promise<void>((resolve, reject) => {
     const timeout = setTimeout(() => reject(new Error('Connection timed out')), 3000);
@@ -46,6 +46,42 @@ async function connect(credential: string, namespace = '/agents') {
   });
   socket.connect(); await ready; return socket;
 }
+test('web Vault sends only owner requests to the current Mac and filters replies', async () => {
+  const owner = await bootstrap(pool), other = await bootstrap(pool);
+  const {credential, connection} = await pair(owner);
+  const path = '/me/vault/macs/' + connection.installation_id + '/request';
+  const socket = await connect(credential, '/agents', true);
+  const devices = await api(owner.owner_token, 'GET', '/me/vault/macs');
+  assert.deepEqual(Object.keys(devices[0]).sort(), ['id','name','online']);
+  assert.equal(devices[0].online, true);
+  assert.deepEqual(await api(other.owner_token, 'GET', '/me/vault/macs'), []);
+  await api(other.owner_token, 'POST', path, {action:'list'}, 404);
+  await api(owner.owner_token, 'POST', path, {action:'reveal'}, 400);
+  const item = {title:'Linear',site:'https://linear.app',kind:'token'};
+  socket.once('vault.request', (input, ack) => {
+    assert.equal(input.actor, owner.owner_id); assert.equal(input.installation, connection.installation_id);
+    ack({status:'listed',items:[item],more:false});
+  });
+  assert.deepEqual(await api(owner.owner_token,'POST',path,{action:'list'}), {status:'listed',items:[item],more:false});
+  const cursor = '4915a209-376b-4725-81fb-788c1385d6ed';
+  socket.once('vault.request', (_, ack) => ack({status:'listed', items:[item], more:true, cursor}));
+  assert.equal((await api(owner.owner_token,'POST',path,{action:'list'})).cursor, cursor);
+  socket.once('vault.request', (input, ack) => {
+    assert.equal(input.cursor, cursor);
+    ack({status:'listed',items:[item],more:false});
+  });
+  await api(other.owner_token,'POST',path,{action:'list',cursor},404);
+  await api(owner.owner_token,'POST',path,{action:'manage',cursor},400);
+  await api(owner.owner_token,'POST',path,{action:'list',cursor});
+  socket.once('vault.request', (_, ack) => ack({status:'listed',items:[{...item,secret:'never-forward'}],more:false}));
+  await api(owner.owner_token,'POST',path,{action:'list'},502);
+  socket.once('vault.request', (_, ack) => ack({status:'opened'}));
+  assert.deepEqual(await api(owner.owner_token,'POST',path,{action:'manage'}), {status:'opened'});
+  const replacement = await connect(credential);
+  assert.deepEqual(await api(owner.owner_token, 'GET', '/me/vault/macs'), []);
+  await api(owner.owner_token, 'POST', path, {action:'list'},404);
+  socket.disconnect(); replacement.disconnect();
+});
 test('pairing enrolls an agent beside human members without channels, grants or human credentials', async () => {
   const owner = await bootstrap(pool), foreign = await bootstrap(pool);
   await api(foreign.owner_token, 'POST', `/workspaces/${owner.workspace_id}/agent-pairings`, {}, 404);

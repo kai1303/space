@@ -100,3 +100,11 @@ h1 { margin: 12px 0 20px; font-size: var(--sp-text-xl); line-height: var(--sp-le
 .plugins-heading { margin-bottom:4px; }
 .plugin-row { border-top:1px solid var(--sp-border); padding-block:4px; }
 .plugin-row button { color:var(--sp-accent); font-weight:700; }
+
+#mcp-suggestion { margin:4px 8px 8px auto; width:min(320px, calc(100% - 16px)); padding:10px 12px; border:1px solid var(--sp-border); border-radius:var(--sp-radius-md); background:var(--sp-surface-raised); box-shadow:var(--sp-shadow); }
+#mcp-suggestion p { margin:4px 0 8px; color:var(--sp-text-secondary); }
+#mcp-suggestion button + button { margin-left:4px; }
+#mcp-endpoint { color:var(--sp-text-secondary); overflow-wrap:anywhere; font-size:var(--sp-text-xs); }
+
+#manual-sign-in { padding: 6px 10px; background: var(--sp-surface-subtle); }
+#resume-control { color: var(--sp-accent); font-weight: 700; }

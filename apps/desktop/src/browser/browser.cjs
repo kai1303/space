@@ -1,11 +1,15 @@
-const { app, WebContentsView, View, systemPreferences, session, dialog } = require('electron');
+const { app, WebContentsView, View, powerMonitor, systemPreferences, session, dialog } = require('electron');
 const { createHash, randomUUID } = require('node:crypto');
 const { join } = require('node:path');
+const { openVault, fillLogin, presentVault } = require('./vault.cjs');
 const { runBrowserTask, runOfficeTask } = require('./agent.cjs');
 
 const { bundledPlugins, labels } = require('./plugins.cjs');
 const { isAssetDownload } = require('../policy.cjs');
 const uuid = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i;
+const { applicationDomain, discoverMcp } = app.isPackaged
+  ? require('../../assets/browser-style/mcp-discovery.cjs')
+  : require('./mcp-discovery.cjs');
 const maxTabs = 12;
 const dividerWidth = 8;
 const minPaneWidth = 320;
@@ -19,7 +23,7 @@ function webAddress(input) {
   } catch {}
 }
 
-function createBrowser(win, base, workspace) {
+function createBrowser(win, base, workspace, keychain = openVault, vaultManager = presentVault) {
   const origin = new URL(base).origin;
   const owner = win.webContents;
   let full = false, splitRatio, navigationWidth = 0, theme = 'dark';
@@ -28,6 +32,172 @@ function createBrowser(win, base, workspace) {
   let generation = 0, opening = false, notice = '';
   let frameTimer, closingTab;
   const tabs = new Map();
+  const dismissedSites = new Set();
+  const registryCache = new Map();
+  let checkedSite, suggestion, lookup, localSetup;
+
+  const vaultResources = app.isPackaged ? join(process.resourcesPath, 'runner') : join(__dirname, '../../dist/runner');
+  let vaultOperation, manager;
+  function lockVault() { manager?.abort(); cancelVault(); }
+  async function showVault(target, expectedActor, action = 'manager', presented, remoteSignal) {
+    if (process.platform !== 'darwin' || !owner.mainFrame || owner.mainFrame.origin !== origin) return 'unavailable';
+    if (manager || vaultOperation) return 'busy';
+    const endpoint = target ? registryCache.get(currentSite())?.site?.url : undefined;
+    const operation = manager = new AbortController();
+    const abort = () => operation.abort();
+    remoteSignal?.addEventListener('abort', abort, {once: true});
+    if (remoteSignal?.aborted) operation.abort();
+    publish();
+    try {
+      const response = await owner.session.fetch(origin + '/v1/me', {
+        credentials: 'include', redirect: 'error', cache: 'no-store',
+        signal: AbortSignal.any([operation.signal, AbortSignal.timeout(6000)]),
+      });
+      if (!response.ok) return 'unavailable';
+      const { id } = await response.json();
+      if (operation.signal.aborted || typeof id !== 'string' || !id || id.length > 128 ||
+          (expectedActor && expectedActor !== id) || (currentActor && currentActor !== id)) return 'unavailable';
+      currentActor = id;
+      if (action === 'web-list') {
+        const result = await keychain(vaultResources, {action, platform: origin, actor: id, origin}, operation.signal);
+        return !operation.signal.aborted && currentActor === id ? result : {status: 'unavailable'};
+      }
+      const result = await vaultManager(vaultResources, { action, platform: origin, actor: id,
+        origin: target?.origin ?? '', endpoint }, operation.signal, win, theme, presented);
+      return ['closed', 'cancelled', 'saved'].includes(result.status) ? result.status : 'unavailable';
+    } catch { return operation.signal.aborted ? 'closed' : 'unavailable'; }
+    finally { remoteSignal?.removeEventListener('abort', abort); if (manager === operation) manager = undefined; if (!win.isDestroyed()) publish(); }
+  }
+  function cancelVault() { vaultOperation?.abort(); }
+  powerMonitor.on('lock-screen', lockVault);
+  powerMonitor.on('suspend', lockVault);
+  function vaultTarget() {
+    const tab = tabs.get(active);
+    if (!visible || !currentActor || !tab || tab.officePath || owner.isDestroyed()) return;
+    if (tab.view.webContents.isDestroyed() || tab.view.webContents.isLoadingMainFrame()) return;
+    const address = webAddress(tab.view.webContents.getURL());
+    if (webAddress(owner.getURL()) && new URL(owner.getURL()).origin === origin && address?.startsWith('https://')) return { tab, address, origin: new URL(address).origin };
+  }
+  async function useVault(action, turn, turnSignal) {
+    const target = vaultTarget();
+    if (!target || vaultOperation || manager || process.platform !== 'darwin') return 'unavailable';
+    const { tab, address } = target, guest = tab.view.webContents, frame = guest.mainFrame;
+    if (turn && (!tab.sidekickOpen || tab.vaultSession !== turn.session || tab.vaultWorkspace !== turn.workspace || !uuid.test(turn.installation) || sidekickAddress(address) !== turn.page)) return 'unavailable';
+    if (turn && tab.manualSignIn) return 'manual_control';
+    const operation = vaultOperation = new AbortController();
+    const signal = AbortSignal.any([operation.signal, AbortSignal.timeout(90000), ...(turnSignal ? [turnSignal] : [])]);
+    const actor = currentActor;
+    const valid = () => !signal.aborted && currentActor === actor && visible && tabs.get(active) === tab &&
+      !guest.isDestroyed() && guest.mainFrame === frame && !guest.isLoadingMainFrame() && guest.getURL() === address &&
+      (!turn || (tab.sidekickOpen && tab.vaultSession === turn.session));
+    try {
+      stop();
+      let agent;
+      if (turn) {
+        const response = await owner.session.fetch(origin + '/v1/agent-sessions/' + tab.vaultSession, {
+          headers: { 'X-Expected-Actor': actor }, credentials: 'include', redirect: 'error', cache: 'no-store', signal,
+        });
+        if (!response.ok) return 'unavailable';
+        const detail = await response.json();
+        if (!detail.context?.browser_url || detail.session?.owner_id !== actor || detail.session.installation_id !== turn.installation ||
+            detail.session.workspace_id !== turn.workspace || detail.session.id !== turn.session || !valid()) return 'unavailable';
+        agent = detail.session.agent_name;
+        if (typeof agent !== 'string' || !agent.trim()) return 'unavailable';
+      } else {
+        const response = await owner.session.fetch(origin + '/v1/me', {
+          headers: { 'X-Expected-Actor': actor }, credentials: 'include', redirect: 'error', cache: 'no-store', signal,
+        });
+        if (!response.ok || (await response.json()).id !== actor) return 'unavailable';
+      }
+      if (!valid()) return 'unavailable';
+      const marker = randomUUID();
+      if (action === 'fill') {
+        agent ??= 'you';
+        await guest.executeJavaScriptInIsolatedWorld(1002, [{ code: 'globalThis.spaceVaultDocument = ' + JSON.stringify(marker) }]);
+        if (!valid()) return 'unavailable';
+      }
+      const resources = vaultResources;
+      const endpoint = registryCache.get(currentSite())?.site?.url;
+      const grant = tab.apiGrant;
+      if (action === 'call-api' && (!grant || grant.turn !== turn.id || grant.endpoint !== endpoint ||
+          !grant.tools.includes(turn.input?.tool) || !turn.input.arguments || typeof turn.input.arguments !== 'object' ||
+          JSON.stringify(turn.input.arguments).length > 4096)) return 'unavailable';
+      if (action === 'list-api') tab.apiGrant = undefined;
+      if (['list-api','call-api'].includes(action) && !endpoint) return 'unavailable';
+      const result = await keychain(resources, { platform: origin, actor, origin: target.origin, action, agent,
+        endpoint, ...(action === 'call-api' && { item: grant.item, tool: turn.input.tool, arguments: JSON.stringify(turn.input.arguments, null, 2) }) }, signal);
+      if (!valid()) return 'unavailable';
+      if (result.status !== 'approved') return ['saved','cancelled','no_matching_login','no_matching_token'].includes(result.status) ? result.status : 'unavailable';
+      if (action === 'list-api' || action === 'call-api') {
+        if (!result.token || !uuid.test(result.item)) return 'unavailable';
+        const { RemoteMcp } = require(join(resources, 'remote.cjs'));
+        const remote = new RemoteMcp();
+        const connection = { url: endpoint, token: result.token };
+        if (action === 'list-api') {
+          const tools = await remote.discover(connection, signal);
+          if (!valid() || JSON.stringify(tools).includes(result.token)) return 'unavailable';
+          tab.apiGrant = { turn: turn.id, endpoint, item: result.item, tools: tools.map(tool => tool.name) };
+          return { status: 'ready', tools };
+        }
+        if (result.item !== grant.item) return 'unavailable';
+        const reply = await remote.call(connection, turn.input.tool, turn.input.arguments, signal);
+        if (!valid() || JSON.stringify(reply).includes(result.token)) return 'unavailable';
+        return { status: 'completed', result: reply };
+      }
+      if (action !== 'fill') return 'unavailable';
+      tab.manualSignIn = true;
+      publish();
+      const code = '(' + fillLogin.toString() + ')(' + [target.origin, address, marker, result.username, result.password].map(v => JSON.stringify(v)).join(',') + ')';
+      const filled = await guest.executeJavaScriptInIsolatedWorld(1002, [{ code }]);
+      return filled ? 'filled' : 'manual_control';
+    } catch { return 'unavailable'; }
+    finally { if (vaultOperation === operation) vaultOperation = undefined; if (!win.isDestroyed()) publish(); }
+  }
+
+  function sidekickAddress(address) { const url = new URL(address); return url.origin + url.pathname; }
+
+  function currentSite() {
+    const tab = tabs.get(active);
+    const address = visible && !tab?.officePath && webAddress(tab?.url);
+    return address ? applicationDomain(address) : undefined;
+  }
+
+  function checkSite() {
+    const domain = currentSite();
+    if (checkedSite === domain) return;
+    lookup?.abort();
+    checkedSite = domain;
+    suggestion = undefined;
+    if (!domain || dismissedSites.has(domain)) return;
+    const controller = lookup = new AbortController();
+    void (async () => {
+      const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(8000)]);
+      const cached = registryCache.get(domain);
+      let site = cached?.site;
+      if (!cached || cached.until <= Date.now()) {
+        site = await discoverMcp(domain, (url, options) => profile.fetch(url, options), signal);
+        if (signal.aborted) return;
+        if (registryCache.size >= 128) registryCache.delete(registryCache.keys().next().value);
+        registryCache.set(domain, { site, until: Date.now() + 30 * 60_000 });
+      }
+      if (!site) return;
+      const response = await owner.session.fetch(origin + '/v1/me/connections', {
+        credentials: 'include', redirect: 'error', cache: 'no-store',
+        headers: { 'X-Expected-Actor': currentActor },
+        signal,
+      });
+      if (!response.ok) return;
+      const { items } = await response.json();
+      if (controller.signal.aborted || !Array.isArray(items)) return;
+      const endpoint = new URL(site.url);
+      const connected = items.some(({ url }) => {
+        if (!URL.canParse(url)) return false;
+        const saved = new URL(url);
+        return saved.origin === endpoint.origin && (saved.pathname + '/').startsWith(endpoint.pathname.replace(/\/$/, '') + '/');
+      });
+      if (!connected) { suggestion = site; publish(); }
+    })().catch(() => { /* Browsing stays available when personal Connections is offline. */ });
+  }
   const pane = new View();
   pane.setVisible(false);
   win.contentView.addChildView(pane);
@@ -44,11 +214,12 @@ function createBrowser(win, base, workspace) {
   function state() {
     const [width] = win.getContentSize();
     const tab = tabs.get(active);
-    return { theme, installed: plugins?.installed() || [], tool: tab ? (tab.officePath ? 'office' : 'browser') : null, newTab: !!tab && !tab.url && !tab.popup, tabs: [...tabs].map(([id, tab]) => ({ id, tool: tab.officePath ? 'office' : 'browser', title: tab.title || 'Browser' })), active, full, splitWidth: splitWidth(width), minSplit: minPaneWidth, maxSplit: width - dividerWidth - minPaneWidth, notice, controlling: !!task,
+    return { theme, manualSignIn: !!tab?.manualSignIn, vaultBusy: !!vaultOperation || !!manager, vaultAvailable: process.platform === 'darwin' && !!vaultTarget(), mcpSuggestion: suggestion, installed: plugins?.installed() || [], tool: tab ? (tab.officePath ? 'office' : 'browser') : null, newTab: !!tab && !tab.url && !tab.popup, tabs: [...tabs].map(([id, tab]) => ({ id, tool: tab.officePath ? 'office' : 'browser', title: tab.title || 'Browser' })), active, full, splitWidth: splitWidth(width), minSplit: minPaneWidth, maxSplit: width - dividerWidth - minPaneWidth, notice, controlling: !!task,
       url: tabs.get(active)?.url || '', back: !!tabs.get(active)?.view.webContents.navigationHistory.canGoBack(),
       forward: !!tabs.get(active)?.view.webContents.navigationHistory.canGoForward(), maxTabs };
   }
   function publish() {
+    checkSite();
     if (visible && ready && !win.isDestroyed() && toolbar && !toolbar.webContents.isDestroyed()) toolbar.webContents.send('browser-state', state());
   }
   function layoutGuest() {
@@ -107,16 +278,16 @@ function createBrowser(win, base, workspace) {
   function showSidekick(focus = true) {
     const tab = tabs.get(active);
     const address = tab && !tab.officePath && webAddress(tab.view.webContents.getURL());
-    if (!address || owner.isDestroyed() || new URL(owner.getURL()).origin !== origin) return;
-    const page = new URL(address);
-    page.search = page.hash = '';
+    if (tab?.manualSignIn || !address || owner.isDestroyed() || new URL(owner.getURL()).origin !== origin) return;
+    const page = sidekickAddress(address);
     tab.sidekickKey ??= randomUUID();
     tab.sidekickOpen = true;
     if (full) { full = false; layout(); publish(); }
-    owner.send('space-browser-sidekick', { tab: tab.sidekickKey, page: page.href, actor: currentActor });
+    owner.send('space-browser-sidekick', { tab: tab.sidekickKey, page, actor: currentActor });
     if (focus) owner.focus();
   }
   function dismissSidekick() {
+    cancelVault();
     const tab = tabs.get(active);
     if (tab?.sidekickOpen) {
       tab.sidekickOpen = false;
@@ -155,7 +326,11 @@ function createBrowser(win, base, workspace) {
     publish();
   }
   function reset() {
+    manager?.abort();
     generation++;
+    localSetup = undefined;
+    dismissedSites.clear();
+    registryCache.clear();
     hide(false);
     for (const id of [...tabs.keys()]) remove(id);
     if (toolbar) {
@@ -241,13 +416,14 @@ function createBrowser(win, base, workspace) {
       const previousUrl = tab.url;
       tab.url = guest.getURL() === 'about:blank' ? '' : guest.getURL();
       view.setVisible(visible && active === id && (!!tab.url || tab.popup));
-      if (active === id && tab.sidekickOpen && previousUrl !== tab.url) {
+      if (active === id && tab.sidekickOpen && !tab.manualSignIn && previousUrl !== tab.url) {
         if (webAddress(tab.url)) showSidekick(false);
         else dismissSidekick();
       }
       tab.title = guest.getTitle() || (webAddress(tab.url) ? new URL(tab.url).hostname : '');
       publish();
     };
+    guest.on('did-start-navigation', (_event, _url, _inPage, main) => { if (main && active === id) cancelVault(); });
     guest.on('did-navigate', updated);
     guest.on('did-navigate-in-page', updated);
     guest.on('page-title-updated', updated);
@@ -263,6 +439,7 @@ function createBrowser(win, base, workspace) {
   }
   function begin(goal) {
     const guest = tabs.get(active)?.view.webContents;
+    if (vaultOperation || tabs.get(active)?.manualSignIn) throw new Error('Finish signing in and resume browser control first.');
     if (task || !guest || !webAddress(guest.getURL()) || guest.isLoadingMainFrame() || typeof goal !== 'string' || !goal.trim() || goal.length > 1000) throw new Error('Open a page and enter a task first.');
     const controller = new AbortController();
     const grant = { controller, origin: new URL(guest.getURL()).origin, timer: setTimeout(() => stop('Task timed out. You have control.'), 180000) };
@@ -303,6 +480,40 @@ function createBrowser(win, base, workspace) {
       case 'space': hide(); break;
       case 'layout': full = !full; layout(); publish(); break;
       case 'stop': stop('You have control.'); break;
+      case 'mcp-guide':
+      case 'connect-mcp':
+      case 'dismiss-mcp': {
+        const site = suggestion;
+        if (!site || checkedSite !== currentSite() || site.url !== arg || new URL(owner.getURL()).origin !== origin) return;
+        suggestion = undefined;
+        if (action === 'dismiss-mcp') { dismissedSites.add(checkedSite); publish(); }
+        else {
+          const selected = tabs.get(active);
+          hide();
+          localSetup = { selected, site, actor: currentActor, address: selected.view.webContents.getURL() };
+          owner.send('space-browser-connect-mcp', { ...site, actor: currentActor, ...(action === 'mcp-guide' && { showGuide: true }) });
+        }
+        break;
+      }
+      case 'fill-login':
+        void useVault('fill').then(status => {
+          if (tabs.get(active)?.view.webContents !== guest) return;
+          if (status === 'no_matching_login') stop('Save a login for this website in Vault first.');
+          if (status === 'unavailable') stop('Could not fill a login on this page.');
+        });
+        break;
+      case 'vault':
+        void showVault(vaultTarget(), currentActor).then(status => {
+          if (tabs.get(active)?.view.webContents === guest && status === 'unavailable') stop('Vault could not be opened on this Mac.');
+        });
+        break;
+      case 'resume-control':
+        if (tabs.get(active)?.manualSignIn && !vaultOperation) {
+          const tab = tabs.get(active);
+          tab.manualSignIn = false; stop();
+          if (tab.sidekickOpen) showSidekick(false);
+        }
+        break;
       case 'sidekick': showSidekick(); break;
       case 'agent': begin(arg); break;
       case 'resize':
@@ -428,6 +639,21 @@ function createBrowser(win, base, workspace) {
       void dialog.showMessageBox(win, { message: 'Sign in to Space to open your browser.', detail: 'Space needs a connection to verify your account.' });
     } finally { opening = false; }
   }
+  owner.ipc.handle('space-vault-open', (event, actor) => {
+    if (event.senderFrame !== owner.mainFrame || event.senderFrame.origin !== origin || typeof actor !== 'string' || !actor) return 'unavailable';
+    return showVault(undefined, actor);
+  });
+  owner.ipc.handle('space-browser-save-token', async (event, endpoint) => {
+    const setup = localSetup;
+    if (!setup || event.senderFrame !== owner.mainFrame || event.senderFrame.origin !== origin || setup.actor !== currentActor ||
+        setup.site.url !== endpoint || setup.selected !== tabs.get(active) || setup.selected.view.webContents.getURL() !== setup.address) return 'unavailable';
+    await open();
+    if (setup !== localSetup || setup.selected !== tabs.get(active) || setup.actor !== currentActor ||
+        setup.selected.view.webContents.getURL() !== setup.address) return 'unavailable';
+    const target = vaultTarget();
+    if (!target || registryCache.get(currentSite())?.site?.url !== endpoint) return 'unavailable';
+    return showVault(target, currentActor, 'add-token');
+  });
   owner.ipc.handle('space-browser-session', (event, tabKey, workspaceId) => {
     const tab = tabs.get(active);
     if (event.senderFrame !== owner.mainFrame || event.senderFrame.origin !== origin || !visible ||
@@ -437,7 +663,11 @@ function createBrowser(win, base, workspace) {
     bytes[6] = (bytes[6] & 15) | 0x40;
     bytes[8] = (bytes[8] & 63) | 0x80;
     const hex = bytes.subarray(0, 16).toString('hex');
-    return [hex.slice(0,8), hex.slice(8,12), hex.slice(12,16), hex.slice(16,20), hex.slice(20)].join('-');
+    const sessionId = [hex.slice(0,8), hex.slice(8,12), hex.slice(12,16), hex.slice(16,20), hex.slice(20)].join('-');
+    if (tab.vaultSession !== sessionId) cancelVault();
+    tab.vaultSession = sessionId;
+    tab.vaultWorkspace = workspaceId;
+    return sessionId;
   });
   owner.ipc.on('space-browser-dismiss-sidekick', (event, key) => {
     if (event.senderFrame === owner.mainFrame && event.senderFrame.origin === origin && tabs.get(active)?.sidekickKey === key)
@@ -452,17 +682,32 @@ function createBrowser(win, base, workspace) {
     if (removed && cause !== 'overwrite' && /(?:session_token|space\.refresh)$/.test(cookie.name) && new URL(origin).hostname === cookie.domain.replace(/^\./, '')) reset();
   };
   cookies.on('changed', cookieChanged);
-  owner.on('did-start-navigation', (_e, _url, inPage, main) => { if (main && !inPage) { generation++; hide(false); } });
+  owner.on('did-start-navigation', (_e, _url, inPage, main) => { if (main && !inPage) { manager?.abort(); generation++; hide(false); } });
   owner.on('render-process-gone', reset);
   win.on('resize', () => { layout(); publish(); });
   layout();
-  win.once('closed', () => { cookies.off('changed', cookieChanged); reset(); });
+  win.once('closed', () => { powerMonitor.off('lock-screen', lockVault); powerMonitor.off('suspend', lockVault); cookies.off('changed', cookieChanged); reset(); });
   function togglePanel() {
     if (!visible) return open();
     if (full) return hide();
     full = true; layout(true); publish();
   }
-  return { open, openOffice, hide, togglePanel,
+  return { open, openOffice, hide, togglePanel, showVault,
+    async webVault(request, signal) {
+      if (!uuid.test(request.actor) || signal.aborted || !['list','manage'].includes(request.action)) return {status: 'unavailable'};
+      if (request.action === 'list') {
+        const result = await showVault(undefined, request.actor, 'web-list', undefined, signal);
+        return typeof result === 'object' ? result : {status: result === 'busy' ? 'busy' : 'unavailable'};
+      }
+      // A remote request can show the locked manager. Only the Mac user can unlock it.
+      return new Promise(resolve => {
+        void showVault(undefined, request.actor, 'manager', () => {
+          if (win.isMinimized()) win.restore();
+          win.show(); resolve({status: 'opened'});
+        }, signal).then(status => resolve({status: status === 'busy' ? 'busy' : 'unavailable'}));
+      });
+    },
+    vaultTool: (turn, signal) => ['fill', 'list-api', 'call-api'].includes(turn.action) ? useVault(turn.action, turn, signal) : 'unavailable',
     showPanel() { if (!visible) return open(); },
     hidePanel() {
       if (opening) generation++; // A pending session check must not reopen the panel.
@@ -470,6 +715,7 @@ function createBrowser(win, base, workspace) {
     },
     accountChanged(actor) {
     // Renderer notifications can revoke access. Only the authenticated /me response opens a profile.
+    if (manager && (!actor || actor !== currentActor)) manager.abort();
     if (currentActor && actor !== currentActor) reset();
     else if (opening && (!actor || actor !== currentActor)) generation++;
   } };

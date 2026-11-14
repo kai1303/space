@@ -14,6 +14,7 @@ const writable = (team:Access) => { if (!team.writable) throw new AppError(409,'
 const manager = (team:Access) => { if (!team.can_manage) throw new AppError(403,'session_manager_required'); };
 const outputPath = (kind:unknown, path:unknown) => {
   if (kind === 'preview' && path === '') return '';
+  if (kind === 'view') return text(path,128);
   if (kind === 'file' || kind === 'change') return text(path,300);
   throw new AppError(400,'invalid_shared_output');
 };
@@ -25,7 +26,7 @@ export class SessionTeamStore {
     return this.db.transaction(async c => {
       const team = await access(c,actor,id);
       const {rows:reviewers} = await c.execute<{user_id:string;display_name:string}>(sql`SELECT r.user_id,u.display_name FROM session_reviewers r JOIN users u ON u.id=r.user_id WHERE r.session_id=${id} ORDER BY u.display_name,r.user_id LIMIT 32`);
-      const {rows:shared} = await c.execute<SharedSessionOutput>(sql`SELECT kind,path,output FROM session_shared_outputs WHERE session_id=${id} ORDER BY kind,path LIMIT 41`);
+      const {rows:shared} = await c.execute<SharedSessionOutput>(sql`SELECT kind,path,output FROM session_shared_outputs WHERE session_id=${id} ORDER BY kind,path LIMIT 49`);
       const {rows} = await c.execute<SessionDiscussionMessage & Record<string,unknown>>(sql`SELECT d.sequence::text,u.display_name AS author,d.body,d.created_at::text
         FROM session_discussion_messages d JOIN users u ON u.id=d.actor_id WHERE d.session_id=${id}
         ${before ? sql`AND d.sequence < ${before}::bigint` : sql``} ORDER BY d.sequence DESC LIMIT 51`);
@@ -86,10 +87,16 @@ export class SessionTeamStore {
       writable(team);
       const {rows:[session]}=await c.execute<{outputs:AgentSessionOutputs}>(sql`SELECT outputs FROM agent_sessions WHERE id=${id}`);
       const available=session!.outputs;
-      const selected=kind==='preview' ? available.preview : kind==='change' ? available.changes.find(change=>change.path===name) : available.files.find(file=>file.path===name);
+      let selected: SharedSessionOutput['output'] | undefined;
+      switch (kind) {
+        case 'view': selected = available.views?.find(view => view.key === name); break;
+        case 'file': selected = available.files.find(file => file.path === name); break;
+        case 'change': selected = available.changes.find(change => change.path === name); break;
+        case 'preview': selected = available.preview; break;
+      }
       if (!selected || !isDeepStrictEqual(selected,output)) throw new AppError(409,'session_output_changed');
       const {rows:[count]}=await c.execute<{total:number;exists:boolean}>(sql`SELECT count(*)::int AS total,coalesce(bool_or(kind=${kind} AND path=${name}),false) AS exists FROM session_shared_outputs WHERE session_id=${id}`);
-      if (!count!.exists && count!.total>=41) throw new AppError(409,'session_shared_output_limit');
+      if (!count!.exists && count!.total>=49) throw new AppError(409,'session_shared_output_limit');
       await c.execute(sql`INSERT INTO session_shared_outputs(session_id,kind,path,output) VALUES(${id},${kind},${name},${JSON.stringify(selected)}::jsonb)
         ON CONFLICT(session_id,kind,path) DO UPDATE SET output=excluded.output WHERE session_shared_outputs.output IS DISTINCT FROM excluded.output`);
     });

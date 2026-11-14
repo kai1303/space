@@ -74,3 +74,39 @@
 .session-helper-agents textarea { padding:8px; min-height:3em; resize:vertical; border:1px solid var(--sp-border); border-radius:4px; font:inherit; color:var(--sp-text); background:var(--sp-surface) }
 .session-helper-agents ul { margin:0 0 8px; padding:0; list-style:none }
 .session-helper-agents li small { display:block; color:var(--sp-text-secondary) }
+
+.code-channel > .chat-channel-header > .sp-conversation-heading { max-width:unset; flex:1; min-width:0; }
+.code-channel-icon { color:var(--sp-text-secondary); flex:none; }
+.code-channel-artifacts-toggle { display:inline-flex; align-items:center; gap:6px; min-height:30px; padding:0 8px; color:var(--sp-text); border:1px solid var(--sp-border); border-radius:6px; background:var(--sp-surface); font:600 13px var(--sp-font); cursor:pointer; }
+.code-channel-artifacts-toggle:hover,.code-channel-artifacts-toggle[aria-expanded=true] { background:var(--sp-surface-hover); }
+.code-channel-artifacts-toggle span { padding:0 5px; border-radius:10px; font-size:11px; background:var(--sp-accent-soft); color:var(--sp-accent); }
+.code-channel-context { display:flex; gap:14px; flex:none; overflow-x:auto; align-items:center; min-height:32px; padding:0 20px; border-bottom:1px solid var(--sp-border); }
+.code-channel-context :is(a,span) { display:inline-flex; align-items:center; gap:5px; white-space:nowrap; color:var(--sp-text-secondary); font-size:12px; }
+.code-channel-context a { text-decoration:none; }
+.code-channel-context a:hover { text-decoration:underline; }
+.code-channel-context svg { width:15px; height:15px; flex:none; }
+.code-channel-artifacts { display:flex; flex:0 0 49%; min-width:0; flex-direction:column; overflow:hidden; background:var(--sp-surface); border-inline-start:1px solid var(--sp-border); }
+.code-channel-artifacts[hidden], .code-artifact-panel[hidden] { display:none; }
+.code-artifacts-header { min-height:42px; display:flex; flex:none; align-items:center; padding-inline:10px; gap:5px; border-bottom:1px solid var(--sp-border); }
+.code-artifacts-header > .sp-tabs { flex:1; align-self:stretch; min-width:0; overflow-x:auto; border:0; gap:12px; }
+.code-artifacts-header > strong { flex:1; }
+.code-artifacts-header > .sp-tabs button { flex:none; padding-inline:3px; font-size:13px; }
+.code-artifact-panel { flex:1; min-height:0; min-width:0; overflow:auto; }
+.code-artifact-html { border:0; width:100%; height:100%; background:white; display:block; }
+.code-artifact-document { padding:16px 20px; overflow-wrap:anywhere; }
+.code-artifact-document h2 { font-size:18px; }
+.code-artifacts-empty,.agent-session-ended { padding:14px 18px; font-size:13px; color:var(--sp-text-secondary); }
+.agent-session-ended { border-top:1px solid var(--sp-border); }
+.agent-session-ended strong { display:block; color:var(--sp-text); }
+.agent-session-ended button { margin-top:7px; }
+.agent-session-ended p { white-space:pre-wrap; overflow-wrap:anywhere; }
+.code-channel .session-team-panel { flex:1; min-width:0; }
+@container (max-width: 740px) {
+ .code-channel .agent-session-body[data-artifacts-open] > :is(.agent-session-conversation,.session-team-panel) { display:none; }
+ .code-channel-artifacts { flex:1; border:0; }
+}
+.agent-session-activity { display:flex; align-items:center; gap:6px; }
+.agent-session-activity:has(.chat-typing:empty):not(:has(button)) { display:contents; }
+.agent-session-activity > button { opacity:0; }
+.agent-session-activity:is(:hover,:focus-within) > button { opacity:1; }
+@media (hover:none) { .agent-session-activity > button { opacity:1; } }

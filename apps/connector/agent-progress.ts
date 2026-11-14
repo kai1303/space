@@ -1,9 +1,11 @@
-import { extractMemoryBlock, visibleText, parseAgentResponse, type AgentActivity, type AgentText, type AgentTool, type AgentResponseItem } from '@space/contracts';
+import { extractMemoryBlock, visibleText, parseAgentResponse, parseSessionViewUpdate, type AgentActivity, type AgentText, type AgentTool, type AgentResponseItem, type AgentSessionCodeContext, type AgentSessionViewUpdate } from '@space/contracts';
+
+const reviewMarker = '<space-review>';
 
 // Accumulated snapshots share the existing backpressure and durable event path.
 export class AgentProgress {
   private readonly pullRequestAction?: {label: string; url: string};
-  constructor(private readonly rolling = false, pullRequestUrl = process.env.SPACE_PULL_REQUEST_URL) {
+  constructor(private readonly rolling = false, pullRequestUrl = process.env.SPACE_PULL_REQUEST_URL, private readonly reviewEnabled = false) {
     if (!rolling || !pullRequestUrl) return;
     const url = new URL(pullRequestUrl);
     if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash || url.href.length > 2000)
@@ -11,6 +13,36 @@ export class AgentProgress {
     this.pullRequestAction = {label: 'Open pull request page', url: url.href};
   }
   activity: AgentActivity = 'working';
+  codeContext?: AgentSessionCodeContext;
+  visibleMessage(raw: string, terminal: boolean): string {
+    const text = visibleText(raw, terminal);
+    if (!this.reviewEnabled) return text;
+    const marker = /(?:^|\n)<space-review>/.exec(text);
+    if (marker) {
+      if (!terminal || this.reviewUpdate(text)) return text.slice(0, marker.index).trimEnd();
+      return text;
+    }
+    if (!terminal) {
+      const lastLine = text.slice(text.lastIndexOf('\n') + 1);
+      if (lastLine && reviewMarker.startsWith(lastLine)) return text.slice(0, -lastLine.length);
+    }
+    return text;
+  }
+  reviewUpdate(raw: string): AgentSessionViewUpdate | undefined {
+    if (!this.reviewEnabled) return;
+    const final = visibleText(raw, true);
+    const end = '</space-review>';
+    if (!final.trimEnd().endsWith(end)) return;
+    const start = final.lastIndexOf('\n' + reviewMarker);
+    const offset = start >= 0 ? start + 1 : final.startsWith(reviewMarker) ? 0 : -1;
+    if (offset < 0) return;
+    try {
+      return parseSessionViewUpdate(JSON.parse(final.slice(offset + reviewMarker.length, final.lastIndexOf(end))));
+    } catch {
+      // A quoted or malformed example is ordinary answer text; it cannot mutate a tab.
+      return;
+    }
+  }
   readonly tools = new Map<string, AgentTool>();
   private readonly items: AgentResponseItem[] = [];
   private readonly changes = new Map<string, string>();
@@ -48,12 +80,17 @@ export class AgentProgress {
   snapshot(messages: AgentText[], terminal = false) {
     // The turn-end memory block is for Space only: hide it from people and attach it when final.
     const memory = terminal ? extractMemoryBlock(messages.map(m => m.text).join('\n\n')) : undefined;
-    messages = messages.map(m => ({ ...m, text: visibleText(m.text, terminal) }));
+    messages = messages.map(m => ({ ...m, text: this.visibleMessage(m.text, terminal) }));
     for (const message of messages) this.message(message.id);
     const messageIds = new Set(messages.map(message => message.id));
     const items = this.items.filter(item => item.type === 'tool' ? this.tools.has(item.id) : messageIds.has(item.id));
     const originals = [...this.tools.values()];
-    const snapshot = parseAgentResponse({ messages, tools: originals.map(tool => ({ ...tool, arguments: '', ...(tool.result === undefined ? {} : { result: '' }), ...(terminal && ['calling', 'running'].includes(tool.status) ? { status: 'interrupted' } : {}) })), components: [], items, ...(this.changes.size ? { outputs: { ...(terminal && this.pullRequestAction ? { actions: [this.pullRequestAction] } : {}), files: [], changes: [...this.changes.keys()].map(path => ({ path, patch: '' })) } } : {}), ...(!terminal ? { activity: this.activity } : {}), ...(memory ? { memory } : {}) });
+    const outputs = this.changes.size || this.codeContext ? {
+      ...(this.codeContext ? {context: this.codeContext} : {}),
+      ...(this.changes.size && terminal && this.pullRequestAction ? { actions: [this.pullRequestAction] } : {}),
+      files: [], changes: [...this.changes.keys()].map(path => ({path, patch: ''})),
+    } : undefined;
+    const snapshot = parseAgentResponse({ messages, tools: originals.map(tool => ({ ...tool, arguments: '', ...(tool.result === undefined ? {} : { result: '' }), ...(terminal && ['calling', 'running'].includes(tool.status) ? { status: 'interrupted' } : {}) })), components: [], items, ...(outputs ? {outputs} : {}), ...(!terminal ? { activity: this.activity } : {}), ...(memory ? { memory } : {}) });
     let remaining = 64000 - JSON.stringify(snapshot).length;
     if (snapshot.outputs) {
       let patchBudget = Math.min(32000, remaining);

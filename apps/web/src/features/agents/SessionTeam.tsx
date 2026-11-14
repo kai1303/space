@@ -4,6 +4,7 @@ import type { AgentSessionOutputs, SessionTeamView, SharedSessionOutput, Workspa
 import { request } from '../../shared/api/request.js';
 import { subscribeUpdates, invalidateUpdates } from '../../shared/realtime/live-updates.js';
 import { TaskChanges, TaskFiles, TaskPreview } from './AgentTaskWorkspace.js';
+import { PublishedCodeView } from './CodeChannelArtifacts.js';
 import './session-team.css';
 
 type Props = { id:string; viewer:string; outputs?:AgentSessionOutputs; standalone?:boolean };
@@ -91,10 +92,12 @@ function SharedArtifacts({items,post}:{items:SharedSessionOutput[];post?: (text:
   const files=items.flatMap(item=>item.kind==='file'?[item.output]:[]);
   const changes=items.flatMap(item=>item.kind==='change'?[item.output]:[]);
   const preview=items.find(item=>item.kind==='preview');
+  const views=items.flatMap(item=>item.kind==='view'?[item.output]:[]);
   return <div className="session-team-section"><h3>Shared for review</h3>
     {changes.length>0 && <details><summary>Changes {changes.length}</summary><TaskChanges changes={changes} onReview={post}/></details>}
     {files.length>0 && <details><summary>Files {files.length}</summary><TaskFiles files={files}/></details>}
     {preview && <details><summary>{preview.output.label}</summary><TaskPreview preview={preview.output}/></details>}
+    {views.map(view=><details key={view.key}><summary>{view.name}</summary><PublishedCodeView view={view}/></details>)}
   </div>;
 }
 
@@ -122,10 +125,11 @@ function ShareOutputs({available,shared,pending,writable,change}:{available:Agen
     ...available.files.map(output=>({kind:'file' as const,path:output.path,output})),
     ...available.changes.map(output=>({kind:'change' as const,path:output.path,output})),
     ...(available.preview?[{kind:'preview' as const,path:'' as const,output:available.preview}]:[]),
+    ...(available.views??[]).map(output=>({kind:'view' as const,path:output.key,output})),
   ];
   return <details className="session-team-section"><summary>Manage shared outputs</summary>
     {all.length===0 && <p>No outputs are available yet.</p>}
-    {writable && all.map(item=><div className="session-team-row" key={item.kind+':'+item.path}><span>{item.kind} · {item.path || 'Preview'}</span><Button disabled={pending} size="sm" onClick={()=>void change(item,false)}>{shared.some(s=>s.kind===item.kind&&s.path===item.path)?'Update snapshot':'Share snapshot'}</Button></div>)}
-    {shared.map(item=><div className="session-team-row" key={item.kind+':'+item.path}><span>{item.path || 'Preview'}</span><Button disabled={pending} size="sm" variant="ghost" onClick={()=>void change(item,true)}>Stop sharing</Button></div>)}
+    {writable && all.map(item=><div className="session-team-row" key={item.kind+':'+item.path}><span>{item.kind} · {item.kind==='view' ? item.output.name : item.path || 'Preview'}</span><Button disabled={pending} size="sm" onClick={()=>void change(item,false)}>{shared.some(s=>s.kind===item.kind&&s.path===item.path)?'Update snapshot':'Share snapshot'}</Button></div>)}
+    {shared.map(item=><div className="session-team-row" key={item.kind+':'+item.path}><span>{item.kind==='view' ? item.output.name : item.path || 'Preview'}</span><Button disabled={pending} size="sm" variant="ghost" onClick={()=>void change(item,true)}>Stop sharing</Button></div>)}
   </details>;
 }

@@ -152,6 +152,9 @@ importers:
       '@fontsource/lato':
         specifier: ^5.3.0
         version: 5.3.0
+      '@modelcontextprotocol/node':
+        specifier: 2.1.2
+        version: 2.1.2(@modelcontextprotocol/server@2.4.0)
       '@modelcontextprotocol/server':
         specifier: 2.4.0
         version: 2.4.0
@@ -170,6 +173,9 @@ importers:
       motion:
         specifier: ^14.9.0
         version: 14.9.0(react-dom@19.3.1)(react@19.3.1)
+      tldts:
+        specifier: '7'
+        version: 7.5.2
       zod:
         specifier: ^4.2.0
         version: 4.6.7
@@ -365,6 +371,9 @@ importers:
       livekit-client:
         specifier: 2.23.0
         version: 2.23.0(@types/dom-mediacapture-record@1.0.22)
+      lottie-web:
+        specifier: 5.13.0
+        version: 5.13.0
       motion:
         specifier: ^14.9.0
         version: 14.9.0(react-dom@19.3.1)(react@19.3.1)
@@ -2089,7 +2098,6 @@ packages:
       hono: ^4 || ^5.0.0-0
     dependencies:
       hono: 4.13.16
-    dev: false
 
   /@huggingface/jinja@0.5.13:
     resolution: {integrity: sha512-jM17MqFily1iyT/1LD3r5w8/CZiyapVB0+7vOw48PfVtzyKsXStmHE4jVTyDAD05Tqv3un1xrS9ILUU1ugQAYQ==}
@@ -3113,7 +3121,6 @@ packages:
       '@hono/node-server': 2.1.6(hono@4.13.16)
       '@modelcontextprotocol/server': 2.4.0
       hono: 4.13.16
-    dev: false
 
   /@modelcontextprotocol/sdk@1.32.2(zod@4.6.7):
     resolution: {integrity: sha512-SWsVtH/0vULSQStoZ6xxH2K09Li8fXYTMC64ZeogCdpZ3XSi1eCPOByV1OpuJxuI3OcmHhosDWYyii07tpPsLw==}
@@ -6942,7 +6949,6 @@ packages:
   /hono@4.13.16:
     resolution: {integrity: sha512-AOLOEhvrV+iH92xXCnFr/5+3KjPKcI3xP63XJtX5spAnkznPdHijlIsUTpi7/9EhWqrTCekw5c5zh1K+YsVw7A==}
     engines: {node: '>=16.9.0'}
-    dev: false
 
   /html-encoding-sniffer@4.0.0:
     resolution: {integrity: sha512-Y22oTqIU4uuPgEemfz7NDJz6OeKf12Lsu+QC+s3BVpda64lTiMYCyGwg5ki4vFxkMwQdeZDl2adZoqUgdFuTgQ==}
@@ -7534,6 +7540,10 @@ packages:
 
   /longest-streak@3.1.0:
     resolution: {integrity: sha512-9Ri+o0JYgehTaVBBDoMqIl8GXtbWg711O3srftcHhZ0dqnETqLaoIK0x17fUw9rFSlK/0NlsKe0Ahhyl5pXE2g==}
+    dev: false
+
+  /lottie-web@5.13.0:
+    resolution: {integrity: sha512-+gfBXl6sxXMPe8tKQm7qzLnUy5DUPJPKIyRHwtpCpyUEYjHYRJC/5gjUvdkuO2c3JllrPtHXH5UJJK8LRYl5yQ==}
     dev: false
 
   /loupe@3.2.1:
@@ -9982,11 +9992,22 @@ packages:
   /tldts-core@6.1.86:
     resolution: {integrity: sha512-Je6p7pkk+KMzMv2XXKmAE3McmolOQFdxkKw0R8EYNr7sELW46JqnNeTX8ybPiQgvg1ymCoF8LXs5fzFaZvJPTA==}
 
+  /tldts-core@7.5.2:
+    resolution: {integrity: sha512-8W1topazDwhMKbm2I83IPa57Ow5VUxFgLbXv42+vSILnv8FY5OHvdEY/tS6WoWeMbxkHZQhra5cmeFHriKptSQ==}
+    dev: true
+
   /tldts@6.1.86:
     resolution: {integrity: sha512-WMi/OQ2axVTf/ykqCQgXiIct+mSQDFdH2fkwhPwgEwvJ1kSzZRiinb0zF2Xb8u4+OqPChmyI6MEu4EezNJz+FQ==}
     hasBin: true
     dependencies:
       tldts-core: 6.1.86
+
+  /tldts@7.5.2:
+    resolution: {integrity: sha512-p+JwEdxIWQx033pMvW9ULBbyC1Eg6JtWo2Mo0jbC8TVSjp2QrHFE+WKs8JpMGc3ECMsmBpU2RH/25NgX3k1ulg==}
+    hasBin: true
+    dependencies:
+      tldts-core: 7.5.2
+    dev: true
 
   /toad-cache@3.7.4:
     resolution: {integrity: sha512-m1TdR/rvT7kgGJZhspNtXdsdYk0fddFpJJFlG5s+UkPFo6lkLoZ3YLOaovPYjq1R75NP5JfeTlSHaOsE09peCg==}

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseAgentResponse } from '@space/contracts';
+import { parseAgentResponse, parseSessionViewUpdate, updateSessionViews } from '@space/contracts';
 const response = {messages:[],tools:[],components:[]};
 test('session responses retain validated previews, files and changes together',()=>{
  const outputs={preview:{state:'ready',label:'Result',document:'<h1>Result</h1>'},files:[{path:'src/result.ts',content:'export const result = 1;',language:'typescript'}],changes:[{path:'src/result.ts',patch:'+export const result = 1;'}]};
@@ -21,6 +21,21 @@ test('provider result actions are bounded HTTPS links without embedded credentia
  assert.deepEqual(parseAgentResponse({...response,outputs}).outputs,outputs);
  for(const actions of [Array(9).fill(action),[{...action,url:'javascript:alert(1)'}],[{...action,url:'https://user:secret@host.example'}]])
    assert.throws(()=>parseAgentResponse({...response,outputs:{...outputs,actions}}));
+});
+
+test('code context and review tabs validate keys, blocks, link credentials and cardinality', () => {
+  const view = {key:'reports/ci', type:'canvas', name:'CI', content:'# Build results'};
+  const parse = (fields: object) => parseAgentResponse({...response,outputs:{files:[],changes:[],...fields}}).outputs;
+  for (const fields of [
+    {views:[view,view]}, {views:[{...view,key:'<bad>'}]}, {views:[{...view,content:'x'.repeat(32001)}]},
+    {views:[{key:'actions',name:'Actions',type:'blocks',blocks:[{type:'run',command:'publish'}]}]},
+    {context:{repository:{label:'Repository',url:'https://user:secret@host.test/repo'}}},
+    {context:{pull_request:{label:'Pull request',url:'http://host.test/pr/1'}}},
+  ]) assert.throws(() => parse(fields));
+  assert.deepEqual(parse({views:[],context:{}}), {views:[],context:{},files:[],changes:[]});
+  assert.throws(() => parseSessionViewUpdate({set:view,remove:'another'}));
+  const eight = Array.from({length:8}, (_, i) => ({key:String(i), name:'Plan', type:'canvas' as const, content:''}));
+  assert.throws(() => updateSessionViews(eight,parseSessionViewUpdate({set:view})), /too_many_session_views/);
 });
 
 test('document edit blocks preserve passage formatting and reject invalid payloads', () => {

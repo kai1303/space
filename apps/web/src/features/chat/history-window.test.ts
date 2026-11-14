@@ -114,3 +114,23 @@ it('keeps tombstones in place through replay and stale pages', () => {
     expect(mergePage(updated, latest, direction).messages[1]).toMatchObject(deleted);
   }
 });
+
+it('merges the newest reply summary into its root across echoed replies, deletion and stale pages',()=>{
+ const summary = (revision:string,count:number) => ({revision,count,participants:[],participant_count:0,last_reply_at:null});
+ const root={...message(1),thread_root_id:'1',reply_summary:summary('1',0)};
+ const previous={...page(1,1,false),messages:[root]};
+ const reply={...message(2),thread_root_id:'1',reply_summary:summary('2',1),reply_count:1};
+ const deletion={...reply,deleted_at:'2026-01-01',reaction_sequence:'3',reply_summary:summary('3',0)};
+ const latest=appendLive(previous,[reply,deletion,reply],true,true);
+ expect(latest.messages).toHaveLength(1);
+ expect(latest.messages[0]!.reply_summary).toEqual(deletion.reply_summary);
+ expect(mergePage(latest,{...previous,messages:[{...root,reply_summary:reply.reply_summary}]},'older').messages[0]!.reply_summary).toEqual(deletion.reply_summary);
+});
+
+it('places a promoted reply at its channel position and keeps the original position in the thread', () => {
+  const reply = {...message(2),thread_root_id:'1'};
+  const visible = appendLive(page(1,1,false),[reply,message(3)],true,true);
+  const promoted = {...reply,channel_broadcast_sequence:'4',reaction_sequence:'4'};
+  expect(appendLive(visible,[promoted,promoted],true,true).messages.map(m=>[m.id,m.sequence])).toEqual([['1','1'],['3','3'],['2','4']]);
+  expect(appendLive(page(1,2,false),[promoted],true).messages.map(m=>[m.id,m.sequence])).toEqual([['1','1'],['2','2']]);
+});

@@ -6,6 +6,7 @@ import { Pool } from 'pg';
 import { bootstrap } from '@space/postgres/bootstrap';
 import { migrate } from '@space/postgres/migrate';
 import { ChatStore } from '@space/postgres/chat';
+import { PostgresStore } from '@space/postgres/store';
 
 const connectionString = process.env.TEST_DATABASE_URL;
 if (!connectionString) throw new Error('TEST_DATABASE_URL is required');
@@ -189,4 +190,37 @@ test('sent message edits enforce ownership, reject competing saves and replay th
   assert.deepEqual(events.rows[1].payload.document, restored.document);
   await chat.deleteMessage(seed.owner_id, seed.channel_id, original.id);
   await assert.rejects(edit(seed.owner_id, 'Restored', restored.reaction_sequence), { code: 'not_found' });
+});
+
+test('hydrates channel reply bars and replay with current public participants after deletes', async () => {
+  const a = await bootstrap(pool), chat = new ChatStore(pool);
+  const root = await chat.send(a.owner_id, a.channel_id, {client_message_id:randomUUID(), text:'Root'});
+  await pool.query('UPDATE users SET image=$1 WHERE id=$2', ['/profile/photo.png', a.collaborator_id]);
+  const reply = await chat.send(a.collaborator_id, a.channel_id, {client_message_id:randomUUID(), text:'First', thread_id:root.thread_id});
+  const again = await chat.send(a.collaborator_id, a.channel_id, {client_message_id:randomUUID(), text:'Second', thread_id:root.thread_id});
+  const session=randomUUID();
+  await pool.query('INSERT INTO agent_sessions(id,workspace_id,installation_id,origin_thread_id,title,managed,created_by) VALUES($1,$2,$3,$4,$5,true,$6)',
+    [session,a.workspace_id,a.installation_id,root.thread_id,'Private agent work',a.owner_id]);
+  const task=await new PostgresStore(pool).createTask(a.owner_id,{workspace_id:a.workspace_id,thread_id:root.thread_id,installation_id:a.installation_id,goal:'Session reference',skill:'demo.echo'},randomUUID());
+  await pool.query('INSERT INTO messages(id,workspace_id,channel_id,thread_id,task_id,installation_id,agent_session_id,text) VALUES($1,$2,$3,$4,$5,$6,$7,$8)',
+    [randomUUID(),a.workspace_id,a.channel_id,root.thread_id,task.id,a.installation_id,session,'Private agent work']);
+  const readRoot = async () => (await chat.messageHistory(a.owner_id, a.channel_id)).messages.find(m=>m.id===root.id)!;
+  const summary = (await readRoot()).reply_summary!;
+  assert.equal(summary.count, 2);
+  assert.deepEqual(summary.participants, [{...reply.author, image:'/profile/photo.png'}]);
+  assert.equal(Date.parse(summary.last_reply_at!), Date.parse(again.created_at));
+  await chat.deleteMessage(a.collaborator_id, a.channel_id, again.id);
+  const updated = (await readRoot()).reply_summary!;
+  assert.equal(updated.count, 1);
+  assert.equal(Date.parse(updated.last_reply_at!), Date.parse(reply.created_at));
+  const replay = (await chat.events(a.owner_id, a.channel_id, again.sequence!)).at(-1)!;
+  assert.equal(replay.type,'message.updated');
+  if (replay.type === 'message.updated') assert.deepEqual(replay.payload.reply_summary,updated);
+  const dm = await chat.directMessages.open(a.owner_id, a.workspace_id, {user_id:a.collaborator_id});
+  const directRoot = await chat.send(a.owner_id, dm.id, {client_message_id:randomUUID(),text:'DM root'});
+  await chat.send(a.collaborator_id, dm.id, {client_message_id:randomUUID(),text:'DM reply',thread_id:directRoot.thread_id});
+  assert.deepEqual((await chat.messageHistory(a.owner_id, dm.id)).messages[0]!.reply_summary?.participants,summary.participants);
+  const outsider = await bootstrap(pool);
+  await assert.rejects(chat.messageHistory(outsider.owner_id, dm.id),{code:'not_found'});
+  await assert.rejects(chat.events(outsider.owner_id, dm.id, '0'),{code:'not_found'});
 });

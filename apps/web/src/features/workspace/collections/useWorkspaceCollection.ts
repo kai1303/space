@@ -10,7 +10,7 @@ const denied = (error: unknown) => error instanceof Error && ['unauthorized', 'n
 const PAGE_SIZE = 24;
 export const MAX_ITEMS = 240;
 
-export function useCollection(workspace: string, view: CollectionView, query = '', { preview = false } = {}) {
+export function useCollection(workspace: string, view: CollectionView, query = '', { preview = false, viewer = '' } = {}) {
   const base = `/workspaces/${encodeURIComponent(workspace)}/hub`;
   const cache = useWorkspaceQueryCache(workspace);
   const previewCache = preview ? cache : undefined;
@@ -32,7 +32,7 @@ export function useCollection(workspace: string, view: CollectionView, query = '
     state.read?.abort(); const controller = new AbortController(); state.read = controller;
     const revision = ++state.revision; retryAfter.current = after; setLoading(!!after || !initial()); setError('');
     try {
-      const pageCount = (view === 'todos' || view === 'files') && !after ? loadedPages.current : 1;
+      const pageCount = (view !== 'sent') && !after ? loadedPages.current : 1;
       const incoming: Item[] = []; let next = after, pagesRead = 0;
       do {
         const path = next ? `${firstPath}&after=${encodeURIComponent(next)}` : firstPath;
@@ -41,7 +41,7 @@ export function useCollection(workspace: string, view: CollectionView, query = '
         if (!state.active || controller.signal.aborted || revision !== state.revision) return;
         incoming.push(...page.items); next = page.next_cursor ?? undefined; pagesRead++;
       } while (next && pagesRead < pageCount);
-      if (view === 'todos' || view === 'files') {
+      if (view !== 'sent') {
         loadedPages.current = Math.min(MAX_ITEMS / PAGE_SIZE, after ? loadedPages.current + 1 : pagesRead);
         for (const item of incoming) confirmedTodos.current.delete(item.id);
       }
@@ -59,12 +59,14 @@ export function useCollection(workspace: string, view: CollectionView, query = '
   }
   useEffect(() => {
     const state = controls.current; state.active = true;
-    const stop = subscribeUpdates('workspace', workspace, () => load(), code => {
+    const revoke = (code: string) => {
       state.revoked = true; confirmedTodos.current.clear(); setRevoked(true); state.revision++; state.read?.abort(); state.write?.abort();
       setItems([]); setCursor(null); setLoading(false); setBusy(false); setWriteError(''); setError(failure(new Error(code)));
-    });
-    return () => { state.active = false; state.revision++; state.read?.abort(); state.write?.abort(); stop(); };
-  }, [workspace, view, query, previewCache]);
+    };
+    const stop = subscribeUpdates('workspace', workspace, () => load(), revoke);
+    const stopActor = (view === 'threads' || view === 'saved') && viewer ? subscribeUpdates('actor', viewer, () => load(), revoke) : undefined;
+    return () => { stopActor?.(); state.active = false; state.revision++; state.read?.abort(); state.write?.abort(); stop(); };
+  }, [workspace, view, query, previewCache, viewer]);
   async function change<T>(path: string, body: object): Promise<T | undefined> {
     const state = controls.current;
     if (state.writing || state.revoked || !state.active) return;
@@ -72,7 +74,7 @@ export function useCollection(workspace: string, view: CollectionView, query = '
     state.writing = true; state.revision++; state.read?.abort(); setLoading(false); setBusy(true); setWriteError('');
     const controller = new AbortController(); state.write = controller;
     try {
-      const value = await request<T>(`${base}${path}`, body, undefined, 'POST', controller.signal);
+      const value = await request<T>(`${base}${path}`, body, undefined, 'POST', controller.signal, viewer || undefined);
       cache?.invalidate(`${base}/${view}`);
       if (!state.active || state.revoked || controller.signal.aborted) return;
       if (view === 'todos') {
@@ -92,5 +94,5 @@ export function useCollection(workspace: string, view: CollectionView, query = '
       }
     } finally { state.writing = false; if (state.active) setBusy(false); }
   }
-  return { items, cursor, loading, error, busy, writeError, revoked, change, clearAndRefresh: () => { cache?.invalidate(`${base}/${view}`); setItems([]); setCursor(null); return load(); }, more: () => load(cursor ?? undefined), retry: () => load(retryAfter.current) };
+  return { items, cursor, loading, error, busy, writeError, revoked, change, refresh: () => load(), clearAndRefresh: () => { cache?.invalidate(`${base}/${view}`); setItems([]); setCursor(null); return load(); }, more: () => load(cursor ?? undefined), retry: () => load(retryAfter.current) };
 }

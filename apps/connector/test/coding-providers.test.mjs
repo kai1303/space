@@ -45,6 +45,7 @@ async function codexFixture(t, behavior='normal') {
           if(${JSON.stringify(behavior)}==='long')for(let i=0;i<50;i++)send({method:'item/completed',params:{...scope,item:{id:'message-'+i,type:'agentMessage',text:'x'.repeat(1000)}}});
           for(let i=0;i<35;i++) send({method:'item/completed',params:{...scope,item:{id:'read-'+i,type:'commandExecution',command:'cat README.md',cwd:turn.params.cwd,status:'completed',aggregatedOutput:'Read '+i}}});
           send({method:'item/completed',params:{...scope,item:{id:'edit',type:'fileChange',status:'completed',changes:[{path:'README.md',kind:{type:'update'},diff:'--- a/README.md\\n+++ b/README.md\\n@@ -1 +1 @@\\n-old\\n+new'}]}}});
+          if (${JSON.stringify(behavior)}==='review') send({method:'item/agentMessage/delta',params:{...scope,itemId:'summary',delta:'Tests passed.\\n<space-review>{"set":{"key":"checks","type":"canvas","name":"Checks","content":"# Results"}}</space-review>'}});
           send({method:'turn/completed',params:{...scope,turn:{id:'turn',status:'completed'}}});
         } else if(m.method==='turn/interrupt') {send({id:m.id,result:{}});send({method:'turn/completed',params:{...scope,turn:{id:'turn',status:'interrupted'}}});}
       });
@@ -66,6 +67,16 @@ test('Codex coding scopes approvals and native execution, streams terminal/patch
   assert.ok(f.launchArgs.includes('features.shell_tool=true'));assert.notEqual(f.launchOptions.env.HOME,process.env.HOME);
   const response=events.at(-1).payload.response;assert.equal(events.at(-1).type,'execution.completed');assert.equal(response.tools.length,30);
   assert.equal(response.outputs.changes[0].path,'README.md');assert.match(response.outputs.changes[0].patch,/\+new/);assert.equal(response.tools.at(-1).name,'apply_patch');assert.match(response.tools.at(-1).result,/\+new/);assert.ok(response.tools.some(tool=>tool.result==='Read 34'));
+});
+
+test('a managed native coding turn publishes its review tab and keeps the channel summary readable', async t=>{
+  const f=await codexFixture(t,'review'), events=[];
+  await f.runtime.invoke({...request('codex'),persistent_session:{resume:false}},async e=>events.push(e),new AbortController().signal,{requestApproval:async()=> 'allow'});
+  assert.deepEqual(events.flatMap(event=>event.payload.session_view?[event.payload.session_view]:[]),[
+    {set:{key:'checks',type:'canvas',name:'Checks',content:'# Results'}},
+  ]);
+  assert.equal(events.at(-1).payload.text,'Tests passed.');
+  assert.ok(events.every(event=>!JSON.stringify(event.payload.response.messages).includes('<space-review>')));
 });
 
 test('Codex coding without controls or with denied project never starts inference', async t=>{

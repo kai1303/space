@@ -130,7 +130,6 @@ export function createApi(store: PostgresStore, options: { workflowChat?: Workfl
   if (options.auth) registerAuthRoutes(app, options.auth);
   registerWorkspaceRoutes(app, new WorkspaceStore(store.pool));
   registerSidebarSectionRoutes(app, new SidebarSectionStore(store.pool));
-  registerComposerDraftRoutes(app, new ComposerDraftStore(store.pool));
   registerWorkspaceSettingsRoutes(app, new WorkspaceSettingsStore(store.pool));
   const invitations = new WorkspaceInvitationStore(store.pool, {emailEncryptionKey:options.invitationEmail?.config.encryptionKey});
   registerWorkspaceInvitationRoutes(app, invitations);
@@ -173,6 +172,7 @@ export function createApi(store: PostgresStore, options: { workflowChat?: Workfl
   const chat = new ChatStore(store.pool);
   registerChatRoutes(app, chat);
   const scheduled = new ScheduledMessageStore(store.pool, chat);
+  registerComposerDraftRoutes(app, new ComposerDraftStore(store.pool), chat, scheduled);
   registerScheduledMessageRoutes(app, scheduled);
   registerWorkflowChat(app, chat, options.workflowChat);
   registerNavigatorRoutes(app, new NavigatorStore(store.pool));

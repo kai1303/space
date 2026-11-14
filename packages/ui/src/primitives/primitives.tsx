@@ -14,6 +14,13 @@ import { AnimatePresence, motion, useAnimate, useIsPresent, useReducedMotion } f
 import { registerToastDialog } from "./toast.js";
 import { motionTransition, surfaceMotion } from "../motion/motion.js";
 
+export function Spinner() {
+  const reduced = useReducedMotion();
+  return <motion.span className="sp-spinner" aria-hidden="true"
+    animate={{ rotate: reduced ? 0 : 360 }}
+    transition={reduced ? { duration: 0 } : { duration: 0.7, ease: "linear", repeat: Infinity }} />;
+}
+
 export type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
   ref?: React.Ref<HTMLButtonElement>;
   variant?: "primary" | "secondary" | "ghost" | "danger";
@@ -38,7 +45,7 @@ export function Button({
       aria-busy={loading || undefined}
       className={`sp-button sp-button--${variant} sp-button--${size} ${className}`}
     >
-      {loading && <span className="sp-spinner" aria-hidden="true" />}
+      {loading && <Spinner />}
       {children}
     </button>
   );

@@ -76,3 +76,24 @@ it('keeps a channel hidden by responsive panels unread and resumes when it becom
   await act(async () => { await vi.advanceTimersByTimeAsync(300); });
   expect(fetch).toHaveBeenCalledTimes(1);
 });
+
+it('acknowledges only the displayed thread when the reply panel is visible', async () => {
+  vi.useFakeTimers();
+  vi.spyOn(document,'hasFocus').mockReturnValue(true);
+  const fetch=vi.fn(async (_path:string,_init:RequestInit)=>({ok:true,json:async()=>({sequence:'42'})}));
+  vi.stubGlobal('fetch',fetch);
+  const panel=document.createElement('aside');
+  panel.className='chat-thread'; panel.setAttribute('aria-label','Thread');
+  panel.innerHTML='<div class="chat-timeline"></div>';
+  panel.hidden=true; document.body.append(panel);
+  try {
+    renderHook(()=>useChannelRead('room','42','0',true,{workspace:'workspace',id:'thread',actor:'viewer'}));
+    await act(async()=>{await vi.advanceTimersByTimeAsync(300);});
+    expect(fetch).not.toHaveBeenCalled();
+    panel.hidden=false;
+    act(()=>window.dispatchEvent(new Event('focus')));
+    await act(async()=>{await vi.advanceTimersByTimeAsync(300);});
+    expect(fetch.mock.calls[0]?.[0]).toBe('/v1/workspaces/workspace/hub/threads/thread/read');
+    expect(fetch.mock.calls[0]?.[1].body).toBe('{"sequence":"42"}');
+  } finally {panel.remove();}
+});

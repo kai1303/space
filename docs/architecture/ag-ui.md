@@ -132,6 +132,22 @@ For a backend that can retain its conversation by AG-UI `threadId`, set `capabil
 | --- | --- |
 | `space.session.open` | Send `{}` to turn the current run into a named, shared Space session linked to its source thread. Already-managed sessions keep their identity. |
 | `space.session.outputs` | Send a Space outputs object containing `files`, `changes`, an optional `preview`, and optional HTTPS `actions`. Space validates and persists managed-session outputs. For example, an agent can supply a unified patch and an action linking to a review on its Git host. |
+| `space.session.setView` | Publish one named review tab or replace its content under the same stable key. |
+| `space.session.removeView` | Send `{"key":"reports/coverage"}` to remove that tab. Repeating a removal is safe. |
 | `space.session.archive` | Send `{}` before a successful `RUN_FINISHED` to end the session. Pending human follow-ups keep it open. Failed or interrupted executions do not archive. |
 
 These operations address the current authorized execution. The server derives the session and installation from the delivery. A backend cannot select a different channel or session in an event. The existing execution deadline applies.
+
+A managed session supports up to eight named tabs alongside its single Changes view. Set an HTML report with the following event.
+
+```json
+{"type":"CUSTOM","name":"space.session.setView","value":{"key":"reports/coverage","type":"html","name":"Coverage","content":"<h1>93% coverage</h1>"}}
+```
+
+Use `canvas` with Markdown in `content` for a document, or `blocks` with an array of validated Space components in `blocks`. Tab keys accept letters, digits, periods, hyphens, underscores and slashes and must begin with a letter or digit. Replacing a tab keeps its position. The session API returns the latest tabs with their keys and contents. A manager can share a specific tab snapshot in Team. Subsequent provider updates stay in the agent session until the manager explicitly updates the shared version.
+
+A provider can also supply a complete ordered `views` list or repository context in `space.session.outputs`. An omitted field preserves the previous value. An empty list clears the published tabs and an empty context clears the context bar. Repository and pull request links require HTTPS. Base and head branch names label the diff when supplied.
+
+```json
+{"type":"CUSTOM","name":"space.session.outputs","value":{"files":[],"changes":[],"context":{"repository":{"label":"acme/web","url":"https://github.com/acme/web"},"base_branch":"main","head_branch":"fix/login","pull_request":{"label":"PR #123","url":"https://github.com/acme/web/pull/123"}}}}
+```

@@ -54,6 +54,18 @@ app.whenReady().then(async () => {
 
   await win.webContents.session.cookies.set({ url, name: 'space-smoke', value: 'persisted', expirationDate: Date.now() / 1000 + 3600 });
   await win.webContents.session.cookies.flushStore();
+  const thread = '/c/AAAAAAAAAAAAAAAAAAAAAA/thread/AAAAAAAAAAAAAAAAAAAAAA?threadWindow=1';
+  const childReady = once(app, 'browser-window-created').then(async ([,child]) => {
+    await once(child.webContents,'did-finish-load');
+    return child;
+  });
+  await win.webContents.executeJavaScript(`window.open(${JSON.stringify(thread)}, '_blank', 'noopener'); undefined`);
+  const child = await childReady;
+  assert.equal(new URL(child.webContents.getURL()).search, '?threadWindow=1');
+  assert.equal(new URL(win.webContents.getURL()).pathname, '/next');
+  assert.equal(child.webContents.session,win.webContents.session);
+  assert.equal(child.webContents.getLastWebPreferences().sandbox,true);
+  child.destroy();
   const savedFile = join(process.env.SPACE_SMOKE_PROFILE, 'desktop-qa.txt');
   const downloaded = new Promise((resolve, reject) => {
     const timeout = setTimeout(() => reject(new Error('Authenticated redirected download never completed')), 4000);

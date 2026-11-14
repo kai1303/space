@@ -79,9 +79,11 @@ export function registerChatRoutes(app: FastifyInstance, chat: ChatStore) {
   app.get<{ Params: { channelId: string; messageId: string } }>('/v1/channels/:channelId/messages/:messageId', r => chat.sourceMessage(r.actorId, uuid(r.params.channelId), uuid(r.params.messageId)));
   app.post<{ Params: { channelId: string } }>('/v1/channels/:channelId/messages', { bodyLimit: 131072 }, async (r, reply) => reply.code(201).send(await chat.send(expectedActor(r), uuid(r.params.channelId), r.body)));
   app.delete<{ Params: { channelId: string; clientId: string } }>('/v1/channels/:channelId/outgoing/:clientId', r => chat.cancelOutgoing(expectedActor(r), uuid(r.params.channelId), uuid(r.params.clientId)));
+  app.put<{ Params: { channelId: string; messageId: string } }>('/v1/channels/:channelId/messages/:messageId/broadcast', r =>
+    chat.broadcastReply(expectedActor(r), uuid(r.params.channelId), uuid(r.params.messageId)));
   app.patch<{ Params: { channelId: string; messageId: string } }>('/v1/channels/:channelId/messages/:messageId', r => chat.editMessage(expectedActor(r), uuid(r.params.channelId), uuid(r.params.messageId), r.body));
   app.delete<{ Params: { channelId: string; messageId: string } }>('/v1/channels/:channelId/messages/:messageId', r => chat.deleteMessage(expectedActor(r), uuid(r.params.channelId), uuid(r.params.messageId)));
-  app.post<{ Params: { channelId: string; messageId: string } }>('/v1/channels/:channelId/messages/:messageId/reactions', r => chat.react(r.actorId, uuid(r.params.channelId), uuid(r.params.messageId), r.body));
+  app.post<{ Params: { channelId: string; messageId: string } }>('/v1/channels/:channelId/messages/:messageId/reactions', r => chat.react(expectedActor(r), uuid(r.params.channelId), uuid(r.params.messageId), r.body));
   app.post<{ Params: { channelId: string } }>('/v1/channels/:channelId/join', r => {
     record(r.body, []);
     return chat.join(r.actorId, uuid(r.params.channelId));

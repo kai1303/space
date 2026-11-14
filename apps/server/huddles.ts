@@ -18,13 +18,13 @@ export class HuddleService {
   // A concurrent revocation must never resurrect this room, including on redelivery after a crash.
   if((await this.store.raw(id))?.state!=='active')await this.media.remove(id);
  }
- async join(actor:string,channel:string):Promise<HuddleAdmission> {
-  const h=await this.store.start(actor,channel);
+ async join(actor:string,channel:string,expected?:string):Promise<HuddleAdmission> {
+  const h=expected?await this.store.current(actor,channel):await this.store.start(actor,channel);
+  if(!h || (expected && h.id!==expected))throw new AppError(409,'huddle_ended');
   await this.provision(h.id);
   if(!await this.media.exists(h.id)){await this.store.end(h.id);throw new AppError(409,'huddle_ended');}
   const token=await this.media.token(h.id,actor,await this.store.name(actor));
-  const current=await this.store.current(actor,channel);
-  if(current?.id!==h.id||current.state!=='active')throw new AppError(409,'huddle_ended');
+  const current=await this.store.admit(actor,channel,h.id);
   return {huddle:current,url:this.media.url,token};
  }
 }
@@ -32,13 +32,35 @@ export class HuddleService {
 export function registerHuddles(app:FastifyInstance,store:HuddleStore,getEvents:()=>Promise<EventBus>,media?:HuddleMedia) {
  const work=new RealtimeWork(4,32),service=media?new HuddleService(store,media):undefined;
  const enabled=()=>{if(!service)throw new AppError(503,'huddles_unavailable');return service;};
+ app.get('/v1/huddles/invitations',r=>{enabled();return store.invitations(r.actorId);});
+ app.post<{Params:{id:string}}>('/v1/huddles/invitations/:id/dismiss',async r=>{
+  enabled();await store.dismiss(r.actorId,uuid(r.params.id));return {ok:true};
+ });
+ app.get<{Params:{id:string};Querystring:{q?:string}}>('/v1/huddles/:id/people',async r=>{
+  enabled();const q=r.query.q??'';
+  if(typeof q!=='string'||q.length>100||q.includes('\0'))throw new AppError(400,'invalid_query');
+  return store.people(r.actorId,uuid(r.params.id),q);
+ });
+ app.post<{Params:{id:string}}>('/v1/huddles/:id/invite',async r=>{
+  enabled();const body=record(r.body,['user_id']);
+  await work.run(r.actorId,()=>store.invite(r.actorId,uuid(r.params.id),uuid(body.user_id)));return {ok:true};
+ });
  app.get('/v1/huddles/config',async()=>({enabled:!!media,capacity:HUDDLE_CAPACITY}));
  app.get<{Params:{workspaceId:string};Querystring:{after?:string}}>('/v1/workspaces/:workspaceId/huddles',r=>{
   enabled();return store.list(r.actorId,uuid(r.params.workspaceId),r.query.after?uuid(r.query.after):undefined);
  });
+ app.get<{Params:{workspaceId:string}}>('/v1/workspaces/:workspaceId/huddles/directory',async r=>{
+  enabled();
+  const workspace=uuid(r.params.workspaceId);
+  const active=await store.list(r.actorId,workspace);
+  const [recent,channels]=await Promise.all([store.recent(r.actorId,workspace),store.suggestions(r.actorId,workspace)]);
+  return {active,recent,channels};
+ });
  app.get<{Params:{channelId:string}}>('/v1/channels/:channelId/huddle',r=>{enabled();return store.current(r.actorId,uuid(r.params.channelId));});
  app.post<{Params:{channelId:string}}>('/v1/channels/:channelId/huddle/join',r=>{
-  record(r.body,[]);return work.run(r.actorId,()=>enabled().join(r.actorId,uuid(r.params.channelId)));
+  const body=record(r.body,['huddle_id']);
+  const expected=body.huddle_id===undefined?undefined:uuid(body.huddle_id);
+  return work.run(r.actorId,()=>enabled().join(r.actorId,uuid(r.params.channelId),expected));
  });
  // LiveKit signs the exact request bytes, independently of Space cookies.
  app.register(async hooks=>{

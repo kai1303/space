@@ -72,33 +72,25 @@ it('lets users retry an initial session load failure',async()=>{
  await screen.findByText('Research prompt');
  expect(screen.queryByRole('alert')).toBeNull();
 });
-it('switches between messages and outputs in one tab row without remounting the draft',async()=>{
- setup();const view=render(<AgentSessions thread="thread" channel="channel" viewerId="user" initialSessionId="one" onAccessLost={()=>{}}/>);
+it('keeps the conversation draft beside published files and returns focus on Escape',async()=>{
+ setup();render(<AgentSessions thread="thread" channel="channel" viewerId="user" initialSessionId="one" onAccessLost={()=>{}}/>);
  const editor=await screen.findByRole('textbox',{name:'Message agent session'});
- await screen.findByText('Research prompt');
  await userEvent.type(editor,'Keep my draft');
- const tabs=screen.getByRole('tablist',{name:'Session views'});
- expect(within(tabs).getAllByRole('tab').map(tab=>tab.textContent)).toEqual(['Messages','Team','Preview','Files 1','Changes 0']);
- expect(screen.queryByRole('button',{name:'Session details',exact:true})).toBeNull();
- const messages=within(tabs).getByRole('tab',{name:'Messages',exact:true});
- await userEvent.click(within(tabs).getByRole('tab',{name:'Files 1'}));
- const files=screen.getByRole('tabpanel',{name:'Files'});
- expect(within(files).getByRole('button',{name:'result.txt',exact:true})).toBeTruthy();
- expect(within(files).queryByText('Research')).toBeNull();
- expect(screen.queryByRole('textbox',{name:'Message agent session'})).toBeNull();
- expect(editor.isConnected).toBe(true);
- await userEvent.keyboard('{Home}');
- expect(document.activeElement).toBe(messages);
- expect(messages.getAttribute('aria-selected')).toBe('true');
+ const trigger=screen.getByRole('button',{name:/Artifacts 1/});
+ await userEvent.click(trigger);
+ expect(screen.getByRole('button',{name:'result.txt',exact:true})).toBeTruthy();
+ expect(screen.getByRole('tab',{name:'Files',selected:true})).toBe(document.activeElement);
  expect(screen.getByRole('textbox',{name:'Message agent session'})).toBe(editor);
+ await userEvent.keyboard('{Escape}');
+ expect(screen.queryByRole('tablist',{name:'Artifact views'})).toBeNull();
+ expect(document.activeElement).toBe(trigger);
  expect(editor.textContent).toContain('Keep my draft');
- expect(view.container.querySelectorAll('[role=tablist]')).toHaveLength(1);
 });
 it('opens sessions from their thread and keeps the conversation and files in the same session view',async()=>{
  setup();render(<SessionViews/>);
  await userEvent.click(await screen.findByRole('button',{name:'Research',exact:true}));
  await screen.findByText('Research prompt');
- await userEvent.click(screen.getByRole('tab',{name:'Files 1'}));
+ await userEvent.click(screen.getByRole('button',{name:/Artifacts 1/}));
  expect(await screen.findByRole('button',{name:'result.txt',exact:true})).toBeTruthy();
  expect(screen.queryByRole('region',{name:'Agent workspace'})).toBeNull();
  await userEvent.click(screen.getByRole('button',{name:'Back to thread'}));
@@ -111,7 +103,7 @@ it('creates another session and sends only through its own composer with a retry
  await userEvent.click(await screen.findByRole('button',{name:'New agent session'}));
  await userEvent.type(screen.getByRole('textbox',{name:'Session name'}),'Design review');
  await userEvent.click(screen.getByRole('button',{name:'Start session',exact:true}));
- await screen.findByText('This is the beginning of your conversation with Codex.');
+ await screen.findByText(/Codex was invited to this code channel/);
  const composer=await screen.findByRole('textbox',{name:'Message agent session'});
  await userEvent.type(composer,'Follow up');await userEvent.keyboard('{Enter}');
  await waitFor(()=>expect(fetch.mock.calls.some(([path,init])=>path.endsWith('/messages')&&init?.headers&&new Headers(init.headers).get('idempotency-key'))).toBe(true));
@@ -141,7 +133,7 @@ it('shows session-level saved outputs even when their turn is outside the loaded
  render(<SessionViews/>);
  await userEvent.click(await screen.findByRole('button',{name:'Research',exact:true}));
  await screen.findByRole('button',{name:'Load older history'});
- await userEvent.click(screen.getByRole('tab',{name:'Files 1'}));
+ await userEvent.click(screen.getByRole('button',{name:/Artifacts 1/}));
  expect(await screen.findByRole('button',{name:'earlier-output.txt',exact:true})).toBeTruthy();
 });
 it('retains the draft and retry identity after an uncertain send',async()=>{
@@ -191,7 +183,7 @@ it('stops work without losing a prepared draft and makes ended sessions read-onl
  const notice=await screen.findByText(/· Turn stopped/);expect(notice.closest('article')).toBeNull();expect(screen.getByText('Result: Research prompt')).toBeTruthy();expect(editor.textContent).toContain('A prepared follow-up');
  expect(screen.queryByRole('button',{name:'End session',exact:true})).toBeNull();
  ended=true;await act(async()=>{await mocks.refresh?.();});
- await screen.findByText('This session has ended. Its conversation and outputs are saved.');expect(screen.queryByRole('textbox',{name:'Message agent session'})).toBeNull();
+ await screen.findByText('Session ended');expect(screen.getByRole('button',{name:'Reopen session'})).toBeTruthy();expect(screen.queryByRole('textbox',{name:'Message agent session'})).toBeNull();
 });
 
 it('shows one waiting indicator for Kiro and adds the reply when it arrives',async()=>{
@@ -285,34 +277,34 @@ it('keeps sending blocked after acknowledgment until the accepted turn is observ
  await act(async()=>{finishRead({ok:true,json:async()=>({session:session('one','Research'),turns:[turn('Research prompt'),{...turn('Accepted task'),task:accepted}],next_cursor:null})});});
  expect((screen.getByRole('button',{name:'Queue'}) as HTMLButtonElement).disabled).toBe(false);
 });
-it('uses the DM header and timeline with a fixed composer and shared output tabs',async()=>{
+it('opens files from the task header while keeping the message timeline and composer mounted',async()=>{
  setup();const view=render(<AgentSessions thread="thread" channel="channel" viewerId="user" initialSessionId="one" channelName="hi" onBack={()=>{}} onClose={()=>{}} onAccessLost={()=>{}}/>);
  await screen.findByText('Research prompt');
  const log=screen.getByRole('log',{name:'Session conversation'});
  const editor=await screen.findByRole('textbox',{name:'Message agent session'});
  expect(log.classList.contains('chat-timeline')).toBe(true);
  expect(log.contains(editor)).toBe(false);
- expect(screen.getByRole('heading',{name:'Codex',exact:true,level:1})).toBeTruthy();
+ expect(screen.getByRole('heading',{name:'Research',exact:true,level:1})).toBeTruthy();
  expect(editor.getAttribute('data-placeholder')).toBe('Message Codex');
  expect(view.container.querySelectorAll('.chat-channel-header')).toHaveLength(1);
  expect(view.container.querySelector('.agent-session-header')).toBeNull();
  expect(view.container.querySelector('.chat-channel-topic')).toBeNull();
- expect(screen.getByRole('tablist',{name:'Session views'}).textContent).toBe('MessagesTeamPreviewFiles 1Changes 0');
+ expect(screen.getByRole('tablist',{name:'Session views'}).textContent).toBe('MessagesTeam');
  expect(screen.queryByRole('button',{name:/unavailable/i})).toBeNull();
  expect(screen.getAllByRole('tablist')).toHaveLength(1);
  expect(screen.getByRole('button',{name:'Bold',exact:true})).toBeTruthy();
  expect(screen.queryByRole('separator',{name:'1 reply'})).toBeNull();
  expect(view.container.querySelectorAll('.sp-conversation-date')).toHaveLength(1);
  await userEvent.type(editor,'Keep this draft');
- const filesButton=screen.getByRole('tab',{name:'Files 1'});
+ const filesButton=screen.getByRole('button',{name:/Artifacts 1/});
  await userEvent.click(filesButton);
- expect(screen.getByRole('tab',{name:'Files 1'}).getAttribute('aria-selected')).toBe('true');
+ expect(screen.getByRole('tab',{name:'Files'}).getAttribute('aria-selected')).toBe('true');
  expect(within(screen.getByRole('tabpanel',{name:'Files'})).queryByText('Research')).toBeNull();
  expect(await screen.findByRole('button',{name:'result.txt',exact:true})).toBeTruthy();
- await userEvent.click(screen.getByRole('tab',{name:'Messages',exact:true}));
+ await userEvent.click(screen.getByRole('button',{name:'Close artifacts'}));
  expect(screen.getByRole('textbox',{name:'Message agent session'})).toBe(editor);
  expect(editor.textContent).toContain('Keep this draft');
- expect(document.activeElement).toBe(screen.getByRole('tab',{name:'Messages',exact:true}));
+ expect(document.activeElement).toBe(filesButton);
  expect(log.contains(editor)).toBe(false);
 });
 it.each(['claude','kiro'])('a %s model without reported effort levels sends only the selected provider model ID',async provider=>{
@@ -493,9 +485,9 @@ it('clears a remounted composer when its previous pending send is accepted',asyn
  expect(attempt.current).toBeUndefined();
 });
 
-it('shares the DM introduction, conversation details menu, and file navigation without losing drafts',async()=>{
+it('shows the code channel introduction, conversation details menu, and file navigation without losing drafts',async()=>{
  setup();render(<AgentSessions thread="thread" channel="channel" viewerId="user" initialSessionId="one" onAccessLost={()=>{}}/>);
- const introduction=await screen.findByText('This is the beginning of your conversation with Codex.');
+ const introduction=await screen.findByText(/Codex was invited to this code channel/);
  expect(introduction.closest('.dm-conversation-intro')).toBeTruthy();
  const editor=await screen.findByRole('textbox',{name:'Message agent session'});
  await userEvent.type(editor,'Keep this draft');
@@ -507,7 +499,7 @@ it('shares the DM introduction, conversation details menu, and file navigation w
  await userEvent.click(screen.getByRole('button',{name:'More conversation actions'}));
  await userEvent.click(screen.getByRole('menuitem',{name:'Browse files'}));
  expect(screen.getByRole('tabpanel',{name:'Files'})).toBeTruthy();
- await userEvent.click(screen.getByRole('tab',{name:'Messages',exact:true}));
+ await userEvent.click(screen.getByRole('button',{name:'Close artifacts'}));
  expect(screen.getByRole('textbox',{name:'Message agent session'})).toBe(editor);
  expect(editor.textContent).toContain('Keep this draft');
 });
@@ -628,12 +620,13 @@ it('submits the patch review to this session without consuming the conversation 
  const user=userEvent.setup();
  render(<AgentSessions thread="thread" channel="channel" viewerId="user" initialSessionId="one" onAccessLost={()=>{}}/>);
  await user.type(await screen.findByRole('textbox',{name:'Message agent session'}),'Draft for later');
- await user.click(screen.getByRole('tab',{name:'Changes 1'}));
+ await user.click(screen.getByRole('button',{name:/Artifacts 1/}));
  await user.click(screen.getByRole('button',{name:'Comment on init.ts, new line 1'}));
  await user.type(screen.getByRole('textbox',{name:/Comment on init.ts/}),'Handle initialization errors.');
  await user.click(screen.getByRole('button',{name:'Add to review'}));
- await user.click(screen.getByRole('tab',{name:'Messages'}));
- await user.click(screen.getByRole('tab',{name:'Changes 1'}));
+ await user.click(screen.getByRole('button',{name:'Close artifacts'}));
+ await user.click(screen.getByRole('button',{name:/Artifacts 1/}));
+ await user.click(screen.getByRole('button',{name:'Submit review'}));
  await user.click(screen.getByRole('button',{name:'Send review'}));
  const composer=await screen.findByRole('textbox',{name:'Message agent session'});
  expect(composer.textContent).toContain('Draft for later');

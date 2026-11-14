@@ -8,7 +8,7 @@ import { errorText } from '../../shared/api/error-text.js';
 
 type ConversationVisit = { workspace: string; channel?: string; label: string; direct?: boolean; inbox?: boolean };
 export function useNavigation(workspaces: Workspace[], workspace: string, setWorkspace: (id: string) => void) {
-  const [mentionTarget, setMentionTarget] = useState<{channel_id:string;message_id:string;thread_id?:string}>();
+  const [mentionTarget, setMentionTarget] = useState<{channel_id:string;message_id:string;thread_id?:string;draftKey?:string}>();
   const [membersOpen, setMembersOpen] = useState(false), [connection, setConnection] = useState<string>();
   const pageViews=useMemo(createWorkspaceViewState,[workspace]);
   const viewForChannel=(id:string)=>conversationView(pageViews.rooms,id);
@@ -31,7 +31,7 @@ export function useNavigation(workspaces: Workspace[], workspace: string, setWor
   const lastHomeChannel = useRef<string | undefined>(undefined);
   const [navigationError, setNavigationError] = useState('');
   const mentionNavigation = useRef(0);
-  async function openMention(item: {channel_id:string;message_id:string;thread_id?:string;channel_kind?:'channel'|'direct'}) {
+  async function openMention(item: {channel_id:string;message_id:string;thread_id?:string;draftKey?:string;channel_kind?:'channel'|'direct'}) {
     const attempt = ++mentionNavigation.current;
     try {
       // Activity can mention a public channel before joining; discovery renders its join screen.
@@ -47,7 +47,7 @@ export function useNavigation(workspaces: Workspace[], workspace: string, setWor
   }
   function openDirect(id: string | undefined = directId) { setHubView(undefined); setActivityOpen(false); mentionNavigation.current++; setDirectCompose(0); setDirectId(id); setDirectOpen(true); setSearchOpen(false); }
   function newDirect() { setHubView(undefined); setActivityOpen(false); setDirectId(undefined); setDirectCompose(value => value + 1); setDirectOpen(true); setSearchOpen(false); }
-  function openHome() { pendingSearch.current = false; setHubView(undefined); setActivityOpen(false); mentionNavigation.current++; setDirectCompose(0); setRequestedChannel(lastHomeChannel.current); setDirectOpen(false); setSearchOpen(false); }
+  function openHome() { pendingSearch.current = false; setHubView(undefined); setActivityOpen(false); mentionNavigation.current++; setDirectCompose(0); setRequestedChannel(pageViews.codeChannel.current ? undefined : lastHomeChannel.current); setDirectOpen(false); setSearchOpen(false); }
   const [searchOpen, setSearchOpen] = useState(false);
   const [canSearch, setCanSearch] = useState(false);
   const [requestedChannel, setRequestedChannel] = useState<string | undefined>(() => new URLSearchParams(window.location.search).get('channel') ?? undefined);

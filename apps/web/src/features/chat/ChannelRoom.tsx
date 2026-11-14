@@ -23,6 +23,9 @@ import { MentionDetails, useMentionSearch } from "../mentions/Mentions.js";
 import { NavigatorSettings, NavigatorSuggestions, agentMention } from '../agents/Navigator.js';
 import { MessageTimeline, type TimelineHandle } from './MessageTimeline.js';
 import { SessionReports, useSessionReports } from './SessionReports.js';
+import {useSavedMessages} from './useSavedMessages.js';
+import {invalidateUpdates} from '../../shared/realtime/live-updates.js';
+import {workspacePath} from '@space/contracts';
 import { useMessageHistory } from './useMessageHistory.js';
 import { ConversationPanelDivider } from './ConversationPanelDivider.js';
 import { useConversationPanels } from './useConversationPanels.js';
@@ -43,7 +46,7 @@ import { Avatar, Button, Dialog, IconButton, Menu, SidePanel, toast } from '@spa
 import { ConversationHeading, ConversationDateDivider, useMessageArrivals } from '@space/ui/conversation';
 import { MessageSearch } from '../search/MessageSearch.js';
 import { type RichDocument } from '@space/ui/rich-text';
-import { Archive, CaretLeft, ChatCircle, DotsThree, Hash, Lock, MagnifyingGlass, Paperclip, Robot, Users, X, Check } from '@phosphor-icons/react';
+import { ArrowSquareOut, Archive, BookmarkSimple, CaretLeft, ChatCircle, DotsThree, Hash, Lock, MagnifyingGlass, Paperclip, Robot, Users, X, Check } from '@phosphor-icons/react';
 import { ConversationListContext } from '../../shared/ui/conversation-list.js';
 import { scheduleMessage } from '../composer/scheduled-messages.js';
 import { socketCommand as command } from '../../shared/realtime/socket-command.js';
@@ -61,11 +64,12 @@ import { ThreadHistory } from './ThreadHistory.js';
 import { ThreadComposer } from '../composer/ThreadComposer.js';
 import { type UploadDrafts } from '../composer/useAttachmentUploads.js';
 
-export function ChannelRoom({ viewState, draftRevision, requestedThread, onCloseDirect, readState, uploads, profile, channel, onChannelChange, onLeft, drafts, onDraftChange, onAccessLost, searchOpen, composeRequest, mentionTarget, onMentionOpened }: { draftRevision?: number; viewState?:Snapshot<ConversationView>; requestedThread?: string; onCloseDirect?: () => void; readState?: ChannelUnread; uploads: UploadDrafts; profile: Profile; channel: Channel; onChannelChange: (channel: Channel) => void; onLeft: () => void; drafts: Record<string, RichDocument>; onDraftChange: (key: string, document: RichDocument) => void; onAccessLost: () => void; searchOpen: boolean; onSearchClose: () => void; composeRequest: number; mentionTarget?: string; onMentionOpened: () => void }) {
+export function ChannelRoom({ onOpenCodeChannel, threadOnly, viewState, draftRevision, editDraftKey, requestedThread, onCloseDirect, readState, uploads, profile, channel, onChannelChange, onLeft, drafts, onDraftChange, onAccessLost, searchOpen, composeRequest, mentionTarget, onMentionOpened }: { onOpenCodeChannel?:(thread:string,id:string,artifact?:NonNullable<import('@space/contracts').SessionReport['artifact']>)=>void; threadOnly?: { close:()=>void; detached?:boolean }; draftRevision?: number; editDraftKey?: string; viewState?:Snapshot<ConversationView>; requestedThread?: string; onCloseDirect?: () => void; readState?: ChannelUnread; uploads: UploadDrafts; profile: Profile; channel: Channel; onChannelChange: (channel: Channel) => void; onLeft: () => void; drafts: Record<string, RichDocument>; onDraftChange: (key: string, document: RichDocument) => void; onAccessLost: () => void; searchOpen: boolean; onSearchClose: () => void; composeRequest: number; mentionTarget?: string; onMentionOpened: () => void }) {
   const profiles = useMemberProfile();
   const [selection,setSelection]=useState<string[]|undefined>();
-  const panels = useConversationPanels(viewState, requestedThread, mentionTarget);
-  const {sidekick, thread, sessionView, sessionOpen, filesOpen, threadPanel, sessionPanel, sidekickPanel, openSessions} = panels;
+  const panels = useConversationPanels(viewState, requestedThread, mentionTarget, !!editDraftKey);
+  const {sidekick, thread, sessionView, sessionOpen, filesOpen, threadPanel, sessionPanel, sidekickPanel} = panels;
+  const openSessions=onOpenCodeChannel ?? panels.openSessions;
   useEffect(()=>setSelection(undefined),[channel.id]);
   function discuss(source:SidekickSource){panels.openSidekick(source);setSelection(undefined);}
   const selectionBar=selection&&<div className="sidekick-selection" role="region" aria-label="Selected messages"><strong>{selection.length} selected</strong><span className="sidekick-selection-hint">Click messages to select</span><Button size="sm" disabled={!selection.length} onClick={()=>discuss({channel_id:channel.id,message_ids:selection})}>Discuss with agent</Button><Button size="sm" variant="ghost" onClick={()=>setSelection(undefined)}>Cancel selection</Button></div>;
@@ -123,7 +127,15 @@ export function ChannelRoom({ viewState, draftRevision, requestedThread, onClose
   const showDetails = (tab = 'about') => { setDetailsTab(tab); setDetailsOpen(true); };
   const filesButton = useRef<HTMLButtonElement>(null);
   const channelTyping=useTypingPublisher(socket,channel.id,undefined,ready&&!channel.archived_at&&!sessionOpen&&!(compact&&thread));
-  useEffect(() => { if (requestedThread) { panels.openThread(requestedThread); onMentionOpened(); } }, [requestedThread]);
+  useEffect(() => {
+    if (editDraftKey) {
+      if (!requestedThread) panels.close();
+      else if (thread !== requestedThread) panels.openThread(requestedThread);
+    } else if (requestedThread) {
+      panels.openThread(requestedThread);
+      onMentionOpened();
+    }
+  }, [requestedThread, editDraftKey]);
   function openThread(id: string) {
     setSourceId(null);
     panels.openThread(id);
@@ -294,8 +306,9 @@ export function ChannelRoom({ viewState, draftRevision, requestedThread, onClose
   const entryRead = useRef<string | undefined>(undefined);
   if (entryRead.current === undefined && readState) entryRead.current = readState.last_read_sequence;
   const messages = history.page?.messages ?? [];
+  const bookmarks = useSavedMessages(channel.workspace_id,channel.id,profile.id,messages);
   const readError = useChannelRead(channel.id, history.page?.newer_cursor ?? '0', readState?.last_read_sequence,
-    historyLoaded && ready && !history.loading && !history.page?.has_newer && atEnd && !pins.open && !searchOpen && !filesOpen && (!sourceId || (!!target && !linkedReply)) && !detailsOpen && !memoryOpen && !selectedMention && !profiles?.selected && !(compact && sessionOpen) && !sidekick);
+    !threadOnly && historyLoaded && ready && !history.loading && !history.page?.has_newer && atEnd && !pins.open && !searchOpen && !filesOpen && (!sourceId || (!!target && !linkedReply)) && !detailsOpen && !memoryOpen && !selectedMention && !profiles?.selected && !(compact && sessionOpen) && !sidekick);
   const firstUnread = entryRead.current === undefined ? undefined : messages.find(message => message.author.id !== profile.id && BigInt(message.sequence ?? '0') > BigInt(entryRead.current!))?.id;
   const [sendVersion, setSendVersion] = useState(0);
   const pending = useOutgoingMessages({ outbox, profile, channel: channel.id, history: messages });
@@ -374,8 +387,8 @@ export function ChannelRoom({ viewState, draftRevision, requestedThread, onClose
   function canSchedule(threadId: string | undefined) {
     return !encrypted && !encryptionUnchecked && !checkingPermissions && !channel.archived_at && !(threadId ? replyDisabledReason : postDisabledReason);
   }
-  async function submit(threadId: string | undefined, text: string, document: RichDocument, attachments: Attachment[], broadcastConfirmed?: boolean) {
-    const disabled = threadId ? replyDisabledReason : postDisabledReason;
+  async function submit(threadId: string | undefined, text: string, document: RichDocument, attachments: Attachment[], broadcastConfirmed?: boolean, alsoSendToChannel?: boolean) {
+    const disabled = threadId ? replyDisabledReason || (alsoSendToChannel && postDisabledReason) : postDisabledReason;
     if (draftUnavailable || checkingPermissions || disabled || channel.archived_at) throw new Error(disabled || 'Posting unavailable');
     const version = accessVersion.current;
     const key = threadId ? `thread:${channel.id}:${threadId}` : uploadKey;
@@ -389,7 +402,7 @@ export function ChannelRoom({ viewState, draftRevision, requestedThread, onClose
         await outbox.enqueue({channelId:channel.id,text:encryptedMessageLabel,encrypted:payload},id);
       }catch(e){throw new ComposerSendError(e instanceof Error?e.message:'Could not encrypt message.');}
     } else {
-      await outbox.enqueue({ channelId: channel.id, threadId, text, document, attachments, broadcastConfirmed });
+      await outbox.enqueue({ channelId: channel.id, threadId, text, document, attachments, broadcastConfirmed, alsoSendToChannel });
     }
     uploads.sent(key, document, attachments);
     if (version !== accessVersion.current) return;
@@ -477,8 +490,25 @@ export function ChannelRoom({ viewState, draftRevision, requestedThread, onClose
   function message(m: ChatMessage, inThread = false, arriving = false, previous?: Pick<ChatMessage, 'author' | 'created_at'>, local = false, streaming = false) {
     local = local || streaming;
     const replies = conversations.get(m.thread_id) ?? [];
+    const draftKey = `thread:${channel.id}:${m.thread_id}`;
+    const hasReplyDraft = !inThread && !m.channel_broadcast_sequence && m.thread_id !== thread &&
+      (!!drafts[draftKey]?.ops.some(op => op.insert.trim()) || !!uploads.drafts[draftKey]?.length);
     const canEdit = !channel.archived_at && !encrypted && !encryptionUnchecked && m.author.kind === 'human' && m.author.id === profile.id
+      && (!m.channel_broadcast_sequence || !postDisabledReason)
       && (direct || permissions.snapshot?.capabilities[m.thread_root_id && m.thread_root_id !== m.id ? 'reply' : 'post']);
+
+    const saved = inThread ? m.viewer_saved : bookmarks?.has(m.id);
+    async function toggleSaved() {
+      await request(`/workspaces/${channel.workspace_id}/hub/saved/${m.id}`,{channel_id:channel.id,active:!saved},undefined,'POST',undefined,profile.id);
+      await invalidateUpdates('actor',profile.id);
+    }
+    const canBroadcast = inThread && canEdit && !checkingPermissions && !postDisabledReason && !replyDisabledReason &&
+      !!m.thread_root_id && m.thread_root_id !== m.id && !m.agent_session_id && !m.channel_broadcast_sequence;
+    async function broadcastReply() {
+      const version = accessVersion.current;
+      const updated = await request<ChatMessage>(`/channels/${channel.id}/messages/${m.id}/broadcast`, {}, undefined, 'PUT', undefined, profile.id);
+      if (version === accessVersion.current) { history.receive([updated], stickToBottom.current); threadLive.current?.([updated]); }
+    }
 
     return <div id={`${inThread ? 'thread' : 'chat'}-message-${m.id}`} tabIndex={-1} className={`chat-message-anchor${searchMatch?.id === m.id ? ' channel-search-match' : ''}${selection ? ' sidekick-selectable' : ''}`}
       onClick={event => {
@@ -492,11 +522,17 @@ export function ChannelRoom({ viewState, draftRevision, requestedThread, onClose
         disabled={selection.length >= 50 && !selection.includes(m.id)}
         onClick={() => setSelection(current => !current ? current : current.includes(m.id) ? current.filter(id => id !== m.id) : current.length < 50 ? [...current, m.id] : current)}
       />}
-      <div inert={!!selection}><ConversationMessage streaming={streaming} message={m} previous={previous} viewerId={profile.id} arrival={arriving} onReact={local || channel.archived_at ? undefined : emoji => { void react(m, emoji); }} body={m.encrypted?<EncryptedBody message={m} control={encryption} viewer={profile.id}/>:undefined}
-        actions={local ? undefined : m.encrypted ? {delete:m.author.id===profile.id&&!m.deleted_at?()=>setDeleteId(m.id):undefined} : { edit: canEdit ? () => setEditing(m) : undefined, pin: !direct && !channel.archived_at && !m.agent_session_id ? () => pins.change(m.id, true) : undefined, delete: m.author.kind === 'human' && m.author.id === profile.id ? () => setDeleteId(m.id) : undefined, selectMessage:()=>setSelection(current=>[...new Set([...(current??[]),m.id])].slice(0,50)), discussWithAgent:()=>discuss({channel_id:channel.id,message_ids:[m.id]}), save: () => request(`/workspaces/${channel.workspace_id}/hub/saved/${m.id}`, { channel_id: channel.id, active: true }).then(() => {}), copyMessage: () => navigator.clipboard.writeText(m.text), ...(!direct ? { saveMemory: () => showMemory({ id: m.id, text: m.text }) } : {}) }} onReply={encrypted || local || inThread ? undefined : () => openThread(m.thread_id)} replyCount={!inThread ? m.reply_count ?? (replies[0]?.id === m.id ? replies.length - 1 : 0) : 0} onMentionClick={setSelectedMention} footer={<SessionReports message={m} inThread={inThread} reports={reports?.get(m.thread_id)} onOpen={openSessions}/>}/></div></div>;
+      <div inert={!!selection}>{saved && !m.deleted_at && <small className="saved-marker"><BookmarkSimple size={12} weight="fill" aria-hidden="true"/>Saved for later · <a href={workspacePath(channel.workspace_id)+'/saved'} target={window.self!==window.top?'_top':undefined}>View Saved</a></small>}{m.channel_broadcast_sequence && <div className="thread-broadcast-context">{inThread
+        ? `Also sent to ${direct ? 'this conversation' : '#'+channel.name}`
+        : <button type="button" onClick={() => openThread(m.thread_id)}>Replied to a thread</button>}</div>}<ConversationMessage streaming={streaming} message={m} previous={previous} viewerId={profile.id} arrival={arriving} onReact={local || channel.archived_at ? undefined : emoji => { void react(m, emoji); }} body={m.encrypted?<EncryptedBody message={m} control={encryption} viewer={profile.id}/>:undefined}
+        actions={local ? undefined : m.encrypted ? {delete:m.author.id===profile.id&&!m.deleted_at?()=>setDeleteId(m.id):undefined} : { broadcastReply: canBroadcast ? broadcastReply : undefined, edit: canEdit ? () => setEditing(m) : undefined, pin: !direct && !channel.archived_at && !m.agent_session_id ? () => pins.change(m.id, true) : undefined, delete: m.author.kind === 'human' && m.author.id === profile.id ? () => setDeleteId(m.id) : undefined, selectMessage:()=>setSelection(current=>[...new Set([...(current??[]),m.id])].slice(0,50)), discussWithAgent:()=>discuss({channel_id:channel.id,message_ids:[m.id]}), ...(!m.agent_session_id && saved!==undefined ? saved ? {unsave:toggleSaved} : {save:toggleSaved} : {}), copyMessage: () => navigator.clipboard.writeText(m.text), ...(!direct && !threadOnly ? { saveMemory: () => showMemory({ id: m.id, text: m.text }) } : {}) }} onReply={encrypted || local || inThread ? undefined : () => openThread(m.thread_id)} threadOpen={thread === m.thread_id} hasReplyDraft={hasReplyDraft} replyCount={!inThread && !m.channel_broadcast_sequence ? m.reply_summary?.count ?? m.reply_count ?? (replies[0]?.id === m.id ? replies.length - 1 : 0) : 0} onMentionClick={setSelectedMention} footer={<SessionReports message={m} inThread={inThread} reports={reports?.get(m.thread_id)} onOpen={openSessions}/>}/></div></div>;
+  }
+  function closeThread() {
+    if (threadOnly) threadOnly.close();
+    else { setSourceId(null); panels.close(); }
   }
   const roomPath = conversationPath(channel.id, requestedThread ?? thread, sourceId ?? undefined);
-  usePublishedPath(sidekick ? undefined : sessionOpen && sessionView?.selected ? sessionPath(sessionView.selected)
+  usePublishedPath(threadOnly || sidekick ? undefined : sessionOpen && sessionView?.selected ? sessionPath(sessionView.selected)
     : roomPath);
   const backToAnswer = sourceId && roomPath === window.location.pathname && window.history.state?.spaceAnswerPath
     ? () => window.history.back() : undefined;
@@ -525,7 +561,11 @@ export function ChannelRoom({ viewState, draftRevision, requestedThread, onClose
       {channel.archived_at && <span className="chat-channel-privacy"><Archive size={14}/> Archived</span>}
     </ConversationNavigation>;
   }
-  return <div className={`chat-conversation ${thread ? 'chat-conversation--thread' : ''} ${direct && filesOpen ? 'chat-conversation--files' : ''}`}><ConversationMain className={`chat-channel${direct ? ' chat-channel--direct' : ''}`} id="chat-messages" tabIndex={-1} aria-hidden={compact && (thread || sessionOpen || sidekick) ? true : undefined} inert={compact && !!(thread || sessionOpen || sidekick)}><FrameHeader primary><ConversationHeading title={channel.name} label={direct ? `Conversation details for ${channel.name}` : `Channel details for #${channel.name}`} onClick={() => { const person = direct && (direct.participants.find(person => person.id !== profile.id) ?? direct.participants[0]); if (person && profiles) profiles.open({kind:'user',id:person.id}); else showDetails(); }} leading={<>{(backToAnswer || openConversationList) && <IconButton className="chat-conversation-back" label={backToAnswer ? "Back to agent answer" : "Back to conversations"} onClick={backToAnswer ?? openConversationList ?? undefined}><CaretLeft size={20} weight="bold"/></IconButton>}<ConversationSectionMenu channel={channel} viewer={profile.id}/></>} icon={direct ? <Avatar name={channel.name} initials={channel.name.slice(0, 2).toUpperCase()} image={(direct.participants.find(person => person.id !== profile.id) ?? direct.participants[0])?.image} /> : channel.private ? <Lock size={20} weight="bold" /> : <Hash size={22} weight="bold" />} />{channel.topic && <button className="chat-channel-topic" title={channel.topic} onClick={() => showDetails()}>{channel.topic}</button>}<div className="chat-header-actions">{direct && !selfDirect && <CallButtons channel={channel.id}/>} {!direct && <HuddleButton channel={channel.id} name={channel.name} disabled={!!channel.archived_at}/>}{!direct && <button className="chat-channel-member-button" aria-label="View channel members" onClick={() => showDetails('members')}><Users size={18} /> Members</button>}<IconButton ref={searchButton} label={`Search in ${channel.name}`} onClick={() => { if (!leaveMemory()) return; if (filesOpen || sessionOpen) panels.close(); pins.close(); setChannelSearchRequest(request => request + 1); }}><MagnifyingGlass size={20} /></IconButton>{direct && <Menu label="More conversation actions" floating trigger={<DotsThree size={22} weight="bold" />} items={[{ label: 'Conversation details', onSelect: () => showDetails() }, ...(profiles && direct.participants[0] ? [{label:'View full profile',onSelect:() => profiles.open({kind:'user',id:(direct.participants.find(person=>person.id!==profile.id)??direct.participants[0]!).id})}] : []), { label: 'Browse files', onSelect: () => { if (!filesOpen) toggleFiles(); } }, ...(onCloseDirect ? [{ label: 'Close direct message', separatorBefore: true, onSelect: onCloseDirect }] : [])]} />}{direct && onCloseDirect && <IconButton label="Close direct message" onClick={onCloseDirect}><X size={20} /></IconButton>}</div></FrameHeader>
+  return <div onKeyDown={event=>{
+    if (event.key==='Escape' && thread && !event.defaultPrevented && (event.target as HTMLElement).closest('.chat-thread') && !document.querySelector('dialog[open], [data-sp-popover-panel]:not([inert])')) {
+      event.preventDefault(); closeThread();
+    }
+  }} className={`chat-conversation ${threadOnly ? 'chat-conversation--thread-only' : ''} ${thread ? 'chat-conversation--thread' : ''} ${direct && filesOpen ? 'chat-conversation--files' : ''}`}>{!threadOnly && <ConversationMain className={`chat-channel${direct ? ' chat-channel--direct' : ''}`} id="chat-messages" tabIndex={-1} aria-hidden={compact && (thread || sessionOpen || sidekick) ? true : undefined} inert={compact && !!(thread || sessionOpen || sidekick)}><FrameHeader primary><ConversationHeading title={channel.name} label={direct ? `Conversation details for ${channel.name}` : `Channel details for #${channel.name}`} onClick={() => { const person = direct && (direct.participants.find(person => person.id !== profile.id) ?? direct.participants[0]); if (person && profiles) profiles.open({kind:'user',id:person.id}); else showDetails(); }} leading={<>{(backToAnswer || openConversationList) && <IconButton className="chat-conversation-back" label={backToAnswer ? "Back to agent answer" : "Back to conversations"} onClick={backToAnswer ?? openConversationList ?? undefined}><CaretLeft size={20} weight="bold"/></IconButton>}<ConversationSectionMenu channel={channel} viewer={profile.id}/></>} icon={direct ? <Avatar name={channel.name} initials={channel.name.slice(0, 2).toUpperCase()} image={(direct.participants.find(person => person.id !== profile.id) ?? direct.participants[0])?.image} /> : channel.private ? <Lock size={20} weight="bold" /> : <Hash size={22} weight="bold" />} />{channel.topic && <button className="chat-channel-topic" title={channel.topic} onClick={() => showDetails()}>{channel.topic}</button>}<div className="chat-header-actions">{direct && !selfDirect && <CallButtons channel={channel.id}/>} {!selfDirect && <HuddleButton direct={!!direct} channel={channel.id} name={channel.name} disabled={!!channel.archived_at}/>}{!direct && <button className="chat-channel-member-button" aria-label="View channel members" onClick={() => showDetails('members')}><Users size={18} /> Members</button>}<IconButton ref={searchButton} label={`Search in ${channel.name}`} onClick={() => { if (!leaveMemory()) return; if (filesOpen || sessionOpen) panels.close(); pins.close(); setChannelSearchRequest(request => request + 1); }}><MagnifyingGlass size={20} /></IconButton>{direct && <Menu label="More conversation actions" floating trigger={<DotsThree size={22} weight="bold" />} items={[{ label: 'Conversation details', onSelect: () => showDetails() }, ...(profiles && direct.participants[0] ? [{label:'View full profile',onSelect:() => profiles.open({kind:'user',id:(direct.participants.find(person=>person.id!==profile.id)??direct.participants[0]!).id})}] : []), { label: 'Browse files', onSelect: () => { if (!filesOpen) toggleFiles(); } }, ...(onCloseDirect ? [{ label: 'Close direct message', separatorBefore: true, onSelect: onCloseDirect }] : [])]} />}{direct && onCloseDirect && <IconButton className="chat-close-direct" label="Close direct message" onClick={onCloseDirect}><X size={20} /></IconButton>}</div></FrameHeader>
     {direct || status === 'Disconnected' ? navigation() :
       <NavigatorSettings channel={channel.id} onCandidates={setNavCandidates} renderTrigger={navigation}/>}
     {tabs.moveError && <p className="chat-error" role="alert">{tabs.moveError}</p>}
@@ -559,7 +599,7 @@ export function ChannelRoom({ viewState, draftRevision, requestedThread, onClose
       </>;
     }}>
       {!historyLoaded && status !== 'Disconnected' ? loadingMessages : !rows.length && !showDirectIntro && introduction}
-    </MessageTimeline>{!direct&&!thread&&!sessionOpen&&!channel.archived_at&&status!=='Disconnected'&&<NavigatorSuggestions channel={channel.id} onThread={openThread} />}{channel.archived_at ? <div className="chat-channel-archived"><strong>This channel is archived</strong>Its messages are available to read.<br /><Button size="sm" onClick={() => showDetails('settings')}>View channel settings</Button></div> : status !== 'Disconnected' && <ConversationComposer primary inactive={draftUnavailable} conversationKey={draftRevision ? `${uploadKey}:${draftRevision}` : uploadKey}
+    </MessageTimeline>{!direct&&!thread&&!sessionOpen&&!channel.archived_at&&status!=='Disconnected'&&<NavigatorSuggestions channel={channel.id} onThread={openThread} />}{channel.archived_at ? <div className="chat-channel-archived"><strong>This channel is archived</strong>Its messages are available to read.<br /><Button size="sm" onClick={() => showDetails('settings')}>View channel settings</Button></div> : status !== 'Disconnected' && <ConversationComposer primary onEditReady={editDraftKey === uploadKey && !draftUnavailable && !channel.archived_at ? onMentionOpened : undefined} inactive={draftUnavailable} conversationKey={draftRevision ? `${uploadKey}:${draftRevision}` : uploadKey}
       controls={{
         audioClipsEnabled: !direct,
         videoClipsEnabled: !direct,
@@ -588,18 +628,19 @@ export function ChannelRoom({ viewState, draftRevision, requestedThread, onClose
         onDraftChange(uploadKey, document);
         channelTyping.change(document);
       }}
-      onSend={(text, document, files, options) => { channelTyping.stop(); return submit(undefined, text, document, files, options?.broadcast_confirmed); }} />}</div></ConversationMain>
-    {!compact && status !== 'Disconnected' && (thread || sessionOpen || sidekick || (direct && filesOpen)) && <ConversationPanelDivider files={filesOpen} />}
-    {status !== 'Disconnected' && <AnimatePresence>{thread && <SidePanel ref={threadPanel} key="thread" role="region" className="chat-thread" aria-label="Thread"><ConversationHeader title="Thread" onBack={backToAnswer} backLabel="Back to agent answer" actions={<ThreadNotificationToggle key={thread} thread={thread}/>} channel={direct ? undefined : channel.name} status={direct ? channel.name : undefined} onClose={() => { setSourceId(null); panels.close(); }} />
+      onSend={(text, document, files, options) => { channelTyping.stop(); return submit(undefined, text, document, files, options?.broadcast_confirmed); }} />}</div></ConversationMain>}
+    {threadOnly && error && <p role="alert">{error}</p>}
+    {!threadOnly && !compact && status !== 'Disconnected' && (thread || sessionOpen || sidekick || (direct && filesOpen)) && <ConversationPanelDivider files={filesOpen} />}
+    {status !== 'Disconnected' && <AnimatePresence>{thread && <SidePanel ref={threadPanel} key="thread" role="region" className="chat-thread" aria-label="Thread"><ConversationHeader title="Thread" onBack={backToAnswer} closeBackLabel={threadOnly && !threadOnly.detached ? "Back to Threads" : undefined} backLabel="Back to agent answer" actions={<><ThreadNotificationToggle key={thread} thread={thread}/>{!threadOnly?.detached && conversationPath(channel.id,thread) && <a className="thread-popout" aria-label="Open thread in a new window" title="Open thread in a new window" target="_blank" rel="noopener noreferrer" href={conversationPath(channel.id,thread)+'?threadWindow=1'}><ArrowSquareOut size={18}/></a>}</>} channel={direct ? undefined : channel.name} status={direct ? channel.name : undefined} onClose={closeThread} />
       {selectionBar}
-      <ThreadHistory target={linkedReply && target?.thread_id === thread ? target : undefined} renderOutgoing={loaded => outgoing(loaded, thread)} key={thread} thread={thread} channel={channel.id} live={threadLive} renderMessage={(m, arriving) => message(m, true, arriving)} activity={[...activity.values()].filter(event => event.thread_id === thread && !event.payload.data.session_managed)} profile={profile} onOpenWorkspace={openAgentSession} onAccessLost={reason => revokeAccess.current(reason)} footer={<>
+      <ThreadHistory channelHistoryLoaded={historyLoaded} workspace={channel.workspace_id} target={linkedReply && target?.thread_id === thread ? target : undefined} renderOutgoing={loaded => outgoing(loaded, thread)} key={thread} thread={thread} channel={channel.id} live={threadLive} renderMessage={(m, arriving) => message(m, true, arriving)} activity={[...activity.values()].filter(event => event.thread_id === thread && !event.payload.data.session_managed)} profile={profile} onOpenWorkspace={openAgentSession} onAccessLost={reason => revokeAccess.current(reason)} footer={<>
       {!direct && <NavigatorSuggestions channel={channel.id} thread={thread} />}
-      {socket && !channel.archived_at && !encrypted && !encryption.loading && <ThreadComposer workspace={channel.workspace_id} sendDisabled={checkingPermissions} sendDisabledReason={replyDisabledReason} suggestionRevision={ready ? replyRevision : undefined} viewerId={profile.id} key={`reply:${thread}`} onSend={(text, document, files, options) => submit(thread, text, document, files, options?.broadcast_confirmed)} onSchedule={canSchedule(thread) ? (text, document, files, at) => scheduleMessage(channel.id, thread, text, document, files, at).then(() => {}) : undefined} mentions={agentTags} uploads={uploads} socket={socket} channel={channel.id} thread={thread} draft={drafts[`thread:${channel.id}:${thread}`]} onDraftChange={document => onDraftChange(`thread:${channel.id}:${thread}`, document)} />}
+      {socket && !channel.archived_at && !encrypted && !encryption.loading && <ThreadComposer onEditReady={editDraftKey === `thread:${channel.id}:${thread}` ? onMentionOpened : undefined} broadcastDestination={!checkingPermissions && !postDisabledReason && !replyDisabledReason ? direct ? 'this conversation' : `#${channel.name}` : undefined} workspace={channel.workspace_id} sendDisabled={checkingPermissions} sendDisabledReason={replyDisabledReason} suggestionRevision={ready ? replyRevision : undefined} viewerId={profile.id} key={`reply:${thread}`} onSend={(text, document, files, options, broadcast) => submit(thread, text, document, files, options?.broadcast_confirmed, broadcast)} onSchedule={canSchedule(thread) ? (text, document, files, at, broadcast) => scheduleMessage(channel.id, thread, text, document, files, at, broadcast).then(() => {}) : undefined} mentions={agentTags} uploads={uploads} socket={socket} channel={channel.id} thread={thread} draft={drafts[`thread:${channel.id}:${thread}`]} onDraftChange={document => onDraftChange(`thread:${channel.id}:${thread}`, document)} />}
       </>} />
     </SidePanel>}</AnimatePresence>}
-    {status !== 'Disconnected' && sidekick && <SidePanel ref={sidekickPanel} role="region" className="chat-thread chat-agent-sessions" aria-label="My sidekick"><Sidekick drafts={drafts} onDraftChange={onDraftChange} attempt={uploads.attempt} acknowledged={uploads.acknowledged} uploads={uploads} onAccepted={uploads.sent} key={channel.workspace_id} workspace={channel.workspace_id} viewerId={profile.id} source={sidekick.source} onClose={panels.close}/></SidePanel>}
+    {status !== 'Disconnected' && sidekick && <SidePanel ref={sidekickPanel} role="region" className="chat-thread chat-agent-sessions" aria-label="My sidekick"><Sidekick drafts={drafts} onDraftChange={onDraftChange} attempt={uploads.attempt} acknowledged={uploads.acknowledged} uploads={uploads} onAccepted={uploads.sent} key={channel.workspace_id} workspace={channel.workspace_id} viewerId={profile.id} source={sidekick.source} onClose={threadOnly ? () => openThread(requestedThread!) : panels.close}/></SidePanel>}
     {status !== 'Disconnected' && sessionView && <SidePanel ref={sessionPanel} key={`sessions:${sessionView.thread}`} role="region" hidden={!sessionOpen} className="chat-thread chat-agent-sessions" aria-label="Agent session">
-      <AgentSessions acknowledged={uploads.acknowledged} uploads={uploads} onAccepted={uploads.sent} drafts={drafts} onDraftChange={onDraftChange} attempt={uploads.attempt} thread={sessionView.thread} channel={channel.id} viewerId={profile.id} initialSessionId={sessionView.selected} initialArtifact={sessionView.artifact} artifactRequest={sessionView.artifactRequest} archived={!!channel.archived_at} channelName={channel.name} onBack={() => openThread(sessionView.thread)} onClose={panels.close} onAccessLost={() => revokeAccess.current(new Error('not_found'))} />
+      <AgentSessions acknowledged={uploads.acknowledged} uploads={uploads} onAccepted={uploads.sent} drafts={drafts} onDraftChange={onDraftChange} attempt={uploads.attempt} thread={sessionView.thread} channel={channel.id} viewerId={profile.id} initialSessionId={sessionView.selected} initialArtifact={sessionView.artifact} artifactRequest={sessionView.artifactRequest} archived={!!channel.archived_at} channelName={channel.name} onBack={() => openThread(sessionView.thread)} onClose={threadOnly ? () => openThread(requestedThread!) : panels.close} onAccessLost={() => revokeAccess.current(new Error('not_found'))} />
     </SidePanel>}
     {status !== 'Disconnected' && <AnimatePresence>{direct && filesOpen && <ChannelFiles direct={!!direct} key={channel.id} channel={channel.id} name={channel.name} revision={fileRevision} deletions={filesDeleted} onClose={closeFiles} onMessage={fileMessage} onAccessLost={() => revokeAccess.current(new Error('not_found'))} />}</AnimatePresence>}
     {status !== 'Disconnected' && encrypted && channelSearchOpen && <EncryptedSearch key={channel.id} channel={channel.id} actor={profile.id} control={encryption} onClose={closeChannelSearch} onOpen={id=>{

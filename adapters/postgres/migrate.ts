@@ -34,6 +34,15 @@ export const migrationFiles = [
   '126_memory_provider_changes.sql',
   '127_sidebar_section_emoji.sql',
   '129_composer_drafts.sql',
+  '130_thread_inbox.sql',
+  '131_thread_broadcasts.sql',
+  '132_thread_reply_bars.sql',
+  '133_huddle_conversations.sql',
+  '134_saved_messages.sql',
+  '136_session_shared_views.sql',
+  '137_web_vault_capability.sql',
+  '138_code_channel_inactivity.sql',
+  '139_session_input_resources.sql',
 ] as const;
 
 export async function migrate(pool: Pool): Promise<void> {

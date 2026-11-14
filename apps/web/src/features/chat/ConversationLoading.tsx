@@ -1,8 +1,9 @@
+import { Spinner } from '@space/ui/primitives';
 import { ConversationMain, FrameHeader } from './ConversationFrame.js';
 import { ConversationComposer } from './ThreadConversation.js';
 export function ConversationLoadingStatus({ label }: { label: string }) {
   return <p className="chat-conversation-loading-status" role="status" aria-label={label}>
-    <span className="sp-spinner" aria-hidden="true" />{label}…
+    <Spinner />{label}…
   </p>;
 }
 

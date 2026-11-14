@@ -42,13 +42,22 @@ The gateway keeps one PostgreSQL `LISTEN` connection for permission changes. If 
 
 Personal management APIs derive the owner from the signed-in session. Workspace management APIs verify the actor’s current admin or owner role. A gateway capability lasts 150 seconds and binds the agent owner, requester, workspace, installation, execution and audience. The connector's invocation deadline is 120 seconds. Every gateway list/call rechecks the current execution, requester, agent ownership, workspace/channel membership, connector state, enabled connection and exact tool grant. In an ordinary session, a request by the agent owner can use both the owner’s personal grants and workspace grants. Another channel member’s request through that agent can use only its workspace grants. The requester and agent owner must both retain workspace and channel access.
 
-Browser Sidekick sessions are private to the owner. The gateway reads the immutable browser handoff from the execution’s session and limits discovery and dispatch to personal grants for that installation. With no personal grants, the agent receives no MCP tools. The connector also omits project and file MCP servers and disables native coding tools for browser turns.
+Browser Sidekick sessions are private to the owner. The gateway reads the immutable browser handoff from the execution’s session and limits discovery and dispatch to personal grants for that installation. With no personal grants, the gateway supplies no tools. A locally paired desktop Codex session can also receive the Mac’s browser Vault tools described below. The connector also omits project and file MCP servers and disables native coding tools for browser turns.
 
 Upstream credentials are encrypted with AES-256-GCM and identity-bound associated data. They never go to the connector or management responses. Endpoint/token changes discard the catalog and grants. Rediscovery removes grants for removed or changed definitions. Gateway tool aliases include a hash of connection/tool identity and fit provider naming limits.
 
 Each remote operation owns its MCP client, session, pinned network connection and deadline. Normal cleanup sends a best-effort session DELETE; cancellation closes local transports. Codex, Kiro and Claude receive the current turn's gateway access, preserve native conversation identity, and discard that access afterward. No capabilities are saved in provider configuration files.
 
 Permission changes trigger revalidation of active work. Revocation aborts local upstream requests where possible and discards unauthorized results. Cancellation cannot undo a remote side effect already performed.
+
+## Personal Vault on macOS
+
+Space Desktop’s HTTPS browser toolbar opens Vault for the exact site and signed-in Space account. A native helper authenticates the Mac user and stores logins and API credentials in the local, non-synchronizing Keychain. The browser’s provider setup opens this native prompt. Existing server-managed Connections use the storage described above and are not migrated by opening Vault.
+
+The desktop Codex connector starts a loopback MCP endpoint with a fresh bearer capability for each private browser turn. The desktop main process checks the tab’s session, paired installation, signed-in owner, and current page. The capability expires with the turn. The website cannot call this endpoint.
+
+- **fill_from_vault** requests a single fill in a same-origin, top-level login form. The user unlocks Vault and selects an account. Navigation, account or tab changes, locking, and suspension invalidate outstanding approval. Space pauses browser control during fill and waits for the user to submit the form, finish MFA, and select **Resume browser control**.
+- **list_saved_tools** asks the user to select a token for the discovered provider endpoint. **call_saved_tool** requests one of those tools and shows its name and arguments for one-time approval. The desktop calls the provider using the existing pinned HTTPS MCP transport. The token is not sent to the Space server or the connector. The model receives the provider’s tool result. These interactive approvals are local to the Mac.
 
 ## Bounds and failure handling
 

@@ -4,14 +4,16 @@ import { ArrowBendUpRight, BellSlash, BookmarkSimple, ChatCircleDots, CheckCircl
 import { EmojiPicker } from '../emoji/emoji-picker.js';
 import { IconButton, Menu } from '../primitives/primitives.js';
 
-export type MessageAction = 'selectMessage' | 'discussWithAgent' | 'forward' | 'addTodo' | 'askAgent' | 'edit' | 'markUnread' | 'save' | 'saveMemory' | 'remind' | 'toggleReplyNotifications' | 'copyLink' | 'copyMessage' | 'pin' | 'connectApp' | 'delete';
+export type MessageAction = 'broadcastReply' | 'selectMessage' | 'discussWithAgent' | 'forward' | 'addTodo' | 'askAgent' | 'edit' | 'markUnread' | 'unsave' | 'save' | 'saveMemory' | 'remind' | 'toggleReplyNotifications' | 'copyLink' | 'copyMessage' | 'pin' | 'connectApp' | 'delete';
 export type MessageActionHandlers = Partial<Record<MessageAction, () => void | Promise<void>>>;
 const menuActions = [
   { key: 'selectMessage', label: 'Select message', icon: CheckCircle },
   { key: 'discussWithAgent', label: 'Discuss with agent', icon: Sparkle },
+  { key: 'broadcastReply', label: 'Send reply to this conversation', icon: ArrowBendUpRight },
   { key: 'edit', label: 'Edit message', icon: PencilSimple },
   { key: 'markUnread', label: 'Mark unread', icon: Tray, separatorBefore: true },
   { key: 'save', label: 'Add to saved', icon: BookmarkSimple },
+  { key: 'unsave', label: 'Remove from saved', icon: BookmarkSimple },
   { key: 'saveMemory', label: 'Save to channel memory', icon: Sparkle },
   { key: 'remind', label: 'Add a reminder', icon: Clock },
   { key: 'toggleReplyNotifications', label: 'Turn off notifications for replies', icon: BellSlash },
@@ -26,7 +28,8 @@ const feedback: Partial<Record<MessageAction, { pending: string; success: string
   copyLink: { pending: 'Copying link…', success: 'Link copied' },
   copyMessage: { pending: 'Copying message…', success: 'Message copied' },
   pin: { pending: 'Pinning message…', success: 'Message pinned to channel' },
-  save: { pending: 'Saving message…', success: 'Message saved' },
+  save: { pending: 'Saving message…', success: 'Added to Saved' },
+  unsave: { pending: 'Removing from Saved…', success: 'Removed from Saved' },
   addTodo: { pending: 'Adding to-do…', success: 'Added to your to-dos' },
 };
 

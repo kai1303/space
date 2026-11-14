@@ -52,12 +52,15 @@ export function useMessageHistory(path: string, onError: (reason: unknown) => vo
       let next = mergePage(targetSequence ? null : current.current, result, direction);
       if (direction === 'latest' || direction === 'newer') {
         if (overflow.current) next = { ...next, has_newer: true };
-        else next = appendLive(next, buffer.current.filter(message => BigInt(message.reaction_sequence ?? '0') > BigInt(result.event_cursor) || BigInt(message.sequence!) > BigInt(result.event_cursor)), direction === 'latest', rootsOnly);
+        else next = appendLive(next, buffer.current.filter(message => BigInt(message.reply_summary?.revision ?? '0') > BigInt(result.event_cursor) || BigInt(message.reaction_sequence ?? '0') > BigInt(result.event_cursor) || BigInt(message.sequence!) > BigInt(result.event_cursor)), direction === 'latest', rootsOnly);
         if (direction === 'latest' && !targetSequence) setLatestVersion(value => value + 1);
       }
       // Updates retain their creation sequence and can overlap any page being fetched.
       const ids = new Set(next.messages.map(message => message.id));
       next = appendLive(next, buffer.current.filter(message => (message.deleted_at || BigInt(message.reaction_sequence ?? '0') > 0n) && ids.has(message.id)), false, rootsOnly);
+      // A reply can update a loaded root while an older page is in flight.
+      if (direction === 'older' && rootsOnly) next = appendLive(next, buffer.current.filter(message =>
+        message.thread_root_id && ids.has(message.thread_root_id) && BigInt(message.reply_summary?.revision ?? '0') > BigInt(result.event_cursor)), false, true);
       buffer.current = []; overflow.current = null;
       update(next);
       return result;

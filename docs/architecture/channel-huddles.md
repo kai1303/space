@@ -1,6 +1,6 @@
-# Channel huddles
+# Huddles
 
-Channel headers offer **Start huddle** or **Join huddle**. The join dialog lets people join muted; cameras always start off. One persistent panel owns the LiveKit room across channel navigation. It offers audio, camera, screen sharing, device selection, minimize, and leave. The Huddles destination lists open rooms in joined, accessible channels, with 50-item pages. Rooms allow 12 simultaneous participants. Rejoining from another device with the same user identity replaces the previous connection.
+Channel headers offer **Start huddle** or **Join huddle**. The join dialog lets people join muted; cameras always start off. One persistent panel owns the LiveKit room across channel navigation. It offers audio, camera, screen sharing, device selection, minimize, and leave. The Huddles destination offers teammate invitations, suggested channels, open rooms in 50-item pages, and the 20 most recent ended rooms the viewer was admitted to. A DM invitation appears across the recipient’s signed-in sessions, including on reconnect. A channel huddle participant can invite an existing channel member. Dismissal and admission clear the invitation across devices. Invitations refer to a specific live room so following an expired invitation cannot start a new one. Channel and DM headers also offer a permanent link to the prejoin dialog. When the starter can post, activation creates a single conversation thread which stays accessible after the room ends. Encrypted DMs keep their audio invitation and omit the plaintext thread. Rooms allow 12 simultaneous participants. Rejoining from another device with the same user identity replaces the previous connection.
 
 ## Run locally
 
@@ -42,7 +42,7 @@ For a fresh machine, download the source archive from `https://github.com/liveki
 
 ## Authorization and recovery
 
-Space issues 60-second, room-scoped JWTs after verifying active workspace membership, joined channel membership and an unarchived channel. No media API secret reaches the browser. Join tokens allow media publishing/subscription, with data publishing disabled. Room names and participant identities are opaque UUIDs. The SFU enforces the 12-participant cap. Signaling and media do not flow through Socket.IO or PostgreSQL.
+Space issues 60-second, room-scoped JWTs after verifying active workspace membership, joined channel membership and an unarchived channel. No media API secret reaches the browser. Join tokens allow media publishing/subscription, and room-scoped data publishing for transient reactions. Room names and participant identities are opaque UUIDs. The SFU enforces the 12-participant cap. Signaling and media do not flow through Socket.IO or PostgreSQL.
 
 A partial unique index admits one open huddle per channel. Concurrent starts converge on that room; atomic authorization writes protect starts racing membership revocation. Transactions retry serialization/deadlock failures at most four times. These use ordinary PostgreSQL transactions/internal write locks, with no explicit row locks or distributed lock service.
 

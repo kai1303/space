@@ -10,6 +10,7 @@ import { startNativeShell } from './shared/native/native-shell.js';
 
 if (window.self !== window.top && new URLSearchParams(location.search).get('view') === 'split') {
   document.documentElement.classList.add('space-split-document');
+  if (new URLSearchParams(location.search).get('source') === 'saved') document.documentElement.classList.add('saved-split-document');
 }
 
 createRoot(document.getElementById('root')!).render(<AppProviders><App /></AppProviders>);

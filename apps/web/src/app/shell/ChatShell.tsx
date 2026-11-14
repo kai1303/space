@@ -1,6 +1,8 @@
 import { RailNavigation, type RailDestination, type RailProps } from './RailNavigation.js';
 export type { RailDestination } from './RailNavigation.js';
 import { readChatTheme } from './chat-theme.js';
+import { startThemeTileWipe } from './theme-tile-wipe.js';
+import { flushSync } from 'react-dom';
 import {useNotificationDelivery} from '../../features/notifications/Notifications.js';
 import type {NotificationItem} from '@space/contracts';
 import { useEffect, useLayoutEffect, useId, useRef, useState, type CSSProperties, type ReactNode } from 'react';
@@ -13,6 +15,7 @@ import { ChannelSearchHeaderContext, type ChannelSearchHeader } from '../../feat
 import { BrowserSidekick } from '../../features/agents/BrowserSidekick.js';
 import { UserSettings } from '../../features/profile/UserProfile.js';
 import { SpaceLogo } from '../../shared/branding/SpaceLogo.js';
+import { AnimatedSpaceLogo } from '../../shared/branding/AnimatedSpaceLogo.js';
 import { WorkspaceSwitcher, type WorkspaceChoice } from './WorkspaceSwitcher.js';
 import { ConversationListContext, PHONE_QUERY, usePhoneLayout } from '../../shared/ui/conversation-list.js';
 
@@ -127,6 +130,14 @@ export function ChatShell({ renderPreview, notificationDelivery, onNavigate, act
   const [channelSearch, setChannelSearch] = useState<ChannelSearchHeader | null>(null);
   function openSearch() { setSidebarOpen(false); (channelSearch?.edit ?? onSearch)?.(); }
   const [theme, setTheme] = useState(readChatTheme);
+  const cancelThemeWipe = useRef<(() => void) | undefined>(undefined);
+  useEffect(() => () => cancelThemeWipe.current?.(), []);
+  function toggleTheme(button: HTMLElement) {
+    if (cancelThemeWipe.current) return;
+    cancelThemeWipe.current = startThemeTileWipe(button,
+      () => flushSync(() => setTheme(current => current === 'dark' ? 'light' : 'dark')),
+      () => { cancelThemeWipe.current = undefined; });
+  }
   useLayoutEffect(() => {
     document.documentElement.dataset.theme = theme;
     try { window.localStorage.setItem('space-theme', theme); } catch {}
@@ -145,7 +156,7 @@ export function ChatShell({ renderPreview, notificationDelivery, onNavigate, act
   return <div ref={shell} className={`chat-app ${sidebarOpen ? 'chat-app--sidebar-open' : ''}${listScrolled ? ' chat-app--list-scrolled' : ''}`} style={{ '--chat-sidebar-width': `${sidebarWidth}px` } as CSSProperties}>
     <a className="chat-skip" href="#chat-messages">Skip to messages</a>
     <header className="chat-topbar">
-      <a className="chat-topbar-brand" href="/chat" aria-label="Space home"><SpaceLogo inverse /></a>
+      <a className="chat-topbar-brand" href="/chat" aria-label="Space home"><AnimatedSpaceLogo theme={theme} /></a>
       <div className="chat-history-controls" role="toolbar" aria-label="History Navigation">
         <IconButton label="Back in history" disabled={!onBack} onClick={onBack}><NavigationIcon name="back" size={20}/></IconButton>
         <IconButton label="Forward in history" disabled={!onForward} onClick={onForward}><NavigationIcon name="forward" size={20}/></IconButton>
@@ -160,7 +171,7 @@ export function ChatShell({ renderPreview, notificationDelivery, onNavigate, act
         : window.spaceDesktop?.openBrowser && <IconButton label="Open browser" onClick={() => window.spaceDesktop?.openBrowser?.()}><Globe size={19}/></IconButton>}{activity}<a className="chat-system-link" href="/design-system" aria-label="Open design system"><BookOpen size={19} /></a></div>
     </header>
     {/* Phones: your picture sits at the right end of the Home header, as in Slack. */}
-    {phone && <div className="chat-phone-account"><UserSettings user={user} userId={userId} onNameChange={onNameChange} /></div>}
+    {phone && <div className="chat-phone-account"><UserSettings workspace={workspace} user={user} userId={userId} onNameChange={onNameChange} /></div>}
     <div className="chat-body">
       <LayoutGroup id={railId}><nav className={`chat-rail${moreOpen ? ' chat-rail--more-open' : ''}`} aria-label="Main navigation" onClick={event => {
         // Choosing a destination from the More sheet closes it; Admin opens its own menu in place.
@@ -179,8 +190,10 @@ export function ChatShell({ renderPreview, notificationDelivery, onNavigate, act
           <NavigationIcon name="search" size={22}/>
         </button>}
         <div className="chat-rail-bottom">
-          <IconButton label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} theme`} onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}>{theme === 'dark' ? <Sun size={21} /> : <Moon size={21} />}</IconButton>
-          {!phone && <UserSettings user={user} userId={userId} onNameChange={onNameChange} />}
+          <IconButton className="chat-theme-toggle" label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} theme`} onClick={event => toggleTheme(event.currentTarget)}>
+            {theme === 'dark' ? <Sun size={21} /> : <Moon size={21} />}
+          </IconButton>
+          {!phone && <UserSettings workspace={workspace} user={user} userId={userId} onNameChange={onNameChange} />}
         </div>
       </nav></LayoutGroup>
       <div className="chat-main-area" onClick={event => {

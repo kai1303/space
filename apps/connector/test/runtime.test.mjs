@@ -166,3 +166,22 @@ test('Kiro pairing sends its provider and rejects mismatched provider responses'
     assert.equal(connection.provider, 'kiro');
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
+
+test('desktop Vault dispatch is installation-bound and independent of a model turn', async () => {
+  const http = createServer();
+  const io = new Server(http);
+  await new Promise(resolve => http.listen(0, '127.0.0.1', resolve));
+  const connected = new Promise(resolve => io.of('/agents').once('connection', resolve));
+  const id = '282b6a70-ea37-45c3-92e6-cf889470ac99';
+  let calls = 0;
+  const connection = connectPlatform({origin:'http://127.0.0.1:' + http.address().port, credential:'fixture',installation_id:id, workspace_id:'workspace'},
+    () => 'required', () => {}, undefined, undefined, async () => { calls++; return {status:'cancelled'}; });
+  try {
+    const socket = await connected;
+    assert.equal(socket.handshake.auth.vault_mac,true);
+    const payload = {actor:id,id,installation:id,action:'list',expires:Date.now()+6000};
+    assert.deepEqual(await socket.timeout(3000).emitWithAck('vault.request',{...payload,installation:'different'}), {status:'unavailable'});
+    assert.deepEqual(await socket.timeout(3000).emitWithAck('vault.request',payload), {status:'cancelled'});
+    assert.equal(calls,1);
+  } finally { connection.close(); await new Promise(resolve => io.close(resolve)); }
+});

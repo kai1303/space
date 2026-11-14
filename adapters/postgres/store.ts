@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type { Pool } from 'pg';
 import { and, eq, gt, inArray, sql, getTableColumns } from 'drizzle-orm';
-import { AppError, assertTransition, parseAgentEvent, parseAgentResponse, parseTaskInput, text, uuid, type AgentPdfContent, type InvocationRequest, type RichDocument, type Task, type AgentInstallation, type WorkplaceEvent } from '@space/contracts';
+import { AppError, assertTransition, parseAgentEvent, parseAgentResponse, parseTaskInput, text, updateSessionViews, uuid, type AgentPdfContent, type InvocationRequest, type RichDocument, type Task, type AgentInstallation, type WorkplaceEvent } from '@space/contracts';
 import { assertEligible, assertApprover } from '@space/core/policy';
 import type { Delivery, DeliveryStore, PreparedDelivery } from '@space/core/ports';
 import { database, type DbSession } from './database.js';
@@ -445,12 +445,15 @@ export class PostgresStore implements DeliveryStore {
         if (!managed || !task.goal_action || !['codex.run','claude.run'].includes(task.skill)) throw new AppError(400,'invalid_session_goal');
         await c.update(s.agentSessions).set({session_goal:event.payload.session_goal}).where(eq(s.agentSessions.id,session.id));
       }
-      if (managed && incomingOutputs) {
+      const viewUpdate = event.payload.session_view;
+      if (viewUpdate && !managed) throw new AppError(409, 'session_unmanaged');
+      if (managed && (incomingOutputs || viewUpdate)) {
         const changedSession = await c.update(s.agentSessions).set({ revision: session.revision + 1, outputs: {
-          ...(incomingOutputs.preview ?? session.outputs.preview ? { preview: incomingOutputs.preview ?? session.outputs.preview } : {}),
-          ...(incomingOutputs.actions ?? session.outputs.actions ? { actions: incomingOutputs.actions ?? session.outputs.actions } : {}),
-          files: mergeOutputPaths(session.outputs.files, incomingOutputs.files),
-          changes: mergeOutputPaths(session.outputs.changes, incomingOutputs.changes),
+          ...session.outputs,
+          ...incomingOutputs,
+          ...(viewUpdate ? {views:updateSessionViews(incomingOutputs?.views ?? session.outputs.views ?? [], viewUpdate)} : {}),
+          files: mergeOutputPaths(session.outputs.files, incomingOutputs?.files ?? []),
+          changes: mergeOutputPaths(session.outputs.changes, incomingOutputs?.changes ?? []),
         } }).where(and(eq(s.agentSessions.id, session.id), eq(s.agentSessions.revision, session.revision))).returning({ id: s.agentSessions.id });
         if (!changedSession.length) throw new SessionConflict();
       }

@@ -1,7 +1,6 @@
 import { workspacePath, workspaceIdFromPath } from '@space/contracts';
 import { SessionTeam } from '../features/agents/SessionTeam.js';
 import { ConversationLinkLoading } from './shell/ConversationLinkLoading.js';
-import { HuddleProvider } from '../features/huddles/Huddles.js';
 import { CallingProvider } from '../features/calling/Calling.js';
 import { InviteAcceptance } from '../features/workspace/invitations/InviteAcceptance.js';
 import { WorkspaceAddress } from '../features/workspace/WorkspaceAddress.js';
@@ -38,5 +37,5 @@ export function Chat() {
     const slug = location.pathname.slice(3).replace(/\/$/, '').replace(/%([0-9a-f]{2})/gi, (_, hex: string) => String.fromCharCode(parseInt(hex, 16)));
     return <WorkspaceAddress slug={slug} email={session.user.email}/>;
   }
-  return <SocketSession key={`${session.user.id}:${session.session.id}`}><CallingProvider actor={session.user.id}><HuddleProvider><ChatWorkspace profile={{ id: session.user.id, display_name: session.user.name }} /></HuddleProvider></CallingProvider></SocketSession>;
+  return <SocketSession key={`${session.user.id}:${session.session.id}`}><CallingProvider actor={session.user.id}><ChatWorkspace profile={{ id: session.user.id, display_name: session.user.name }} /></CallingProvider></SocketSession>;
 }

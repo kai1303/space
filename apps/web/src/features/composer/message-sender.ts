@@ -13,10 +13,10 @@ export function messageContent(text: string, document: RichDocument | undefined,
   };
 }
 
-export function sendMessage(socket: Socket, channel: string, thread: string | undefined, id: string, content: ReturnType<typeof messageContent> | {encrypted:EncryptedDm}, broadcastConfirmed = false, expectedActor?: string) {
+export function sendMessage(socket: Socket, channel: string, thread: string | undefined, id: string, content: ReturnType<typeof messageContent> | {encrypted:EncryptedDm}, broadcastConfirmed = false, expectedActor?: string, alsoSendToChannel = false) {
   return command<ChatMessage>(socket, 'message.send', {
     channel_id: channel, client_message_id: id, ...content, ...(expectedActor && { expected_actor: expectedActor }),
-    ...(thread ? { thread_id: thread } : {}), ...(broadcastConfirmed ? { broadcast_confirmed: true } : {}),
+    ...(thread ? { thread_id: thread } : {}), ...(alsoSendToChannel ? {also_send_to_channel:true} : {}), ...(broadcastConfirmed ? { broadcast_confirmed: true } : {}),
   });
 }
 

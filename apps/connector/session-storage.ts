@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import type { LocalProvider } from '@space/contracts';
 import type { Connection, Registration } from './storage.js';
 
-export interface LocalSessionStorage { directory: string; connection: Connection; identity: Registration; project?: string; coding?: boolean }
+export interface LocalSessionStorage { browserTurn?: import('./outbound-tools.js').BrowserTurn; directory: string; connection: Connection; identity: Registration; project?: string; coding?: boolean }
 
 async function privateDirectory(path: string, create = true) {
   if (create) await mkdir(path, { mode: 0o700 });

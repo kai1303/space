@@ -19,3 +19,20 @@ The machine-readable REA reports and extraction scripts are retained locally und
 - A participant with source access can ask a second installed agent to help. Space creates a linked session, passes the explicitly selected context, and applies the helper installation’s approval rules.
 - Browse sessions searches authorized work and filters it by status, creator, agent and channel. Personal sidebar archiving and ending a session for everyone are separate operations.
 - Installed AG-UI providers can open the current task as a managed session, publish supported outputs and HTTPS actions, and end the session. A PR action opens its configured destination on the Git host, where the user’s own repository permissions apply. See the [AG-UI protocol](../architecture/ag-ui.md).
+
+## Review channel comparison
+
+Slack’s published demonstration shows a code icon and the task name in the channel header. The Artifacts button opens a pane alongside the conversation. Code, View and Canvas share the pane, which has its own close button. The help guide also shows how to collect line comments, edit feedback before sending it, and revisit the source message. These visual details come from Slack’s product demonstration and help guide. [Product demonstration](https://slack.com/blog/news/slack-code-channels-for-agents) · [Code channel help](https://slack.com/help/articles/54310833022355-Build-with-AI-as-a-team-using-Slack-Code)
+
+| Workflow | Previous Space behavior | Current Space behavior |
+| --- | --- | --- |
+| Start a task | Mention an agent in a channel or DM to start from a message. | Mentions still work. New code channel in Agent sessions also lets you choose an agent and a source channel, then start a fresh thread or pick a recent message. |
+| Open the work | A source-message shortcut opened an agent panel inside the channel. The agent name led the header. | The source shortcut opens the named task as a dedicated conversation. Its original thread is reachable from the session. |
+| Inspect results | Preview, Files and Changes occupied the conversation area, including when there was no output. | Artifacts opens beside chat on a wide screen. On a narrow screen it takes the available width. Generated tabs appear as outputs arrive and Files & links lists resources people shared. |
+| Review a patch | Changes offered patch comments and a queue action. | Code shows the file list, line numbers and branch labels. A reviewer can send one comment or collect several, edit the feedback, and send it without replacing the chat draft. |
+| Publish artifacts | A session held a preview, file contents, changes and outgoing links. | Providers can update a named HTML report, Markdown canvas or set of Space components in place. The context bar shows the repository, branches and pull request when the provider supplies them. |
+| Finish and return | Ending preserved the session for reading. Restoring a personal sidebar entry did not resume the session. | An authorized manager can reopen an ended session and continue its history. The last completed result is available as a summary when it was the final turn. |
+
+Inactive code channels leave the sidebar after seven days. They remain available through search, Explore and direct links according to the viewer’s access. Starting new work brings the channel back. Personal archives and stars retain their existing behavior.
+
+The Space review room preserves its source and reviewer permissions. People invited only to review see explicitly shared snapshots. Canvases use Markdown and structured tabs use Space components. Integration with Slack’s Block Kit interaction callbacks and collaborative canvas comment anchors is outside this implementation.

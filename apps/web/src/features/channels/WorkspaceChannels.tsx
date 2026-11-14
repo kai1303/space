@@ -1,3 +1,4 @@
+import {DirectoryCreateChannel} from './create-channel-context.js';
 import { ConversationMain } from '../chat/ConversationFrame.js';
 import { sessionWorkStatusLabels, sessionPath, conversationPath } from '@space/contracts';
 import { ConversationHistory, usePublishedPath } from '../../shared/ui/conversation-location.js';
@@ -10,7 +11,7 @@ import { AgentMessageLinkContext } from '@space/ui/agents';
 import { AgentSessions } from '../agents/AgentSessions.js';
 import { useAgentSessionList } from '../agents/useAgentSessionList.js';
 import type { Snapshot } from '../../shared/ui/view-state.js';
-import type { ConversationView } from '../chat/view-state.js';
+import type { CodeChannelLocation, ConversationView } from '../chat/view-state.js';
 import { usePersonalSections } from './SidebarSectionsProvider.js';
 import { useStarredChannels } from './useStarredChannels.js';
 import { useDirectMessageList } from '../direct-messages/DirectMessages.js';
@@ -23,7 +24,7 @@ import { Button, Dialog, toast } from '@space/ui/primitives';
 import { WorkspaceSidebar } from '@space/ui/navigation';
 import { motionTransition } from '@space/ui/motion';
 import { type RichDocument } from '@space/ui/rich-text';
-import { Archive, WarningCircle, CaretDown, Hash, Lock, Plus } from '@phosphor-icons/react';
+import { Archive, Headphones, WarningCircle, CaretDown, Hash, Lock, Plus } from '@phosphor-icons/react';
 import { listAll, request } from '../../shared/api/request.js';
 import type { ChannelSummary as Channel } from '@space/contracts';
 import type { Workspace } from '../workspace/workspace-types.js';
@@ -38,11 +39,11 @@ import { ConversationLoading } from '../chat/ConversationLoading.js';
 import { type UploadDrafts } from '../composer/useAttachmentUploads.js';
 
 const sessionBatch = 5;
-type ChannelView = { channels: Channel[]; selected: string; direct?: DirectMessageSummary; agentSession?: AgentSessionReference; loaded: boolean; error: string };
+type ChannelView = { channels: Channel[]; selected: string; direct?: DirectMessageSummary; agentSession?: CodeChannelLocation; loaded: boolean; error: string };
 const emptyChannelView: ChannelView = { channels: [], selected: '', loaded: false, error: '' };
-export function WorkspaceChannels({ initialSession, onSessionRestored, viewForChannel, onRequestedChannelConsumed, shortcut, onShortcut, content, onContentClose, onDirectMessage, onNewDirectMessage, uploads, profile, workspace, workspaces, workspaceControl, width, onWidthChange, requestedChannel, mentionTarget, onMentionOpened, onVisit, searchOpen, onSearchClose, onSearchAvailabilityChange, drafts, onDraftChange, onForgetChannel }: { initialSession?: AgentSessionReference; onSessionRestored: () => void; viewForChannel:(id:string)=>Snapshot<ConversationView>; onRequestedChannelConsumed: () => void; shortcut?: HubView; onShortcut: (view: HubView) => void; content?: ReactNode; onContentClose: () => void; onDirectMessage: (id: string) => void; onNewDirectMessage: () => void; uploads: UploadDrafts; profile: Profile; workspace: string; workspaces: Workspace[]; workspaceControl: ReactNode; width: number; onWidthChange: (width: number) => void;  requestedChannel?: string; mentionTarget?: {channel_id:string;message_id:string;thread_id?:string}; onMentionOpened: () => void; onVisit: (channel?: Channel) => void; searchOpen: boolean; onSearchClose: () => void; onSearchAvailabilityChange: (available: boolean) => void; drafts: Record<string, RichDocument>; onDraftChange: (key: string, document: RichDocument) => void; onForgetChannel: (id: string) => void }) {
+export function WorkspaceChannels({ codeChannelView, onOpenOrigin, onReturnDirect, initialSession, onSessionRestored, viewForChannel, onRequestedChannelConsumed, shortcut, onShortcut, content, onContentClose, onDirectMessage, onNewDirectMessage, uploads, profile, workspace, workspaces, workspaceControl, width, onWidthChange, requestedChannel, mentionTarget, onMentionOpened, onVisit, searchOpen, onSearchClose, onSearchAvailabilityChange, drafts, onDraftChange, onForgetChannel }: { codeChannelView: Snapshot<CodeChannelLocation | undefined>; onOpenOrigin:(item:{channel_id:string;thread_id:string})=>void; onReturnDirect:(channel:string)=>void; initialSession?: CodeChannelLocation; onSessionRestored: () => void; viewForChannel:(id:string)=>Snapshot<ConversationView>; onRequestedChannelConsumed: () => void; shortcut?: HubView; onShortcut: (view: HubView) => void; content?: ReactNode; onContentClose: () => void; onDirectMessage: (id: string) => void; onNewDirectMessage: () => void; uploads: UploadDrafts; profile: Profile; workspace: string; workspaces: Workspace[]; workspaceControl: ReactNode; width: number; onWidthChange: (width: number) => void;  requestedChannel?: string; mentionTarget?: {channel_id:string;message_id:string;thread_id?:string;draftKey?:string}; onMentionOpened: () => void; onVisit: (channel?: Channel) => void; searchOpen: boolean; onSearchClose: () => void; onSearchAvailabilityChange: (available: boolean) => void; drafts: Record<string, RichDocument>; onDraftChange: (key: string, document: RichDocument) => void; onForgetChannel: (id: string) => void }) {
   const reduced = useReducedMotion();
-  const [views, setViews] = useState(() => new Map<string, ChannelView>(initialSession ? [[workspace, {...emptyChannelView, agentSession: initialSession}]] : []));
+  const [views, setViews] = useState(() => new Map<string, ChannelView>([[workspace, {...emptyChannelView, selected:(initialSession ?? codeChannelView.current)?.channel_id ?? '', agentSession: initialSession ?? codeChannelView.current} ]]));
   useEffect(() => { if (initialSession) onSessionRestored(); }, [initialSession, onSessionRestored]);
   const unread = useWorkspaceUnread(workspace);
   const typing = useDirectTyping(workspace, profile.id);
@@ -85,6 +86,7 @@ export function WorkspaceChannels({ initialSession, onSessionRestored, viewForCh
   const [renameId,setRenameId] = useState<string>();
   const listedSessions = sessions.items.filter(item => !starredSessions.ids.includes(item.id));
   const agentSession = views.get(workspace)?.agentSession;
+  useLayoutEffect(() => { codeChannelView.current = agentSession; }, [agentSession, codeChannelView]);
   const visibleSessions = listedSessions.slice(0,visibleCount);
   if (agentSession && listedSessions.length > visibleCount) {
     const activeIndex = listedSessions.findIndex(item => item.id === agentSession.id);
@@ -97,11 +99,11 @@ export function WorkspaceChannels({ initialSession, onSessionRestored, viewForCh
   }
   const sessionRows = [
     ...starredSessions.conversations.flatMap(item => item.session ? [{
-      id:item.id, title:item.name, thread:item.session.origin_thread_id, agentName:item.session.agent_name,
+      id:item.id, title:item.name, thread:item.session.origin_thread_id, agentName:item.session.agent_name, codeChannel:item.session.code_channel,
       section:'starred' as const, working:item.working, status:item.status, canRename:item.can_rename,
     }] : []),
     ...visibleSessions.map(item => ({
-      id:item.id, title:item.title, thread:item.origin_thread_id, agentName:item.agent_name,
+      id:item.id, title:item.title, thread:item.origin_thread_id, agentName:item.agent_name, codeChannel:item.code_channel,
       section:'sessions' as const, working:item.working, status:item.status, canRename:item.created_by===profile.id || item.owner_id===profile.id,
     })),
   ];
@@ -129,9 +131,12 @@ export function WorkspaceChannels({ initialSession, onSessionRestored, viewForCh
     return () => clearTimeout(timer);
   }, [channels, clock]);
   const unreadById = new Map(unread.channels.map(item => [item.channel_id,item]));
+  function huddleIcon(id:string) {
+    if (byId.get(id)?.active_huddle || directById.get(id)?.active_huddle) return <span className="sidebar-huddle-icon" aria-label="Huddle in progress" role="img"><Headphones size={17} weight="bold"/></span>;
+  }
   function badges(id: string) {
     const counts = unreadById.get(id);
-    return {unread:counts?.unread_count ?? 0,badgeCount:byId.get(id)?.notification_preferences?.badge_every_post ? counts?.unread_count ?? 0 : counts?.mention_count ?? 0};
+    return {statusIcon:huddleIcon(id),unread:counts?.unread_count ?? 0,badgeCount:byId.get(id)?.notification_preferences?.badge_every_post ? counts?.unread_count ?? 0 : counts?.mention_count ?? 0};
   }
   function hiddenChannel(id: string) {
     const prefs = byId.get(id)?.notification_preferences;
@@ -209,7 +214,34 @@ export function WorkspaceChannels({ initialSession, onSessionRestored, viewForCh
     const frame = requestAnimationFrame(restore);
     return () => cancelAnimationFrame(frame);
   }, [agentSession, retained]);
+  const sourceButton = useRef<{session:string;channel:string;label:string} | null>(null);
+  const [restoreSource, setRestoreSource] = useState<typeof sourceButton.current>(null);
+  function closeToSource() {
+    if (sourceButton.current?.session === agentSession?.id) setRestoreSource(sourceButton.current);
+    sourceButton.current = null;
+    closeSession();
+    if (agentSession?.fromDirectInbox) onReturnDirect(agentSession.channel_id);
+  }
+  useEffect(() => {
+    if (!restoreSource || agentSession || content || restoreSource.channel !== (homeDirect?.id ?? selected)) return;
+    const main = document.getElementById('chat-messages');
+    if (!main || main.querySelector('[aria-label="Thread"]')) return;
+    main.focus({preventScroll:true});
+    const focusSource = () => {
+      const button = Array.from(main.querySelectorAll<HTMLButtonElement>('button[data-code-channel-id]')).find(item =>
+        item.dataset.codeChannelId === restoreSource.session && (item.getAttribute('aria-label') ?? item.textContent) === restoreSource.label);
+      if (!button || document.activeElement !== main) return false;
+      button.focus({preventScroll:true});
+      return true;
+    };
+    if (focusSource()) { setRestoreSource(null); return; }
+    const observer = new MutationObserver(() => { if (focusSource()) setRestoreSource(null); });
+    observer.observe(main, {childList:true,subtree:true});
+    const deadline = window.setTimeout(() => setRestoreSource(null), 3000);
+    return () => { observer.disconnect(); window.clearTimeout(deadline); };
+  }, [restoreSource, agentSession, selected, homeDirect?.id, content]);
   function closeSession() {
+    codeChannelView.current = undefined;
     origin.current = null;
     updateView(view => ({...view,agentSession:undefined}));
   }
@@ -306,6 +338,7 @@ export function WorkspaceChannels({ initialSession, onSessionRestored, viewForCh
       channelMutation.current++;
       updateView(view => ({ ...view, channels: [...view.channels, channel], selected: version === scope.current ? channel.id : view.selected, direct: version === scope.current ? undefined : view.direct }));
       if (version !== scope.current) return;
+      if(shortcut==='directories')onContentClose();
       onVisit(channel); setName(''); setPrivate(false); setCreateOpen(false); onSearchClose();
     } catch (e) { updateView(view => ({ ...view, error: errorText(e) })); }
     finally { if (version === scope.current) setBusy(false); }
@@ -362,7 +395,7 @@ export function WorkspaceChannels({ initialSession, onSessionRestored, viewForCh
     const person = participants?.find(member => member.id !== profile.id) ?? participants?.[0];
     return { initials:person?.name.slice(0, 2).toUpperCase(), image:person?.image, online:person?.presence === 'active' };
   }
-  return <div className="chat-layout" style={{ '--chat-sidebar-width': `${width}px` } as CSSProperties}>
+  return <DirectoryCreateChannel.Provider value={()=>setCreateOpen(true)}><div className="chat-layout" style={{ '--chat-sidebar-width': `${width}px` } as CSSProperties}>
     <div id="chat-conversations" className="chat-sidebar">
       <WorkspaceSidebar workspaceId={workspace} workspace={workspaces.find(w => w.id === workspace)?.name ?? 'Workspace'} width={width} onWidthChange={onWidthChange}
         loading={!loaded && !error} showEmptySections onNewMessage={onNewDirectMessage}
@@ -384,7 +417,7 @@ export function WorkspaceChannels({ initialSession, onSessionRestored, viewForCh
             id:c.id, ...channelActions(c), name:c.archived_at ? `${c.name} (archived)` : c.name,
             private:c.private, ...badges(c.id), section:'channels' as const, ...(c.joined && sectionProps(c.id, 'channels')),
           })),
-          ...sessionRows.map(item => ({ id:`session:${item.id}`, name:item.title, ...sessionActions(item), agentName:item.agentName,
+          ...sessionRows.map(item => ({ id:`session:${item.id}`, name:item.title, ...sessionActions(item), agentName:item.agentName, codeChannel:item.codeChannel,
             typing:item.working || item.status === 'active', section:item.section,
             statusIcon:item.status === 'needs_attention' || item.status === 'archived'
               ? <span className={`session-row-status session-row-status--${item.status}`} role="img" aria-label={sessionWorkStatusLabels[item.status]} title={sessionWorkStatusLabels[item.status]}>
@@ -392,7 +425,7 @@ export function WorkspaceChannels({ initialSession, onSessionRestored, viewForCh
               </span> : undefined, onRename:item.canRename ? () => setRenameId(item.id) : undefined })),
           ...directs.items.filter(dm => !starred.ids.includes(dm.id)).map(dm => ({
             id:dm.id, name:dm.name, typing:typing.has(dm.id), section:'direct' as const,
-            ...sectionProps(dm.id, 'direct'), ...directAvatar(dm.id), unread:unreadById.get(dm.id)?.unread_count ?? 0,
+            ...sectionProps(dm.id, 'direct'), ...directAvatar(dm.id), statusIcon:huddleIcon(dm.id), unread:unreadById.get(dm.id)?.unread_count ?? 0,
           })),
           ...personal.assignments.filter(item => item.kind === 'direct' && !starred.ids.includes(item.channel_id) && !directById.has(item.channel_id))
             .map(item => ({ id:item.channel_id, name:item.name, section:'direct' as const, typing:typing.has(item.channel_id),
@@ -418,8 +451,14 @@ export function WorkspaceChannels({ initialSession, onSessionRestored, viewForCh
       {unread.error && <p className="chat-sidebar-loading" role="status">{unread.error}</p>}
       {error && channel?.joined && <p role="alert">{error}</p>}
     </div>
-    {renderedSession && !content && <ConversationMain retainContents primary={!!agentSession} inert={!agentSession} aria-hidden={!agentSession || undefined} style={!agentSession ? {width:retained?.width} : undefined} id={agentSession ? "chat-messages" : undefined} tabIndex={-1} className={agentSession ? "chat-channel" : "chat-channel chat-session-retained"} aria-label="Agent session"><AgentMessageLinkContext.Provider value={openMessage ? followCitation : null}><AgentSessions primary={!!agentSession} agentName={renderedSession.agent_name} key={renderedSession.id} thread={renderedSession.origin_thread_id} channel={renderedSession.channel_id} initialSessionId={renderedSession.id} viewerId={profile.id} archived={renderedSession.channel_archived} drafts={drafts} onDraftChange={onDraftChange} attempt={uploads.attempt} acknowledged={uploads.acknowledged} uploads={uploads} onAccepted={uploads.sent} onClose={closeSession} onAccessLost={()=>{origin.current=null;const key=`session:${renderedSession.channel_id}:${renderedSession.id}`;delete drafts[key];onDraftChange(key,{ops:[]});closeSession();void sessions.refresh();}}/></AgentMessageLinkContext.Provider></ConversationMain>}
-    {content ?? (agentSession ? null : !loaded && !error ? <ConversationLoading label="Loading workspace" /> : channel?.joined ? <ChannelRoom viewState={viewForChannel(channel.id)} readState={unread.channels.find(item => item.channel_id === channel.id)} requestedThread={mentionTarget?.channel_id === channel.id ? mentionTarget.thread_id : undefined} mentionTarget={mentionTarget?.channel_id === channel.id ? mentionTarget.message_id : undefined} onMentionOpened={onMentionOpened} key={channel.id} uploads={uploads} profile={profile} channel={channel} onChannelChange={updated => homeDirect ? updateView(view => ({ ...view, direct: updated as DirectMessageSummary })) : channelChanged(updated)} onCloseDirect={homeDirect ? () => void closeHomeDirect() : undefined} onLeft={() => leftChannel(channel)} drafts={drafts} onDraftChange={onDraftChange} onAccessLost={() => { onForgetChannel(channel.id); if (homeDirect) forgetDirect(channel.id, 'This conversation is unavailable'); }} searchOpen={searchOpen} onSearchClose={onSearchClose} composeRequest={composeRequest} /> : <motion.main initial={reduced ? false : { opacity: .65 }} animate={{ opacity: 1 }} transition={motionTransition(reduced)} id="chat-messages" tabIndex={-1} className="chat-empty"><div className="chat-empty-icon">{channel?.private ? <Lock size={32} /> : <Hash size={32} />}</div><h1>{channel ? channel.name : 'A place for every conversation'}</h1><p>{channel ? channel.archived_at ? 'Join this archived channel to read its message history.' : 'Join this channel to read and send messages with your team.' : loaded ? 'Create your first channel and bring your team together.' : 'Loading your channels…'}</p>{channel ? <Button variant="primary" loading={busy} onClick={() => void join()}>Join channel</Button> : loaded && <Button variant="primary" onClick={() => setCreateOpen(true)}><Plus size={17} /> Create channel</Button>}{error && <p role="alert">{error}</p>}</motion.main>)}
+    {renderedSession && !content && <ConversationMain retainContents primary={!!agentSession} inert={!agentSession} aria-hidden={!agentSession || undefined} style={!agentSession ? {width:retained?.width} : undefined} id={agentSession ? "chat-messages" : undefined} tabIndex={-1} className={agentSession ? "chat-channel" : "chat-channel chat-session-retained"} aria-label="Agent session"><AgentMessageLinkContext.Provider value={openMessage ? followCitation : null}><AgentSessions primary={!!agentSession} agentName={renderedSession.agent_name} key={renderedSession.id} thread={renderedSession.origin_thread_id} channel={renderedSession.channel_id} initialSessionId={renderedSession.id} initialArtifact={agentSession?.artifact} channelName={byId.get(renderedSession.channel_id)?.name} viewerId={profile.id} archived={renderedSession.channel_archived} drafts={drafts} onDraftChange={onDraftChange} attempt={uploads.attempt} acknowledged={uploads.acknowledged} uploads={uploads} onAccepted={uploads.sent} onBack={()=>{closeSession();onOpenOrigin({channel_id:renderedSession.channel_id,thread_id:renderedSession.origin_thread_id});}} onClose={closeToSource} onAccessLost={()=>{origin.current=null;const key=`session:${renderedSession.channel_id}:${renderedSession.id}`;delete drafts[key];onDraftChange(key,{ops:[]});closeSession();void sessions.refresh();}}/></AgentMessageLinkContext.Provider></ConversationMain>}
+    {content ?? (agentSession ? null : !loaded && !error ? <ConversationLoading label="Loading workspace" /> : channel?.joined ? <ChannelRoom onOpenCodeChannel={(thread,id,artifact)=>{
+      origin.current=null;
+      const trigger=document.activeElement;
+      sourceButton.current=trigger instanceof HTMLButtonElement && trigger.dataset.codeChannelId===id ? {session:id,channel:channel.id,label:trigger.getAttribute('aria-label') ?? trigger.textContent ?? ''} : null;
+      const known=sessions.items.find(item=>item.id===id);
+      updateView(view=>({...view,agentSession:{id,origin_thread_id:thread,channel_id:channel.id,channel_archived:!!channel.archived_at,agent_name:known?.agent_name ?? '',artifact}}));
+    }} viewState={viewForChannel(channel.id)} readState={unread.channels.find(item => item.channel_id === channel.id)} editDraftKey={mentionTarget?.channel_id === channel.id ? mentionTarget.draftKey : undefined} requestedThread={mentionTarget?.channel_id === channel.id ? mentionTarget.thread_id : undefined} mentionTarget={mentionTarget?.channel_id === channel.id ? mentionTarget.message_id : undefined} onMentionOpened={onMentionOpened} key={channel.id} uploads={uploads} profile={profile} channel={channel} onChannelChange={updated => homeDirect ? updateView(view => ({ ...view, direct: updated as DirectMessageSummary })) : channelChanged(updated)} onCloseDirect={homeDirect ? () => void closeHomeDirect() : undefined} onLeft={() => leftChannel(channel)} drafts={drafts} onDraftChange={onDraftChange} onAccessLost={() => { onForgetChannel(channel.id); if (homeDirect) forgetDirect(channel.id, 'This conversation is unavailable'); }} searchOpen={searchOpen} onSearchClose={onSearchClose} composeRequest={composeRequest} /> : <motion.main initial={reduced ? false : { opacity: .65 }} animate={{ opacity: 1 }} transition={motionTransition(reduced)} id="chat-messages" tabIndex={-1} className="chat-empty"><div className="chat-empty-icon">{channel?.private ? <Lock size={32} /> : <Hash size={32} />}</div><h1>{channel ? channel.name : 'A place for every conversation'}</h1><p>{channel ? channel.archived_at ? 'Join this archived channel to read its message history.' : 'Join this channel to read and send messages with your team.' : loaded ? 'Create your first channel and bring your team together.' : 'Loading your channels…'}</p>{channel ? <Button variant="primary" loading={busy} onClick={() => void join()}>Join channel</Button> : loaded && <Button variant="primary" onClick={() => setCreateOpen(true)}><Plus size={17} /> Create channel</Button>}{error && <p role="alert">{error}</p>}</motion.main>)}
     {split && <aside className="space-channel-split" aria-label={`Split view of #${split.name}`}>
       <header><strong>#{split.name}</strong><Button size="sm" aria-label="Close split view" onClick={() => setSplitId(undefined)}>Close</Button></header>
       <iframe key={split.id} title={`Conversation in #${split.name}`} src={conversationPath(split.id) + '?view=split'} />
@@ -439,5 +478,5 @@ export function WorkspaceChannels({ initialSession, onSessionRestored, viewForCh
     {renameTarget && <RenameSessionDialog key={renameTarget.id} id={renameTarget.id} title={renameTarget.title}
       workspace={workspace} thread={renameTarget.thread} viewerId={profile.id} onClose={()=>setRenameId(undefined)}/>}
     <Dialog open={createOpen} title="Create a channel" onClose={() => setCreateOpen(false)}><form className="chat-form" onSubmit={create}><p>Channels bring the right people and conversations together.</p><label>Channel name<input maxLength={80} placeholder="e.g. product" value={name} required onChange={e => setName(e.target.value)} /></label><label className="chat-checkbox"><input type="checkbox" checked={isPrivate} onChange={e => setPrivate(e.target.checked)} /><span>Make private<small>Only added members can read and send messages.</small></span></label>{error && <p role="alert">{error}</p>}<div className="chat-form-actions"><Button disabled={busy} onClick={() => setCreateOpen(false)}>Cancel</Button><Button variant="primary" type="submit" loading={busy}>Create channel</Button></div></form></Dialog>
-  </div>;
+  </div></DirectoryCreateChannel.Provider>;
 }

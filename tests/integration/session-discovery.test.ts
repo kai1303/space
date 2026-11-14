@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { Pool } from 'pg';
 import { io } from 'socket.io-client';
+import { ChatStore } from '@space/postgres/chat';
 import { PostgresStore } from '@space/postgres/store';
 import { migrate } from '@space/postgres/migrate';
 import { bootstrap } from '@space/postgres/bootstrap';
@@ -91,4 +92,39 @@ test('a committed status transition refreshes the discovery view without a runni
       VALUES($1,$2,$3,$4,'Approve','demo.echo',$5,'awaiting_approval',$6,'key','hash')`,[randomUUID(),seed.workspace_id,seed.thread_id,seed.installation_id,seed.owner_id,id]);
     await changed;assert.equal((await list())[0].id,id);
   } finally {clearTimeout(timeout);socket.disconnect();await api.close();}
+});
+
+test('seven-day inactivity hides only unpinned code channels and preserves search, restore and later activity', async()=>{
+  const seed=await bootstrap(pool), owner=seed.owner_id, workspace=seed.workspace_id;
+  const selfDm=await new ChatStore(pool).directMessages.open(owner,workspace,{user_id:owner});
+  const privateThread=randomUUID();
+  await pool.query('INSERT INTO threads(id,workspace_id,channel_id) VALUES($1,$2,$3)',[privateThread,workspace,selfDm.id]);
+  async function make(title:string,sidekick=false) {
+    const id=randomUUID();
+    await pool.query(`INSERT INTO agent_sessions(id,workspace_id,installation_id,origin_thread_id,title,created_at,managed,handoff_context,handoff_hash,created_by)
+      VALUES($1,$2,$3,$4,$5,now()-interval '8 days',true,$6,$7,$8)`,[id,workspace,seed.installation_id,sidekick?privateThread:seed.thread_id,title,sidekick?{}:null,sidekick?'hash':null,owner]);
+    return id;
+  }
+  const idle=await make('Inactive channel'), recent=await make('Discussion'), restored=await make('Restored'),
+    starred=await make('Starred'), archived=await make('Personally archived'), sidekick=await make('Sidekick',true), running=await make('Running');
+  const list=async()=> (await sessions.listWorkspace(owner,workspace)).items;
+  await pool.query('INSERT INTO hub_starred_agent_sessions(workspace_id,user_id,session_id) VALUES($1,$2,$3)',[workspace,owner,starred]);
+  await sessions.updateSidebar(owner,archived,{archived:true});
+  await sessions.updateSidebar(owner,restored,{archived:false});
+  await pool.query(`INSERT INTO tasks(id,workspace_id,thread_id,installation_id,goal,skill,requester_id,status,session_id,idempotency_key,request_hash,created_at,updated_at)
+    VALUES($1,$2,$3,$4,'Run','demo.echo',$5,'running',$6,'run','run',now()-interval '8 days',now()-interval '8 days')`,
+    [randomUUID(),workspace,seed.thread_id,seed.installation_id,owner,running]);
+  const discuss=(id:string)=>pool.query('INSERT INTO session_discussion_messages(session_id,actor_id,client_id,body) VALUES($1,$2,$3,$4)',[id,owner,randomUUID(),'Review it']);
+  await discuss(recent); await discuss(archived);
+  const visible=await list();
+  assert.deepEqual(new Set(visible.map(item=>item.id)),new Set([recent,restored,starred,sidekick,running]));
+  assert.ok(visible.find(item=>item.id===recent)?.sidebar_expires_at);
+  assert.ok(visible.every(item=>item.id===recent || !item.sidebar_expires_at));
+  const search=await sessions.discover(owner,workspace,{q:'Inactive channel'});
+  assert.equal(search.items[0]?.access==='source' && search.items[0].sidebar_inactive,true);
+  assert.deepEqual((await sessions.discover(owner,workspace,{q:'Inactive channel',archived:'false'})).items,[]);
+  assert.deepEqual((await sessions.listWorkspace(owner,workspace,{archived:'true'})).items.map(item=>item.id),[archived]);
+  assert.equal((await sessions.read(owner,idle)).session.id,idle);
+  await discuss(idle);
+  assert.ok((await list()).some(item=>item.id===idle));
 });

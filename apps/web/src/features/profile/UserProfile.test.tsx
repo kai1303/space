@@ -27,6 +27,24 @@ async function open(label: string) {
   await userEvent.click(screen.getByRole('button', { name: 'Your account' }));
   await userEvent.click(screen.getByRole('menuitem', { name: label }));
 }
+it('opens the personal Vault directly below Profile on desktop', async () => {
+  const openVault = vi.fn(async () => 'closed');
+  vi.stubGlobal('spaceDesktop', { openVault });
+  setup();
+  await userEvent.click(screen.getByRole('button', { name: 'Your account' }));
+  const entry = await screen.findByRole('menuitem', { name: 'Vault' });
+  expect(entry.previousElementSibling?.textContent).toBe('Profile');
+  await userEvent.click(entry);
+  expect(openVault).toHaveBeenCalledWith(profile.id);
+  expect(screen.queryByRole('menuitem', { name: 'Vault' })).toBeNull();
+});
+it('opens the web Vault for the signed-in user', async () => {
+  const fetcher = setup();
+  fetcher.mockImplementation(async url => ({ok: true, json: async () => String(url).endsWith('/vault/macs') ? [] : profile}));
+  await open('Vault');
+  expect(await screen.findByText(/Pair a local agent in Space Desktop/)).toBeTruthy();
+  expect(screen.getByRole('dialog', {name: 'Vault'})).toBeTruthy();
+});
 it('edits and persists a profile, then displays the saved name', async () => {
   const fetcher = setup();
   await open('Profile');

@@ -4,11 +4,12 @@ import type { Snapshot } from '../../shared/ui/view-state.js';
 import type { ConversationView } from './view-state.js';
 
 type Panel = {kind:'thread'; id:string} | {kind:'session'} | {kind:'sidekick'; source:SidekickSource} | {kind:'files'};
-export function useConversationPanels(view: Snapshot<ConversationView> | undefined, requestedThread?: string, mentionTarget?: string) {
+export function useConversationPanels(view: Snapshot<ConversationView> | undefined, requestedThread?: string, mentionTarget?: string, editingDraft = false) {
   const restored = requestedThread || mentionTarget ? undefined : view?.current;
   // Keep the session mounted while hidden so an unfinished turn survives navigation.
   const [sessionView, setSessionView] = useState(restored?.sessionView);
   const [panel, setPanel] = useState<Panel | undefined>(() => {
+    if (editingDraft) return requestedThread ? {kind:'thread', id:requestedThread} : undefined;
     const thread = requestedThread ?? restored?.thread;
     if (thread) return {kind:'thread', id:thread};
     if (restored?.sessionOpen && restored.sessionView) return {kind:'session'};

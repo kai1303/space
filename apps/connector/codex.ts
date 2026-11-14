@@ -1,5 +1,5 @@
 import { attachmentContext, attachmentImages } from './attachment-input.js';
-import { isReasoningEffort, parseModelCatalog, type AgentModel, parseSessionGoal, type SessionGoal, type GoalAction, visibleText } from '@space/contracts';
+import { isReasoningEffort, parseModelCatalog, type AgentModel, parseSessionGoal, type SessionGoal, type GoalAction } from '@space/contracts';
 import { replyFormatInstructions } from './reply-format.js';
 import { memoryInstructions } from './memory-instructions.js';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
@@ -13,7 +13,7 @@ import { CODING_TURN_TIMEOUT_MS, parseInvocation, parseAgentEvent, parseAgentRes
 
 import {sessionRuntime} from './session-runtime.js';
 import { serverPrompt, turnScopedRuntime, type TurnServer } from './outbound-tools.js';
-import { approveCoding, approveProject, boundCodingMessages, codingInstructions } from './coding-tools.js';
+import { approveCoding, approveProject, readCodeContext, reviewInstructions, boundCodingMessages, codingInstructions } from './coding-tools.js';
 import { AgentProgress } from './agent-progress.js';
 import { projectMcp, projectServer, projectToolNames, resolveProject } from './project-tools.js';
 import { AgentSessionStopped, type InvokeAgent, type SpawnAgent } from './agent-runtime.js';
@@ -160,7 +160,7 @@ async function startSingleCodex(accessToken: string, onExit: () => void, launch:
     let completedTurn = false, finishTurn!: () => void;
     let turnFinished = new Promise<void>(resolve => { finishTurn = resolve; });
     let progress: NodeJS.Timeout | undefined, dirty = false, progressPending = false, settled = false;
-    const output = new AgentProgress(coding);
+    const output = new AgentProgress(coding, undefined, coding && Boolean(request.persistent_session));
     const messages = new Map<string, AgentText>();
     let queue = Promise.resolve();
     const approvalLifetime = new AbortController();
@@ -168,7 +168,7 @@ async function startSingleCodex(accessToken: string, onExit: () => void, launch:
     const done = new Promise<void>((resolve, fail) => { finish = resolve; reject = error => { approvalLifetime.abort(error); fail(error); }; });
     // Notifications may arrive in the same stdout chunk as the turn/start response.
     const early: Message[] = [];
-    const publish = (type: AgentEvent['type'], text: string, complete = false, sessionReady = false, goalUpdate?: SessionGoal | null) => {
+    const publish = (type: AgentEvent['type'], text: string, complete = false, sessionReady = false, goalUpdate?: SessionGoal | null, sessionView?: AgentEvent['payload']['session_view']) => {
       const terminal = type === 'execution.completed' || type === 'execution.failed';
       let response;
       try { response = output.snapshot([...messages.values()].map(message => ({ ...message, ...(terminal ? { status: 'complete' as const } : {}) })), terminal); }
@@ -176,7 +176,7 @@ async function startSingleCodex(accessToken: string, onExit: () => void, launch:
         if (type !== 'execution.failed') throw error;
         try { response = output.snapshot([], true); } catch { /* Invalid snapshots cannot hide the terminal failure. */ }
       }
-      const event = parseAgentEvent({ id: randomUUID(), schema_version: '1.0', execution_id: request.execution_id, sequence: ++sequence, type, occurred_at: new Date().toISOString(), payload: { ...(goalUpdate === undefined ? {} : {session_goal:goalUpdate}), text: visibleText(text, terminal), ...(response ? { response } : {}), ...(sessionReady ? { session_ready: true } : {}) } });
+      const event = parseAgentEvent({ id: randomUUID(), schema_version: '1.0', execution_id: request.execution_id, sequence: ++sequence, type, occurred_at: new Date().toISOString(), payload: { ...(goalUpdate === undefined ? {} : {session_goal:goalUpdate}), text: output.visibleMessage(text, terminal) || (terminal ? 'Review updated.' : 'Working'), ...(sessionView ? {session_view:sessionView} : {}), ...(response ? { response } : {}), ...(sessionReady ? { session_ready: true } : {}) } });
       queue = queue.then(async () => { signal.throwIfAborted(); await emit(event); });
       void queue.catch(reject);
       return queue;
@@ -339,7 +339,10 @@ async function startSingleCodex(accessToken: string, onExit: () => void, launch:
     let sessionUnavailable = false;
     try {
       await publish('execution.started', 'Codex is working.');
-      if (coding) await approveProject(project, controls, approvalSignal);
+      if (coding) {
+        await approveProject(project, controls, approvalSignal);
+        output.codeContext = await readCodeContext(project!, approvalSignal);
+      }
       let retained: Awaited<ReturnType<NonNullable<typeof sessions>['session']>> | undefined;
       if (request.persistent_session) {
         sessionUnavailable = true;
@@ -354,7 +357,7 @@ async function startSingleCodex(accessToken: string, onExit: () => void, launch:
         ...((servers.length || request.context?.handoff?.browser_url) ? { config: { mcp_servers: { ...(project && !coding ? { [projectServer]: { ...projectMcp(project), enabled_tools: projectToolNames } } : {}), ...Object.fromEntries(servers.map(s => [s.name, {
           url: s.url, bearer_token_env_var: s.tokenEnv, enabled_tools: s.tools,
           // Space authorizes these exact aliases at dispatch and again for every gateway call.
-          ...(request.context?.handoff?.browser_url && s.name === 'space_outbound'
+          ...(request.context?.handoff?.browser_url && (s.name === 'space_outbound' || s.name === 'browser')
             ? { tools: Object.fromEntries(s.tools.map(name => [name, { approval_mode: 'approve' }])) } : {}),
         }])) } } } : {}),
       };
@@ -403,7 +406,7 @@ async function startSingleCodex(accessToken: string, onExit: () => void, launch:
         signal.throwIfAborted();
       }
       const contextLabel = request.persistent_session?.resume ? 'Refreshed conversation context' : 'Supplied conversation context';
-      const prompt = `${request.context ? `${contextLabel} (quoted data):\n${JSON.stringify(request.context)}\n\n` : ''}Task:\n${request.goal}${replyFormatInstructions}${memoryInstructions(request.context)}${attachmentContext(request.attachments, Boolean(request.pdf_tool_token))}`;
+      const prompt = `${request.context ? `${contextLabel} (quoted data):\n${JSON.stringify(request.context)}\n\n` : ''}Task:\n${request.goal}${replyFormatInstructions}${coding && request.persistent_session ? reviewInstructions : ''}${memoryInstructions(request.context)}${attachmentContext(request.attachments, Boolean(request.pdf_tool_token))}`;
       if (request.goal_action) {
         followingGoal = ['set','resume'].includes(request.goal_action.kind);
         await applyGoal(request.goal_action);
@@ -435,6 +438,9 @@ async function startSingleCodex(accessToken: string, onExit: () => void, launch:
       flush();
       await queue;
       settled = true;
+      if (coding) output.codeContext = await readCodeContext(project!, approvalSignal);
+      const view = request.persistent_session && output.reviewUpdate(text());
+      if (view) await publish('execution.progress', 'Updating review tab', false, false, undefined, view);
       await publish('execution.completed', text().trim() || (request.goal_action?.kind === 'clear' ? 'Goal cleared.' : goal?.status === 'paused' ? 'Goal paused.' : 'Codex completed the task.'), true);
     } catch {
       settled = true;
@@ -469,5 +475,5 @@ async function startSingleCodex(accessToken: string, onExit: () => void, launch:
 }
 
 export async function startCodex(accessToken: string, onExit: () => void, launch: SpawnAgent = spawn, storage?: LocalSessionStorage, selectedProject?: string) {
-  return sessionRuntime(exited => turnScopedRuntime((done, servers, signal, enableGoals, personalOnly) => startSingleCodex(accessToken, done, launch, personalOnly && storage ? { ...storage, project: undefined, coding: false } : storage, personalOnly ? undefined : selectedProject, servers, signal, enableGoals), exited, storage?.connection.origin),4,onExit);
+  return sessionRuntime(exited => turnScopedRuntime((done, servers, signal, enableGoals, personalOnly) => startSingleCodex(accessToken, done, launch, personalOnly && storage ? { ...storage, project: undefined, coding: false } : storage, personalOnly ? undefined : selectedProject, servers, signal, enableGoals), exited, storage?.connection.origin, storage?.browserTurn),4,onExit);
 }

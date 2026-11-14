@@ -1,3 +1,4 @@
+import { Spinner } from '@space/ui/primitives';
 import { useEffect, useRef, type ReactNode } from 'react';
 import { motion, useReducedMotion } from 'motion/react';
 import { motionTransition } from '@space/ui/motion';
@@ -32,6 +33,6 @@ export function AccessFrame({ screen, title, description, step, children, loadin
 
 export function AccessLoading({ message = 'Opening your workspace…' }: { message?: string }) {
   return <AccessFrame screen="loading" title="Getting things ready." loading>
-    <p className="access-status" role="status"><span className="sp-spinner" aria-hidden="true" />{message}</p>
+    <p className="access-status" role="status"><Spinner />{message}</p>
   </AccessFrame>;
 }

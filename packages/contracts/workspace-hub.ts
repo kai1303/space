@@ -1,11 +1,30 @@
 import { parseRichDocument, type RichDocument } from './rich-text.js';
 import { AppError, record, text, uuid } from './validation.js';
+import type { ChatMessage } from './chat.js';
 
 export interface HubMessage {
   id: string; channel_id: string; channel_name: string; thread_id: string;
   text: string; author_name: string; created_at: string; reply_count: number;
+  saved_at?: string;
+  channel_kind?: 'channel' | 'direct';
+  author_id?: string;
+  author_image?: string | null;
+  file_name?: string | null;
   document?: RichDocument | null;
 }
+export interface HubThread extends HubMessage {
+  channel_kind: 'channel' | 'direct';
+  read_through: string;
+  archived_at: string | null;
+  encrypted_since: string | null;
+  unread_count: number;
+  latest_sequence: string;
+  last_activity_at: string;
+  root: HubThreadMessage;
+  recent_replies: HubThreadMessage[];
+  participants: ChatMessage['author'][];
+}
+export type HubThreadMessage = ChatMessage & { viewer_saved: boolean };
 export interface HubFile {
   description?: string;
   id: string; channel_id: string; channel_name: string; message_id: string;

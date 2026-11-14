@@ -28,7 +28,7 @@ it('removes saved messages only after the server accepts the change', async () =
   let saved = true; fake((_path, init) => { if (init?.method === 'POST') { saved = false; return { active: false }; } return { items: saved ? [message] : [], next_cursor: null }; });
   render(<WorkspaceCollections view="saved" workspace="workspace" onOpen={() => {}} />);
   await userEvent.click(await screen.findByRole('button', { name: 'Remove saved message from Alex' }));
-  await screen.findByText('Save something for later');
+  await screen.findByText('Nothing saved yet');
   expect(vi.mocked(fetch).mock.calls.some(([path, init]) => String(path).endsWith('/saved/message') && init?.body === '{"channel_id":"channel","active":false}')).toBe(true);
 });
 it('exposes read failures and retries instead of presenting an empty collection', async () => {
@@ -82,14 +82,14 @@ it('keeps a saved message and reports a failed removal', async () => {
   vi.stubGlobal('fetch', vi.fn(async (_path: string, init?: RequestInit) => ({ ok: init?.method !== 'POST', status: init?.method === 'POST' ? 503 : 200, json: async () => init?.method === 'POST' ? { error: 'save_unavailable' } : { items: [message], next_cursor: null } })));
   render(<WorkspaceCollections view="saved" workspace="workspace" onOpen={() => {}} />);
   await userEvent.click(await screen.findByRole('button', { name: 'Remove saved message from Alex' }));
-  await screen.findByRole('alert'); expect(screen.getByText(message.text)).toBeTruthy(); expect(screen.queryByText('Save something for later')).toBeNull();
+  await screen.findByRole('alert'); expect(screen.getByText(message.text)).toBeTruthy(); expect(screen.queryByText('Nothing saved yet')).toBeNull();
 });
 it('does not restore a saved message from a read that began before its removal', async () => {
   let saved = true, slow = false, release: (value: unknown) => void = () => {};
   fake((_path, init) => { if (init?.method === 'POST') { saved = false; slow = false; return { active: false }; } return slow ? new Promise(resolve => { release = resolve; }) : { items: saved ? [message] : [], next_cursor: null }; });
   render(<WorkspaceCollections view="saved" workspace="workspace" onOpen={() => {}} />); await screen.findByText(message.text); slow = true; let pending: Promise<void>;
   await act(async () => { pending = updates.read!(); await Promise.resolve(); });
-  await userEvent.click(screen.getByRole('button', { name: 'Remove saved message from Alex' })); await screen.findByText('Save something for later');
+  await userEvent.click(screen.getByRole('button', { name: 'Remove saved message from Alex' })); await screen.findByText('Nothing saved yet');
   await act(async () => { release({ items: [message], next_cursor: null }); await pending!; }); expect(screen.queryByText(message.text)).toBeNull();
 });
 it('does not restore private items when a read finishes after revocation', async () => {
@@ -244,4 +244,31 @@ it('moves the Files ownership highlight while preserving tab controls and keyboa
  expect(shared.querySelector('.sp-tab-indicator')).toBeTruthy();
  expect(view.container.querySelectorAll('.sp-tab-indicator')).toHaveLength(1);
  expect(view.container.querySelectorAll('.files-ownership [tabindex="0"]')).toHaveLength(1);
+});
+
+it('keeps the inbox open and distinguishes reply, source, save and reaction actions', async () => {
+  let saved=false, reacted=false;
+  fake((path,init)=>{
+    if (init?.method==='POST') {
+      const body=JSON.parse(String(init.body));
+      if (path.endsWith('/reactions')) reacted=body.active;
+      else if (path.endsWith('/saved/message')) saved=body.active;
+      else throw Error('unexpected mutation');
+      return {};
+    }
+    return {items:[{...message, unread_count:1, recent_replies:[], root:{...message, viewer_saved:saved, author:{kind:'human',id:'alex',name:'Alex'}, reactions:[{emoji:'👍',count:reacted?2:1,user_ids:reacted?['alex','reader']:['alex']}]}}],next_cursor:null};
+  });
+  const open=vi.fn(); render(<WorkspaceCollections view="threads" workspace="workspace" viewer="reader" onOpen={open} renderThread={(_,close)=><button onClick={close}>Back to threads</button>}/>);
+  await userEvent.click(await screen.findByRole('button',{name:'Open thread in general'}));
+  expect(open).not.toHaveBeenCalled();
+  await userEvent.click(screen.getByRole('button',{name:'Back to threads'}));
+  await userEvent.click(screen.getByRole('button',{name:'Save message for later'}));
+  await screen.findByRole('button',{name:'Remove saved message'});
+  await userEvent.click(screen.getByRole('button',{name:'👍 1'}));
+  expect((await screen.findByRole('button',{name:'👍 2'})).getAttribute('aria-pressed')).toBe('true');
+  await userEvent.click(screen.getByRole('button',{name:'Open in conversation'}));
+  expect(open).toHaveBeenLastCalledWith({channel_id:'channel',message_id:'message'});
+  await userEvent.click(screen.getByRole('button',{name:'general',exact:true}));
+  expect(open).toHaveBeenLastCalledWith({channel_id:'channel',thread_id:'thread'});
+  expect(vi.mocked(fetch).mock.calls.some(([path])=>String(path).endsWith('/read'))).toBe(false);
 });

@@ -1,0 +1,91 @@
+:root[data-theme-wipe]::view-transition {
+  pointer-events: none;
+}
+
+:root[data-theme-wipe]::view-transition-old(root),
+:root[data-theme-wipe]::view-transition-new(root) {
+  animation: none;
+  mix-blend-mode: normal;
+}
+
+:root[data-theme-wipe]::view-transition-new(root) {
+  clip-path: inset(100%);
+}
+
+:root[data-theme-wipe] .chat-theme-toggle svg {
+  view-transition-name: theme-toggle-icon;
+}
+
+:root[data-theme-wipe]::view-transition-group(theme-toggle-icon) {
+  --icon-turn: 55deg;
+}
+
+:root[data-theme-wipe][data-theme=light]::view-transition-group(theme-toggle-icon) {
+  --icon-turn: -55deg;
+}
+
+:root[data-theme-wipe]::view-transition-old(theme-toggle-icon) {
+  animation: theme-icon-out 180ms ease-in both;
+  mix-blend-mode: normal;
+}
+
+:root[data-theme-wipe]::view-transition-new(theme-toggle-icon) {
+  animation: theme-icon-in 260ms ease-out both;
+  mix-blend-mode: normal;
+}
+
+@keyframes theme-icon-out {
+  to { opacity: 0; transform: rotate(var(--icon-turn)) scale(.65); }
+}
+
+@keyframes theme-icon-in {
+  from { opacity: 0; transform: rotate(calc(-1 * var(--icon-turn))) scale(.65); }
+}
+
+/* Capture the rail mark separately so both cube faces carry the actual workspace artwork. */
+:root[data-theme-wipe] .chat-rail .chat-workspace-mark {
+  view-transition-name: workspace-mark;
+}
+
+:root[data-theme-wipe]::view-transition-group(workspace-mark) {
+  /* Half of the rail mark's 36px side is the distance from a face to the cube center. */
+  --cube-depth: 18px;
+  --turn: 90deg;
+  --axis: 0, 1, 0;
+}
+
+:root:is([data-theme-wipe=up], [data-theme-wipe=down])::view-transition-group(workspace-mark) {
+  --axis: 1, 0, 0;
+}
+
+:root:is([data-theme-wipe=right], [data-theme-wipe=up])::view-transition-group(workspace-mark) {
+  --turn: -90deg;
+}
+
+@media (max-width: 720px) {
+  :root[data-theme-wipe]::view-transition-group(workspace-mark) {
+    --cube-depth: 15px;
+  }
+}
+
+:root[data-theme-wipe]::view-transition-old(workspace-mark),
+:root[data-theme-wipe]::view-transition-new(workspace-mark) {
+  animation: workspace-cube-turn 560ms cubic-bezier(.4, 0, .2, 1) both;
+  backface-visibility: hidden;
+  mix-blend-mode: normal;
+}
+
+:root[data-theme-wipe]::view-transition-old(workspace-mark) {
+  --from: 0deg;
+  --to: calc(-1 * var(--turn));
+}
+
+:root[data-theme-wipe]::view-transition-new(workspace-mark) {
+  --from: var(--turn);
+  --to: 0deg;
+}
+
+@keyframes workspace-cube-turn {
+  from { transform: perspective(180px) translateZ(calc(-1 * var(--cube-depth))) rotate3d(var(--axis), var(--from)) translateZ(var(--cube-depth)); }
+  to { transform: perspective(180px) translateZ(calc(-1 * var(--cube-depth))) rotate3d(var(--axis), var(--to)) translateZ(var(--cube-depth)); }
+}

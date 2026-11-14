@@ -1,7 +1,9 @@
 import { isDeepStrictEqual } from 'node:util';
 import { sql, type SQL } from 'drizzle-orm';
 import type { Pool } from 'pg';
-import { AppError, parseComposerDraftKey, parseComposerDraftMutation, type AssetAttachment, type ComposerDraftPage, type ComposerDraftRow, type ComposerDraftValue } from '@space/contracts';
+import type { ScheduledMessageStore } from './scheduled-messages.js';
+import type { ChatStore } from './chat.js';
+import { AppError, record, uuid, parseEncryptedDm, parseComposerDraftKey, parseComposerDraftMutation, type AssetAttachment, type ComposerDraftPage, type ComposerDraftRow, type ComposerDraftValue } from '@space/contracts';
 import { database, type DbSession } from './database.js';
 import { sessionTransaction } from './session-concurrency.js';
 
@@ -76,6 +78,59 @@ export class ComposerDraftStore {
         SELECT key,revision,value FROM composer_drafts WHERE actor_id=${actor} AND key=${destination.key}`);
       return { workspace_id: room.workspace_id, destination_name: room.destination_name, ...(row ?? { key: destination.key, revision: null, value: null }) };
     }, { isolationLevel: 'repeatable read', accessMode: 'read only' });
+  }
+
+  async submit(action: {send: ChatStore} | {schedule: ScheduledMessageStore}, actor: string, rawKey: string, body: unknown) {
+    const target = parseComposerDraftKey(rawKey);
+    const scheduling = 'schedule' in action;
+    if (scheduling && target.encrypted) throw new AppError(409, 'encrypted_scheduling_unavailable');
+    const args = record(body, scheduling ? ['revision', 'send_at'] : target.encrypted ? ['revision', 'encrypted'] : ['revision', 'broadcast_confirmed']);
+    const revision = uuid(args.revision);
+    if (scheduling && (typeof args.send_at !== 'string' || args.send_at.length > 40 || !Number.isFinite(Date.parse(args.send_at))))
+      throw new AppError(400, 'invalid_send_at');
+    const sendAt = scheduling ? new Date(args.send_at as string).toISOString() : undefined;
+    const envelope = target.encrypted ? parseEncryptedDm(args.encrypted) : undefined;
+    return sessionTransaction(this.db, async c => {
+      const room = await requireDestination(c, actor, target);
+      const { rows: [draft] } = await c.execute<Pick<ComposerDraftRow, 'revision' | 'value'>>(sql`
+        SELECT revision,value FROM composer_drafts WHERE actor_id=${actor} AND key=${target.key}`);
+      if (draft?.revision !== revision || !draft.value) {
+        // Two devices can send the same revision, or a successful response can be lost.
+        const sent = scheduling ? await c.execute(sql`SELECT 1 FROM scheduled_messages WHERE id=${revision}
+          AND user_id=${actor} AND channel_id=${target.channel} AND thread_id IS NOT DISTINCT FROM ${target.thread}::uuid
+          AND send_at=${sendAt}::timestamptz`) : await c.execute(sql`SELECT 1 FROM message_identities WHERE workspace_id=${room.workspace_id}
+          AND user_id=${actor} AND channel_id=${target.channel} AND client_message_id=${revision}`);
+        if (sent.rowCount) return;
+        throw conflict();
+      }
+      if (scheduling && Date.parse(sendAt!) < Math.floor(Date.now() / 60000) * 60000 + 5 * 60000)
+        throw new AppError(400, 'draft_schedule_too_soon');
+      const value = draft.value;
+      let content;
+      if ('ciphertext' in value) {
+        if (!envelope || !isDeepStrictEqual(envelope.asset_ids ?? [], value.asset_ids ?? [])) throw new AppError(400, 'invalid_encrypted_draft');
+        content = { encrypted: envelope };
+      } else {
+        const {document, files} = value;
+        content = {
+          text: document.ops.map(op => op.insert).join('').trim(),
+          ...(document.ops.length && {document}),
+          asset_ids: files.map(file => file.id),
+          asset_descriptions: Object.fromEntries(files.filter(file => file.description).map(file => [file.id, file.description])),
+          ...(target.thread && {thread_id: target.thread}),
+
+        };
+      }
+      if (scheduling) {
+        await action.schedule.scheduleInTransaction(c, actor, target.channel, {id:revision, send_at:sendAt, ...content});
+      } else {
+        await action.send.sendInTransaction(c, actor, target.channel, {client_message_id:revision, ...content,
+          ...(args.broadcast_confirmed !== undefined && {broadcast_confirmed:args.broadcast_confirmed})});
+      }
+      const cleared = await c.execute(sql`UPDATE composer_drafts SET value=NULL,asset_ids='{}',base=${revision},revision=gen_random_uuid()
+        WHERE actor_id=${actor} AND key=${target.key} AND revision=${revision} RETURNING key`);
+      if (!cleared.rowCount) throw conflict();
+    });
   }
 
   put(actor: string, rawKey: string, raw: unknown): Promise<ComposerDraftRow> {

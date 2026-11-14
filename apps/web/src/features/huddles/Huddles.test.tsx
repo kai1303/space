@@ -10,13 +10,13 @@ vi.mock('livekit-client',()=>({
 }));
 vi.mock('@livekit/components-react',async()=>{
  const {createContext}=await import('react');
- return {RoomContext:createContext(null),RoomAudioRenderer:()=>null,StartAudio:()=>null,ParticipantTile:()=>null,useTracks:()=>[],useConnectionState:()=> 'connected',useLocalParticipant:()=>({localParticipant:mocks.rooms.at(-1)?.localParticipant,isMicrophoneEnabled:true,isCameraEnabled:false,isScreenShareEnabled:false}),useMediaDeviceSelect:()=>({devices:[],activeDeviceId:'',setActiveMediaDevice:vi.fn()})};
+ return {RoomContext:createContext(null),RoomAudioRenderer:()=>null,StartAudio:()=>null,ParticipantTile:()=>null,useTracks:()=>[],useDataChannel:()=>({send:vi.fn(),isSending:false}),useConnectionState:()=> 'connected',useLocalParticipant:()=>({localParticipant:mocks.rooms.at(-1)?.localParticipant,isMicrophoneEnabled:true,isCameraEnabled:false,isScreenShareEnabled:false}),useMediaDeviceSelect:()=>({devices:[],activeDeviceId:'',setActiveMediaDevice:vi.fn()})};
 });
 import {HuddleProvider,HuddleButton,Huddles} from './Huddles.js';
 const huddle={id:'huddle',channel_id:'channel',workspace_id:'workspace',channel_name:'design',state:'active',created_at:'2026-11-06'};
 HTMLDialogElement.prototype.showModal=function(){this.open=true;};
 HTMLDialogElement.prototype.close=function(){this.open=false;this.dispatchEvent(new Event('close'));};
-beforeEach(()=>{mocks.rooms=[];mocks.listeners=[];mocks.request.mockReset();mocks.request.mockImplementation(async(path:string)=>path==='/huddles/config'?{enabled:true}:path.endsWith('/join')?{huddle,token:'short-lived-token',url:'ws://localhost:7880'}:path.includes('/workspaces/')?{items:[huddle],next_cursor:null}:huddle);});
+beforeEach(()=>{mocks.rooms=[];mocks.listeners=[];mocks.request.mockReset();mocks.request.mockImplementation(async(path:string)=>path==='/huddles/config'?{enabled:true}:path.endsWith('/join')?{huddle,token:'short-lived-token',url:'ws://localhost:7880'}:path.endsWith('/directory')?{active:{items:[huddle],next_cursor:null},recent:[],channels:[]}:huddle);});
 afterEach(cleanup);
 function mount(){return render(<HuddleProvider><HuddleButton channel="channel" name="design"/></HuddleProvider>);}
 async function join(){await userEvent.click(await screen.findByRole('button',{name:'Join huddle'}));const dialog=screen.getByRole('dialog');expect(dialog).toBeTruthy();await userEvent.click(screen.getAllByRole('button',{name:'Join huddle'}).at(-1)!);await screen.findByRole('region',{name:'Channel huddle'});}

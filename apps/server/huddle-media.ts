@@ -24,7 +24,7 @@ export function huddleMedia(env:NodeJS.ProcessEnv=process.env):HuddleMedia|undef
   async remove(id){try{await rooms.deleteRoom(huddleRoom(id));}catch(error){if((error as {code?:string}).code!=='not_found')throw error;}},
   async exists(id){return (await rooms.listRooms([huddleRoom(id)])).length>0;},
   async token(id,actor,name){const token=new AccessToken(key,secret,{identity:actor,name,ttl:60});
-   token.addGrant({roomJoin:true,room:huddleRoom(id),canPublish:true,canSubscribe:true,canPublishData:false});return token.toJwt();},
+   token.addGrant({roomJoin:true,room:huddleRoom(id),canPublish:true,canSubscribe:true,canPublishData:true});return token.toJwt();},
   webhook:(body,authorization)=>receiver.receive(body,authorization),
  };
 }

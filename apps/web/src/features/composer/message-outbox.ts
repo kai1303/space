@@ -7,7 +7,7 @@ import { messageContent, sendMessage } from './message-sender.js';
 type Draft = {
   encrypted?:EncryptedDm;
   channelId: string; threadId?: string; text: string; document?: RichDocument;
-  attachments?: AssetAttachment[]; broadcastConfirmed?: boolean;
+  attachments?: AssetAttachment[]; broadcastConfirmed?: boolean; alsoSendToChannel?: boolean;
 };
 export type OutboxEntry = Draft & {
   id: string; createdAt: string; attachments: AssetAttachment[];
@@ -32,12 +32,13 @@ function copyContent(draft: Draft) {
     const label = description?.trim();
     return { id, name, size, type, ...(label ? { description: label } : {}) };
   });
+  if (draft.alsoSendToChannel && (!draft.threadId || draft.encrypted)) throw new Error('Invalid thread broadcast');
   if(draft.encrypted && (draft.threadId || draft.text!==encryptedMessageLabel || draft.document || attachments.length || draft.broadcastConfirmed)) throw new Error('Invalid encrypted message');
   return {
     ...(draft.encrypted ? {encrypted:parseEncryptedDm(draft.encrypted)} : {}),
     channelId: draft.channelId, ...(draft.threadId ? { threadId: draft.threadId } : {}),
     text: draft.text.trim(), ...(draft.document ? { document: parseRichDocument(draft.document) } : {}),
-    attachments, ...(draft.broadcastConfirmed === true ? { broadcastConfirmed: true } : {}),
+    attachments, ...(draft.alsoSendToChannel === true ? { alsoSendToChannel: true } : {}), ...(draft.broadcastConfirmed === true ? { broadcastConfirmed: true } : {}),
   };
 }
 
@@ -197,7 +198,7 @@ export class MessageOutbox {
       if (attempt !== entry && !await this.replace(entry, attempt)) return;
       if (!socket?.connected) throw new Error('Reconnecting. Try again when connected.');
       const content = attempt.encrypted ? {encrypted:attempt.encrypted} : messageContent(attempt.text, attempt.document, attempt.attachments);
-      const saved = await sendMessage(socket, attempt.channelId, attempt.threadId, id, content, attempt.broadcastConfirmed, this.viewerId);
+      const saved = await sendMessage(socket, attempt.channelId, attempt.threadId, id, content, attempt.broadcastConfirmed, this.viewerId, attempt.alsoSendToChannel);
       if (!this.matches(attempt, saved)) throw new Error(unconfirmed);
       if (!this.entries.some(row => row.id === id && !cancelling(row))) return;
       this.notifyDelivery(saved, entry);

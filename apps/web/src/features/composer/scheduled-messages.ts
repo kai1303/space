@@ -14,10 +14,10 @@ const messages: Record<string, string> = {
 export const scheduledLabel = (at: string | Date) => new Date(at).toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
 
 // A fresh id per attempt; the server treats a repeat of the same id and content as the same schedule.
-export async function scheduleMessage(channel: string, thread: string | undefined, text: string, document: RichDocument, files: Attachment[], at: Date) {
+export async function scheduleMessage(channel: string, thread: string | undefined, text: string, document: RichDocument, files: Attachment[], at: Date, alsoSendToChannel = false) {
   try {
     const scheduled = await request<ScheduledMessage>(`/channels/${channel}/scheduled-messages`, {
-      id: crypto.randomUUID(), text, document, send_at: at.toISOString(), ...(thread ? { thread_id: thread } : {}),
+      id: crypto.randomUUID(), text, document, ...(alsoSendToChannel && {also_send_to_channel:true}), send_at: at.toISOString(), ...(thread ? { thread_id: thread } : {}),
       ...(files.length ? { asset_ids: files.map(file => file.id) } : {}),
     });
     toast.success(`Scheduled for ${scheduledLabel(scheduled.send_at)}`, { description: 'See it in Drafts & sent.' });

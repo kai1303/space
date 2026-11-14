@@ -28,7 +28,14 @@ function isAssetDownload(value, configuredUrl) {
   return /^\/v1\/assets\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/download$/i.test(new URL(value).pathname);
 }
 
-module.exports = { spaceUrl, navigationAction, isAssetDownload };
+function isThreadWindow(value, configuredUrl) {
+  if (navigationAction(value, configuredUrl) !== 'internal') return false;
+  const url = new URL(value);
+  return /^\/c\/[A-Za-z0-9_-]{21}[AQgw]\/thread\/[A-Za-z0-9_-]{21}[AQgw]$/.test(url.pathname)
+    && url.search === '?threadWindow=1' && !url.hash;
+}
+
+module.exports = { spaceUrl, navigationAction, isAssetDownload, isThreadWindow };
 
 function mediaPermissionAllowed(permission, origin, configuredUrl, mediaTypes = []) {
   return permission === 'media' && navigationAction(origin, configuredUrl) === 'internal'

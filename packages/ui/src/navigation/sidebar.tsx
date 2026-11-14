@@ -5,7 +5,7 @@ import { useEffect, useId, useState, type ReactNode } from "react";
 import { AnimatePresence, LayoutGroup, motion, stagger, useAnimate, useReducedMotion } from "motion/react";
 import { motionTransition } from "../motion/motion.js";
 import { Reveal, RevealContent } from "../motion/reveal.js";
-import { DotsThree, FolderSimple, Lock } from "@phosphor-icons/react";
+import { Code, DotsThree, FolderSimple, Lock } from "@phosphor-icons/react";
 import { Avatar, ChannelItem, IconButton, Menu } from "../primitives/primitives.js";
 export type SidebarChannel = {
   id: string;
@@ -20,6 +20,7 @@ export type SidebarChannel = {
   initials?: string;
   image?: string | null;
   agentName?: string;
+  codeChannel?: boolean;
   statusIcon?: ReactNode;
   onDetails?: () => void;
   actions?: SidebarAction[];
@@ -44,7 +45,7 @@ export function DirectTypingIcon({ name, label = `${name} is typing`, size = 20 
   </svg>;
 }
 export type SidebarCustomSection = { id: string; name: string; emoji?: string; collapsed: boolean };
-const builtinNames = { starred: 'Starred', channels: 'Channels', direct: 'Direct messages', sessions: 'Agent sessions', apps: 'Apps' };
+const builtinNames = { starred: 'Starred', channels: 'Channels', direct: 'Direct messages', sessions: 'Code channels', apps: 'Apps' };
 const builtinIcons = { starred: 'star', channels: 'channels', direct: 'dms', sessions: 'agents', apps: 'apps' } as const;
 type SidebarState = { query: string; expanded: Record<string, boolean> };
 const initialSidebarState: SidebarState = { query: "", expanded: { starred: true, channels: true, direct: true, sessions: true, apps: true } };
@@ -198,8 +199,8 @@ export function WorkspaceSidebar({
           const section = typeof group === 'string' ? group : undefined;
           const custom = typeof group === 'object' ? group : undefined;
           const key = typeof group === 'string' ? group : `custom:${group.id}`;
-          const name = typeof group === 'string' ? builtinNames[group] : group.name;
           const items = groups.get(key) ?? [];
+          const name = section === 'sessions' && items.some(row => row.codeChannel === false) ? 'Agent sessions' : typeof group === 'string' ? builtinNames[group] : group.name;
           const acceptsMove = Boolean(moving?.onMoveToSection && !drag?.saving && (custom
             ? moving.customSectionId !== custom.id
             : moving.customSectionId && moving.section === section));
@@ -242,7 +243,7 @@ export function WorkspaceSidebar({
                 c.statusIcon ? c.statusIcon : c.agentName ? (
                   <span className="sp-sidebar-avatar" aria-hidden={!c.typing} role={c.typing ? 'img' : undefined}
                     aria-label={c.typing ? `${c.agentName} is working` : undefined}>
-                    <Avatar name={c.agentName} initials={c.agentName.slice(0,2).toUpperCase()} image={c.image} size="sm" tone="green"/>
+                    {c.codeChannel ? <Code size={17} aria-hidden="true"/> : <Avatar name={c.agentName} initials={c.agentName.slice(0,2).toUpperCase()} image={c.image} size="sm" tone="green"/>}
                     {c.typing && <motion.span aria-hidden="true" className="sp-sidebar-working-dot"
                       animate={{opacity: reduced ? 1 : [1, 0.5, 1]}}
                       transition={reduced ? {duration:0} : {duration:1.4, repeat:Infinity, ease:'easeInOut'}}/>}

@@ -1,5 +1,5 @@
 import { attachmentContext, attachmentImages } from './attachment-input.js';
-import { parseModelCatalog, type AgentModel, visibleText } from '@space/contracts';
+import { parseModelCatalog, type AgentModel } from '@space/contracts';
 import { replyFormatInstructions } from './reply-format.js';
 import { memoryInstructions } from './memory-instructions.js';
 import { spawn } from 'node:child_process';
@@ -10,7 +10,7 @@ import { StringDecoder } from 'node:string_decoder';
 import { CODING_TURN_TIMEOUT_MS, parseInvocation, parseAgentEvent, type AgentEvent, type AgentText } from '@space/contracts';
 import { AgentSessionStopped, type InvokeAgent, type SpawnAgent } from './agent-runtime.js';
 import { localSessionStore, type LocalSessionStorage } from './session-storage.js';
-import { approveCoding, approveProject, contentPatch, kiroCodingTools } from './coding-tools.js';
+import { approveCoding, approveProject, readCodeContext, reviewInstructions, contentPatch, kiroCodingTools } from './coding-tools.js';
 import { AgentProgress } from './agent-progress.js';
 import { projectServer, projectToolNames, resolveProject } from './project-tools.js';
 import { prepareKiroProfile, resolveKiroAcpCommand } from './kiro-auth.js';
@@ -157,7 +157,7 @@ async function startSingleKiro(storage: LocalSessionStorage, onExit: () => void,
     if (request.skill !== 'kiro.run' || active || !live || signal.aborted) throw new Error('Kiro is unavailable for this task.');
     let sessionId: string | undefined, text = '', sequence = 0, prompting = false, settled = false;
     const configurationUpdates = new Set<string>();
-    const output = new AgentProgress(coding);
+    const output = new AgentProgress(coding, undefined, coding && Boolean(request.persistent_session));
     const messages: AgentText[] = [];
     let currentMessage: AgentText | undefined, messageCount = 0;
     let progress: NodeJS.Timeout | undefined, dirty = false, publishing = false, queue = Promise.resolve();
@@ -166,7 +166,7 @@ async function startSingleKiro(storage: LocalSessionStorage, onExit: () => void,
     const failure = new Promise<never>((_resolve, fail) => { reject = error => { rejected ??= error; approvalLifetime.abort(error); fail(error); }; });
     void failure.catch(() => {});
     let prompt: Promise<any> | undefined, taskDirectory: string | undefined;
-    const publish = (type: AgentEvent['type'], detail: string, sessionReady = false) => {
+    const publish = (type: AgentEvent['type'], detail: string, sessionReady = false, sessionView?: AgentEvent['payload']['session_view']) => {
       let response;
       const terminal = type === 'execution.completed' || type === 'execution.failed';
       try { response = output.snapshot(messages.map(message => ({ ...message, ...(terminal ? { status: 'complete' as const } : {}) })), terminal); }
@@ -175,7 +175,7 @@ async function startSingleKiro(storage: LocalSessionStorage, onExit: () => void,
         try { response = output.snapshot([], true); } catch { /* Invalid snapshots cannot hide the terminal failure. */ }
       }
       const event = parseAgentEvent({ id: randomUUID(), schema_version: '1.0', execution_id: request.execution_id, sequence: ++sequence, type, occurred_at: new Date().toISOString(), payload: {
-        text: visibleText(detail, terminal), ...(sessionReady ? { session_ready: true } : {}),
+        text: output.visibleMessage(detail, terminal) || (terminal ? 'Review updated.' : 'Working'), ...(sessionView ? {session_view:sessionView} : {}), ...(sessionReady ? { session_ready: true } : {}),
         ...(response ? { response } : {}),
       } });
       queue = queue.then(async () => { signal.throwIfAborted(); await emit(event); });
@@ -275,7 +275,10 @@ async function startSingleKiro(storage: LocalSessionStorage, onExit: () => void,
     const deadline = setTimeout(() => reject(new Error('Kiro turn timed out.')), coding ? CODING_TURN_TIMEOUT_MS : 120_000);
     try {
       await publish('execution.started', 'Kiro is working.');
-      if (coding) await approveProject(project, controls, approvalSignal);
+      if (coding) {
+        await approveProject(project, controls, approvalSignal);
+        output.codeContext = await readCodeContext(project!, approvalSignal);
+      }
       const retained = request.persistent_session ? await sessions.session(request.session_id, request.persistent_session.resume) : undefined;
       taskDirectory = project ?? retained?.cwd ?? await mkdtemp(join(sessions.cwd, 'task-'));
       signal.throwIfAborted();
@@ -309,13 +312,16 @@ async function startSingleKiro(storage: LocalSessionStorage, onExit: () => void,
       signal.throwIfAborted();
       if (retained) { await publish('execution.progress', 'Kiro session is ready.', true); await retained.save(sessionId, true); }
       signal.throwIfAborted();
-      const content = `${request.context ? `Supplied conversation context (quoted data):\n${JSON.stringify(request.context)}\n\n` : ''}Task:\n${request.goal}${replyFormatInstructions}${memoryInstructions(request.context)}${attachmentContext(request.attachments, Boolean(request.pdf_tool_token))}`;
+      const content = `${request.context ? `Supplied conversation context (quoted data):\n${JSON.stringify(request.context)}\n\n` : ''}Task:\n${request.goal}${replyFormatInstructions}${coding && request.persistent_session ? reviewInstructions : ''}${memoryInstructions(request.context)}${attachmentContext(request.attachments, Boolean(request.pdf_tool_token))}`;
       prompting = true;
       prompt = rpc('session/prompt', { sessionId, prompt: [{ type: 'text', text: content }, ...attachmentImages(request.attachments).map(data=>({type:'image',mimeType:'image/webp',data}))] }, coding ? CODING_TURN_TIMEOUT_MS : 120_000);
       const resultTurn = await Promise.race([prompt, failure]);
       if (resultTurn.stopReason !== 'end_turn' && resultTurn.stopReason !== 'refusal') throw new Error('Kiro did not finish the turn.');
       signal.throwIfAborted();
       flush(); await queue; settled = true;
+      if (coding) output.codeContext = await readCodeContext(project!, approvalSignal);
+      const view = request.persistent_session && output.reviewUpdate(text);
+      if (view) await publish('execution.progress', 'Updating review tab', false, view);
       await publish('execution.completed', text.trim() ? text : resultTurn.stopReason === 'refusal' ? 'Kiro declined this request.' : 'Kiro completed the task.');
     } catch {
       settled = true;

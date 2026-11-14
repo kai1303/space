@@ -1,3 +1,4 @@
+import { registerWebVault } from './web-vault.js';
 import type { EventBus } from '@space/events';
 import type { FastifyInstance } from 'fastify';
 import type { Server } from 'socket.io';
@@ -40,11 +41,12 @@ export function registerAgentConnectionRoutes(app: FastifyInstance, store: Agent
 }
 export function registerAgentConnections(app: FastifyInstance, io: Server, store: AgentConnectionStore, tasks: PostgresStore, onOutbox: (listener: (keys?: readonly string[]) => void) => () => void, getEvents: () => Promise<EventBus>, work: RealtimeWork) {
   const agents = io.of('/agents');
+  registerWebVault(app, agents, store);
   agents.use(async (socket, next) => {
     socket.conn.once('close', () => work.cancel(socket.id));
     try {
-      const auth = record(socket.handshake.auth, ['token']);
-      socket.data.agent = await work.run(socket.id, () => store.connect(auth.token));
+      const auth = record(socket.handshake.auth, ['token', 'vault_mac']);
+      socket.data.agent = await work.run(socket.id, () => store.connect(auth.token, auth.vault_mac === true));
       if (socket.conn.readyState !== 'open') return;
       socket.data.token = auth.token;
       next();
@@ -55,6 +57,7 @@ export function registerAgentConnections(app: FastifyInstance, io: Server, store
   agents.on('connection', socket => {
     registerDirectTurns(socket,store,tasks,work);
     const identity = socket.data.agent as Awaited<ReturnType<AgentConnectionStore['connect']>>;
+    if (socket.handshake.auth.vault_mac === true) void socket.join('vault:' + identity.connection_id);
     const delivery = registerLocalCodexTasks(socket, store, tasks, getEvents, work, identity.connector_id === 'codex.local');
     let checking = false, dirty = false;
     const stopCheck = checks.add(['global', `workspace:${identity.workspace_id}`, `actor:${identity.owner_id}`], () => {

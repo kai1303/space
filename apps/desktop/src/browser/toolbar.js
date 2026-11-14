@@ -11,6 +11,10 @@ const el = id => document.getElementById(id);
 const send = (action, arg) => window.browserBar.command(action, arg);
 let picking = false;
 let installed = [];
+let suggestedSite;
+el('connect-mcp').onclick = () => send('connect-mcp', suggestedSite?.url);
+el('mcp-guide').onclick = () => send('mcp-guide', suggestedSite?.url);
+el('dismiss-mcp').onclick = () => send('dismiss-mcp', suggestedSite?.url);
 let current, shownUrl, lastNotice, splitWidth, drag;
 const divider = el('divider');
 divider.onpointerdown = event => {
@@ -118,6 +122,16 @@ document.addEventListener('keydown', event => {
   }
 });
 window.browserBar.onState(state => {
+  suggestedSite = state.mcpSuggestion;
+  const suggestion = el('mcp-suggestion');
+  const showSuggestion = !!suggestedSite && !state.controlling;
+  const openingSuggestion = showSuggestion && suggestion.hidden;
+  suggestion.hidden = !showSuggestion;
+  if (showSuggestion) {
+    el('mcp-title').textContent = /\bMCP\b/i.test(suggestedSite.name) ? suggestedSite.name : suggestedSite.name + ' MCP';
+    el('mcp-endpoint').textContent = suggestedSite.url;
+  }
+  if (openingSuggestion) reveal(suggestion);
   installed = state.installed;
   el('new').hidden = !installed.includes('browser');
   el('office').hidden = !installed.includes('office');
@@ -161,8 +175,15 @@ window.browserBar.onState(state => {
   divider.setAttribute('aria-valuetext', splitWidth + ' pixels');
   el('new').disabled = state.tabs.length >= state.maxTabs;
   el('back').disabled = !state.back; el('forward').disabled = !state.forward;
-  el('sidekick').hidden = state.controlling; el('sidekick').disabled = !state.url;
-  el('ask').hidden = state.controlling; el('ask').disabled = !state.url;
+  el('sidekick').hidden = state.controlling; el('sidekick').disabled = !state.url || state.manualSignIn || state.vaultBusy;
+  el('ask').hidden = state.controlling; el('ask').disabled = !state.url || state.manualSignIn || state.vaultBusy;
+  el('vault').hidden = !state.vaultAvailable;
+  el('vault').disabled = state.vaultBusy;
+  el('fill-login').hidden = !state.vaultAvailable;
+  el('fill-login').disabled = state.vaultBusy || state.manualSignIn;
+  el('manual-sign-in').hidden = !state.manualSignIn;
+  el('resume-control').disabled = state.vaultBusy;
+  if (state.manualSignIn || state.vaultBusy) setTaskOpen(false);
   el('stop').hidden = !state.controlling;
   el('feedback').classList.toggle('controlling', state.controlling);
   const message = state.controlling ? 'Codex is controlling this tab.' : state.notice;
@@ -173,7 +194,7 @@ window.browserBar.onState(state => {
   el('dismiss').hidden = state.controlling;
 });
 window.browserBar.onAddressFocus(focusAddress);
-for (const action of ['space', 'layout', 'new', 'office', 'back', 'forward', 'reload', 'stop', 'sidekick']) el(action).onclick = () => {
+for (const action of ['space', 'layout', 'new', 'office', 'back', 'forward', 'reload', 'stop', 'sidekick', 'vault', 'fill-login', 'resume-control']) el(action).onclick = () => {
   if (current != null) showTools(false);
   send(action);
 };

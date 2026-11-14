@@ -85,3 +85,11 @@ test('desktop recovery only removes locks of exited workers in its own profile',
     assert.equal(existsSync(lock), false);
   } finally { rmSync(dir, { recursive: true }); }
 });
+
+test('only opens a native thread window for a canonical Space thread URL', () => {
+  const { isThreadWindow } = require('../src/policy.cjs');
+  const base='https://space.example.com', id='AAAAAAAAAAAAAAAAAAAAAA';
+  const path=`/c/${id}/thread/${id}?threadWindow=1`;
+  assert.equal(isThreadWindow(base+path,base),true);
+  for (const url of ['https://other.example'+path,base+path+'&x=1',base+path+'#other',base+'/chat?threadWindow=1',base+path.replace('/thread/','/message/')]) assert.equal(isThreadWindow(url,base),false);
+});

@@ -25,12 +25,12 @@ test('simultaneous starts share one room and both members can join',async()=>{
  assert.equal((await store.list(a.owner_id,a.workspace_id)).items.length,1);
  assert.equal(sessions[0]!.huddle.state,'active');
 });
-test('unjoined actors, other workspaces, archived channels and DMs cannot join',async()=>{
+test('unjoined actors, other workspaces and archived channels cannot join',async()=>{
  const a=await bootstrap(pool),b=await bootstrap(pool),m=media(),service=new HuddleService(store,m.provider);
  await assert.rejects(service.join(b.owner_id,a.channel_id),{code:'not_found'});
  await assert.rejects(store.list(b.owner_id,a.workspace_id),{code:'not_found'});
  const dm=await new ChatStore(pool).directMessages.open(a.owner_id,a.workspace_id,{user_id:a.collaborator_id});
- await assert.rejects(service.join(a.owner_id,dm.id),{code:'not_found'});
+ await assert.rejects(service.join(b.owner_id,dm.id),{code:'not_found'});
  await pool.query('DELETE FROM channel_members WHERE channel_id=$1 AND user_id=$2',[a.channel_id,a.collaborator_id]);
  await assert.rejects(service.join(a.collaborator_id,a.channel_id),{code:'not_found'});
  await pool.query('UPDATE channels SET archived_at=now() WHERE id=$1',[a.channel_id]);
@@ -75,4 +75,49 @@ test('deleted huddle state preserves the durable media cleanup obligation',async
  await pool.query('DELETE FROM channel_huddles WHERE id=$1',[h.id]);
  assert.equal(await store.raw(h.id),null);
  assert.equal((await pool.query("SELECT count(*)::int n FROM observed_outbox WHERE kind='huddle.close' AND aggregate_id=$1",[h.id])).rows[0].n,1);
+});
+
+test('DM invitations, attendance and the saved thread are private and idempotent',async()=>{
+ const a=await bootstrap(pool),b=await bootstrap(pool),chat=new ChatStore(pool),service=new HuddleService(store,media().provider);
+ const dm=await chat.directMessages.open(a.owner_id,a.workspace_id,{user_id:a.collaborator_id});
+ const first=await service.join(a.owner_id,dm.id),room=first.huddle;
+ assert.equal(room.channel_name,dm.name);assert.ok(room.thread_id);
+ assert.equal((await store.invitations(a.collaborator_id))[0]?.id,room.id);
+ assert.equal((await store.invitations(b.owner_id)).length,0);
+ const again=await Promise.all([service.join(a.owner_id,dm.id),service.join(a.collaborator_id,dm.id)]);
+ assert.deepEqual(again.map(x=>x.huddle.thread_id),[room.thread_id,room.thread_id]);
+ assert.equal((await store.invitations(a.collaborator_id)).length,0);
+ assert.equal((await pool.query('SELECT count(*)::int n FROM messages WHERE thread_id=$1',[room.thread_id])).rows[0].n,1);
+ await store.end(room.id);
+ assert.equal((await store.recent(a.collaborator_id,a.workspace_id))[0]?.thread_id,room.thread_id);
+ assert.deepEqual(await store.recent(b.owner_id,a.workspace_id),[]);
+ await pool.query('UPDATE workspace_members SET active=false WHERE workspace_id=$1 AND user_id=$2',[a.workspace_id,a.collaborator_id]);
+ assert.deepEqual(await store.recent(a.collaborator_id,a.workspace_id),[]);
+ await assert.rejects(service.join(a.owner_id,dm.id),{code:'not_found'});
+});
+test('encrypted DMs can huddle without creating a plaintext thread',async()=>{
+ const a=await bootstrap(pool),chat=new ChatStore(pool),service=new HuddleService(store,media().provider);
+ const dm=await chat.directMessages.open(a.owner_id,a.workspace_id,{user_id:a.collaborator_id});
+ await pool.query('UPDATE channels SET encrypted_since=now() WHERE id=$1',[dm.id]);
+ const {huddle}=await service.join(a.owner_id,dm.id);
+ assert.equal(huddle.thread_id,null);
+ assert.equal((await store.invitations(a.collaborator_id))[0]?.id,huddle.id);
+ assert.equal((await pool.query('SELECT count(*)::int n FROM messages WHERE channel_id=$1',[dm.id])).rows[0].n,0);
+});
+
+test('channel invites require attendance and membership, dismiss idempotently and expire with the room',async()=>{
+ const a=await bootstrap(pool),b=await bootstrap(pool),service=new HuddleService(store,media().provider);
+ const {huddle}=await service.join(a.owner_id,a.channel_id);
+ const listed=await new ChatStore(pool).channels(a.collaborator_id,a.workspace_id);
+ assert.equal(listed.items.find(c=>c.id===a.channel_id)?.active_huddle,true);
+ assert.equal((await store.people(a.owner_id,huddle.id,'')).items.some(row=>row.id===a.collaborator_id),true);
+ await assert.rejects(store.invite(a.collaborator_id,huddle.id,a.owner_id),{code:'not_found'});
+ await assert.rejects(store.invite(a.owner_id,huddle.id,b.owner_id),{code:'not_found'});
+ await Promise.all([store.invite(a.owner_id,huddle.id,a.collaborator_id),store.invite(a.owner_id,huddle.id,a.collaborator_id)]);
+ assert.deepEqual((await store.invitations(a.collaborator_id)).map(h=>h.id),[huddle.id]);
+ await store.dismiss(a.collaborator_id,huddle.id);await store.dismiss(a.collaborator_id,huddle.id);
+ assert.deepEqual(await store.invitations(a.collaborator_id),[]);
+ await store.end(huddle.id);
+ await assert.rejects(service.join(a.collaborator_id,a.channel_id,huddle.id),{code:'huddle_ended'});
+ assert.equal(await store.current(a.owner_id,a.channel_id),null);
 });

@@ -32,21 +32,24 @@ export function parseWorkspaceMemberInput(input: unknown): { user_id: string; ro
 }
 
 export interface WorkspaceDirectoryMember {
+  image?: string | null; title?: string; time_zone?: string; presence?: string;
   user_id: string; display_name: string; email?: string | null; role: MemberRole; guest_type?: 'none'|'single'|'multi'; active: boolean; joined_at: string;
 }
 export interface WorkspaceDirectory extends Page<WorkspaceDirectoryMember> { role: MemberRole; primary_owner_id?: string | null; email_visible?: boolean }
 export function parseDirectoryQuery(input: unknown) {
-  const v = record(input, ['after', 'limit', 'q', 'role', 'status', 'sort', 'guest']);
+  const v = record(input, ['after', 'limit', 'q', 'role', 'status', 'sort', 'guest', 'title', 'time_zone']);
   const paging = parsePage({ ...(v.after === undefined ? {} : {after:v.after}), ...(v.limit === undefined ? {} : {limit:v.limit}) });
   const q = v.q === undefined || v.q === '' ? '' : text(v.q, 100).trim();
   const role = v.role === undefined || v.role === 'all' ? undefined : memberRole(v.role);
   const status = v.status ?? 'active';
   if (status !== 'active' && status !== 'deactivated' && status !== 'all') throw new AppError(400, 'invalid_member_status');
   const sort = v.sort ?? 'id';
-  if (sort !== 'id' && sort !== 'name' && sort !== 'joined') throw new AppError(400, 'invalid_sort');
+  if (sort !== 'id' && sort !== 'name' && sort !== 'name_desc' && sort !== 'joined') throw new AppError(400, 'invalid_sort');
   const guest = v.guest ?? 'all';
-  if (!['all','none','single','multi'].includes(guest as string)) throw new AppError(400, 'invalid_guest_type');
-  return { ...paging, q, role, status, sort, guest };
+  if (!['all','any_guest','none','single','multi'].includes(guest as string)) throw new AppError(400, 'invalid_guest_type');
+  const title = v.title ? text(v.title,100).trim() : '';
+  const time_zone = v.time_zone ? text(v.time_zone,100).trim() : '';
+  return { ...paging, q, role, status, sort, guest, title, time_zone };
 }
 export function parseRoleInput(input: unknown): { role: MemberRole } {
   const v = record(input, ['role']);

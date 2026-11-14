@@ -16,3 +16,20 @@
 .scheduled-message-edit p{flex-basis:100%;margin:0;color:var(--sp-danger);font-size:13px}
 @media(max-width:720px){.scheduled-messages{padding:0 12px}.scheduled-message{padding:12px}}
 .composer-drafts-body>ul{margin-top:16px}.draft-actions{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:4px;color:var(--sp-text-secondary);font-size:13px}
+
+.draft-row { position: relative; }
+.composer-drafts .draft-row > button { padding-inline-end: 156px; }
+.draft-row-tools { position: absolute; inset-block-start: 8px; inset-inline-end: 8px; margin: 0; gap: 2px; padding: 2px; border: 1px solid var(--sp-border); border-radius: 6px; background: var(--sp-surface); }
+.draft-row-tools:empty { display: none; }
+@media (hover: hover) {
+  .draft-row:not(:hover):not(:focus-within) .draft-row-tools:not(:has([role=alert])) { opacity: 0; }
+}
+.draft-send-footer { display: flex; justify-content: flex-end; gap: 8px; margin-top: 24px; }
+
+.draft-schedule-form > p { color: var(--sp-text-secondary); font-size: 14px; }
+.draft-schedule-fields { display: flex; gap: 12px; flex-wrap: wrap; }
+.draft-schedule-fields label { flex: 1 1 9rem; display: grid; gap: 6px; font-weight: 600; font-size: 14px; }
+.draft-schedule-fields input { width: 100%; min-width: 0; box-sizing: border-box; padding: 8px 10px; border: 1px solid var(--sp-border-strong); border-radius: 6px; background: var(--sp-surface); color: var(--sp-text); font: inherit; }
+
+.sp-button.draft-delete-confirm { background: #c32943; border-color: transparent; color: white; }
+.sp-button.draft-delete-confirm:hover { background: #a52238; }

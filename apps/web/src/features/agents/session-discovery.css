@@ -14,3 +14,8 @@
 .session-discovery nav { display:flex; gap:8px; }
 .session-row-status { display:inline-flex; align-items:center; justify-content:center; width:20px; color:var(--sp-text-secondary); }
 .session-row-status--needs_attention { color:var(--sp-warning,#956009); }
+.code-channel-browser-bar {display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap}
+.code-channel-create {display:grid;gap:14px}
+.code-channel-create label {display:grid;gap:4px;font-size:14px;font-weight:600}
+.code-channel-create label>input {width:100%;min-width:0;box-sizing:border-box;border:1px solid var(--sp-border);border-radius:6px;background:var(--sp-surface);color:var(--sp-text);font:inherit;font-weight:400;padding:8px}
+.code-channel-create footer {display:flex;justify-content:flex-end;gap:8px}

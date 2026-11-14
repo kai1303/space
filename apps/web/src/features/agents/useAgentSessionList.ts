@@ -19,6 +19,28 @@ export function useAgentSessionList(workspace: string) {
     let active = true, pages = 1, running = false;
     let current = sessionPage(cache?.peek<Page>(key));
     let controller: AbortController;
+    let expiry: ReturnType<typeof setTimeout> | undefined;
+    const deadlines = new Map<string, {stamp:string; at:number}>();
+    function scheduleExpiry() {
+      clearTimeout(expiry);
+      const now = performance.now();
+      let earliest = Infinity;
+      const ids = new Set(current.items.map(item => item.id));
+      for (const id of deadlines.keys()) if (!ids.has(id)) deadlines.delete(id);
+      for (const item of current.items) {
+        if (!item.sidebar_expires_at || item.sidebar_expires_in_ms === undefined) { deadlines.delete(item.id); continue; }
+        let deadline = deadlines.get(item.id);
+        if (!deadline || deadline.stamp !== item.sidebar_expires_at || deadline.at <= now) {
+          deadline = {stamp:item.sidebar_expires_at, at:now + item.sidebar_expires_in_ms};
+          deadlines.set(item.id, deadline);
+        }
+        earliest = Math.min(earliest, deadline.at);
+      }
+      if (Number.isFinite(earliest)) expiry = setTimeout(() => {
+        cache?.invalidate(key);
+        void read(false);
+      }, Math.max(0, earliest - now) + 1);
+    }
     function publish(loading: boolean, error = '', revoked = false) {
       setState({owner:cache,key,...current,loading,error,revoked});
     }
@@ -43,6 +65,7 @@ export function useAgentSessionList(workspace: string) {
           if (!cursor) break;
         }
         current = {items:[...items.values()],next_cursor:cursor};
+        scheduleExpiry();
         publish(false);
       } catch (reason) {
         if (!active || signal.aborted) return;
@@ -56,10 +79,10 @@ export function useAgentSessionList(workspace: string) {
     }
     append.current = () => { void read(true); };
     const stop = subscribeUpdates('workspace',workspace,() => read(false),() => {
-      active = false; controller?.abort(); current = empty;
+      active = false; clearTimeout(expiry); controller?.abort(); current = empty;
       publish(false,'Agent sessions are unavailable.',true);
     });
-    return () => { active = false; controller?.abort(); stop(); };
+    return () => { active = false; clearTimeout(expiry); controller?.abort(); stop(); };
   },[cache,key,workspace]);
   const warm = cache?.peek<Page>(key);
   const current = state.owner === cache && state.key === key ? state : {...sessionPage(warm),loading:!warm,error:'',revoked:false};

@@ -13,7 +13,7 @@ const app = createApi(new PostgresStore(pool), { allowDevelopmentTokens: true })
 before(async () => { assert.ok(process.env.TEST_DATABASE_URL); await admin.query(`CREATE SCHEMA ${schema}`); await migrate(pool); });
 after(async () => { await app.close(); await pool.end(); await admin.query(`DROP SCHEMA ${schema} CASCADE`); await admin.end(); });
 type Seed = Awaited<ReturnType<typeof bootstrap>>;
-async function request(token: string, method: 'GET' | 'POST', path: string, payload?: object, status = 200) {
+async function request(token: string, method: 'GET' | 'POST' | 'PATCH', path: string, payload?: object, status = 200) {
   const response = await app.inject({ method, url: `/v1${path}`, headers: { authorization: `Bearer ${token}`, 'idempotency-key': randomUUID() }, payload });
   assert.equal(response.statusCode, status, `${path}: ${response.body}`); return response.body ? response.json() : null;
 }
@@ -54,6 +54,98 @@ test('sent and participant threads exclude inaccessible channels and internal se
   assert.deepEqual((await hub(a, 'sent')).items.map((m: any) => m.id), [root.id]);
   await pool.query('DELETE FROM channel_members WHERE channel_id=$1 AND user_id=$2', [a.channel_id, a.owner_id]);
   assert.equal((await hub(a, 'threads')).items.length, 0); assert.equal((await hub(a, 'sent')).items.length, 0);
+});
+
+test('thread inbox pages unread first and advances only the viewer and observed replies', async () => {
+  const a = await bootstrap(pool);
+  const root = await send(a, 'Release plan');
+  const emptyPage = await hub(a, 'threads');
+  assert.deepEqual(emptyPage.items, []);
+  const first = await send(a, 'First reply', {thread_id:root.thread_id}, a.collaborator_token);
+  await send(a, 'My reply', {thread_id:root.thread_id});
+  await send(a, 'More notes', {thread_id:root.thread_id}, a.collaborator_token);
+  const last = await send(a, 'Four replies', {thread_id:root.thread_id}, a.collaborator_token);
+  const newer = await send(a, 'Another thread');
+  const own = await send(a, 'Only my reply', {thread_id:newer.thread_id});
+  const firstPage = await hub(a, 'threads?limit=1'), entry = firstPage.items[0];
+  assert.equal(entry.id, root.id); assert.equal(entry.root.text,'Release plan');
+  assert.equal(entry.unread_count,3); assert.equal(entry.reply_count,4); assert.equal(entry.latest_sequence,last.sequence);
+  assert.deepEqual(entry.recent_replies.map((m:{text:string})=>m.text), ['More notes','Four replies']);
+  assert.deepEqual(entry.participants.map((p:{id:string})=>p.id), [a.collaborator_id,a.owner_id]);
+  assert.equal((await hub(a,'threads?limit=1&after='+firstPage.next_cursor)).items[0].id,newer.id);
+  const read = (sequence:string,status=200) => mutate(a,'threads/'+root.thread_id+'/read',{sequence},a.owner_token,status);
+  await read(own.sequence,400);
+  await read(first.sequence);
+  assert.equal((await hub(a,'threads')).items[0].unread_count,2);
+  const concurrent = await Promise.all([read(last.sequence),read(first.sequence),read(last.sequence)]);
+  assert.ok(concurrent.some(row=>row.sequence===last.sequence));
+  assert.deepEqual(await read(first.sequence),{sequence:last.sequence});
+  const after = await hub(a,'threads');
+  assert.deepEqual(after.items.map((r:{id:string})=>r.id),[newer.id,root.id]);
+  assert.equal(after.items[1].unread_count,0);
+  assert.equal((await hub(a,'threads',a.collaborator_token)).items[0].unread_count,1);
+  const older=await hub(a,`threads/${root.thread_id}/replies?before=${entry.recent_replies[0].sequence}`);
+  assert.deepEqual(older.items.map((m:{text:string})=>m.text),['First reply','My reply']);
+  await mutate(a,'threads/'+root.thread_id+'/unread',{sequence:last.sequence});
+  assert.equal((await hub(a,'threads')).items.find((m:{id:string})=>m.id===root.id).unread_count,1);
+  await read(last.sequence);
+  await send(a,'Arrived after open',{thread_id:root.thread_id},a.collaborator_token);
+  await read(last.sequence);
+  assert.equal((await hub(a,'threads')).items[0].unread_count,1);
+  await pool.query('DELETE FROM channel_members WHERE channel_id=$1 AND user_id=$2',[a.channel_id,a.owner_id]);
+  await read(last.sequence,404);
+  await mutate(a,'threads/'+root.thread_id+'/unread',{sequence:last.sequence},a.owner_token,404);
+  assert.deepEqual((await hub(a,'threads')).items,[]);
+});
+
+test('actor subscriptions override DM and channel defaults without reopening an unfollowed thread', async () => {
+  const a=await bootstrap(pool);
+  const settings = (thread:string) => '/threads/'+thread+'/notification-subscription';
+  const follow = (thread:string, following:boolean) => request(a.collaborator_token,'PATCH',settings(thread),{following});
+  const dm = await request(a.owner_token,'POST','/workspaces/'+a.workspace_id+'/direct-messages',{user_id:a.collaborator_id});
+  const root=await send(a,'DM root',{},a.owner_token,dm.id);
+  assert.deepEqual(await request(a.collaborator_token,'GET',settings(root.thread_id)),{following:true});
+  await send(a,'DM reply',{thread_id:root.thread_id},a.owner_token,dm.id);
+  assert.equal((await hub(a,'threads',a.collaborator_token)).items[0].channel_kind,'direct');
+  await follow(root.thread_id,false);
+  await send(a,'Reply after unfollow',{thread_id:root.thread_id},a.collaborator_token,dm.id);
+  await send(a,'Unfollow survives',{thread_id:root.thread_id},a.owner_token,dm.id);
+  assert.deepEqual((await hub(a,'threads',a.collaborator_token)).items,[]);
+  const notifications=(await request(a.collaborator_token,'GET','/workspaces/'+a.workspace_id+'/notifications')).items;
+  assert.ok(notifications.some((n:{kind:string})=>n.kind==='thread_reply'));
+  assert.ok(!notifications.some((n:{text:string})=>n.text==='Unfollow survives'));
+  const channelRoot=await send(a,'Anyone can follow');
+  await send(a,'Channel reply',{thread_id:channelRoot.thread_id});
+  await pool.query('UPDATE channel_members SET follow_every_thread=true WHERE channel_id=$1 AND user_id=$2',[a.channel_id,a.collaborator_id]);
+  assert.deepEqual(await request(a.collaborator_token,'GET',settings(channelRoot.thread_id)),{following:true});
+  assert.equal((await hub(a,'threads',a.collaborator_token)).items[0].id,channelRoot.id);
+  await follow(channelRoot.thread_id,false);
+  assert.deepEqual((await hub(a,'threads',a.collaborator_token)).items,[]);
+  await follow(root.thread_id,true);
+  assert.equal((await hub(a,'threads',a.collaborator_token)).items[0].id,root.id);
+});
+
+test('inbox previews expose author avatars, actor-owned saves and current reply reactions', async () => {
+  const a = await bootstrap(pool), avatar = 'https://example.test/profile.png';
+  await pool.query('UPDATE users SET image=$2 WHERE id=$1',[a.collaborator_id,avatar]);
+  const root = await send(a, 'Review'), reply = await send(a,'Approved',{thread_id:root.thread_id},a.collaborator_token);
+  await mutate(a,'saved/'+reply.id,{channel_id:a.channel_id,active:true});
+  const revision = async () => (await pool.query('SELECT revision FROM resource_update_revisions WHERE resource=$1',
+    ['workspace-messages:'+a.workspace_id])).rows[0].revision;
+  const prev = await revision();
+  await request(a.owner_token,'POST','/channels/'+a.channel_id+'/messages/'+reply.id+'/reactions',{emoji:'👍',active:true});
+  assert.ok(BigInt(await revision()) > BigInt(prev));
+  await request(a.collaborator_token,'POST','/channels/'+a.channel_id+'/messages/'+reply.id+'/reactions',{emoji:'👍',active:true});
+  const [row] = (await hub(a,'threads')).items;
+  assert.deepEqual(row.root.reactions,[]);
+  assert.equal(row.root.viewer_saved,false);
+  const [preview] = row.recent_replies;
+  assert.equal(preview.author.image,avatar);
+  assert.equal(preview.viewer_saved,true);
+  assert.deepEqual(preview.reactions,[{emoji:'👍',count:2,user_ids:[a.owner_id,a.collaborator_id].sort()}]);
+  assert.equal((await hub(a,'threads',a.collaborator_token)).items[0].recent_replies[0].viewer_saved,false);
+  await request(a.owner_token,'POST','/channels/'+a.channel_id+'/messages/'+reply.id+'/reactions',{emoji:'👍',active:false});
+  assert.deepEqual((await hub(a,'threads')).items[0].recent_replies[0].reactions,[{emoji:'👍',count:1,user_ids:[a.collaborator_id]}]);
 });
 
 test('saved and starred toggles are owner scoped, concurrent and idempotent, with fresh channel authorization', async () => {
@@ -234,4 +326,18 @@ test('multiple file types are ORed before pagination and an empty selection retu
   assert.equal((await hub(a,'files?kinds=image,pdf,text,audio,video,other')).items.length,4);
   assert.equal((await hub(a,'files?kind=pdf')).items[0].id,ids[0]);
   for(const query of ['kinds=bad','kinds=pdf,,image','kinds=all','kinds=pdf,pdf','kinds=pdf&kind=image','kinds='+ 'a'.repeat(100)]) await request(a.owner_token,'GET',`/workspaces/${a.workspace_id}/hub/files?${query}`,undefined,400);
+});
+
+test('Saved uses bookmark time, moves exactly once across concurrent attempts, and scopes cleanup by owner',async()=>{
+  const a=await bootstrap(pool),old=await send(a,'An older message'),recent=await send(a,'A newer message');
+  for(const m of [recent,old])await mutate(a,'saved/'+m.id,{channel_id:a.channel_id,active:true});
+  await mutate(a,'saved/'+old.id,{channel_id:a.channel_id,active:true},a.collaborator_token);
+  const first=await hub(a,'saved?limit=1');
+  assert.equal(first.items[0].id,old.id);assert.equal((await hub(a,'saved?after='+first.next_cursor)).items[0].id,recent.id);
+  const moved=await Promise.all(Array.from({length:4},()=>mutate(a,'saved/cleanup',{action:'move',message_id:old.id})));
+  assert.equal(moved.reduce((sum,r)=>sum+r.count,0),1);
+  assert.deepEqual((await hub(a,'todos')).items.map(t=>t.message_id),[old.id]);
+  await mutate(a,'saved/cleanup',{action:'clear'});
+  assert.equal((await hub(a,'saved')).items.length,0);
+  assert.deepEqual((await hub(a,'saved',a.collaborator_token)).items.map(t=>t.id),[old.id]);
 });

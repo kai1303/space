@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { HttpAgent } from '@ag-ui/client';
 import { EventSchema } from '@ag-ui/core/schemas';
-import { AppError, parseAgentComponent, parseAgentResponse, parseSessionOutputs, parseInvocation, type AgentConnector, type AgentEvent, type AgentResponse, type InvocationReceipt, type InvocationRequest } from '@space/contracts';
+import { AppError, parseAgentComponent, parseAgentResponse, parseSessionOutputs, parseSessionViewUpdate, record, parseInvocation, type AgentConnector, type AgentEvent, type AgentResponse, type InvocationReceipt, type InvocationRequest } from '@space/contracts';
 
 function eventId(execution: string, sequence: number) {
   const hex = createHash('sha256').update(`${execution}:ag-ui:${sequence}`).digest('hex');
@@ -31,7 +31,7 @@ export class AgUiConnector implements AgentConnector {
     const ignoredMessages = new Set<string>();
     const abort = () => agent.abortRun();
     signal.addEventListener('abort', abort, { once: true });
-    const send = async (type: AgentEvent['type'], timestamp?: number, error?: string, lifecycle?: 'open'|'archive') => {
+    const send = async (type: AgentEvent['type'], timestamp?: number, error?: string, lifecycle?: 'open'|'archive', view?: AgentEvent['payload']['session_view']) => {
       signal.throwIfAborted();
       const snapshot = parseAgentResponse(response);
       const plain = snapshot.messages.map(message => message.text).join('\n\n');
@@ -39,7 +39,7 @@ export class AgUiConnector implements AgentConnector {
         ? plain || snapshot.components.map(component => component.title).join('\n') || 'Agent run completed.'
         : snapshot.step ?? 'Working');
       await emit({ id: eventId(request.execution_id, ++sequence), schema_version: '1.0', execution_id: request.execution_id,
-        sequence, type, occurred_at: new Date(timestamp ?? 0).toISOString(), payload: { text, response: snapshot, ...(lifecycle ? { session_lifecycle:lifecycle } : {}) } });
+        sequence, type, occurred_at: new Date(timestamp ?? 0).toISOString(), payload: { text, response: snapshot, ...(lifecycle ? { session_lifecycle:lifecycle } : {}), ...(view ? {session_view:view} : {}) } });
     };
     const finish = () => {
       response.messages.forEach(message => { message.status = 'complete'; });
@@ -102,6 +102,14 @@ export class AgUiConnector implements AgentConnector {
               case 'STEP_STARTED': response.step = event.stepName; break;
               case 'STEP_FINISHED': delete response.step; break;
               case 'CUSTOM': {
+                if (event.name === 'space.session.setView' || event.name === 'space.session.removeView') {
+                  const update = parseSessionViewUpdate(event.name === 'space.session.setView'
+                    ? {set:event.value} : {remove:record(event.value, ['key']).key});
+                  // Once persisted, an older full view list must not overwrite this edit on a subsequent message.
+                  if (response.outputs) delete response.outputs.views;
+                  await send('execution.progress', event.timestamp, undefined, undefined, update);
+                  return;
+                }
                 if (event.name === 'space.session.outputs') {
                   response.outputs = parseSessionOutputs(event.value);
                   break;

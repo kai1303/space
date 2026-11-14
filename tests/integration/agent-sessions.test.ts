@@ -170,6 +170,33 @@ test('stop and end fence leases and approvals, retain history, and enforce creat
   assert.equal(detail.session.state, 'ended'); assert.equal(detail.turns.length, 2);
 });
 
+test('finished sessions retain a reviewable result and managers can reopen them without replaying work', async () => {
+  const a = await fixture(), foreign = await fixture(), one = await session(a);
+  const path = `/agent-sessions/${one.id}`;
+  const task = await api(a.owner_token, 'POST', path+'/messages', {text:'Fix the login flow'}, 201);
+  const delivery = (await store.claimDelivery(a.installation_id))!;
+  await store.acceptEvent(a.installation_id, event(task.active_execution_id, 1, 'execution.started'), delivery);
+  await store.acceptEvent(a.installation_id, event(task.active_execution_id, 2, 'execution.completed'), delivery);
+  await store.ackDelivery(delivery);
+  await api(a.owner_token, 'POST', path+'/end', {});
+  const ended = await api(a.collaborator_token, 'GET', path);
+  assert.deepEqual(ended.final_summary, {task_id:task.id, excerpt:'Answer'});
+  await api(a.collaborator_token, 'POST', path+'/reopen', {}, 403);
+  await api(foreign.owner_token, 'POST', path+'/reopen', {}, 404);
+  await pool.query('UPDATE channels SET archived_at=now() WHERE id=$1',[a.channel_id]);
+  await api(a.owner_token, 'POST', path+'/reopen', {}, 409);
+  await pool.query('UPDATE channels SET archived_at=NULL WHERE id=$1',[a.channel_id]);
+  const revision = async () => (await pool.query('SELECT revision FROM agent_sessions WHERE id=$1',[one.id])).rows[0].revision;
+  const oldRevision = await revision();
+  const reopened = await Promise.all([1,2].map(() => api(a.owner_token, 'POST', path+'/reopen', {})));
+  assert.ok(reopened.every(session => session.state === 'active' && session.turn_count === 1));
+  assert.equal(await revision(), oldRevision + 1);
+  assert.equal((await api(a.owner_token, 'GET', path)).final_summary, undefined);
+  assert.equal(await store.claimDelivery(a.installation_id), null);
+  const next = await api(a.owner_token, 'POST', path+'/messages', {text:'Review feedback'}, 201);
+  assert.equal(next.session_id, one.id);
+});
+
 test('concurrent distinct sends create only one turn and legacy sessions cannot receive persistent turns', async () => {
   const a = await fixture(), one = await session(a);
   const responses = await Promise.all(['One', 'Two'].map(text => app.inject({ method: 'POST', url: `/v1/agent-sessions/${one.id}/messages`, headers: { authorization: `Bearer ${a.owner_token}`, 'idempotency-key': randomUUID() }, payload: { text } })));
@@ -608,6 +635,30 @@ test('workspace session navigation is paginated, includes private handoffs only 
   assert.deepEqual((await api(a.collaborator_token, 'GET', path)).items, []);
 });
 
+test('session input links page across turns and delivered steering without including ambient context',async()=>{
+  const a=await fixture(), one=await session(a), path='/agent-sessions/'+one.id+'/resources';
+  const fixtures=await pool.query(`INSERT INTO tasks(id,workspace_id,thread_id,installation_id,goal,skill,requester_id,
+    status,session_id,idempotency_key,request_hash,created_at,result)
+    SELECT gen_random_uuid(),$1,$2,$3,'Read https://docs.example/release/'||n,'codex.run',$4,
+      'completed',$5,n::text,'test',now()-n*interval '1 second','See https://private.example/output'
+    FROM generate_series(1,23) n RETURNING id`,[a.workspace_id,a.thread_id,a.installation_id,a.owner_id,one.id]);
+  for(const state of ['sent','cancelled']) {
+    await pool.query(`INSERT INTO agent_session_inputs(id,session_id,actor_id,kind,execution_id,body,request_hash,state)
+      VALUES($1,$2,$3,'steer',$4,$5,'test',$6)`,[randomUUID(),one.id,a.owner_id,randomUUID(),
+      {text:'Review these links',document:{ops:[{insert:'these links',attributes:{link:'https://context.example/'+state}}]},
+        browser_url:'https://private.example/browser'},state]);
+  }
+  const first=await api(a.owner_token,'GET',path), second=await api(a.owner_token,'GET',path+'?before='+first.next_cursor);
+  assert.equal(first.items.length,20);assert.equal(second.items.length,4);assert.equal(second.next_cursor,null);
+  const links=[...first.items,...second.items].flatMap(item=>item.links);
+  assert.equal(new Set(links).size,24);assert.ok(links.includes('https://context.example/sent'));
+  assert.ok(!links.some(link=>link.includes('private')||link.includes('cancelled')));
+  const another=await session(a);
+  await api(a.owner_token,'GET','/agent-sessions/'+another.id+'/resources?before=task:'+fixtures.rows[0].id,undefined,400);
+  await pool.query('DELETE FROM channel_members WHERE user_id=$1 AND channel_id=$2',[a.collaborator_id,a.channel_id]);
+  await api(a.collaborator_token,'GET',path,undefined,404);
+});
+
 test('session uploads bind once to their authorized turn, survive expiry, and reach the runner', async () => {
   const a = await fixture(), foreign = await fixture();
   const one = await session(a), other = await session(a);
@@ -632,6 +683,11 @@ test('session uploads bind once to their authorized turn, survive expiry, and re
   assert.equal((await pool.query('SELECT 1 FROM knowledge_visible_attachments($1,$2,$3,$4::uuid[])', [a.workspace_id,a.owner_id,a.channel_id,[file.id]])).rowCount, 0);
   const detail = await api(a.owner_token,'GET',`/agent-sessions/${one.id}`);
   assert.equal(detail.turns[0].task.attachments[0].description,'Console log');
+  const resources = '/agent-sessions/'+one.id+'/resources';
+  const page = await api(a.collaborator_token,'GET',resources);
+  assert.deepEqual(page.items.map((item:any)=>item.files.map((f:any)=>f.id)),[[file.id]]);
+  await api(foreign.owner_token,'GET',resources,undefined,404);
+  assert.deepEqual((await api(a.owner_token,'GET','/agent-sessions/'+other.id+'/resources')).items,[]);
   const delivery = (await store.claimDelivery(a.installation_id))!;
   const prepared = (await store.prepareDelivery(delivery))!;
   assert.deepEqual(prepared.request.attachments?.[0]?.content,{kind:'text',text:'hello',truncated:false});
@@ -816,7 +872,10 @@ test('session-only reviewer can discuss an explicit output snapshot without gain
   const invite=(user:string)=>app.inject({method:'PUT',url:'/v1'+team+'/reviewers/'+user,headers:{authorization:'Bearer '+a.owner_token},payload:{}});
   const patch={path:'app.ts',patch:'@@ -1 +1 @@\n-old\n+new'};
   const file={path:'internal.txt',content:'private data'};
-  await pool.query('UPDATE agent_sessions SET outputs=$1 WHERE id=$2',[{files:[file],changes:[patch]},sessionId]);
+  const canvas = {key:'release',name:'Release notes',type:'canvas',content:'# Release preview'};
+  const sourceContext = {repository:{label:'Source members only'}};
+  await pool.query('UPDATE agent_sessions SET outputs=$1 WHERE id=$2',[{files:[file],changes:[patch],views:[canvas],context:sourceContext},sessionId]);
+  const shareView = (output:unknown) => app.inject({method:'PUT',url:'/v1'+team+'/shared',headers:{authorization:'Bearer '+a.owner_token},payload:{kind:'view',path:canvas.key,output}});
   const share=(actor:string,output:unknown)=>app.inject({method:'PUT',url:'/v1'+team+'/shared',headers:{authorization:'Bearer '+actor},payload:{kind:'change',path:patch.path,output}});
   await api(token,'GET',team,undefined,404);
   assert.equal((await invite(stranger.owner_id)).statusCode,404);
@@ -839,9 +898,13 @@ test('session-only reviewer can discuss an explicit output snapshot without gain
   assert.equal((await share(token,patch)).statusCode,403);
   assert.equal((await share(a.owner_token,{...patch,patch:'wrong version'})).statusCode,409);
   assert.equal((await share(a.owner_token,patch)).statusCode,200);
+  assert.equal((await shareView({...canvas,content:'stale'})).statusCode,409);
+  assert.equal((await shareView(canvas)).statusCode,200);
   await pool.query('UPDATE agent_sessions SET outputs=$1 WHERE id=$2',[{files:[file],changes:[{...patch,patch:'different'}]},sessionId]);
   view=await api(token,'GET',team);
-  assert.deepEqual(view.shared,[{kind:'change',path:patch.path,output:patch}]);
+  assert.deepEqual(view.shared,[{kind:'change',path:patch.path,output:patch},{kind:'view',path:canvas.key,output:canvas}]);
+  assert.ok(!JSON.stringify(view).includes(sourceContext.repository.label));
+  assert.equal((await shareView(null)).statusCode,200);
   assert.ok(!JSON.stringify(view).includes(file.content));
   const key=randomUUID();
   const posts=Array.from({length:4},()=>api(token,'POST',team+'/discussion',{text:'Please review this line'},200,key));
@@ -882,4 +945,20 @@ test('session-only reviewer can discuss an explicit output snapshot without gain
   await api(a.owner_token,'POST',url+'/end',{});
   await api(a.owner_token,'POST',team+'/discussion',{text:'After closing'},409);
   assert.equal((await api(a.owner_token,'GET',team)).writable,false);
+});
+
+test('creating a fresh code channel is atomic and retriable without posting a source message', async()=>{
+  const a=await fixture(), b=await fixture(), start='/channels/'+a.channel_id+'/agent-sessions';
+  const input={client_thread_id:randomUUID(), client_session_id:randomUUID(),installation_id:a.installation_id,title:'Checkout repair'};
+  await api(b.owner_token,'POST',start,input,404);
+  await Promise.all(Array.from({length:3},()=>api(a.owner_token,'POST',start,input,201)));
+  const detail = await api(a.owner_token,'GET','/agent-sessions/'+input.client_session_id);
+  assert.equal(detail.session.origin_thread_id,input.client_thread_id);
+  assert.equal(detail.session.title,input.title);
+  assert.equal(detail.turns.length,0);
+  assert.equal((await pool.query('SELECT id FROM messages WHERE thread_id=$1',[input.client_thread_id])).rowCount,0);
+  await api(a.owner_token,'POST',start,{...input,title:'different request'},409);
+  const wrong={...input,client_session_id:randomUUID(),client_thread_id:randomUUID(),installation_id:b.installation_id};
+  await api(a.owner_token,'POST',start,wrong,404);
+  assert.equal((await pool.query('SELECT id FROM threads WHERE id=$1',[wrong.client_thread_id])).rowCount,0);
 });

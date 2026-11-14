@@ -3,6 +3,7 @@ import { io } from 'socket.io-client';
 import { sidekickPageUrl, parseGoalAction, parseInvocation, parseAgentEvent, parseLocalProvider, localProviders, type LocalProvider, type AgentEvent, type InvocationRequest, uuid, text, record } from '@space/contracts';
 import { AgentSessionStopped, type InvokeAgent, type SteerHandler } from './agent-runtime.js';
 import {CODING_TURN_TIMEOUT_MS} from '@space/contracts';
+import {webVaultPages} from './web-vault-pages.js';
 import {toolApprovalClient} from './tool-approvals.js';
 import { ConnectorStore, platformOrigin, type Connection } from './storage.js';
 
@@ -36,7 +37,9 @@ function unauthorized(error: unknown): boolean {
   const value = error as { code?: unknown; message?: unknown; data?: { code?: unknown } };
   return [value.code, value.data?.code, value.message].some(item => typeof item === 'string' && /unauthorized|unauthenticated|revoked|invalid.token/i.test(item));
 }
-export function connectPlatform(connection: Connection, status: () => AuthStatus, onUnauthorized: () => void, invoke?: InvokeAgent, models?: () => import('@space/contracts').AgentModel[] | undefined) {
+export interface WebVaultRequest { id: string; actor: string; installation: string; action: 'list' | 'manage'; expires: number; cursor?: string }
+export type WebVaultHandler = (request: WebVaultRequest, signal: AbortSignal) => Promise<unknown>;
+export function connectPlatform(connection: Connection, status: () => AuthStatus, onUnauthorized: () => void, invoke?: InvokeAgent, models?: () => import('@space/contracts').AgentModel[] | undefined, webVault?: WebVaultHandler) {
   const origin = platformOrigin(connection.origin);
   const provider = parseLocalProvider(connection.provider);
   let lastMessage: string | undefined;
@@ -47,10 +50,33 @@ export function connectPlatform(connection: Connection, status: () => AuthStatus
   }
   logChange('Connecting to Space.');
   const socket = io(`${origin}/agents`, {
-    transports: ['websocket'], auth: { token: connection.credential },
+    transports: ['websocket'], auth: { token: connection.credential, ...(webVault && {vault_mac: true}) },
     reconnection: true, reconnectionAttempts: Infinity, reconnectionDelay: 1_000,
     reconnectionDelayMax: 30_000, randomizationFactor: 0.5, timeout: 15_000,
   });
+  let vaultRequest: AbortController | undefined;
+  if (webVault) {
+    const pages = webVaultPages(webVault);
+    socket.on('vault.request', async (raw: unknown, ack: unknown) => {
+      if (typeof ack !== 'function') return;
+      if (vaultRequest) { ack({status: 'busy'}); return; }
+      const controller = vaultRequest = new AbortController();
+      try {
+        const value = record(raw, ['id', 'actor', 'installation', 'action', 'expires', 'cursor']);
+        if (value.installation !== connection.installation_id || (value.action !== 'list' && value.action !== 'manage') ||
+            typeof value.expires !== 'number' || !Number.isSafeInteger(value.expires)) throw new Error();
+        const remaining = Math.min(value.expires - Date.now(), 65000);
+        if (remaining <= 0) throw new Error();
+        if (value.cursor !== undefined && value.action !== 'list') throw new Error();
+        const continuation = value.cursor === undefined ? {} : {cursor: uuid(value.cursor)};
+        const result = await pages.dispatch({id: uuid(value.id), actor: uuid(value.actor), installation: connection.installation_id,
+          action: value.action, ...continuation, expires: value.expires}, AbortSignal.any([controller.signal, AbortSignal.timeout(remaining)]));
+        if (!controller.signal.aborted) ack(result);
+      } catch { if (!controller.signal.aborted) ack({status: 'unavailable'}); }
+      finally { vaultRequest = undefined; }
+    });
+    socket.on('disconnect', () => { pages.clear(); vaultRequest?.abort(); });
+  }
   let closed = false;
   let reconnect: NodeJS.Timeout | undefined;
   let reconnectDelay = 1_000;

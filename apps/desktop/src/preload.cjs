@@ -1,6 +1,12 @@
 const { contextBridge, ipcRenderer } = require('electron');
 if (process.isMainFrame) contextBridge.exposeInMainWorld('spaceDesktop', {
   browserAccountChanged: id => ipcRenderer.send('space-browser-account', id),
+  ...(process.platform === 'darwin' && { openVault: actor => ipcRenderer.invoke('space-vault-open', actor), saveBrowserVaultToken: endpoint => ipcRenderer.invoke('space-browser-save-token', endpoint) }),
+  onBrowserMcpSetup: fn => {
+    const handler = (_event, site) => fn(site);
+    ipcRenderer.on('space-browser-connect-mcp', handler);
+    return () => ipcRenderer.removeListener('space-browser-connect-mcp', handler);
+  },
   onBrowserSidekick: fn => {
     const handler = (_event, tab) => fn(tab);
     ipcRenderer.on('space-browser-sidekick', handler);

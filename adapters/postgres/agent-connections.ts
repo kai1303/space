@@ -103,9 +103,18 @@ export class AgentConnectionStore {
     if (!row || !await hasWorkspaceAccess(this.db, row.owner_id, row.workspace_id)) throw unauthorized();
     return row;
   }
-  async connect(token: unknown) {
+  async vaultMacs(actor: string, installation?: string) {
+    return this.db.select({id: s.agentConnections.installation_id, name: s.agentConnections.name,
+      connection: s.agentConnections.connection_id, online: sql<boolean>`coalesce(${s.agentConnections.connection_id} is not null and ${s.agentConnections.last_seen_at} > now() - interval '45 seconds',false)`})
+      .from(s.agentConnections).innerJoin(s.agentInstallations, eq(s.agentInstallations.id, s.agentConnections.installation_id))
+      .innerJoin(s.workspaceMembers, and(eq(s.workspaceMembers.workspace_id, s.agentInstallations.workspace_id), eq(s.workspaceMembers.user_id, s.agentInstallations.owner_id)))
+      .where(and(eq(s.agentInstallations.owner_id, actor), eq(s.agentConnections.vault_mac, true), eq(s.agentInstallations.enabled, true),
+        eq(s.workspaceMembers.active, true), isNull(s.agentConnections.revoked_at), installation ? eq(s.agentInstallations.id, installation) : undefined))
+      .orderBy(s.agentConnections.name, s.agentConnections.installation_id).limit(100);
+  }
+  async connect(token: unknown, vaultMac = false) {
     const identity = await this.authenticate(token), connection_id = randomUUID();
-    const rows = await this.db.update(s.agentConnections).set({ connection_id, last_seen_at: new Date(), auth_status: 'required', model_catalog:null })
+    const rows = await this.db.update(s.agentConnections).set({ connection_id, vault_mac: vaultMac, last_seen_at: new Date(), auth_status: 'required', model_catalog:null })
       .where(and(eq(s.agentConnections.installation_id, identity.id), eq(s.agentConnections.token_hash, hash(token as string)), isNull(s.agentConnections.revoked_at))).returning();
     if (!rows.length) throw unauthorized();
     return { ...identity, connection_id };

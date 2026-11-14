@@ -44,3 +44,13 @@ describe("Space conversation", () => {
     expect(reaction.textContent).toContain("2");
   });
 });
+
+it('shows real reply participants, last activity and a personal thread draft', () => {
+ const {rerender}=render(<Message author="Root" initials="R" time="10:00" onReply={()=>{}} replyCount={2}
+   replyParticipants={[{id:'one',name:'Kai',image:'/kai.png'}]} lastReplyAt="2026-11-12T12:00:00Z" hasReplyDraft>Hello</Message>);
+ const bar=screen.getByRole('button',{name:'2 replies & 1 draft View thread'});
+ expect(bar.querySelector('img')?.getAttribute('src')).toBe('/kai.png');
+ expect(bar.querySelector('time')?.dateTime).toBe('2026-11-12T12:00:00Z');
+ rerender(<Message author="Root" initials="R" time="10:00" onReply={()=>{}} hasReplyDraft>Hello</Message>);
+ expect(screen.getByRole('button',{name:'1 draft View thread'})).toBeTruthy();
+});

@@ -1,3 +1,4 @@
+import { readSessionResources } from './session-resources.js';
 import { sessionWorkStatus } from './session-work-status.js';
 import { discoverSessions } from './session-discovery.js';
 import { directTurnTarget, runTurn, type TurnPlan } from './direct-turn-admission.js';
@@ -8,13 +9,15 @@ import type { Pool } from 'pg';
 import { and, eq, sql } from 'drizzle-orm';
 import { isLocalAgentSkill, supportsModelSettings, isLegacyCodexSetting, type CodexSettings, AppError, parseAgentSessionInput, parseAgentSessionMessage, parseAgentResponse, record, text, uuid, type SessionRelatedAgent, type AgentSessionDetail, type AgentSessionSummary, type WorkspaceAgentSession, type AgentSessionTurn, type SessionInput, type Task } from '@space/contracts';
 import { database, type DbSession } from './database.js';
-import { hasThreadAccess, requireWorkspaceAccess } from './access.js';
+import { hasChannelAccess, hasThreadAccess, requireWorkspaceAccess } from './access.js';
+import { sessionSidebarActivity } from './session-sidebar-activity.js';
 import { sessionTransaction, SessionConflict } from './session-concurrency.js';
 import {sessionToolApprovals} from './tool-approvals.js';
 import { PostgresStore } from './store.js';
 import * as s from './schema.js';
 const notFound = () => new AppError(404, 'not_found');
 const summaryColumns = sql`a.id,a.workspace_id,a.installation_id,a.origin_thread_id,a.title,a.state,a.queue_paused,a.managed,a.created_by,a.created_at::text,coalesce(ac.name,d.name) AS agent_name,i.owner_id,
+  (a.managed AND a.handoff_context IS NULL) AS code_channel,
   (a.managed AND i.connector_id IN ('codex.local','claude.local')) AS supports_steering,
   CASE WHEN a.managed THEN a.skill ELSE coalesce((SELECT skill FROM tasks WHERE session_id=a.id ORDER BY created_at,id LIMIT 1),a.skill) END AS skill,
   (SELECT count(*)::integer FROM tasks WHERE session_id=a.id) AS turn_count`;
@@ -32,6 +35,13 @@ export class AgentSessionStore {
     const [session] = await c.select().from(s.agentSessions).where(eq(s.agentSessions.id, uuid(id)));
     if (!session || !await hasThreadAccess(c, actor, session.origin_thread_id)) throw notFound();
     return session;
+  }
+  async resources(actor: string, id: string, query: unknown) {
+    return this.db.transaction(async c => {
+      const session = await this.visible(c, actor, id);
+      if (!session.managed || session.handoff_context) throw notFound();
+      return readSessionResources(c, session, query);
+    }, {isolationLevel:'repeatable read', accessMode:'read only'});
   }
   async models(actor:string, id:string) {
     return this.db.transaction(async c => {
@@ -94,16 +104,20 @@ export class AgentSessionStore {
       const result = await c.execute<WorkspaceAgentSession & Record<string, unknown>>(sql`
         SELECT ${summaryColumns},EXISTS(SELECT 1 FROM tasks WHERE session_id=a.id AND status='running') AS working,
           ${sessionWorkStatus(sql`a.id`,sql`a.state`)} AS status,
-          t.channel_id,ch.archived_at IS NOT NULL AS channel_archived
+          t.channel_id,ch.archived_at IS NOT NULL AS channel_archived, idle.expires::text AS sidebar_expires_at,
+          extract(epoch FROM (idle.expires - now()))*1000 AS expires_in_ms
         FROM agent_sessions a JOIN threads t ON t.id=a.origin_thread_id
         JOIN channels ch ON ch.id=t.channel_id
         JOIN channel_members m ON m.channel_id=t.channel_id AND m.workspace_id=a.workspace_id AND m.user_id=${actor}
         JOIN agent_installations i ON i.id=a.installation_id JOIN agent_definitions d ON d.id=i.definition_id LEFT JOIN agent_connections ac ON ac.installation_id=i.id
         ${sidebarJoin(actor)}
-        WHERE a.workspace_id=${workspace} AND a.managed AND coalesce(p.archived,false)=${input.archived === 'true'}
+        ${sessionSidebarActivity}
+        WHERE a.workspace_id=${workspace} AND a.managed AND coalesce(p.archived,false)=${input.archived === 'true'} AND (idle.expires IS NULL OR idle.expires > now())
         ${before ? sql`AND (${sidebarKey})<(SELECT ${sidebarKey} FROM agent_sessions a ${sidebarJoin(actor)} WHERE a.id=${before})` : sql``}
         ORDER BY coalesce(p.anchor_time,a.created_at) DESC,coalesce(p.anchor_id,a.id) DESC,coalesce(p.position,0) DESC,a.id DESC LIMIT 21`);
-      return { items: result.rows.slice(0,20).map(row => ({...row,created_at:new Date(row.created_at).toISOString()})), next_cursor: result.rows.length > 20 ? result.rows[19]!.id : null };
+      return { items: result.rows.slice(0,20).map(({expires_in_ms,sidebar_expires_at,...row}) => ({...row,
+        ...(sidebar_expires_at ? {sidebar_expires_at:new Date(sidebar_expires_at).toISOString(),sidebar_expires_in_ms: Math.ceil(Number(expires_in_ms))} : {}),
+        created_at:new Date(row.created_at).toISOString()})), next_cursor: result.rows.length > 20 ? result.rows[19]!.id : null };
     }, { isolationLevel: 'repeatable read', accessMode: 'read only' });
   }
   async updateSidebar(actor: string, id: string, raw: unknown) {
@@ -150,6 +164,23 @@ export class AgentSessionStore {
   async create(actor: string, threadId: string, raw: unknown): Promise<AgentSessionSummary> {
     const input = parseAgentSessionInput(raw); uuid(threadId);
     return sessionTransaction(this.db, c => this.createIn(c,actor,threadId,input,null));
+  }
+  async createForChannel(actor: string, channelId: string, raw: unknown): Promise<AgentSessionSummary> {
+    const {client_thread_id, ...fields} = record(raw, ['client_thread_id','client_session_id','installation_id','title','skill']);
+    const threadId = uuid(client_thread_id), input = parseAgentSessionInput(fields);
+    return sessionTransaction(this.db, async c => {
+      const [channel] = await c.select().from(s.channels).where(eq(s.channels.id,uuid(channelId)));
+      if (!channel || channel.kind !== 'channel' || !await hasChannelAccess(c,actor,channel.workspace_id,channelId)) throw notFound();
+      const inserted = await c.insert(s.threads).values({id:threadId,workspace_id:channel.workspace_id,channel_id:channelId})
+        .onConflictDoNothing().returning({id:s.threads.id});
+      if (!inserted.length) {
+        const [existing] = await c.select({id:s.agentSessions.id}).from(s.agentSessions)
+          .innerJoin(s.threads,eq(s.threads.id,s.agentSessions.origin_thread_id))
+          .where(and(eq(s.agentSessions.id,input.client_session_id),eq(s.threads.id,threadId),eq(s.threads.channel_id,channelId)));
+        if (!existing) throw new AppError(409,'idempotency_conflict');
+      }
+      return this.createIn(c,actor,threadId,input,null);
+    });
   }
   private async createIn(c:DbSession, actor:string, threadId:string, input:ReturnType<typeof parseAgentSessionInput>, parentId:string|null) {
     if (!await hasThreadAccess(c, actor, threadId)) throw notFound();
@@ -236,7 +267,13 @@ export class AgentSessionStore {
         JOIN users u ON u.id=i.owner_id LEFT JOIN agent_connections ac ON ac.installation_id=i.id
         WHERE a.origin_thread_id=${session.origin_thread_id} AND (a.id=${session.parent_session_id}::uuid OR a.parent_session_id=${session.id})
         ORDER BY a.created_at,a.id LIMIT 33`);
-      return { related_agents:related.rows, session_goal:session.session_goal, inputs:inputs.rows.filter(input => input.kind === 'queue'), audience:audienceLabel, tool_approvals:await sessionToolApprovals(c,id), ...(session.handoff_context ? {context:session.handoff_context} : {}), ...(session.managed ? { outputs: session.outputs } : {}), session: await this.summary(c, id), turns, next_cursor: (after || result.rows.length > 20) && turns.length ? turns[0]!.task.id : null, has_newer: after ? result.rows.length > 20 : !!before };
+      // Ended sessions cannot accept another turn. The last turn is therefore a stable
+      // summary reference, including for sessions archived before this field existed.
+      const finalSummary = session.state === 'ended' ? (await c.execute<{task_id:string; excerpt:string}>(sql`
+        SELECT id AS task_id, left(result,480) AS excerpt FROM (
+          SELECT id,status,result FROM tasks WHERE session_id=${id} ORDER BY created_at DESC,id DESC LIMIT 1
+        ) last_turn WHERE status='completed' AND nullif(trim(result),'') IS NOT NULL`)).rows[0] : undefined;
+      return { ...(finalSummary ? {final_summary:finalSummary} : {}), related_agents:related.rows, session_goal:session.session_goal, inputs:inputs.rows.filter(input => input.kind === 'queue'), audience:audienceLabel, tool_approvals:await sessionToolApprovals(c,id), ...(session.handoff_context ? {context:session.handoff_context} : {}), ...(session.managed ? { outputs: session.outputs } : {}), session: await this.summary(c, id), turns, next_cursor: (after || result.rows.length > 20) && turns.length ? turns[0]!.task.id : null, has_newer: after ? result.rows.length > 20 : !!before };
     }, { isolationLevel: 'repeatable read', accessMode: 'read only' });
   }
   async send(actor: string, id: string, raw: unknown, key: string): Promise<Task> {
@@ -454,6 +491,23 @@ export class AgentSessionStore {
         if (session.title !== previous) throw new AppError(409, 'session_title_changed');
         await c.update(s.agentSessions).set({ title, creation_title: session.creation_title ?? session.title })
           .where(eq(s.agentSessions.id, id));
+      }
+      return this.summary(c, id);
+    });
+  }
+  async reopen(actor: string, id: string): Promise<AgentSessionSummary> {
+    return sessionTransaction(this.db, async c => {
+      const session = await this.manageable(c, actor, id);
+      await this.tasks.eligible(c, {
+        workspace_id: session.workspace_id, thread_id: session.origin_thread_id, session_id: id,
+        installation_id: session.installation_id, skill: session.skill, requester_id: actor,
+      }, true, true);
+      if (session.state === 'ended') {
+        const changed = await c.update(s.agentSessions)
+          .set({ state: 'active', revision: session.revision + 1, queue_paused: false })
+          .where(and(eq(s.agentSessions.id, id), eq(s.agentSessions.revision, session.revision)))
+          .returning({ id: s.agentSessions.id });
+        if (!changed.length) throw new SessionConflict();
       }
       return this.summary(c, id);
     });

@@ -1,3 +1,4 @@
+import {WorkspaceDirectory} from './WorkspaceDirectory.js';
 import { SessionDiscovery } from '../../agents/SessionDiscovery.js';
 import { Workflows } from './Workflows.js';
 import { useMemberProfile } from '../../profile/MemberProfile.js';
@@ -97,11 +98,14 @@ function useDestinationData(workspace: string, mode: Mode) {
 }
 
 export function WorkspaceDestinations(props: {
+  onNewDirect?:()=>void;
+  onOpenHuddle?:(item:{channel_id:string;thread_id?:string})=>void;
   onConnectAgent?:(connector?:string)=>void;
   viewState?:Snapshot<SpacebotView>;onOpenConnection?:(id:string)=>void;
   view: View; workspace: string; viewer: string; onOpenChannel: (id: string) => void; onOpenMembers: () => void; onOpenAgents: () => void;
 }) {
-  if(props.view==='huddles') return <Huddles key={props.workspace} workspace={props.workspace} onOpenChannel={props.onOpenChannel}/>;
+  if(props.view==='directories') return <WorkspaceDirectory key={props.workspace+':'+props.viewer} {...props}/>;
+  if(props.view==='huddles') return <Huddles key={props.workspace} workspace={props.workspace} viewer={props.viewer} onOpenThread={props.onOpenHuddle} onOpenChannel={props.onOpenChannel}/>;
   return <Destination key={`${props.workspace}:${props.view}`} {...props} />;
 }
 
@@ -109,7 +113,6 @@ function Destination({ onConnectAgent, viewState, onOpenConnection, view, worksp
   const present=useDestinationPresence();
   const profiles = useMemberProfile();
   const connectAgent = (connector?: string) => onConnectAgent ? onConnectAgent(connector) : onOpenMembers();
-  const [directory, setDirectory] = useState('People');
   const [newWorkflow,setNewWorkflow] = useState(false);
   const [workflowTab,setWorkflowTab] = useState('Templates');
   const [agentSection, setAgentSection] = useState('All agents');
@@ -120,12 +123,10 @@ function Destination({ onConnectAgent, viewState, onOpenConnection, view, worksp
   const [joining, setJoining] = useState(''), [actionError, setActionError] = useState('');
   const alive = useRef(true), opening = useRef(false);
   useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
-  const mode: Mode = view === 'directories' ? directory === 'People' ? 'people' : directory === 'Channels' ? 'channels' : 'none' : view === 'agents' && ['Apps','Agent sessions'].includes(agentSection) ? 'none' : view === 'agents' && agentSection === 'Memory' ? 'channels' : view === 'agents' && agentSection === 'Workflows' ? (workflowTab === 'Templates' ? 'workflows' : workflowTab === 'All' ? 'published-workflows' : 'managed-workflows') : view;
+  const mode: Mode = view === 'agents' && ['Apps','Agent sessions'].includes(agentSection) ? 'none' : view === 'agents' && agentSection === 'Memory' ? 'channels' : view === 'agents' && agentSection === 'Workflows' ? (workflowTab === 'Templates' ? 'workflows' : workflowTab === 'All' ? 'published-workflows' : 'managed-workflows') : view==='directories'?'none':view;
   const { data, loading, more, error, access, retry, loadMore } = useDestinationData(workspace, mode);
   const query = search.trim().toLocaleLowerCase();
   const matches = (...values: string[]) => values.join(' ').toLocaleLowerCase().includes(query);
-  const people = data.people.filter(person => person.kind === 'human' && matches(person.name));
-  const channels = data.channels.filter(channel => matches(channel.name, channel.topic, channel.description));
   const usableChannels = data.channels.filter(channel => !channel.archived_at);
   const agentInfo = (installation: AgentInstallation) => {
     const connector = data.connectors.find(item => item.id === installation.connector_id);
@@ -146,7 +147,6 @@ function Destination({ onConnectAgent, viewState, onOpenConnection, view, worksp
     } catch (reason) { if (alive.current) setActionError(failure(reason)); }
     finally { opening.current = false; if (alive.current) setJoining(''); }
   }
-  const switchDirectory = (tab: string) => { setDirectory(tab); setSearch(''); setActionError(''); };
   const heading = view === 'directories' ? 'Directories' : view === 'agents' ? agentSection : view === 'spacebot' ? 'Spacebot' : 'Huddles';
   const channelChoices = <div className="wd-channel-choices">
     {usableChannels.length ? <><label>Channel<Select searchable aria-label="Channel" value={currentChannel?.id ?? ''} onChange={event => setSelectedChannel(event.target.value)}>{usableChannels.map(channel => <option key={channel.id} value={channel.id}># {channel.name}{channel.joined ? '' : ' · Join channel'}</option>)}</Select></label><Button variant={view === 'spacebot' && agentUnavailable ? 'secondary' : 'primary'} disabled={!currentChannel || Boolean(joining)} loading={Boolean(joining)} onClick={() => currentChannel && void openChannel(currentChannel)}>Open channel <NavigationIcon name="forward" size={16}/></Button></> : <p>No active channels are available. Create a channel from Home to start a discussion.</p>}
@@ -154,18 +154,13 @@ function Destination({ onConnectAgent, viewState, onOpenConnection, view, worksp
   return <div className={`workspace-destinations wd-${view}`}>
     {view === 'agents' && <aside className="wd-sidebar" aria-label="Agents and tools"><h2>Agents &amp; tools</h2>{([{ title: 'All agents', icon: <NavigationIcon name="agents" size={19}/> }, { title: 'Agent sessions', icon: <Robot size={19}/> }, { title: 'Workflows', icon: <NavigationIcon name="workflow" size={19}/> }, { title: 'Apps', icon: <NavigationIcon name="apps" size={19}/> }, { title: 'Memory', icon: <BookOpen size={19} aria-hidden="true"/> }] as const).map(({ title, icon }) => <button key={title} type="button" aria-current={agentSection === title ? 'page' : undefined} onClick={() => { setAgentSection(title); setNewWorkflow(false); setSearch(''); }}>{icon}{title}</button>)}</aside>}
     <main className={`wd-main${view === 'agents' && agentSection === 'Workflows' ? ' wd-workflows' : ''}`} id="chat-messages" tabIndex={-1}>
-      {view !== 'spacebot' && <header className="wd-header"><h1>{view === 'directories' && <NavigationIcon name="directories" size={21}/>}{view === 'huddles' && <NavigationIcon name="huddles" size={21}/>}{heading}</h1>{view === 'agents' && agentSection === 'Workflows' && <Button size="sm" onClick={() => {setWorkflowTab('Templates'); setNewWorkflow(true);}}>New workflow</Button>}{view === 'directories' && <Button size="sm" onClick={onOpenMembers}><Users size={16} /> Manage members</Button>}{view === 'agents' && agentSection === 'All agents' && <Button size="sm" onClick={() => connectAgent()}>Connect an agent</Button>}</header>}
-      {view === 'directories' && <Tabs className="wd-tabs" label="Directory" value={directory} onChange={switchDirectory} items={(['People','Channels','External','Invitations'] as const).map(label=>({id:label,label,icon:<NavigationIcon name={({People:'people',Channels:'channel-search',External:'external',Invitations:'invitations'} as const)[label]} size={17} active={directory===label}/>}))}/>}
+      {view !== 'spacebot' && <header className="wd-header"><h1>{view === 'huddles' && <NavigationIcon name="huddles" size={21}/>}{heading}</h1>{view === 'agents' && agentSection === 'Workflows' && <Button size="sm" onClick={() => {setWorkflowTab('Templates'); setNewWorkflow(true);}}>New workflow</Button>}{view === 'agents' && agentSection === 'All agents' && <Button size="sm" onClick={() => connectAgent()}>Connect an agent</Button>}</header>}
       {view === 'agents' && agentSection === 'Workflows' && <Tabs className="wd-tabs" label="Workflows" value={workflowTab} onChange={setWorkflowTab}
         items={['All','Templates','Managed by you'].map(label=>({id:label,label}))}/>}
       <div className="wd-content">
-        {(view === 'directories' && ['People', 'Channels'].includes(directory) || view === 'agents' && agentSection === 'All agents') && <label className="wd-search"><NavigationIcon name="search" size={19}/><input type="search" aria-label={`Search ${view === 'directories' ? directory.toLowerCase() : 'agents'}`} placeholder={view === 'directories' ? `Search ${directory.toLowerCase()}` : 'Search agents by name or skill'} value={search} onChange={event => setSearch(event.target.value)} /></label>}
+        {(view === 'agents' && agentSection === 'All agents') && <label className="wd-search"><NavigationIcon name="search" size={19}/><input type="search" aria-label={'Search agents'} placeholder={'Search agents by name or skill'} value={search} onChange={event => setSearch(event.target.value)} /></label>}
         {(error || actionError) && <div className="wd-error" role="alert"><span>{actionError || error}</span>{error && <Button size="sm" onClick={retry}>Retry</Button>}</div>}
-        {loading ? <p role="status" className="wd-loading">Loading {view === 'directories' ? directory.toLowerCase() : view === 'huddles' || agentSection === 'Memory' ? 'channels' : agentSection === 'Workflows' ? 'workflows' : 'agents'}…</p> : <>
-          {view === 'directories' && directory === 'People' && <><div className="wd-section-heading"><h2>People in your workspace</h2><span>{people.length} people{data.next ? ' loaded' : ''}</span></div>{people.length ? <ul className="wd-people">{people.map(person => <li key={person.id}><button type="button" className="space-profile-trigger" aria-label={`View ${person.name}’s profile`} onClick={() => profiles?.open({kind:'user',id:person.id})}><Avatar name={person.name} initials={initials(person.name)} size="lg" tone="blue" /><strong>{person.name}</strong><span>{person.id === viewer ? 'You' : 'Workspace member'}</span></button></li>)}</ul> : !error && <Empty icon={<Users size={30} />} title={query ? 'No people match your search' : 'No people to show'} description={query ? 'Try another name.' : 'Workspace members will appear here.'} />}</>}
-          {view === 'directories' && directory === 'Channels' && <><div className="wd-section-heading"><h2>Explore channels</h2><span>{channels.length} channels{data.next ? ' loaded' : ''}</span></div>{channels.length ? <ul className="wd-channels">{channels.map(channel => <li key={channel.id}><span className="wd-channel-icon"><NavigationIcon name="channel" size={22}/></span><div><strong>{channel.name}</strong><p>{channel.topic || channel.description || 'A place for your team’s conversations.'}</p><small>{channel.private ? 'Private channel' : 'Public channel'}{channel.archived_at ? ' · Archived' : ''}{channel.joined ? ' · Joined' : ''}</small></div><Button size="sm" aria-label={`${channel.joined ? 'Open' : 'Join'} ${channel.name}`} disabled={Boolean(joining)} loading={joining === channel.id} onClick={() => void openChannel(channel)}>{channel.joined ? 'Open' : 'Join channel'}</Button></li>)}</ul> : !error && <Empty icon={<Hash size={30} />} title={query ? 'No channels match your search' : 'No channels yet'} description={query ? 'Try another channel name or topic.' : 'Create your first channel from Home.'} />}</>}
-          {view === 'directories' && directory === 'External' && <Empty icon={<Users size={34} />} title="Your team, together in Space" description="Shared channels with external organizations are not available in Space. This directory contains members of your workspace."><Button onClick={() => switchDirectory('People')}>Browse workspace members</Button></Empty>}
-          {view === 'directories' && directory === 'Invitations' && <Empty icon={<Users size={34} />} title="Workspace invitations" description="An invitation directory is not available in Space. You can view current members and pair a local agent in workspace members."><Button onClick={onOpenMembers}>Open workspace members</Button></Empty>}
+        {loading ? <p role="status" className="wd-loading">Loading {view === 'huddles' || agentSection === 'Memory' ? 'channels' : agentSection === 'Workflows' ? 'workflows' : 'agents'}…</p> : <>
           {view === 'agents' && agentSection === 'All agents' && <><div className="wd-section-heading"><div><h2>Your workspace agents</h2><p>Bring your own agents into your team’s conversations.</p></div></div><div className="wd-agent-grid">{installed.map(installation => { const info = agentInfo(installation); return <article key={installation.id} className="wd-agent-card"><div className="wd-agent-identity"><button type="button" className="space-profile-trigger" aria-label={`View ${info.name}’s profile`} onClick={() => profiles?.open({kind:'agent',id:installation.id})}><Avatar name={info.name} initials={initials(info.name)} tone="purple" size="lg" /></button><span role="status" data-state={!installation.enabled ? 'disabled' : info.participant?.status ?? 'unknown'}><Badge dot={installation.enabled} tone={installation.enabled && info.participant?.status ? statusTone[info.participant.status] : 'neutral'}>{!installation.enabled ? 'Disabled' : info.participant?.status ? statusText[info.participant.status] : unknownStatus}</Badge></span></div><h3 title={info.name}><button type="button" className="space-profile-trigger" aria-label={`View ${info.name}’s profile`} onClick={() => profiles?.open({kind:'agent',id:installation.id})}><span className="wd-agent-name">{info.name}</span></button></h3><span className="wd-agent-owner">{installation.owner_id === viewer ? 'Owned by you' : `Owned by ${data.people.find(person => person.id === installation.owner_id)?.name ?? 'a workspace member'}`}</span><Button size="sm" onClick={() => onOpenConnection ? onOpenConnection(installation.id) : onOpenMembers()}>View connection</Button></article>; })}</div>{!installed.length && !error && <Empty icon={<NavigationIcon name="agents" size={32}/>} title={query ? 'No agents match your search' : 'Make room for your first agent'} description={query ? 'Try another name or skill.' : 'Connect an agent to bring it into this workspace.'}>{!query && <Button onClick={() => connectAgent()}>Connect an agent</Button>}</Empty>}</>}
           {(mode === 'workflows' || mode === 'published-workflows' || mode === 'managed-workflows') && !error && <Workflows key={mode} workspace={workspace} templates={data.workflows} viewer={viewer} templatesTab={mode === 'workflows'} newWorkflow={newWorkflow} onCloseNew={() => setNewWorkflow(false)}
             published={data.published} managed={mode === 'managed-workflows'} onPublished={() => {setNewWorkflow(false); if (mode === 'managed-workflows') retry(); else setWorkflowTab('Managed by you');}}
@@ -200,7 +195,6 @@ function Destination({ onConnectAgent, viewState, onOpenConnection, view, worksp
             </div> : !error && <div className="wd-bot-panel wd-bot-connect"><h3>Connect your first agent</h3><p>Bring an agent into your workspace to start a conversation.</p><Button variant="primary" onClick={() => connectAgent()}>Connect an agent</Button></div>}
             <Button className="wd-bot-explore" variant="ghost" onClick={onOpenAgents}>Explore agents &amp; tools <NavigationIcon name="forward" size={16}/></Button>
           </section>}
-          {view === 'directories' && data.next && <Button className="wd-load-more" loading={more} onClick={loadMore}>Load more {directory.toLowerCase()}</Button>}
         </>}
       </div>
     </main>

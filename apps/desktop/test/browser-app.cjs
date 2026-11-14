@@ -10,10 +10,27 @@ const directory = process.env.SPACE_SMOKE_PROFILE;
 const restart = process.env.SPACE_SMOKE_PHASE === 'restart';
 app.setPath('userData', directory);
 let actor = 'alice';
+const vaultWorkspace = '282b6a70-ea37-45c3-92e6-cf889470ac99';
+const vaultInstallation = '76d1bf53-88be-43a7-835c-abd20ffc8477';
+let testVault = async () => ({ status: 'cancelled' });
+let personalConnections = [], connectionChecks = 0;
 const server = createServer((req, res) => {
+  if (req.url?.startsWith('/v1/agent-sessions/')) {
+    assert.equal(req.headers['x-expected-actor'], actor);
+    return res.setHeader('content-type', 'application/json').end(JSON.stringify({
+      session: { id: req.url.split('/').at(-1), owner_id: actor, workspace_id: vaultWorkspace, installation_id: vaultInstallation, agent_name: 'Kai Mac Codex' },
+      context: { browser_url: 'https://linear.app/login' },
+    }));
+  }
   if (req.url === '/v1/me') {
     if (!req.headers.cookie?.includes('signed-in=yes')) return res.writeHead(401).end();
     return res.setHeader('content-type', 'application/json').end(JSON.stringify({ id: actor }));
+  }
+  if (req.url === '/v1/me/connections') {
+    assert.equal(req.headers['x-expected-actor'], actor);
+    assert.match(req.headers.cookie || '', /signed-in=yes/);
+    connectionChecks++;
+    return res.setHeader('content-type', 'application/json').end(JSON.stringify({ items: personalConnections }));
   }
   if (req.url?.endsWith('/office-session?mode=edit')) {
     return res.writeHead(403).end();
@@ -44,9 +61,45 @@ app.whenReady().then(async () => {
   const port = server.address().port;
   writeFileSync(portFile, String(port));
   const base = 'http://127.0.0.1:' + port;
-  const win = createSpaceWindow(base + '/chat', { show: false });
+  const win = createSpaceWindow(base + '/chat', { show: false, keychain: (...args) => testVault(...args), vaultManager: (...args) => testVault(...args) });
   await once(win.webContents, 'did-finish-load');
   await win.webContents.session.cookies.set({ url: base, name: 'signed-in', value: 'yes' });
+  if (process.platform === 'darwin') {
+    const initialActor = actor;
+    actor = vaultWorkspace;
+    const signal = new AbortController().signal;
+    testVault = async (_path, request) => {
+      assert.deepEqual(request, {action: 'web-list', platform: base, origin: base, actor});
+      return {status: 'listed', items: [{title:'Linear',kind:'token',site:'https://linear.app'}], more:false};
+    };
+    assert.deepEqual(await win.spaceBrowser.webVault({action:'list', actor:vaultInstallation},signal), {status:'unavailable'});
+    assert.equal((await win.spaceBrowser.webVault({action:'list',actor},signal)).status, 'listed');
+    await win.webContents.executeJavaScript("spaceDesktop.browserAccountChanged(null)");
+    actor = initialActor;
+    let managerCalls = 0;
+    testVault = async (_path, request) => {
+      managerCalls++;
+      assert.deepEqual(request, { action: 'manager', platform: base, actor, origin: '', endpoint: undefined });
+      return { status: 'closed' };
+    };
+    assert.equal(await win.webContents.executeJavaScript("spaceDesktop.openVault('someone-else')"), 'unavailable');
+    assert.equal(await win.webContents.executeJavaScript("spaceDesktop.openVault('alice')"), 'closed');
+    assert.equal(managerCalls, 1);
+    const { promise: started, resolve: didOpen } = Promise.withResolvers();
+    const windowCount = require('electron').BaseWindow.getAllWindows().length;
+    testVault = (...args) => {
+      const closed = require('../src/browser/vault.cjs').presentVault(...args);
+      assert.equal(require('electron').BaseWindow.getAllWindows().length, windowCount);
+      didOpen();
+      return closed;
+    };
+    const opened = win.webContents.executeJavaScript("spaceDesktop.openVault('alice')");
+    await started;
+    assert.equal(await win.webContents.executeJavaScript("spaceDesktop.openVault('alice')"), 'busy');
+    await win.webContents.executeJavaScript("spaceDesktop.browserAccountChanged(null)");
+    assert.equal(await opened, 'closed');
+    testVault = async () => ({ status: 'cancelled' });
+  }
   const created = once(app, 'web-contents-created');
   await win.webContents.executeJavaScript('spaceDesktop.openWorkspacePanel()');
   const [, bar] = await created;
@@ -149,6 +202,135 @@ app.whenReady().then(async () => {
   await send('close', library.id);
   await go();
   const first = guest();
+  if (!restart) {
+    const registrySearches = [];
+    first.session.protocol.handle('https', request => {
+      const url = new URL(request.url);
+      if (url.pathname === '/login') return new Response('<form method="post"><input autocomplete="username"><input type="password"></form>', { headers: { 'content-type': 'text/html' } });
+      if (url.hostname !== 'registry.modelcontextprotocol.io') return new Response('<title>Provider</title>', { headers: { 'content-type': 'text/html' } });
+      const search = url.searchParams.get('search');
+      registrySearches.push(search);
+      assert.equal(request.headers.get('cookie'), null);
+      return Response.json({ servers: search === 'com.postman/' ? [{
+        server: { name: 'com.postman/postman-mcp-server', title: 'Postman MCP Server', remotes: [{ type: 'streamable-http', url: 'https://mcp.postman.com/mcp' }] },
+        _meta: { 'io.modelcontextprotocol.registry/official': { status: 'active', isLatest: true } },
+      }] : [] });
+    });
+    const suggestion = '#mcp-suggestion:not([hidden])';
+    try {
+      await first.loadURL('https://github.com.example.org/test');
+      assert.equal(connectionChecks, 0);
+      await first.loadURL('https://team.postman.com/private/project?token=secret');
+      await waitFor(bar, suggestion, 'Postman MCP Server');
+      await waitFor(bar, '#mcp-endpoint', 'https://mcp.postman.com/mcp');
+      await first.loadURL('https://www.postman.com/other');
+      assert.equal(registrySearches.filter(search => search === 'com.postman/').length, 1);
+      await first.loadURL('https://github.com/owner/repo?private=yes');
+      await waitFor(bar, suggestion, 'GitHub MCP');
+      const checks = connectionChecks;
+      await first.loadURL('https://github.com/owner/repo/pull/1');
+      assert.equal(connectionChecks, checks);
+      const setup = win.webContents.executeJavaScript(`new Promise(resolve => {
+        const off = spaceDesktop.onBrowserMcpSetup(site => { off(); resolve(site); });
+      })`);
+      await click('#connect-mcp');
+      assert.deepEqual(await setup, { name: 'GitHub', url: 'https://api.githubcopilot.com/mcp/', actor: 'alice' });
+      testVault = async (_resources, request) => {
+        assert.equal(request.action, 'add-token');
+        assert.equal(request.endpoint, 'https://api.githubcopilot.com/mcp/');
+        assert.equal(request.actor, 'alice');
+        return { status: 'saved' };
+      };
+      assert.equal(await win.webContents.executeJavaScript("spaceDesktop.saveBrowserVaultToken('https://invalid.example/mcp')"), 'unavailable');
+      assert.equal(await win.webContents.executeJavaScript("spaceDesktop.saveBrowserVaultToken('https://api.githubcopilot.com/mcp/')"), 'saved');
+      personalConnections = [{ url: 'https://api.githubcopilot.com/mcp/readonly' }];
+      await win.spaceBrowser.showPanel();
+      await first.loadURL('https://linear.app/team');
+      await waitFor(bar, suggestion, 'Linear MCP');
+      const guide = win.webContents.executeJavaScript(`new Promise(resolve => {
+        const off = spaceDesktop.onBrowserMcpSetup(site => { off(); resolve(site); });
+      })`);
+      await click('#mcp-guide');
+      assert.deepEqual(await guide, { name: 'Linear', url: 'https://mcp.linear.app/mcp', actor: 'alice', showGuide: true });
+      await win.spaceBrowser.showPanel();
+      await waitFor(bar, suggestion, 'Linear MCP');
+      await click('#dismiss-mcp');
+      await first.loadURL('https://github.com/owner/repo');
+      await first.loadURL('https://linear.app/team');
+      assert.equal(await bar.executeJavaScript("document.querySelector('#mcp-suggestion').hidden"), true);
+      assert.ok(connectionChecks > checks);
+      await first.loadURL('https://linear.app/login');
+      const sidekick = win.webContents.executeJavaScript(`new Promise(resolve => {
+        const off = spaceDesktop.onBrowserSidekick(tab => { off(); resolve(tab); });
+      })`);
+      await click('#sidekick');
+      const vaultTab = await sidekick;
+      const session = await win.webContents.executeJavaScript('spaceDesktop.browserSessionId(' + JSON.stringify(vaultTab.tab) + ',' + JSON.stringify(vaultWorkspace) + ')');
+      const context = { session, workspace: vaultWorkspace, installation: vaultInstallation, page: 'https://linear.app/login' };
+      const requestFill = (overrides = {}) => win.spaceBrowser.vaultTool({ action: 'fill', ...context, ...overrides }, AbortSignal.timeout(5000));
+      const approved = { status: 'approved', username: 'test-login', password: 'test-secret' };
+      let prompts = 0;
+      testVault = async (_resources, request) => {
+        prompts++;
+        assert.equal(request.origin, 'https://linear.app'); assert.equal(request.agent, 'Kai Mac Codex');
+        return approved;
+      };
+      assert.equal(await requestFill({ installation: vaultWorkspace }), 'unavailable');
+      assert.equal(await requestFill({ page: 'https://linear.app/other' }), 'unavailable');
+      assert.equal(prompts, 0);
+      const allowLogin = testVault;
+      testVault = async () => ({ status: 'cancelled' });
+      assert.equal(await requestFill(), 'cancelled');
+      assert.equal(await first.executeJavaScript("document.querySelector('[type=password]').value"), '');
+      testVault = allowLogin;
+      assert.equal(await requestFill(), 'filled');
+      assert.equal(await first.executeJavaScript("document.querySelector('[type=password]').value === 'test-secret'"), true);
+      assert.equal(await requestFill(), 'manual_control');
+      assert.equal(prompts, 1);
+      await send('agent', 'Read the page');
+      assert.equal(await bar.executeJavaScript("document.querySelector('#ask').disabled"), true);
+      await click('#resume-control');
+      await first.loadURL('https://linear.app/login');
+      testVault = async () => {
+        await first.loadURL('https://linear.app/login');
+        return approved;
+      };
+      assert.equal(await requestFill(), 'unavailable', 'a same-URL reload invalidates approval');
+      assert.equal(await first.executeJavaScript("document.querySelector('[type=password]').value"), '');
+      await first.executeJavaScript("document.querySelector('form').action='https://other.example/login'");
+      testVault = async () => approved;
+      assert.equal(await requestFill(), 'manual_control');
+      assert.equal(await first.executeJavaScript("document.querySelector('[type=password]').value"), '');
+      await click('#resume-control');
+      const item = 'd920ebbe-c6e2-4edb-944f-f07bb81182b4';
+      const { RemoteMcp } = require('../dist/runner/remote.cjs');
+      const methods = { discover: RemoteMcp.prototype.discover, call: RemoteMcp.prototype.call };
+      const catalog = [{ name: 'issue_read', inputSchema: { type: 'object' } }];
+      const issued = [];
+      try {
+        RemoteMcp.prototype.discover = async c => { assert.deepEqual(c, { url: 'https://mcp.linear.app/mcp', token: 'fake-api-token' }); return catalog; };
+        RemoteMcp.prototype.call = async (c, name, args) => {
+          assert.equal(c.token, 'fake-api-token'); issued.push([name, args]); return { content: [{ type: 'text', text: 'Issue title' }] };
+        };
+        testVault = async (_resources, request) => {
+          assert.equal(request.agent, 'Kai Mac Codex');
+          assert.equal(request.endpoint, 'https://mcp.linear.app/mcp');
+          if (request.action === 'call-api') assert.equal(request.item, item);
+          return { status: 'approved', item, token: 'fake-api-token' };
+        };
+        const list = await requestFill({ id: 'turn-a', action: 'list-api' });
+        assert.deepEqual(list, { status: 'ready', tools: catalog });
+        const call = { id: 'turn-a', action: 'call-api', input: { tool: 'issue_read', arguments: { id: 'ENG-42' } } };
+        assert.equal(await requestFill({ ...call, id: 'turn-b' }), 'unavailable');
+        assert.equal(await requestFill({ ...call, input: { tool: 'issue_write', arguments: {} } }), 'unavailable');
+        assert.deepEqual(await requestFill(call), { status: 'completed', result: { content: [{ type: 'text', text: 'Issue title' }] } });
+        assert.deepEqual(issued, [['issue_read', { id: 'ENG-42' }]]);
+      } finally { Object.assign(RemoteMcp.prototype, methods); }
+    } finally {
+      first.session.protocol.unhandle('https');
+      await first.loadURL(base + '/report');
+    }
+  }
   const observeSidekick = () => win.webContents.executeJavaScript(`new Promise(resolve => {
     const unsubscribe = spaceDesktop.onBrowserSidekick(tab => {unsubscribe(); resolve(tab);});
   })`);

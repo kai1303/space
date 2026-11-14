@@ -16,3 +16,17 @@
 @media(min-width:1100px){.chat-app:has(.space-user-settings.is-profile-open) .chat-main-area{margin-right:475px}}
 /* Keep actions visible while the profile fields scroll, as Slack's modal does. */
 .sp-dialog[open]:has(.space-profile-editor){display:flex;flex-direction:column}.sp-dialog:has(.space-profile-editor)>.sp-dialog-header{flex-shrink:0}.space-profile-editor{display:flex;flex-direction:column;min-height:0;overflow:hidden}.space-profile-editor fieldset{flex:1;min-height:0;overflow:auto}.space-profile-editor footer{flex-shrink:0;border-top:1px solid var(--sp-border)}
+
+.account-notifications > button, .account-pause-menu button {
+  display:flex;align-items:center;justify-content:space-between;width:100%;
+  padding:7px 20px;border:0;background:transparent;color:inherit;font:inherit;text-align:left;cursor:pointer;
+}
+.account-notifications > button:is(:hover,[aria-expanded=true]), .account-pause-menu button:is(:hover,:focus-visible) { background:var(--sp-surface-hover); }
+.account-pause-menu {
+  position:fixed;inset:auto;margin:0;width:min(224px,calc(100vw - 8px));box-sizing:border-box;max-height:calc(100dvh - 8px);overflow:auto;
+  padding:6px 0;border:1px solid var(--sp-border);border-radius:8px;background:var(--sp-surface);color:var(--sp-text);
+  box-shadow:var(--sp-shadow-lg);font:15px/22px var(--sp-font-sans);
+}
+.account-pause-menu small,.account-pause-menu form,.account-pause-menu [role=alert] { display:block;padding:4px 16px; }
+.account-pause-menu input { display:block;max-width:100%;box-sizing:border-box;font:inherit;color:inherit;background:var(--sp-surface); }
+.account-pause-menu button:disabled { opacity:.55;cursor:default; }

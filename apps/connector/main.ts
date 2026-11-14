@@ -35,6 +35,8 @@ export function credentialRenewalDelay(expiresAt: number, now = Date.now()) {
 }
 
 interface ConnectorHost {
+  webVault?: import('./runtime.js').WebVaultHandler;
+  browserTurn?(connection: import('./storage.js').Connection): import('./outbound-tools.js').BrowserTurn;
   directory: string;
   paired(): void;
   revoked(): void;
@@ -68,7 +70,7 @@ export async function runConnector(args = process.argv.slice(2), host?: Connecto
     let state = await store.load();
     const createSession = () => createProvider(provider, {
       store, state, signal: controller.signal, announce: host?.announce, login: host?.login,
-      storage: state.connection && {directory:store.directory, connection:state.connection, project, coding:options.coding},
+      storage: state.connection && {directory:store.directory, connection:state.connection, project, coding:options.coding, browserTurn:host?.browserTurn?.(state.connection)},
       publish: () => platform?.publish(),
       async activate(start, readyMessage) {
         if (controller.signal.aborted) return;
@@ -135,7 +137,7 @@ export async function runConnector(args = process.argv.slice(2), host?: Connecto
         return;
       }
       await runtime.invoke(request, emit, signal, controls);
-    }, () => models);
+    }, () => models, host?.webVault);
     try {
       await session.start({paired, login:options.login, desktop:Boolean(host)});
     } catch (error) {

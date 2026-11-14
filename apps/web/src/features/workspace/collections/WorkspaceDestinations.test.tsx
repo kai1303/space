@@ -14,7 +14,13 @@ const people = [{ id: 'kai', name: 'Kai Tran', kind: 'human' }, { id: 'anna', na
 const channels = [{ id: 'general', name: 'general', joined: true, topic: 'Team updates', description: '', private: false, archived_at: null }, { id: 'design', name: 'design', joined: false, topic: 'Design work', description: '', private: false, archived_at: null }];
 const installations = [{ id: 'agent', workspace_id: 'workspace', owner_id: 'kai', connector_id: 'codex.local', definition_id: 'def', enabled: true, capabilities: { skills: ['codex.run'], controls: {} } }];
 const props = { workspace: 'workspace', viewer: 'kai', onOpenChannel: vi.fn(), onOpenMembers: vi.fn(), onOpenAgents: vi.fn() };
+const directoryMembers = people.filter(p=>p.kind==='human').map(p=>({user_id:p.id,display_name:p.name,role:'member',active:true}));
 function response(path: string): unknown {
+  const params=new URL(path,'https://space.test').searchParams;
+  const q=params.get('q')?.toLowerCase()??'';
+  if(path.includes('/directory?'))return {items:params.get('guest')==='any_guest'?[]:directoryMembers.filter(p=>p.display_name.toLowerCase().includes(q)),next_cursor:null};
+  if(path.includes('/invitations?'))return {items:[],next_cursor:null,role:'owner'};
+  if(params.has('directory'))return {items:channels.filter(c=>(c.name+' '+c.topic).toLowerCase().includes(q)),next_cursor:null};
   if (path.includes('/participants')) return { items: people, next_cursor: null };
   if (path.includes('/channels?')) return { items: channels, next_cursor: null };
   if (path === '/agents/connectors') return defaultPairedConnectors;
@@ -31,16 +37,16 @@ afterEach(() => { cleanup(); updates.clear(); vi.resetAllMocks(); });
 it('shows searchable real people, keeps agents in their own directory, and opens member management', async () => {
   render(<WorkspaceDestinations view="directories" {...props} />);
   await screen.findByText('Kai Tran');
-  expect(screen.getByText('You')).toBeTruthy();
+  expect(screen.getByText('(you)',{exact:false})).toBeTruthy();
   expect(screen.queryByText('Kai’s Codex')).toBeNull();
   await userEvent.type(screen.getByRole('searchbox', { name: 'Search people' }), 'Anna');
   expect(screen.getByText('Anna Lee')).toBeTruthy();
-  expect(screen.queryByText('Kai Tran')).toBeNull();
+  await waitFor(()=>expect(screen.queryByText('Kai Tran')).toBeNull());
   await userEvent.click(screen.getByRole('button', { name: 'Manage members' }));
   expect(props.onOpenMembers).toHaveBeenCalledOnce();
   await userEvent.clear(screen.getByRole('searchbox', { name: 'Search people' }));
   await userEvent.type(screen.getByRole('searchbox', { name: 'Search people' }), 'missing');
-  expect(screen.getByText('No people match your search')).toBeTruthy();
+  await screen.findByText('No people match your search');
 });
 
 it('filters channels by topic and joins before opening, retaining failures for retry', async () => {
@@ -51,27 +57,24 @@ it('filters channels by topic and joins before opening, retaining failures for r
   expect(props.onOpenChannel).toHaveBeenCalledWith('general');
   expect(api.request.mock.calls.some(([path]) => path === '/channels/general/join')).toBe(false);
   await userEvent.type(screen.getByRole('searchbox', { name: 'Search channels' }), 'Design work');
-  expect(screen.queryByText('general')).toBeNull();
+  await waitFor(()=>expect(screen.queryByText('general')).toBeNull());
   api.request.mockImplementation(async (path: string) => { if (path.endsWith('/join')) throw new Error('permission_denied'); return response(path); });
-  await userEvent.click(screen.getByRole('button', { name: 'Join design' }));
+  await userEvent.click(await screen.findByRole('button', { name: 'Join design' }));
   expect((await screen.findByRole('alert')).textContent).toContain('permission denied');
   expect(props.onOpenChannel).not.toHaveBeenCalledWith('design');
   api.request.mockImplementation(async (path: string) => response(path));
-  await userEvent.click(screen.getByRole('button', { name: 'Join design' }));
+  await userEvent.click(await screen.findByRole('button', { name: 'Join design' }));
   expect(api.request).toHaveBeenCalledWith('/channels/design/join', {});
   await waitFor(() => expect(props.onOpenChannel).toHaveBeenCalledWith('design'));
 });
 
-it('exposes honest external and invitation boundaries with working member actions', async () => {
+it('shows workspace guests and tracks invitations in the directory', async () => {
   render(<WorkspaceDestinations view="directories" {...props} />);
-  await userEvent.click(screen.getByRole('tab', { name: 'External' }));
-  expect(screen.getByText(/Shared channels with external organizations are not available/)).toBeTruthy();
-  await userEvent.click(screen.getByRole('button', { name: 'Browse workspace members' }));
-  await screen.findByText('Kai Tran');
-  await userEvent.click(screen.getByRole('tab', { name: 'Invitations' }));
-  expect(screen.getByText(/An invitation directory is not available/)).toBeTruthy();
-  await userEvent.click(screen.getByRole('button', { name: 'Open workspace members' }));
-  expect(props.onOpenMembers).toHaveBeenCalledOnce();
+  await userEvent.click(screen.getByRole('tab',{name:'External'}));
+  await screen.findByText('No guests in this directory yet');
+  await userEvent.click(screen.getByRole('tab',{name:'Invitations'}));
+  await screen.findByText('Track your invitations');
+  expect(screen.getByRole('button',{name:'Manage invitations'})).toBeTruthy();
 });
 
 it('shows workspace agents with functioning contextual navigation', async () => {
@@ -201,15 +204,15 @@ it('Huddles explains missing media configuration', async () => {
 });
 
 it('loads another bounded page only on request, and refreshes from workspace updates', async () => {
-  api.request.mockImplementation(async (path: string) => path.includes('after=next') ? { items: [{ id: 'chris', kind: 'human', name: 'Chris' }], next_cursor: null } : path.includes('/participants') ? { items: people, next_cursor: 'next' } : response(path));
+  api.request.mockImplementation(async (path: string) => path.includes('after=next') ? { items: [{ user_id: 'chris', display_name: 'Chris' }], next_cursor: null } : path.includes('/directory?') ? { items: directoryMembers, next_cursor: 'next' } : response(path));
   render(<WorkspaceDestinations view="directories" {...props} />);
   const more = await screen.findByRole('button', { name: 'Load more people' });
   expect(api.request).toHaveBeenCalledTimes(1);
   await userEvent.click(more);
   await screen.findByText('Chris');
-  expect(api.request).toHaveBeenCalledWith('/workspaces/workspace/participants?limit=100&after=next', undefined, undefined, 'POST', expect.any(AbortSignal));
+  expect(api.request).toHaveBeenCalledWith('/workspaces/workspace/directory?limit=100&sort=id&after=next', undefined, undefined, 'POST', expect.any(AbortSignal));
   expect(screen.getByText('Kai Tran')).toBeTruthy();
-  api.request.mockResolvedValue({ items: [{ id: 'new', kind: 'human', name: 'New person' }], next_cursor: null });
+  api.request.mockResolvedValue({ items: [{ user_id: 'new', display_name: 'New person' }], next_cursor: null });
   await act(async () => { await updates.get('workspace')?.refresh(); });
   expect(screen.getByText('New person')).toBeTruthy();
   expect(screen.queryByText('Kai Tran')).toBeNull();
@@ -223,7 +226,7 @@ it('shows errors with retry and protects workspace data from late requests and a
   await userEvent.click(screen.getByRole('button', { name: 'Retry' }));
   await screen.findByText('Kai Tran');
   let resolve!: (result: unknown) => void;
-  api.request.mockImplementation((path: string) => path.includes('/workspace/') ? new Promise(done => { resolve = done; }) : Promise.resolve({ items: [{ id: 'other', name: 'Other member', kind: 'human' }], next_cursor: null }));
+  api.request.mockImplementation((path: string) => path.includes('/workspace/') ? new Promise(done => { resolve = done; }) : Promise.resolve({ items: [{ user_id: 'other', display_name: 'Other member' }], next_cursor: null }));
   act(() => { void updates.get('workspace')?.refresh(); });
   view.rerender(<WorkspaceDestinations view="directories" {...props} workspace="other" />);
   await screen.findByText('Other member');
@@ -248,7 +251,7 @@ it('ignores an older read within a workspace and does not navigate after workspa
   let resolveOld!: (result: unknown) => void;
   api.request.mockImplementationOnce(() => new Promise(done => { resolveOld = done; }));
   act(() => { void updates.get('workspace')?.refresh(); });
-  api.request.mockResolvedValueOnce({ items: [{ id: 'fresh', name: 'Fresh member', kind: 'human' }], next_cursor: null });
+  api.request.mockResolvedValueOnce({ items: [{ user_id: 'fresh', display_name: 'Fresh member' }], next_cursor: null });
   await act(async () => { await updates.get('workspace')?.refresh(); });
   await act(async () => { resolveOld({ items: people, next_cursor: null }); });
   expect(screen.getByText('Fresh member')).toBeTruthy();
@@ -258,7 +261,7 @@ it('ignores an older read within a workspace and does not navigate after workspa
   await screen.findByText('design');
   let resolveJoin!: (result: unknown) => void;
   api.request.mockImplementationOnce(() => new Promise(done => { resolveJoin = done; }));
-  await userEvent.click(screen.getByRole('button', { name: 'Join design' }));
+  await userEvent.click(await screen.findByRole('button', { name: 'Join design' }));
   act(() => { updates.get('workspace')?.revoke('forbidden'); });
   await act(async () => { resolveJoin({}); });
   expect(props.onOpenChannel).not.toHaveBeenCalled();

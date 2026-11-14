@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { Pool } from 'pg';
-import { and, eq, gt, getTableColumns, sql } from 'drizzle-orm';
+import { and, desc, eq, gt, ne, getTableColumns, sql } from 'drizzle-orm';
 import {
   AppError, parseWorkspaceInput, parseWorkspaceMemberInput, parseRoleInput, parsePage, parseDirectoryQuery, uuid, record,
 } from '@space/contracts';
@@ -111,7 +111,7 @@ export class WorkspaceStore {
       const preferences = await readWorkspacePreferences(c, workspace);
       const emailVisible = manager || preferences.email_visibility === 'members';
       const [workspaceRow] = await c.select({primary_owner_id:w.primary_owner_id}).from(w).where(eq(w.id,workspace));
-      const sortValue = query.sort === 'name' ? sql`lower(${u.display_name})` : query.sort === 'joined' ? sql`${m.joined_at}` : sql`${m.user_id}`;
+      const sortValue = query.sort.startsWith('name') ? sql`lower(${u.display_name})` : query.sort === 'joined' ? sql`${m.joined_at}` : sql`${m.user_id}`;
       let cursorValue: unknown;
       if (query.after && query.sort !== 'id') {
         const [cursor] = await c.select({value:query.sort==='joined'?sql`${m.joined_at}::text`:sortValue}).from(m).innerJoin(u,eq(u.id,m.user_id)).where(and(eq(m.workspace_id,workspace),eq(m.user_id,query.after),visibleWorkspacePeer(workspace,actor,sql`${m.user_id}`)));
@@ -119,15 +119,17 @@ export class WorkspaceStore {
         cursorValue = cursor.value;
       }
       const pattern = `%${query.q.replace(/[\\%_]/g, '\\$&')}%`;
-      const rows = await c.select({user_id:m.user_id,display_name:u.display_name,role:m.role,guest_type:m.guest_type,active:m.active,joined_at:m.joined_at,...(emailVisible ? {email:u.email} : {})})
+      const rows = await c.select({user_id:m.user_id,display_name:u.display_name,image:u.image,title:u.title,time_zone:u.time_zone,presence:u.presence,role:m.role,guest_type:m.guest_type,active:m.active,joined_at:m.joined_at,...(emailVisible ? {email:u.email} : {})})
         .from(m).innerJoin(u,eq(u.id,m.user_id)).where(and(eq(m.workspace_id,workspace),
           query.status === 'all' ? undefined : eq(m.active,query.status === 'active'),
           query.role ? eq(m.role,query.role) : undefined,
-          query.guest === 'all' ? undefined : eq(m.guest_type,query.guest as 'none'|'single'|'multi'),
+          query.title ? sql`lower(${u.title})=lower(${query.title})` : undefined,
+          query.time_zone ? eq(u.time_zone,query.time_zone) : undefined,
+          query.guest === 'all' ? undefined : query.guest==='any_guest' ? ne(m.guest_type,'none') : eq(m.guest_type,query.guest as 'none'|'single'|'multi'),
           visibleWorkspacePeer(workspace,actor,sql`${m.user_id}`),
-          query.after ? query.sort === 'id' ? gt(m.user_id,query.after) : sql`(${sortValue},${m.user_id})>(${query.sort==='joined'?sql`${cursorValue}::timestamptz`:sql`${cursorValue}`},${query.after}::uuid)` : undefined,
+          query.after ? query.sort === 'id' ? gt(m.user_id,query.after) : sql`(${sortValue},${m.user_id}) ${query.sort==='name_desc'?sql`<`:sql`>`} (${query.sort==='joined'?sql`${cursorValue}::timestamptz`:sql`${cursorValue}`},${query.after}::uuid)` : undefined,
           query.q ? sql`(${u.display_name} ILIKE ${pattern} OR ${m.user_id}::text ILIKE ${pattern} ${emailVisible ? sql`OR ${u.email} ILIKE ${pattern}` : sql``})` : undefined,
-        )).orderBy(sortValue,m.user_id).limit(query.limit+1);
+        )).orderBy(query.sort==='name_desc'?desc(sortValue):sortValue,query.sort==='name_desc'?desc(m.user_id):m.user_id).limit(query.limit+1);
       return {...page(rows,query.limit,row=>row.user_id),role:membership.role,primary_owner_id:workspaceRow!.primary_owner_id,email_visible:emailVisible};
     });
   }

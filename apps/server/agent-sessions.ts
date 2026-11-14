@@ -24,7 +24,7 @@ export function registerAgentSessionRoutes(app: FastifyInstance, sessions: Agent
   app.post<Team>(team+'/discussion',async r=>{
     await sessions.team.post(expectedActor(r),uuid(r.params.sessionId),uuid(r.headers['idempotency-key']),r.body); return {ok:true};
   });
-  app.put<Team>(team+'/shared',async r=>{
+  app.put<Team>(team+'/shared',{bodyLimit:262144},async r=>{
     await sessions.team.share(expectedActor(r),uuid(r.params.sessionId),r.body); return {ok:true};
   });
   app.get<{ Params: { workspaceId: string } }>('/v1/workspaces/:workspaceId/agent-sessions/discover', request => sessions.discover(expectedActor(request), uuid(request.params.workspaceId), request.query));
@@ -34,6 +34,10 @@ export function registerAgentSessionRoutes(app: FastifyInstance, sessions: Agent
   app.post<{ Params: { workspaceId: string } }>('/v1/workspaces/:workspaceId/sidekick-sessions', async (request, reply) => reply.code(201).send(await sessions.sidekicks.create(expectedActor(request), uuid(request.params.workspaceId), request.body)));
   app.get<{ Params: { threadId: string } }>('/v1/threads/:threadId/agent-sessions', request => sessions.list(request.actorId, uuid(request.params.threadId)));
   app.post<{ Params: { threadId: string } }>('/v1/threads/:threadId/agent-sessions', async (request, reply) => reply.code(201).send(await sessions.create(request.actorId, uuid(request.params.threadId), request.body)));
+  app.post<{ Params: { channelId: string } }>('/v1/channels/:channelId/agent-sessions', async (request, reply) =>
+    reply.code(201).send(await sessions.createForChannel(expectedActor(request),uuid(request.params.channelId),request.body)));
+  app.get<{ Params: { sessionId: string } }>('/v1/agent-sessions/:sessionId/resources', request =>
+    sessions.resources(expectedActor(request), uuid(request.params.sessionId), request.query));
   app.get<{ Params: { sessionId: string } }>('/v1/agent-sessions/:sessionId/location', request => sessions.location(request.actorId, uuid(request.params.sessionId)));
   app.get<{ Params: { sessionId: string } }>('/v1/agent-sessions/:sessionId/models', request => sessions.models(request.actorId, uuid(request.params.sessionId)));
   app.patch<{ Params: { sessionId: string } }>('/v1/agent-sessions/:sessionId/sidebar', request =>
@@ -75,6 +79,10 @@ export function registerAgentSessionRoutes(app: FastifyInstance, sessions: Agent
     catch(e){ state=e instanceof AppError && e.code==='turn_not_running'?'blocked':'uncertain';detail=state==='blocked'?'Turn is no longer accepting input.':'Delivery could not be confirmed.'; }
     await sessions.finishSteer(id,state,detail);
     return {id,state};
+  });
+  app.post<{ Params: { sessionId: string } }>('/v1/agent-sessions/:sessionId/reopen', request => {
+    record(request.body, []);
+    return sessions.reopen(expectedActor(request), uuid(request.params.sessionId));
   });
   for (const operation of ['stop', 'end'] as const) app.post<{ Params: { sessionId: string } }>(`/v1/agent-sessions/:sessionId/${operation}`, async request => {
     record(request.body, []);

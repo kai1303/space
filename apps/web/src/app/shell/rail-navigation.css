@@ -15,8 +15,12 @@
   border-radius: 0;
 }
 .rail-symbol { display: grid; place-items: center; }
+.chat-rail .chat-theme-toggle:hover,
 .chat-rail .chat-rail-item:is(:hover,.is-peeking):not(.is-active) .chat-rail-icon {
   background: rgba(239,225,245,.25);
+}
+.chat-rail .chat-theme-toggle:hover {
+  color: inherit;
 }
 .rail-peek {
   position: fixed;

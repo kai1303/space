@@ -18,7 +18,8 @@ export async function readSessionReports(db: Database, actor: string, channel: s
           CASE WHEN latest.status='completed' THEN left(latest.result,240) END AS result,
           CASE WHEN jsonb_array_length(a.outputs->'changes')>0 THEN 'changes'
                WHEN a.outputs->'preview'->>'state'='ready' THEN 'preview'
-               WHEN jsonb_array_length(a.outputs->'files')>0 THEN 'files' END AS artifact
+               WHEN jsonb_array_length(a.outputs->'files')>0 THEN 'files'
+               WHEN jsonb_array_length(a.outputs->'views')>0 THEN 'artifacts' END AS artifact
         FROM agent_sessions a
         JOIN LATERAL (SELECT m.id FROM messages m WHERE m.channel_id=t.channel_id AND m.thread_id=t.id
           ORDER BY m.sequence LIMIT 1) root ON true

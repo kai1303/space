@@ -43,6 +43,7 @@ export class DirectMessageStore {
     if (cursor && !(await c.execute(sql`SELECT 1 FROM direct_message_views WHERE workspace_id=${workspace} AND user_id=${actor} AND channel_id=${cursor.id}`)).rows.length) throw new AppError(400, 'invalid_cursor');
     const rows = await c.execute<DirectMessageRow & Record<string, unknown>>(sql`SELECT ch.id,ch.workspace_id,to_json(ch.encrypted_since) AS encrypted_since,'direct' AS kind,
       CASE WHEN ch.direct_user_low=ch.direct_user_high THEN peer.display_name||' (you)' ELSE peer.display_name END AS name,
+      EXISTS(SELECT 1 FROM channel_huddles h WHERE h.channel_id=ch.id AND h.state='active') AS active_huddle,
       true AS private,true AS joined,ch.topic,ch.description,NULL::text AS archived_at,ch.created_by,ch.created_at::text,
       v.hidden,p.participants,l.last_message,to_char(v.last_activity_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS activity_at
       FROM direct_message_views v JOIN channels ch ON ch.id=v.channel_id AND ch.workspace_id=v.workspace_id
@@ -50,14 +51,14 @@ export class DirectMessageStore {
       JOIN LATERAL (SELECT jsonb_agg(jsonb_build_object('id',u.id,'name',u.display_name,'image',u.image,'title',u.title,'presence',u.presence) ORDER BY u.id) AS participants
         FROM users u WHERE u.id IN (ch.direct_user_low,ch.direct_user_high)) p ON true
       LEFT JOIN LATERAL (SELECT jsonb_build_object('text',m.text,'created_at',m.created_at,'author_name',coalesce(m.workflow_name,u.display_name)) AS last_message
-        FROM messages m JOIN users u ON u.id=m.user_id WHERE m.workspace_id=ch.workspace_id AND m.channel_id=ch.id ORDER BY m.sequence DESC LIMIT 1) l ON true
+        FROM messages m JOIN users u ON u.id=m.user_id WHERE m.workspace_id=ch.workspace_id AND m.channel_id=ch.id ORDER BY coalesce(m.channel_broadcast_sequence,m.sequence) DESC LIMIT 1) l ON true
       WHERE v.workspace_id=${workspace} AND v.user_id=${actor} AND (${channel ?? null}::uuid IS NOT NULL OR NOT v.hidden)
         AND (${channel ?? null}::uuid IS NULL OR ch.id=${channel ?? null}::uuid)
         AND (${cursor?.id ?? null}::uuid IS NULL OR (v.last_activity_at,ch.id)<(${cursor?.at ?? null}::timestamptz,${cursor?.id ?? null}::uuid))
         AND position(lower(${q}) IN lower(peer.display_name||' '||peer.full_name))>0
         AND (${unread}=false OR EXISTS(SELECT 1 FROM messages um JOIN channel_reads cr ON cr.channel_id=um.channel_id AND cr.user_id=${actor}
-          WHERE um.workspace_id=ch.workspace_id AND um.channel_id=ch.id AND um.user_id IS DISTINCT FROM ${actor}::uuid AND um.deleted_at IS NULL AND um.sequence>cr.last_read_sequence
-            AND NOT EXISTS(SELECT 1 FROM messages earlier WHERE earlier.workspace_id=um.workspace_id AND earlier.channel_id=um.channel_id AND earlier.thread_id=um.thread_id AND earlier.sequence<um.sequence)))
+          WHERE um.workspace_id=ch.workspace_id AND um.channel_id=ch.id AND um.user_id IS DISTINCT FROM ${actor}::uuid AND um.deleted_at IS NULL AND coalesce(um.channel_broadcast_sequence,um.sequence)>cr.last_read_sequence
+            AND (um.channel_broadcast_sequence IS NOT NULL OR NOT EXISTS(SELECT 1 FROM messages earlier WHERE earlier.workspace_id=um.workspace_id AND earlier.channel_id=um.channel_id AND earlier.thread_id=um.thread_id AND earlier.sequence<um.sequence))))
       ORDER BY v.last_activity_at DESC,ch.id DESC LIMIT ${limit + 1}`);
     return rows.rows;
   }

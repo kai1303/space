@@ -1,4 +1,4 @@
-import { parseComposerDraftKey, parseComposerDraftMutation, type ComposerDraftPage, type ComposerDraftRow, type ComposerDraftValue, type RichDocument } from '@space/contracts';
+import { parseComposerDraftKey, parseComposerDraftMutation, type ComposerDraftPage, type ComposerDraftRow, type ComposerDraftValue, type DmEncryption, type RichDocument } from '@space/contracts';
 import type { Attachment } from '@space/ui/rich-text';
 import { request } from '../../shared/api/request.js';
 import { invalidateUpdates, subscribeUpdates } from '../../shared/realtime/live-updates.js';
@@ -82,6 +82,53 @@ export class DraftSync {
   }
 
   metadata(key: string) { return this.rows.get(key); }
+
+  readonly sending = new Map<string, string>();
+  sendableRevision(key: string) {
+    const row = this.rows.get(key);
+    if (!row?.value || this.edits.has(key) || this.unsealed.has(key) || this.locked.has(key) ||
+        this.conflicts.has(key) || this.failures.has(key) || this.sending.has(key)) return null;
+    return row.revision;
+  }
+
+  async deliver(key: string, revision: string, confirmBroadcast: boolean, sendAt?: Date) {
+    if (this.sendableRevision(key) !== revision) throw Error('This draft changed. Review it before sending.');
+    const row = this.rows.get(key)!;
+    const signal = this.controller.signal;
+    this.sending.set(key, revision);
+    this.changed();
+    try {
+      let body: object = sendAt ? {revision, send_at: sendAt.toISOString()} : {revision, broadcast_confirmed: confirmBroadcast};
+      if (row.value && 'ciphertext' in row.value) {
+        if (sendAt) throw Error('Scheduling is unavailable in encrypted conversations.');
+        const channel = parseComposerDraftKey(key).channel;
+        const [{deviceState}, {seal}, {fileManifest}] = await Promise.all([
+          import('../direct-messages/encryption/device-storage.js'), import('../direct-messages/encryption/crypto.js'),
+          import('../direct-messages/encryption/encrypted-upload.js'),
+        ]);
+        const [remote, local, content] = await Promise.all([
+          request<DmEncryption>(`/channels/${channel}/encryption`, undefined, undefined, 'POST', signal, this.viewer),
+          deviceState(this.viewer, channel), decode(this.viewer, key, row.value),
+        ]);
+        if (!remote.enabled || !local?.trust) throw Error('Verify this device in conversation details before sending.');
+        const document = content.document.ops.length ? content.document : {ops: [{insert: '\n'}]};
+        const encrypted = await seal(local.identity, local.trust, remote.devices, channel, this.viewer,
+          revision, document, fileManifest(content.attachments));
+        body = {revision, encrypted};
+      }
+      await request(this.base + '/' + encodeURIComponent(key) + (sendAt ? '/schedule' : '/send'), body, undefined, 'POST', signal, this.viewer);
+      if (!signal.aborted && this.rows.get(key)?.revision === revision && !this.edits.has(key) && !this.unsealed.has(key)) {
+        this.rows.delete(key);
+        this.callbacks.apply(key, emptyDraft, false);
+      }
+    } finally {
+      this.sending.delete(key);
+      if (!signal.aborted) {
+        this.changed();
+        void invalidateUpdates('drafts', this.viewer);
+      }
+    }
+  }
 
   private conflict(key: string) {
     if (!this.conflicts.has(key)) this.callbacks.notify('This draft changed on another device. Choose a version in Drafts & sent.');

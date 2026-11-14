@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="227" height="130" viewBox="0 0 227 130" fill="none">
+  <circle cx="113.5" cy="149.1" r="115.1" fill="#A5B3EE"/>
+  <g fill="#4F66D1" stroke="#4F66D1" stroke-width="8" stroke-linejoin="round">
+    <path transform="matrix(0.866 0.5 -0.866 0.5 121.8 61.4)" d="M4 4H34.5V65L24 53L4 59Z"/>
+    <path transform="matrix(0.866 0.5 -0.866 0.5 121.8 59.4)" d="M4 4H34.5V65L24 53L4 59Z"/>
+    <path transform="matrix(0.866 0.5 -0.866 0.5 121.8 57.4)" d="M4 4H34.5V65L24 53L4 59Z"/>
+    <path transform="matrix(0.866 0.5 -0.866 0.5 121.8 55.4)" d="M4 4H34.5V65L24 53L4 59Z"/>
+    <path transform="matrix(0.866 0.5 -0.866 0.5 121.8 53.4)" d="M4 4H34.5V65L24 53L4 59Z"/>
+  </g>
+  <path transform="matrix(0.866 0.5 -0.866 0.5 121.8 51.4)" d="M4 4H34.5V65L24 53L4 59Z" fill="#DCE2F7" stroke="#DCE2F7" stroke-width="8" stroke-linejoin="round"/>
+</svg>

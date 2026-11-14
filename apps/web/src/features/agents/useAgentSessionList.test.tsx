@@ -33,3 +33,21 @@ it('ignores late results from a previous workspace and clears revoked session ti
  expect(result.current.items).toEqual([]);
  expect(result.current.error).toBeTruthy();
 });
+
+it('refreshes once at the idle deadline and stops scheduling when only exempt channels remain',async()=>{
+ vi.useFakeTimers();
+ try {
+  const fetch=vi.fn().mockResolvedValueOnce({ok:true,json:async()=>({items:[{id:'expiring',sidebar_expires_at:'2026-11-14T12:00:00Z',sidebar_expires_in_ms:1000}],next_cursor:null})})
+    .mockResolvedValue({ok:true,json:async()=>({items:[{id:'starred'}],next_cursor:null})});
+  vi.stubGlobal('fetch',fetch);
+  const {result}=renderHook(()=>useAgentSessionList('workspace'));
+  await act(async()=>{await vi.advanceTimersByTimeAsync(0);});
+  expect(result.current.items[0]?.id).toBe('expiring');
+  await act(async()=>{await vi.advanceTimersByTimeAsync(999);});
+  expect(fetch).toHaveBeenCalledTimes(1);
+  await act(async()=>{await vi.advanceTimersByTimeAsync(2);});
+  expect(result.current.items[0]?.id).toBe('starred');
+  await act(async()=>{await vi.advanceTimersByTimeAsync(1_000_000);});
+  expect(fetch).toHaveBeenCalledTimes(2);
+ } finally {vi.useRealTimers();}
+});

@@ -30,7 +30,7 @@ function recoverStoppedWorker(directory) {
   catch (error) { if (error.code === 'ESRCH') unlinkSync(path); }
 }
 
-function createRunners({ origin, userData, resources, login, notify }) {
+function createRunners({ origin, userData, resources, login, notify, vaultTool, webVault }) {
   const root = join(userData, 'local-runners', createHash('sha256').update(origin).digest('hex'));
   const running = new Map();
   let stopping = false;
@@ -55,10 +55,35 @@ function createRunners({ origin, userData, resources, login, notify }) {
     let acknowledged = !code;
     if (acknowledged) finish();
     const timeout = code && setTimeout(() => { fail(new Error('Desktop pairing timed out. Check your workspace connection and retry.')); child.kill(); }, 25_000);
-    let failure;
+    let failure, pendingFill, pendingWebVault;
     child.on('error', () => { failure = 'Space could not start the bundled connector.'; fail(new Error(failure)); });
     child.on('message', async message => {
       if (stopping) return;
+      if (message.type === 'web-vault-cancel' && pendingWebVault?.id === message.id) pendingWebVault.controller.abort();
+      if (message.type === 'web-vault') {
+        const request = message.request;
+        let result = {status: 'busy'};
+        if (!pendingWebVault && webVault) {
+          const pending = pendingWebVault = {id: request.id, controller: new AbortController()};
+          try { result = await webVault(request, AbortSignal.any([controller.signal, pending.controller.signal])); }
+          catch { result = {status: 'unavailable'}; }
+          finally { pendingWebVault = undefined; }
+        }
+        if (child.connected) child.send({type: 'web-vault-result', id: request.id, result}, () => {});
+      }
+      if (message.type === 'vault-cancel') {
+        if (pendingFill?.id === message.id) pendingFill.controller.abort();
+      }
+      if (message.type === 'vault-fill') {
+        let status = 'unavailable';
+        if (provider === 'codex' && vaultTool && !pendingFill) {
+          const turn = pendingFill = { id: message.id, controller: new AbortController() };
+          try {
+            status = await vaultTool(message, AbortSignal.any([turn.controller.signal, controller.signal, AbortSignal.timeout(90000)]));
+          } catch {} finally { pendingFill = undefined; }
+        }
+        if (child.connected) child.send({ type: 'vault-result', id: message.id, status }, () => {});
+      }
       if (message.type === 'paired') { acknowledged = true; clearTimeout(timeout); finish(); }
       if (message.type === 'failure') failure = String(message.message).slice(0, 500);
       if (message.type === 'login') {

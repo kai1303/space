@@ -1,0 +1,36 @@
+.threads-inbox{container:thread-feed / inline-size}
+.threads-inbox .collection-heading{position:sticky;top:0;z-index:1;gap:9px;background:var(--sp-surface,#fff)}
+.thread-feed-card{padding:0 12px 8px}
+.thread-card-messages{border:1px solid var(--sp-border);border-radius:12px;padding-bottom:8px}
+.thread-new-reply{background:rgba(29,155,209,.10)}
+.thread-card-heading{position:relative;margin:16px 12px 12px;display:grid;align-content:start;gap:2px;min-height:40px}
+.thread-source,.thread-open,.thread-show-more{border:0;background:transparent;color:inherit;font:inherit;cursor:pointer;text-align:left}
+.thread-source{display:inline-flex;align-items:center;gap:3px;width:fit-content;padding:0;font-size:15px;font-weight:700;line-height:20px}
+.thread-source:hover,.thread-show-more:hover{text-decoration:underline}
+.thread-participants{font-size:12px;line-height:18px;color:var(--sp-text-secondary)}
+.thread-window-link{position:absolute;right:0;top:0;display:inline-flex;padding:4px;color:var(--sp-text-secondary)}
+.thread-preview{display:flex;gap:8px;align-items:flex-start;padding:8px 20px;font-size:15px;line-height:22px}
+.thread-card-messages>.thread-preview{padding-top:20px}
+.thread-preview:hover,.thread-preview:focus-within{background:var(--sp-surface-raised)}
+.thread-preview>.sp-avatar{width:36px;height:36px;flex:none;border-radius:8px}
+.thread-preview-copy{min-width:0;overflow-wrap:anywhere}
+.thread-preview p{margin:0;white-space:pre-wrap}
+.thread-preview time{font-size:12px;color:var(--sp-text-secondary)}
+.thread-show-more{margin:3px 0 3px 64px;padding:0;color:var(--sp-info);font-size:13px;font-weight:700}
+.thread-inline-composer,.thread-open{margin:8px 20px 0}
+.thread-inline-composer{min-height:126px}
+.thread-inline-composer .chat-compose{padding:0}
+.thread-inline-composer .chat-typing:empty{display:none}
+.thread-inline-composer label.thread-broadcast-option{display:flex;flex-direction:row;align-items:center;gap:6px;font-size:13px;color:var(--sp-text-secondary);margin:7px 0}
+.thread-editor-placeholder,.thread-open{box-sizing:border-box;padding:12px;border:1px solid var(--sp-border-strong);border-radius:8px;color:var(--sp-text-secondary);font-size:15px}
+.thread-editor-placeholder{min-height:96px}
+.thread-open{width:calc(100% - 40px)}
+.thread-inbox-detail{position:relative;display:flex;flex:0 1 48%;min-width:300px;overflow:hidden;border-left:1px solid var(--sp-border,#ddd)}
+.chat-conversation.chat-conversation--thread-only{width:100%;min-width:0;flex:1}
+.chat-conversation--thread-only>.chat-thread{position:relative;inset:auto;flex:1;width:100%;max-width:none;min-width:0}
+.thread-window{height:100dvh;display:flex;background:var(--sp-surface,#fff);color:var(--sp-text,#1d1c1d)}
+.thread-popout{display:inline-flex;align-items:center;justify-content:center;height:32px;width:32px;border-radius:5px;color:inherit}.thread-popout:hover{background:var(--sp-surface-raised,#eee)}
+@container thread-feed (max-width:740px){.threads-inbox.has-detail>.collection-main{display:none}.threads-inbox.has-detail>.thread-inbox-detail{flex:1;min-width:0;border:0}}
+.thread-preview{position:relative}.thread-preview-copy{flex:1}.thread-preview-actions{position:absolute;right:18px;top:-8px;display:flex;align-items:center;gap:3px;padding:2px 4px;background:var(--sp-surface,#fff);border:1px solid var(--sp-border,#ddd);border-radius:6px;opacity:0;pointer-events:none}.thread-preview:hover .thread-preview-actions,.thread-preview:focus-within .thread-preview-actions{opacity:1;pointer-events:auto}.thread-preview-actions>button,.thread-preview-actions summary{width:28px;height:28px;justify-content:center}.thread-preview-reactions{display:flex;flex-wrap:wrap;gap:4px}.thread-preview-reactions button{font-size:12px;border:1px solid var(--sp-border,#ddd);border-radius:12px;padding:1px 7px}.thread-preview-reactions button[aria-pressed=true]{border-color:var(--sp-info,#1264a3)}@media(hover:none){.thread-preview-actions{position:static;opacity:1;pointer-events:auto;border:0}}
+
+.thread-preview-actions button,.thread-preview-actions summary{cursor:pointer}.thread-preview-actions summary{display:inline-flex;align-items:center;justify-content:center;padding:0;background:transparent;border:0}.thread-preview-reactions button{cursor:pointer;background:var(--sp-surface);color:inherit}

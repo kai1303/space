@@ -610,13 +610,13 @@
   width: 100%;
   max-width: 600px;
   min-width: 0;
-  min-height: 30px;
+  min-height: 34px;
   box-sizing: border-box;
   margin: 2px 0 0 -5px;
   padding: 2px 4px;
   text-align: left;
   white-space: nowrap;
-  font: 700 12px var(--sp-font-sans);
+  font: 700 13px var(--sp-font-sans);
   cursor: pointer;
 }
 .sp-thread-link:hover,
@@ -629,12 +629,14 @@
   outline-offset: 2px;
 }
 .sp-thread-link > svg { flex-shrink: 0; }
-.sp-thread-link span {
-  color: var(--sp-text-tertiary);
-  font-size: 11px;
-  font-weight: 400;
-  margin-left: 3px;
-}
+.sp-thread-link-faces { display: flex; flex-shrink: 0; gap: 3px; }
+.sp-thread-link-face { position: relative; display: flex; }
+.sp-thread-link-faces .sp-avatar { width: 24px; height: 24px; border-radius: 4px; font-size: 10px; }
+.sp-thread-link-more { position: absolute; inset: 0; display: grid; place-items: center; border-radius: 4px; background: #0009; color: white; }
+.sp-thread-link strong { color: var(--sp-info); flex-shrink: 0; }
+.sp-thread-link-detail { display: grid; min-width: 0; color: var(--sp-text-secondary); font-size: 12px; font-weight: 400; }
+.sp-thread-link-detail > * { grid-area: 1 / 1; overflow: hidden; text-overflow: ellipsis; }
+.sp-thread-link:is(:hover, :focus-visible) time { opacity: 0; }
 .sp-thread-link-hint,
 .sp-thread-link-arrow {
   opacity: 0;
@@ -760,18 +762,11 @@
   border: 2px solid currentColor;
   border-right-color: transparent;
   border-radius: 50%;
-  animation: sp-spin 700ms linear infinite;
-}
-@keyframes sp-spin {
-  to {
-    transform: rotate(360deg);
-  }
 }
 @media (prefers-reduced-motion: reduce) {
   .sp-thread-link-hint,
   .sp-thread-link-arrow { transition: none; }
   .sp-spinner {
-    animation: none;
     border-style: dotted;
   }
 }

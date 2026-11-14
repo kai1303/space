@@ -248,8 +248,19 @@ test(
     });
     assert.ok(frames.some((f) => f.includes('message.send') && f.includes('ciphertext')));
     assert.ok(frames.every((f) => !f.includes(marker)));
+    const draftText = 'Encrypted row send ' + randomUUID();
+    await editor.fill(draftText);
+    await alice.page.getByRole('button', {name:'Drafts & sent',exact:true}).click();
+    const row = alice.page.getByRole('listitem').filter({hasText:draftText});
+    await row.hover();
+    await row.getByRole('button',{name:'Send message'}).click();
+    const delivery = alice.page.waitForRequest(r => r.url().includes('/composer-drafts/') && r.url().endsWith('/send'));
+    await alice.page.getByRole('dialog',{name:'Send message'}).getByRole('button',{name:'Send',exact:true}).click();
+    const body = (await delivery).postData()!;
+    assert.ok(body.includes('ciphertext') && !body.includes(draftText));
     const returned = await bob.context.newPage();
     await returned.goto(url);
+    await expect(returned.getByRole('article').filter({hasText:draftText})).toHaveCount(1, {timeout:15000});
     const received = returned.getByRole('article').filter({ hasText: marker });
     await expect(received).toHaveCount(1, { timeout: 15000 });
     await expect(received.locator('strong,b').filter({ hasText: marker })).toBeVisible();
@@ -316,11 +327,15 @@ test(
     const stored = await pool.query('SELECT text,document,encrypted FROM messages WHERE channel_id=$1', [
       dm.id,
     ]);
-    assert.equal(stored.rowCount, 1);
-    assert.equal(stored.rows[0].text, 'Encrypted message');
-    assert.equal(stored.rows[0].document, null);
-    assert.ok(stored.rows[0].encrypted.ciphertext);
-    assert.ok(!JSON.stringify(stored.rows).includes(marker));
+    assert.equal(stored.rowCount, 2);
+    for (const message of stored.rows) {
+      assert.equal(message.text, 'Encrypted message');
+      assert.equal(message.document, null);
+      assert.ok(message.encrypted.ciphertext);
+    }
+    assert.ok([marker, draftText].every(text => !JSON.stringify(stored.rows).includes(text)));
+    await alice.page.goto(url);
+    await expect(editor).toBeEditable();
     await returned.keyboard.press('Escape');
     const fileOnly = 'no-caption-' + randomUUID() + '.txt';
     await alice.page.route(

@@ -13,6 +13,11 @@ function configure(value) {
   url = spaceUrl(value);
   runners = createRunners({ origin: new URL(url).origin, userData: app.getPath('userData'),
     resources: app.isPackaged ? join(process.resourcesPath, 'runner') : join(__dirname, '../dist/runner'),
+    webVault: async (request, signal) => {
+      if (quitting || !win || win.isDestroyed()) return {status: 'unavailable'};
+      return win.spaceBrowser.webVault(request, signal);
+    },
+    vaultTool: (context, signal) => win?.spaceBrowser.vaultTool(context, signal) ?? 'unavailable',
     login: providerLogin, notify: (provider, detail) => {
       if (!quitting) void dialog.showMessageBox({ type: 'error', message: `Local ${provider} needs attention`, detail });
     },
@@ -89,7 +94,14 @@ if (!app.requestSingleInstanceLock()) {
     configure(process.env.SPACE_DESKTOP_URL || config.url);
     Menu.setApplicationMenu(Menu.buildFromTemplate([
       { role: 'appMenu' },
-      { label: 'File', submenu: [{ label: 'New Browser Tab', accelerator: 'CmdOrCtrl+T', click: () => {
+      { label: 'File', submenu: [...(process.platform === 'darwin' ? [{ label: 'Open Personal Vault…', click: async () => {
+        openWindow();
+        if (win.webContents.isLoadingMainFrame()) await require('node:events').once(win.webContents, 'did-finish-load');
+        if (!win || win.isDestroyed()) return;
+        const status = await win.spaceBrowser.showVault();
+        if (status === 'busy') void dialog.showMessageBox({ message: 'Your Vault is already open or in use.' });
+        if (status === 'unavailable') void dialog.showMessageBox({ message: 'Could not open your personal Vault.', detail: 'Sign in to Space Desktop and try again.' });
+      } }] : []), { label: 'New Browser Tab', accelerator: 'CmdOrCtrl+T', click: () => {
         if (!win || win.isDestroyed()) openWindow();
         void win.spaceBrowser.open(true);
       } }, { label: 'Cycle Workspace Layout', accelerator: 'CmdOrCtrl+Shift+B', click: () => {

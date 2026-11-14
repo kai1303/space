@@ -3,6 +3,8 @@ import { afterEach, beforeAll, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { toast } from '@space/ui/primitives';
 import userEvent from '@testing-library/user-event';
+import { BrowserSidekick } from '../agents/BrowserSidekick.js';
+import { Connections } from './Connections.js';
 import { UserSettings } from '../profile/UserProfile.js';
 
 // Dialog motion has its own tests. Resolving its exit deterministically lets this suite
@@ -66,6 +68,62 @@ it('opens personal accounts with truthful transport, observed status and call me
   expect(connection().getByText(/Last observed: Ready/)).toBeTruthy();
   expect(screen.getByText('Uncertain')).toBeTruthy();
   expect(screen.getByText(/may have completed/)).toBeTruthy();
+});
+it('prefills a suggested personal MCP and waits for the user to provide credentials and save', async () => {
+  const fetcher = setup();
+  const site = { name: 'Linear', url: 'https://mcp.linear.app/mcp' };
+  let notify!: (preset: typeof site & { actor: string; showGuide?: boolean }) => void;
+  vi.stubGlobal('spaceDesktop', { onBrowserMcpSetup: (handler: typeof notify) => { notify = handler; return () => {}; } });
+  render(<BrowserSidekick workspace="workspace" viewer="user" />);
+  act(() => notify({ ...site, actor: 'another-user' }));
+  expect(screen.queryByRole('dialog')).toBeNull();
+  act(() => notify({ ...site, actor: 'user', showGuide: true }));
+  expect((await screen.findByLabelText('Connection name') as HTMLInputElement).value).toBe(site.name);
+  expect((screen.getByLabelText('MCP endpoint') as HTMLInputElement).value).toBe(site.url);
+  const token = screen.getByLabelText('Bearer token') as HTMLInputElement;
+  expect(token.value).toBe('');
+  expect(screen.getByText('How to get a Linear token').closest('details')?.open).toBe(true);
+  expect(screen.getByRole('link', { name: 'Linear token documentation' }).getAttribute('href')).toBe('https://linear.app/docs/api-and-webhooks');
+  const endpoint = screen.getByLabelText('MCP endpoint');
+  fireEvent.change(endpoint, { target: { value: 'https://mcp.linear.app.example.org/mcp' } });
+  expect(screen.getByText('How to get a bearer token')).toBeTruthy();
+  expect(screen.queryByText('Linear token documentation')).toBeNull();
+  fireEvent.change(endpoint, { target: { value: site.url } });
+  expect(fetcher.mock.calls.every(([, opts]) => opts?.method === 'GET')).toBe(true);
+  fireEvent.change(token, { target: { value: 'test-token' } });
+  await userEvent.click(screen.getByRole('button', { name: 'Save connection' }));
+  await screen.findByRole('heading', { name: site.name });
+  const writes = fetcher.mock.calls.filter(([, opts]) => opts?.method !== 'GET');
+  expect(writes.map(([url]) => url)).toEqual(['/v1/me/connections']);
+  expect(JSON.parse(writes[0][1]!.body as string)).toMatchObject(site);
+});
+it('opens the signed-in user’s native Vault from personal Connections', async () => {
+  const fetcher = setup();
+  const openVault = vi.fn(async () => 'closed');
+  vi.stubGlobal('spaceDesktop', { openVault });
+  render(<Connections userId="user" onClose={() => {}}/>);
+  await userEvent.click(await screen.findByRole('button', { name: 'Open personal Vault' }));
+  expect(openVault).toHaveBeenCalledWith('user');
+  expect(fetcher.mock.calls.every(([, opts]) => opts?.method === 'GET')).toBe(true);
+});
+it('hands a Mac browser credential to native Vault without a web password field or server write', async () => {
+  const fetcher = setup();
+  const close = vi.fn();
+  const saveBrowserVaultToken = vi.fn(async () => 'saved');
+  vi.stubGlobal('spaceDesktop', { saveBrowserVaultToken });
+  const site = { name: 'Linear', url: 'https://mcp.linear.app/mcp', showGuide: true };
+  render(<Connections userId="user" suggested={site} onClose={close}/>);
+  expect(screen.queryByLabelText('Bearer token')).toBeNull();
+  await userEvent.click(screen.getByRole('button', { name: 'Save token on this Mac' }));
+  expect(saveBrowserVaultToken).toHaveBeenCalledWith(site.url);
+  expect(close).toHaveBeenCalled();
+  expect(fetcher.mock.calls.every(([, opts]) => opts?.method === 'GET')).toBe(true);
+});
+it('shows the existing personal connection if the endpoint was added before setup opened', async () => {
+  setup();
+  render(<Connections userId="user" suggested={{ name: 'GitHub', url: base.url + '/' }} onClose={() => {}}/>);
+  await screen.findByRole('heading', { name: base.name });
+  expect(screen.queryByLabelText('MCP endpoint')).toBeNull();
 });
 it('adds another account with a password field and clears its token on save and reopen', async () => {
   const fetcher = setup(); await open();

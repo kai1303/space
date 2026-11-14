@@ -9,6 +9,8 @@
   width: 28px;
   height: 28px;
 }
+.space-logo--animated { position: relative; }
+.space-logo-player { position: absolute; inset: 0; }
 .chat-workspace-mark .space-logo--icon {
   width: 80%;
   height: 80%;

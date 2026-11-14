@@ -157,6 +157,71 @@ test('ordinary files require ready, owned assets in the same room; a late clear 
   await api(a.owner_token, 'PUT', path, mutation(null, savedAgain.revision));
 });
 
+test('row sends commit one copy of a revision and preserve newer edits and rejected drafts', async () => {
+  const a = await bootstrap(pool);
+  const key = `thread:${a.channel_id}:${a.thread_id}`, path = dest(key);
+  const old = await api(a.owner_token, 'PUT', path, mutation(plain('first version')));
+  const draft = plain('ready for review');
+  const current = await api(a.owner_token, 'PUT', path, mutation(draft, old.revision));
+  const send = (revision: string) => app.inject({method:'POST',url:path+'/send',
+    headers:{authorization:`Bearer ${a.owner_token}`},payload:{revision}});
+  assert.equal((await send(old.revision)).statusCode,409);
+  await pool.query('UPDATE channels SET archived_at=now() WHERE id=$1',[a.channel_id]);
+  assert.equal((await send(current.revision)).statusCode,409);
+  assert.deepEqual((await api(a.owner_token,'GET',path)).value,draft);
+  await pool.query('UPDATE channels SET archived_at=NULL WHERE id=$1',[a.channel_id]);
+  for (const res of await Promise.all([send(current.revision),send(current.revision)])) assert.equal(res.statusCode,204,res.body);
+  const sent = await pool.query('SELECT document,thread_id FROM messages WHERE channel_id=$1 AND client_message_id=$2',[a.channel_id,current.revision]);
+  assert.deepEqual(sent.rows,[{document:draft.document,thread_id:a.thread_id}]);
+  const cleared = await api(a.owner_token,'GET',path);
+  assert.equal(cleared.value,null);
+  const next = await api(a.owner_token,'PUT',path,mutation(plain('next reply'),cleared.revision));
+  assert.equal((await send(current.revision)).statusCode,204);
+  assert.deepEqual((await api(a.owner_token,'GET',path)).value,next.value);
+});
+
+test('scheduling a draft revision preserves its files and thread and handles racing devices', async () => {
+  const a = await bootstrap(pool);
+  const dm = await api(a.owner_token,'POST',`/v1/workspaces/${a.workspace_id}/direct-messages`,{user_id:a.collaborator_id});
+  const file = {id:randomUUID(), name:'plan.txt', type:'text/plain', size:42, description:'Original plan'};
+  await pool.query(`INSERT INTO assets(id,workspace_id,channel_id,uploader_id,name,type,size,staging_key,object_key,status)
+    VALUES($1::uuid,$2,$3,$4,$5,$6,$7,$1::text,$1::text,'ready')`,[file.id,a.workspace_id,a.channel_id,a.owner_id,file.name,file.type,file.size]);
+  const path = dest(`thread:${a.channel_id}:${a.thread_id}`);
+  const content = {...plain('Plan for tomorrow'),files:[file]};
+  const draft = await api(a.owner_token,'PUT',path,mutation(content));
+  const at = new Date(Date.now() + 7 * 86400000).toISOString();
+  const send = (path: string, revision: string, time = at) => app.inject({method:'POST',url:path+'/schedule',
+    headers:{authorization:`Bearer ${a.owner_token}`},payload:{revision,send_at:time}});
+  assert.equal((await send(path,draft.revision,new Date(Date.now()+120_000).toISOString())).statusCode,400);
+  assert.deepEqual((await api(a.owner_token,'GET',path)).value,content);
+  const later = new Date(Date.parse(at)+3600000).toISOString();
+  const attempts = await Promise.all([send(path,draft.revision,at),send(path,draft.revision,later)]);
+  assert.deepEqual(attempts.map(r=>r.statusCode).sort(),[204,409]);
+  const scheduled = await api(a.owner_token,'GET',`/v1/workspaces/${a.workspace_id}/scheduled-messages`);
+  assert.equal(scheduled.items.length,1);
+  const item = scheduled.items[0];
+  assert.equal(item.thread_id,a.thread_id);
+  assert.deepEqual(item.document,content.document);
+  assert.equal(item.attachments[0].id,file.id);
+  const tombstone = await api(a.owner_token,'GET',path);
+  assert.equal(tombstone.value,null);
+  const newDraft = await api(a.owner_token,'PUT',path,mutation(plain('Newer reply'),tombstone.revision));
+  assert.equal((await send(path,draft.revision,item.send_at)).statusCode,204);
+  assert.deepEqual((await api(a.owner_token,'GET',path)).value,newDraft.value);
+  const changed = await api(a.owner_token,'PUT',dest(dm.id),mutation(plain('Reminder')));
+  assert.equal((await send(dest(dm.id),changed.revision)).statusCode,204);
+  await pool.query('UPDATE channels SET encrypted_since=now() WHERE id=$1',[dm.id]);
+  assert.equal((await send(dest('encrypted:'+dm.id),randomUUID())).statusCode,409);
+  await api(a.owner_token,'POST',`/v1/scheduled-messages/${item.id}/send`,{});
+  const { ScheduledMessageStore } = await import('@space/postgres/scheduled-messages');
+  const version = (await pool.query('SELECT version FROM scheduled_messages WHERE id=$1',[item.id])).rows[0].version;
+  await new ScheduledMessageStore(pool,new ChatStore(pool)).deliver(item.id,version);
+  const posted = (await pool.query('SELECT thread_id,attachments FROM messages WHERE channel_id=$1 AND client_message_id=$2',[a.channel_id,item.id])).rows;
+  assert.equal(posted.length,1);
+  assert.equal(posted[0].thread_id,a.thread_id);
+  assert.equal(posted[0].attachments[0].description,file.description);
+});
+
 test('encryption conversion purges prior drafts, enforces ciphertext-only writes and leaves no content on the realtime bus', async () => {
   const a = await bootstrap(pool);
   const dm = await api(a.owner_token, 'POST', `/v1/workspaces/${a.workspace_id}/direct-messages`, { user_id: a.collaborator_id });

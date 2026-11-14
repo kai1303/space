@@ -2,6 +2,7 @@ import { sql } from 'drizzle-orm';
 import { AppError, record, sessionWorkStatusLabels, text, uuid, type SessionDiscoveryItem, type SessionDiscoveryPage, type SessionWorkStatus } from '@space/contracts';
 import { requireWorkspaceAccess } from './access.js';
 import type { Database } from './database.js';
+import { sessionSidebarActivity } from './session-sidebar-activity.js';
 import { sessionWorkStatus } from './session-work-status.js';
 
 export async function discoverSessions(db: Database, actor: string, workspace: string, raw: unknown): Promise<SessionDiscoveryPage> {
@@ -33,26 +34,27 @@ export async function discoverSessions(db: Database, actor: string, workspace: s
     // provider, status or conversation text must never reveal a source-room match.
     const reviewers = !agent && !creator && !channel && !status && archived === 'all' ? sql`
       UNION ALL
-      SELECT a.id,a.title,a.created_at,true,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL
+      SELECT a.id,a.title,a.created_at,true,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL
       FROM agent_sessions a JOIN threads t ON t.id=a.origin_thread_id
       WHERE a.workspace_id=${workspace} AND a.managed AND ${sharedReview} ${sharedWithWorkspace}
         AND NOT EXISTS (SELECT 1 FROM channel_members m WHERE m.channel_id=t.channel_id AND m.user_id=${actor})
         ${q ? sql`AND strpos(lower(a.title),lower(${q}))>0` : sql``} ${continuation}` : sql``;
     const result = await c.execute<{id:string; title:string; review_only:boolean; origin_thread_id:string; channel_id:string;
-      agent_name:string; channel_archived:boolean; channel_name:string; creator_name:string|null; sidebar_archived:boolean; status:SessionWorkStatus}>(sql`
+      agent_name:string; channel_archived:boolean; channel_name:string; creator_name:string|null; sidebar_archived:boolean; sidebar_inactive:boolean; status:SessionWorkStatus}>(sql`
       SELECT * FROM (
         SELECT a.id,a.title,a.created_at,false AS review_only,a.origin_thread_id,t.channel_id,ch.archived_at IS NOT NULL AS channel_archived,
           coalesce(ac.name,d.name) AS agent_name,CASE WHEN ch.kind='direct' THEN 'Direct message' ELSE ch.name END AS channel_name,
-          u.display_name AS creator_name,coalesce(p.archived,false) AS sidebar_archived,${sessionWorkStatus(sql`a.id`,sql`a.state`)} AS status
+          u.display_name AS creator_name,coalesce(p.archived,false) AS sidebar_archived,coalesce(idle.expires<=now(),false) AS sidebar_inactive,${sessionWorkStatus(sql`a.id`,sql`a.state`)} AS status
         FROM channel_members m JOIN threads t ON t.channel_id=m.channel_id JOIN agent_sessions a ON a.origin_thread_id=t.id
         JOIN channels ch ON ch.id=t.channel_id JOIN agent_installations i ON i.id=a.installation_id
         JOIN agent_definitions d ON d.id=i.definition_id LEFT JOIN agent_connections ac ON ac.installation_id=i.id
         LEFT JOIN users u ON u.id=a.created_by LEFT JOIN session_sidebar_preferences p ON p.session_id=a.id AND p.user_id=m.user_id
+        ${sessionSidebarActivity}
         WHERE m.workspace_id=${workspace} AND m.user_id=${actor} AND a.workspace_id=${workspace} AND a.managed ${sharedWithWorkspace} ${continuation}
           ${agent ? sql`AND strpos(lower(coalesce(ac.name,d.name)),lower(${agent}))>0` : sql``}
           ${creator ? sql`AND strpos(lower(u.display_name),lower(${creator}))>0` : sql``}
           ${channel ? sql`AND strpos(lower(CASE WHEN ch.kind='direct' THEN 'Direct message' ELSE ch.name END),lower(${channel}))>0` : sql``}
-          ${archived === 'all' ? sql`` : sql`AND coalesce(p.archived,false)=${archived === 'true'}`}
+          ${archived === 'all' ? sql`` : archived === 'true' ? sql`AND p.archived` : sql`AND NOT coalesce(p.archived,false) AND (idle.expires IS NULL OR idle.expires>now())`}
           ${q ? sql`AND (strpos(lower(a.title),lower(${q}))>0 OR EXISTS (
             SELECT 1 FROM tasks v WHERE v.session_id=a.id AND to_tsvector('simple',v.goal||' '||coalesce(v.result,'')) @@ ${wordQuery}
           ) OR EXISTS (
@@ -71,7 +73,7 @@ export async function discoverSessions(db: Database, actor: string, workspace: s
     const items = result.rows.slice(0,25).map((row):SessionDiscoveryItem => row.review_only
       ? {access:'reviewer',id:row.id,title:row.title}
       : {access:'source',id:row.id,title:row.title,status:row.status,origin_thread_id:row.origin_thread_id,channel_id:row.channel_id,
-        channel_name:row.channel_name,channel_archived:row.channel_archived,creator_name:row.creator_name,agent_name:row.agent_name,sidebar_archived:row.sidebar_archived});
+        channel_name:row.channel_name,channel_archived:row.channel_archived,creator_name:row.creator_name,agent_name:row.agent_name,sidebar_archived:row.sidebar_archived,...(row.sidebar_inactive ? {sidebar_inactive:true} : {})});
     return {items,next_cursor: result.rows.length>25 ? items.at(-1)!.id : null};
   }, {isolationLevel:'repeatable read',accessMode:'read only'});
 }

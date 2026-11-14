@@ -61,7 +61,7 @@ export function RichComposer({
   channel,
   conversationKey,
   scope = "channel",
-  placeholder,
+  placeholder, editorLabel,
   loadReplySuggestion,
   defaultValue,
   draftValue,
@@ -93,11 +93,13 @@ export function RichComposer({
   renderExtraActions, renderAddMenuItems, renderBeforeSend,
   addMenuVariant = "standard",
   autoFocus = false,
+  onEditReady,
 }: {
   channel: string;
   conversationKey?: string;
   scope?: "channel" | "thread";
   placeholder?: string;
+  editorLabel?: string;
   loadReplySuggestion?: (signal: AbortSignal) => Promise<string | null>;
   defaultValue?: RichDocument;
   /** Live draft for this destination. Pass null for a cleared draft. */
@@ -141,6 +143,7 @@ export function RichComposer({
   renderBeforeSend?: (insertText: (value: string) => void, disabled: boolean) => ReactNode;
   renderExtraActions?: (insertText: (value: string) => void, disabled: boolean) => ReactNode;
   autoFocus?: boolean;
+  onEditReady?: () => void;
 }) {
   const agentAddMenu = addMenuVariant === "agent-session";
   const mount = useRef<HTMLDivElement>(null);
@@ -154,8 +157,8 @@ export function RichComposer({
   const seenDraft = useRef(draftValue);
   const deferredDraft = useRef<RichDocument | null | undefined>(undefined);
   const applyDraft = useRef<(value: RichDocument | null) => void>(undefined);
-  const labels = useRef({ channel, placeholder });
-  labels.current = { channel, placeholder };
+  const labels = useRef({ channel, placeholder, editorLabel });
+  labels.current = { channel, placeholder, editorLabel };
   const selection = useRef({ index: 0, length: 0 });
   const pending = useRef(false);
   const fileInput = useRef<HTMLInputElement>(null);
@@ -291,11 +294,29 @@ export function RichComposer({
   }, [completion, emojiIndex, suggestionsId, ready]);
   const [editorVersion, setEditorVersion] = useState(0);
   useEffect(() => {
+    const q = editor.current;
+    if (!editorVersion || !q || !onEditReady) return;
+    // A thread's footer stays inert until its history is ready.
+    const focusWhenAvailable = () => {
+      const container = q.root.closest('[inert]');
+      if (container) {
+        observer.observe(container, { attributes: true, attributeFilter: ['inert'] });
+        return;
+      }
+      observer.disconnect();
+      q.focus();
+      if (q.hasFocus()) onEditReady();
+    };
+    const observer = new MutationObserver(focusWhenAvailable);
+    focusWhenAvailable();
+    return () => observer.disconnect();
+  }, [editorVersion, onEditReady, conversationKey]);
+  useEffect(() => {
     const root = editor.current?.root;
     if (!root) return;
-    root.setAttribute('aria-label', `Message ${channel}`);
+    root.setAttribute('aria-label', editorLabel ?? `Message ${channel}`);
     root.setAttribute('data-placeholder', visibleReply ? '' : placeholder ?? `Message #${channel}`);
-  }, [channel, placeholder, editorVersion, visibleReply]);
+  }, [channel, placeholder, editorLabel, editorVersion, visibleReply]);
   const mentionsUI = useMentions(editor, ready, conversationKey ?? channel, findMentions, editorVersion);
   const mentionKeys = useRef(mentionsUI.key); mentionKeys.current = mentionsUI.key;
   const [broadcastWarning, setBroadcastWarning] = useState(false);
@@ -474,7 +495,7 @@ export function RichComposer({
         pending.current = false;
         setSending(false);
         q.root.setAttribute("role", "textbox");
-        q.root.setAttribute("aria-label", `Message ${labels.current.channel}`);
+        q.root.setAttribute("aria-label", labels.current.editorLabel ?? `Message ${labels.current.channel}`);
         q.root.setAttribute("aria-multiline", "true");
         if (initial.current)
           q.setContents(

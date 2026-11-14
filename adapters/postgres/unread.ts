@@ -13,11 +13,11 @@ export class UnreadStore {
     workspace = uuid(workspace);
     return this.db.transaction(async c => {
       await requireWorkspaceAccess(c, actor, workspace);
-      const root = sql`NOT EXISTS (SELECT 1 FROM messages earlier WHERE earlier.workspace_id=${workspace}
-        AND earlier.channel_id=ch.id AND earlier.thread_id=m.thread_id AND earlier.sequence<m.sequence)`;
+      const root = sql`(m.channel_broadcast_sequence IS NOT NULL OR NOT EXISTS (SELECT 1 FROM messages earlier WHERE earlier.workspace_id=${workspace}
+        AND earlier.channel_id=ch.id AND earlier.thread_id=m.thread_id AND earlier.sequence<m.sequence))`;
       const result = await c.execute<WorkspaceUnread['channels'][number] & Record<string, unknown>>(sql`
         SELECT ch.id AS channel_id,coalesce(r.last_read_sequence,0)::text AS last_read_sequence,
-          coalesce((SELECT m.sequence FROM messages m WHERE m.workspace_id=${workspace} AND m.channel_id=ch.id AND ${root} ORDER BY m.sequence DESC LIMIT 1),0)::text AS latest_sequence,
+          coalesce((SELECT coalesce(m.channel_broadcast_sequence,m.sequence) FROM messages m WHERE m.workspace_id=${workspace} AND m.channel_id=ch.id AND ${root} ORDER BY coalesce(m.channel_broadcast_sequence,m.sequence) DESC LIMIT 1),0)::text AS latest_sequence,
           coalesce(m.unread_count,0)::int AS unread_count,
           coalesce(mentions.total,0)::int AS mention_count
         FROM channel_members cm JOIN channels ch ON ch.id=cm.channel_id AND ch.workspace_id=cm.workspace_id
@@ -32,7 +32,7 @@ export class UnreadStore {
         ) mentions ON mentions.channel_id=ch.id
         LEFT JOIN LATERAL (
           SELECT count(*) FILTER (WHERE m.user_id IS DISTINCT FROM ${actor}::uuid) AS unread_count
-          FROM messages m WHERE m.workspace_id=${workspace} AND m.channel_id=ch.id AND m.deleted_at IS NULL AND m.sequence>coalesce(r.last_read_sequence,0) AND ${root}
+          FROM messages m WHERE m.workspace_id=${workspace} AND m.channel_id=ch.id AND m.deleted_at IS NULL AND coalesce(m.channel_broadcast_sequence,m.sequence)>coalesce(r.last_read_sequence,0) AND ${root}
         ) m ON true
         WHERE cm.workspace_id=${workspace} AND cm.user_id=${actor} ORDER BY ch.id`);
       return { workspace_id: workspace, channels: result.rows };
@@ -54,7 +54,7 @@ export class UnreadStore {
         await c.execute(sql`SELECT id FROM channels WHERE id=${channel} FOR UPDATE`);
       }
       if (!await hasChannelAccess(c, actor, workspace, channel)) throw new AppError(404, 'not_found');
-      if (sequence !== '0' && !(await c.execute(sql`SELECT id FROM messages WHERE workspace_id=${workspace} AND channel_id=${channel} AND sequence=${sequence}::bigint`)).rows.length) {
+      if (sequence !== '0' && !(await c.execute(sql`SELECT id FROM messages WHERE workspace_id=${workspace} AND channel_id=${channel} AND (sequence=${sequence}::bigint OR channel_broadcast_sequence=${sequence}::bigint)`)).rows.length) {
         throw new AppError(400, 'invalid_read_sequence');
       }
       await c.execute(sql`UPDATE channel_reads SET last_read_sequence=${sequence}::bigint

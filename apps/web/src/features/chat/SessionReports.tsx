@@ -1,5 +1,5 @@
-import { Fragment, useEffect, useState } from 'react';
-import { Robot } from '@phosphor-icons/react';
+import { useEffect, useState } from 'react';
+import { Code } from '@phosphor-icons/react';
 import { sessionWorkStatusLabels, type ChatMessage, type SessionReport } from '@space/contracts';
 import { request } from '../../shared/api/request.js';
 import { subscribeUpdates } from '../../shared/realtime/live-updates.js';
@@ -34,7 +34,7 @@ export function useSessionReports(channel: string, viewer: string, messages?: Ch
 }
 
 type Artifact = NonNullable<SessionReport['artifact']>;
-const artifactLabels: Record<Artifact,string> = {changes:'View changes',preview:'Open preview',files:'View files'};
+const artifactLabels: Record<Artifact,string> = {changes:'View changes',preview:'Open preview',files:'View files',artifacts:'Open artifacts'};
 
 export function SessionReports({message,inThread,reports,onOpen}:{
   message:ChatMessage; inThread:boolean; reports?:SessionReport[];
@@ -52,15 +52,15 @@ export function SessionReports({message,inThread,reports,onOpen}:{
   return <>{[...links].map(([id,title]) => {
     const report = detail.get(id);
     const statusId = `session-status-${inThread ? "thread" : "channel"}-${message.id}-${id}`;
-    return <Fragment key={id}>
-      <button type="button" className="sp-thread-link chat-session-link" aria-label={`Agent session: ${title}`} aria-describedby={report ? statusId : undefined} title={title} onClick={()=>onOpen(message.thread_id,id)}>
-        <Robot size={14} aria-hidden="true"/>Agent session<span>{title}</span>
+    return <div className="code-channel-unfurl" key={id}>
+      <button type="button" data-code-channel-id={id} className="sp-thread-link chat-session-link" aria-label={`Agent session: ${title}`} aria-describedby={report ? statusId : undefined} title={title} onClick={()=>onOpen(message.thread_id,id)}>
+        <Code size={16} aria-hidden="true"/><span>{title}</span>
         {report && <small id={statusId}>{sessionWorkStatusLabels[report.status]}</small>}
       </button>
       {report && (report.result || report.artifact) && <div className="chat-session-result">
         {report.result && <span>{report.result}</span>}
-        {report.artifact && <button type="button" onClick={()=>onOpen(message.thread_id,id,report.artifact!)}>{artifactLabels[report.artifact]}</button>}
+        {report.artifact && <button type="button" data-code-channel-id={id} onClick={()=>onOpen(message.thread_id,id,report.artifact!)}>{artifactLabels[report.artifact]}</button>}
       </div>}
-    </Fragment>;
+    </div>;
   })}</>;
 }

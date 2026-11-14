@@ -10,6 +10,9 @@ declare global {
       onClose(fn: (close: () => void) => void): () => void;
     };
     spaceDesktop?: {
+      openVault?(actor: string): Promise<string>;
+      saveBrowserVaultToken?(endpoint: string): Promise<string>;
+      onBrowserMcpSetup?(fn: (site: {name: string; url: string; showGuide?: boolean; actor: string}) => void): () => void;
       onBrowserSidekick?(fn: (tab: {tab: string; page: string; actor: string} | null) => void): () => void;
       browserSessionId?(tab: string, workspace: string): Promise<string | null>;
       dismissBrowserSidekick?(tab: string): void;

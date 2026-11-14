@@ -1,9 +1,9 @@
-const { BaseWindow, WebContentsView, dialog, shell } = require('electron');
+const { BaseWindow, BrowserWindow, WebContentsView, dialog, shell } = require('electron');
 const { createBrowser } = require('./browser/browser.cjs');
 const { join } = require('node:path');
-const { navigationAction, spaceUrl, isAssetDownload, mediaPermissionAllowed } = require('./policy.cjs');
+const { navigationAction, spaceUrl, isAssetDownload, isThreadWindow, mediaPermissionAllowed } = require('./policy.cjs');
 
-function createSpaceWindow(configuredUrl, { show = true, pair } = {}) {
+function createSpaceWindow(configuredUrl, { show = true, pair, keychain, vaultManager } = {}) {
   const url = spaceUrl(configuredUrl);
   const win = new BaseWindow({
     title: 'Space', width: 1360, height: 900, minWidth: 800, minHeight: 600,
@@ -20,7 +20,7 @@ function createSpaceWindow(configuredUrl, { show = true, pair } = {}) {
   });
   win.contentView.addChildView(workspace);
   win.webContents = workspace.webContents;
-  win.spaceBrowser = createBrowser(win, url, workspace);
+  win.spaceBrowser = createBrowser(win, url, workspace, keychain, vaultManager);
   win.once('closed', () => { if (!workspace.webContents.isDestroyed()) workspace.webContents.close(); });
   win.webContents.on('page-title-updated', (_event, title) => { if (!win.isDestroyed()) win.setTitle(title || 'Space'); });
   win.webContents.ipc.on('space-browser-open', event => {
@@ -99,7 +99,31 @@ function createSpaceWindow(configuredUrl, { show = true, pair } = {}) {
   win.webContents.on('will-redirect', (event, target) => {
     if (navigationAction(target, url) !== 'internal') event.preventDefault();
   });
+  const threadWindows = new Map();
+  win.once('closed', () => { for (const child of threadWindows.values()) if (!child.isDestroyed()) child.destroy(); });
   win.webContents.setWindowOpenHandler(({ url: target }) => {
+    if (isThreadWindow(target, url)) {
+      const existing = threadWindows.get(target);
+      if (existing) existing.focus();
+      else if (threadWindows.size < 8) {
+        const child = new BrowserWindow({ title: 'Thread · Space', width: 580, height: 760,
+          webPreferences: { partition: 'persist:space', nodeIntegration: false, contextIsolation: true, sandbox: true, webSecurity: true, webviewTag: false } });
+        threadWindows.set(target, child);
+        child.once('closed', () => threadWindows.delete(target));
+        const safe = (event, next) => { if (navigationAction(next, url) !== 'internal') event.preventDefault(); };
+        child.webContents.on('will-navigate', safe);
+        child.webContents.on('will-redirect', safe);
+        child.webContents.on('will-attach-webview', event => event.preventDefault());
+        child.webContents.setWindowOpenHandler(({url: next}) => {
+          if (navigationAction(next, url) === 'external') openExternal(next);
+          else if (isAssetDownload(next, url)) child.webContents.downloadURL(next);
+          else if (navigationAction(next,url) === 'internal') void win.webContents.loadURL(next).catch(()=>{});
+          return {action:'deny'};
+        });
+        void child.loadURL(target).catch(()=>{ if (!child.isDestroyed()) child.close(); });
+      }
+      return { action: 'deny' };
+    }
     if (isAssetDownload(target, url)) {
       win.webContents.downloadURL(target);
       return { action: 'deny' };

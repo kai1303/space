@@ -1,6 +1,6 @@
 import { claudeGoalTranscript } from './claude-goal.js';
 import { attachmentContext, attachmentImages } from './attachment-input.js';
-import { parseModelCatalog, type AgentModel, visibleText, type GoalAction, type SessionGoal } from '@space/contracts';
+import { parseModelCatalog, type AgentModel, type GoalAction, type SessionGoal } from '@space/contracts';
 import { replyFormatInstructions } from './reply-format.js';
 import { memoryInstructions } from './memory-instructions.js';
 import { spawn, type ChildProcess } from 'node:child_process';
@@ -11,7 +11,7 @@ import { query, type SDKActiveGoalMessage, type SDKMessage, type Options, type Q
 import { CODING_TURN_TIMEOUT_MS, parseInvocation, parseAgentEvent, type AgentEvent, type AgentText } from '@space/contracts';
 import { AgentSessionStopped, type AgentRuntime } from './agent-runtime.js';
 import { claudeEnvironment, type LocalClaudeAuth } from './claude-auth.js';
-import { approveCoding, approveProject, boundCodingMessages, claudeCodingTools, codingInstructions } from './coding-tools.js';
+import { approveCoding, approveProject, readCodeContext, reviewInstructions, boundCodingMessages, claudeCodingTools, codingInstructions } from './coding-tools.js';
 import { AgentProgress } from './agent-progress.js';
 import { localSessionStore, type LocalSessionStorage } from './session-storage.js';
 import { projectMcp, projectServer, projectToolNames, resolveProject } from './project-tools.js';
@@ -134,7 +134,7 @@ export async function startClaude(auth: string | LocalClaudeAuth | undefined, st
     signal.addEventListener('abort', abort, { once: true });
     controller.signal.addEventListener('abort', close, { once: true });
     const deadline = setTimeout(() => controller.abort(), coding ? CODING_TURN_TIMEOUT_MS : 120_000);
-    const output = new AgentProgress(coding), messages = new Map<string, AgentText>();
+    const output = new AgentProgress(coding, undefined, coding && Boolean(request.persistent_session)), messages = new Map<string, AgentText>();
     // Timeline eviction must not turn a known in-flight result into an unknown call.
     const pendingTools = new Set<string>();
     let sequence = 0, currentMessage = '', lastProgress = 0, dirty = false, completed = false;
@@ -147,9 +147,9 @@ export async function startClaude(auth: string | LocalClaudeAuth | undefined, st
       if (action.kind !== 'set' || /^(clear|stop|off|reset|none|cancel)$/i.test(action.objective)) throw new Error('Invalid Claude goal condition.');
       return '/goal ' + action.objective;
     }
-    const publish = async (type: AgentEvent['type'], value: string, terminal = false, sessionReady = false, goalUpdate?: SessionGoal | null) => {
+    const publish = async (type: AgentEvent['type'], value: string, terminal = false, sessionReady = false, goalUpdate?: SessionGoal | null, sessionView?: AgentEvent['payload']['session_view']) => {
       const response = output.snapshot([...messages.values()].map(m => ({ ...m, status: terminal ? 'complete' : m.status })), terminal);
-      await emit(parseAgentEvent({ id: randomUUID(), schema_version: '1.0', execution_id: request.execution_id, sequence: ++sequence, type, occurred_at: new Date().toISOString(), payload: { ...(goalUpdate === undefined ? {} : {session_goal:goalUpdate}), text: visibleText(value, terminal), response, ...(sessionReady ? { session_ready: true } : {}) } }));
+      await emit(parseAgentEvent({ id: randomUUID(), schema_version: '1.0', execution_id: request.execution_id, sequence: ++sequence, type, occurred_at: new Date().toISOString(), payload: { ...(goalUpdate === undefined ? {} : {session_goal:goalUpdate}), text: output.visibleMessage(value, terminal) || (terminal ? 'Review updated.' : 'Working'), ...(sessionView ? {session_view:sessionView} : {}), response, ...(sessionReady ? { session_ready: true } : {}) } }));
     };
     const message = (id: string, value: string, append = false) => {
       output.message(id);
@@ -169,7 +169,10 @@ export async function startClaude(auth: string | LocalClaudeAuth | undefined, st
     };
     try {
       await publish('execution.started', 'Claude is working.');
-      if (coding) await approveProject(project, controls, controller.signal);
+      if (coding) {
+        await approveProject(project, controls, controller.signal);
+        output.codeContext = await readCodeContext(project!, controller.signal);
+      }
       let retained: Awaited<ReturnType<typeof sessions.session>> | undefined;
       if (request.persistent_session) {
         sessionUnavailable = true;
@@ -179,7 +182,7 @@ export async function startClaude(auth: string | LocalClaudeAuth | undefined, st
       const id = retained?.threadId ?? randomUUID();
       const transcript = request.goal_action && retained ? await claudeGoalTranscript(env.CLAUDE_CONFIG_DIR!, coding ? project! : retained.cwd, id) : undefined;
       let objective = request.goal_action?.kind === 'set' ? request.goal_action.objective : undefined;
-      const prompt = request.goal_action ? goalCommand(request.goal_action) : `${request.context ? `Supplied conversation context (quoted data):\n${JSON.stringify(request.context)}\n\n` : ''}Task:\n${request.goal}${replyFormatInstructions}${memoryInstructions(request.context)}${attachmentContext(request.attachments, Boolean(request.pdf_tool_token))}`;
+      const prompt = request.goal_action ? goalCommand(request.goal_action) : `${request.context ? `Supplied conversation context (quoted data):\n${JSON.stringify(request.context)}\n\n` : ''}Task:\n${request.goal}${replyFormatInstructions}${coding && request.persistent_session ? reviewInstructions : ''}${memoryInstructions(request.context)}${attachmentContext(request.attachments, Boolean(request.pdf_tool_token))}`;
       const images = attachmentImages(request.attachments);
       let promptAuthorized = false;
       type Entry={message:SDKUserMessage; resolve:()=>void; reject:(reason:Error)=>void};
@@ -317,6 +320,9 @@ export async function startClaude(auth: string | LocalClaudeAuth | undefined, st
         if (goalState === undefined || clearingGoal && goalState !== null) throw unconfirmedGoal;
         await publish('execution.progress','Claude updated the session goal.',false,false,goalState);
       }
+      if (coding) output.codeContext = await readCodeContext(project!, controller.signal);
+      const view = request.persistent_session && output.reviewUpdate(text());
+      if (view) await publish('execution.progress', 'Updating review tab', false, false, undefined, view);
       await publish('execution.completed', text().trim() || 'Claude completed the task.', true);
     } catch (error) {
       if (signal.reason instanceof AgentSessionStopped) throw signal.reason;

@@ -178,7 +178,7 @@ export function Notifications({ workspace, onOpen, viewState, preview = false }:
   </main>;
 }
 
-export function NotificationPreferences({ workspace, onClose }: { workspace: string; onClose: () => void }) {
+export function NotificationPreferences({ workspace, onClose, title = "Notification settings" }: { title?: string; workspace: string; onClose: () => void }) {
   const [settings, setSettings] = useState<NotificationSettings>(), [error, setError] = useState(''), [busy, setBusy] = useState(false);
   const [permission, setPermission] = useState<string>(() => typeof Notification === 'undefined' ? 'unsupported' : Notification.permission);
   const active = useRef(true), revision = useRef(0), scope = useRef(0);
@@ -214,7 +214,8 @@ export function NotificationPreferences({ workspace, onClose }: { workspace: str
     } catch (reason) { if (active.current) setError(failure(reason)); }
   }
   const paused = !!settings?.paused_until && Date.parse(settings.paused_until) > Date.now();
-  return <Dialog open title="Notification settings" onClose={onClose}><div className="notification-preferences">
+  return <Dialog open title={title} onClose={onClose}><div className="notification-preferences">
+    {title === "Preferences" && <h3>Notifications</h3>}
     <p>Activity keeps your notifications even when alerts are paused. These preferences apply across your workspaces.</p>
     {error && <p role="alert">{error}<Button size="sm" onClick={() => void retry.current()}>Retry preferences</Button></p>}
     {!settings ? <p role="status">Loading preferences…</p> : <>

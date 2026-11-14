@@ -4,11 +4,27 @@ import { mkdtemp, mkdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
+import { readCodeContext } from '../dist/coding-tools.js';
 import { parseOptions } from '../dist/main.js';
 import { AgentProgress } from '../dist/agent-progress.js';
 import { localSessionStore } from '../dist/session-storage.js';
 import { sessionRuntime } from '../dist/session-runtime.js';
 import { turnScopedRuntime } from '../dist/outbound-tools.js';
+
+test('the session context reflects the approved Git directory without publishing parent repository or credential data', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'space-code-context-'));
+  t.after(() => rm(directory, {recursive:true,force:true}));
+  const project = join(directory, 'app'), sub = join(project, 'sub');
+  await mkdir(sub,{recursive:true});
+  execFileSync('git',['init','--quiet','--initial-branch=review',project]);
+  execFileSync('git',['-C',project,'remote','add','origin','https://user:password@host.test/org/app']);
+  const signal = new AbortController().signal;
+  assert.deepEqual(await readCodeContext(project,signal),{repository:{label:'app'},head_branch:'review'});
+  execFileSync('git',['-C',project,'remote','set-url','origin','git@github.com:acme/app.git']);
+  assert.deepEqual(await readCodeContext(project,signal),{repository:{label:'app',url:'https://github.com/acme/app'},head_branch:'review'});
+  assert.deepEqual(await readCodeContext(sub,signal),{});
+});
 
 test('coding is explicit and requires an absolute project', () => {
   assert.throws(() => parseOptions(['--coding']), /project/);
@@ -73,5 +89,17 @@ test('only coding results with changes expose a configured PR page to reviewers'
   }
   for (const unsafe of ['javascript:alert(1)','https://user:secret@ghe.test/pr','https://ghe.test/signin?token=secret']) {
     assert.throws(() => new AgentProgress(true,unsafe));
+  }
+});
+
+test('a coding agent can discuss review markup without publishing a view or losing its final reply', () => {
+  const output = new AgentProgress(true, undefined, true);
+  for (const message of [
+    'Use <space-review> at the end of your message.',
+    'Example:\n```html\n<space-review>{}</space-review>\n```',
+    'Draft:\n<space-review>incomplete',
+  ]) {
+    assert.equal(output.reviewUpdate(message), undefined);
+    assert.equal(output.visibleMessage(message, true), message);
   }
 });

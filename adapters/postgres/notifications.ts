@@ -5,7 +5,7 @@ import { database, type DbSession } from './database.js';
 import { hasThreadAccess, requireWorkspaceAccess } from './access.js';
 import { sessionTransaction } from './session-concurrency.js';
 
-type Channel = { id: string; workspace_id: string; kind: 'channel' | 'direct' };
+type Channel = { id: string; workspace_id: string; kind: 'channel' | 'direct'; direct_user_low: string | null; direct_user_high: string | null };
 async function rows<T>(c: DbSession, query: Parameters<DbSession['execute']>[0]): Promise<T[]> { return (await c.execute(query)).rows as T[]; }
 const missing = () => new AppError(404, 'not_found');
 const defaults: NotificationSettings = { mode: 'mentions', desktop_enabled: false, sound_enabled: false, preview_enabled: false, thread_replies: true, paused_until: null };
@@ -61,7 +61,8 @@ export class NotificationStore {
     return result.rows[0];
   }
 
-  async notify(c: DbSession, actor: string, channel: Channel, message: string, thread: string, refs: MentionReference[], reply: boolean) {
+  async notify(c: DbSession, actor: string, channel: Channel, message: string, thread: string, refs: MentionReference[], reply: boolean, alsoInChannel = false) {
+    const followsDirectThread = channel.kind === 'direct' && channel.direct_user_low !== channel.direct_user_high;
     const followers = [actor, ...refs.filter(ref => ref.kind === 'user').map(ref => ref.id)];
     await c.execute(sql`INSERT INTO notification_subscriptions(thread_id,user_id)
       SELECT ${thread},wm.user_id FROM workspace_members wm JOIN channel_members cm ON cm.workspace_id=wm.workspace_id AND cm.user_id=wm.user_id AND cm.channel_id=${channel.id}
@@ -71,14 +72,16 @@ export class NotificationStore {
       SELECT ${channel.workspace_id},${channel.id},${message},recipient.user_id,${actor},recipient.kind,
         NOT recipient.joined OR coalesce(p.paused_until>now(),false) OR coalesce(recipient.muted_until>now(),false) OR coalesce(recipient.notification_mode,p.mode,'mentions')='none' OR (recipient.kind='thread_reply' AND NOT coalesce(recipient.notify_thread_replies,recipient.follow_every_thread OR coalesce(p.thread_replies,true)))
       FROM (
-        SELECT wm.user_id,CASE WHEN mn.id IS NOT NULL THEN 'mention' WHEN ${channel.kind === 'direct'} THEN 'direct_message'
-          WHEN ${reply} AND (ns.following OR (ns.following IS NULL AND cm.follow_every_thread)) THEN 'thread_reply' ELSE 'channel_message' END AS kind,cm.user_id IS NOT NULL AS joined,cm.follow_every_thread,cm.notification_mode,cm.muted_until,cm.notify_thread_replies
+        SELECT wm.user_id,CASE WHEN mn.id IS NOT NULL THEN 'mention' WHEN ${reply} AND coalesce(ns.following,${followsDirectThread} OR cm.follow_every_thread) THEN 'thread_reply'
+          WHEN ${channel.kind === 'direct'} THEN 'direct_message' ELSE 'channel_message' END AS kind,cm.user_id IS NOT NULL AS joined,cm.follow_every_thread,cm.notification_mode,cm.muted_until,cm.notify_thread_replies
         FROM workspace_members wm LEFT JOIN channel_members cm ON cm.workspace_id=wm.workspace_id AND cm.user_id=wm.user_id AND cm.channel_id=${channel.id}
         LEFT JOIN mention_notifications mn ON mn.message_id=${message} AND mn.user_id=wm.user_id
         LEFT JOIN notification_subscriptions ns ON ns.thread_id=${thread} AND ns.user_id=wm.user_id
         LEFT JOIN mention_preferences p ON p.user_id=wm.user_id
         WHERE wm.workspace_id=${channel.workspace_id} AND wm.active AND wm.user_id<>${actor}
-          AND (mn.id IS NOT NULL OR (cm.user_id IS NOT NULL AND (${channel.kind === 'direct'} OR (${reply} AND (ns.following OR (ns.following IS NULL AND cm.follow_every_thread))) OR (NOT ${reply} AND coalesce(cm.notification_mode,p.mode)='all'))))
+          AND (mn.id IS NOT NULL OR (cm.user_id IS NOT NULL AND (
+            (${reply} AND coalesce(ns.following,${followsDirectThread} OR cm.follow_every_thread))
+            OR (${!reply || alsoInChannel} AND (${channel.kind === 'direct'} OR coalesce(cm.notification_mode,p.mode)='all')))))
       ) recipient LEFT JOIN mention_preferences p ON p.user_id=recipient.user_id
       ORDER BY recipient.user_id ON CONFLICT DO NOTHING`);
   }
@@ -184,9 +187,16 @@ export class NotificationStore {
     const following = input === undefined ? undefined : booleanInput(input, 'following');
     return sessionTransaction(this.db, async c => {
       if (!await hasThreadAccess(c, actor, uuid(thread))) throw missing();
+      if ((await c.execute(sql`SELECT 1 FROM agent_sessions WHERE origin_thread_id=${thread} AND handoff_context IS NOT NULL
+        AND created_by IS DISTINCT FROM ${actor}::uuid LIMIT 1`)).rows.length) throw missing();
       if (following !== undefined) await c.execute(sql`INSERT INTO notification_subscriptions(thread_id,user_id,following) VALUES(${thread},${actor},${following})
-        ON CONFLICT(thread_id,user_id) DO UPDATE SET following=EXCLUDED.following`);
-      return { following: (await rows<{ following: boolean }>(c, sql`SELECT following FROM notification_subscriptions WHERE thread_id=${thread} AND user_id=${actor}`))[0]?.following ?? false };
+        ON CONFLICT(thread_id,user_id) DO UPDATE SET following=EXCLUDED.following
+        WHERE notification_subscriptions.following IS DISTINCT FROM EXCLUDED.following`);
+      const [state] = await rows<{following:boolean}>(c, sql`SELECT coalesce(ns.following,(ch.kind='direct' AND ch.direct_user_low<>ch.direct_user_high) OR cm.follow_every_thread) AS following
+        FROM threads t JOIN channels ch ON ch.id=t.channel_id JOIN channel_members cm ON cm.channel_id=ch.id AND cm.user_id=${actor}
+        LEFT JOIN notification_subscriptions ns ON ns.thread_id=t.id AND ns.user_id=cm.user_id WHERE t.id=${thread}`);
+      if (!state) throw missing();
+      return state;
     });
   }
 }

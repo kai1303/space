@@ -6,6 +6,7 @@ export const outboundServer = 'space_outbound';
 export const outboundTokenEnv = 'SPACE_OUTBOUND_TOKEN';
 
 export type TurnServer = OutboundAccess & { name: string; tokenEnv: string };
+export type BrowserTurn = (request: InvocationRequest, signal: AbortSignal) => Promise<TurnServer | undefined>;
 export function turnServers(request: InvocationRequest, platform?: string): TurnServer[] {
   const servers: TurnServer[] = request.outbound ? [{ ...request.outbound, name: outboundServer, tokenEnv: outboundTokenEnv }] : [];
   if (request.pdf_tool_token && !request.context?.handoff?.browser_url) {
@@ -21,7 +22,7 @@ export function serverPrompt(servers: TurnServer[], project?: string) {
 }
 
 // Capabilities belong to a turn, while native conversation IDs stay in provider storage.
-export async function turnScopedRuntime(create: (onExit: () => void, servers: TurnServer[], signal?: AbortSignal, enableGoals?: boolean, personalOnly?: boolean) => Promise<AgentRuntime>, onExit: () => void, platform?: string): Promise<AgentRuntime> {
+export async function turnScopedRuntime(create: (onExit: () => void, servers: TurnServer[], signal?: AbortSignal, enableGoals?: boolean, personalOnly?: boolean) => Promise<AgentRuntime>, onExit: () => void, platform?: string, browserTurn?: BrowserTurn): Promise<AgentRuntime> {
   let closed = false, busy = false;
   const exited = () => { if (!closed) { closed = true; onExit(); } };
   let runtime: AgentRuntime | undefined = await create(exited, []);
@@ -36,12 +37,18 @@ export async function turnScopedRuntime(create: (onExit: () => void, servers: Tu
       const scoped = personalOnly || servers.length > 0 || Boolean(request.goal_action);
       if (closed || busy || signal.aborted) throw new Error('Agent unavailable or busy.');
       busy = true;
+      const lifetime = new AbortController();
       try {
+        if (personalOnly && browserTurn) {
+          const local = await browserTurn(request, AbortSignal.any([signal, lifetime.signal]));
+          if (local) servers.push(local);
+        }
         if (scoped) { runtime?.stop(); runtime = undefined; }
         if (!runtime) runtime = await create(exited, servers, signal, Boolean(request.goal_action), personalOnly);
         if (closed || signal.aborted) { runtime.stop(); runtime = undefined; throw new Error('Agent unavailable.'); }
         await runtime.invoke(request, emit, signal, controls);
       } finally {
+        lifetime.abort();
         if (scoped) { runtime?.stop(); runtime = undefined; }
         busy = false;
       }

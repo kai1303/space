@@ -7,6 +7,10 @@ function mergeSessionLinks(previous: ChatMessage['agent_sessions'] = [], incomin
   // Match the bounded inline summary returned by message history.
   return [...new Map([...previous, ...incoming].map(session => [session.id, session])).values()].slice(0, 100);
 }
+function newestSummary(a: ChatMessage['reply_summary'], b: ChatMessage['reply_summary']) {
+  if (!a || !b) return b ?? a;
+  return BigInt(b.revision) >= BigInt(a.revision) ? b : a;
+}
 function ordered(messages: ChatMessage[]) {
   const unique = new Map<string, ChatMessage>();
   for (const message of messages) {
@@ -16,6 +20,8 @@ function ordered(messages: ChatMessage[]) {
     const latest = keepPrevious ? previous : message;
     let updated = previous?.reply_count !== undefined || message.reply_count !== undefined
       ? { ...latest, reply_count: Math.max(previous?.reply_count ?? 0, message.reply_count ?? 0) } : latest;
+    const summary = newestSummary(previous?.reply_summary, message.reply_summary);
+    if (summary) updated = { ...updated, reply_summary: summary, reply_count: summary.count };
     if (previous?.agent_sessions || message.agent_sessions) updated = { ...updated, agent_sessions: mergeSessionLinks(previous?.agent_sessions, message.agent_sessions) };
     unique.set(message.id, updated);
   }
@@ -31,7 +37,7 @@ export function mergePage(previous: MessagePage | null, page: MessagePage, direc
     const live = previous.has_newer ? [] : previous.messages.filter(message => BigInt(message.sequence!) > BigInt(page.event_cursor));
     const ids = new Set(page.messages.map(message => message.id));
     const updates = previous.messages.filter(message => ids.has(message.id) && (message.deleted_at ||
-      BigInt(message.reaction_sequence ?? '0') > BigInt(page.event_cursor)));
+      BigInt(message.reaction_sequence ?? '0') > BigInt(page.event_cursor) || BigInt(message.reply_summary?.revision ?? '0') > BigInt(page.event_cursor)));
     const messages = ordered([...page.messages, ...live, ...updates]);
     return boundaries({ ...page, has_older: page.has_older || messages.length > HISTORY_LIMIT }, messages.slice(-HISTORY_LIMIT));
   }
@@ -43,15 +49,20 @@ export function mergePage(previous: MessagePage | null, page: MessagePage, direc
   }, direction === 'older' ? messages.slice(0, HISTORY_LIMIT) : messages.slice(-HISTORY_LIMIT));
 }
 export function appendLive(previous: MessagePage, incoming: ChatMessage[], pinned: boolean, rootsOnly = false): MessagePage {
+  if (rootsOnly) incoming = incoming.map(message => message.channel_broadcast_sequence ?
+    { ...message, sequence: message.channel_broadcast_sequence } : message);
   const counts = new Map<string, number>(), sessions = new Map<string, NonNullable<ChatMessage['agent_sessions']>>();
+  const summaries = new Map<string, ChatMessage['reply_summary']>();
   for (const message of incoming) if (message.thread_root_id) {
+    if (!message.agent_session_id && message.reply_summary) summaries.set(message.thread_root_id, newestSummary(summaries.get(message.thread_root_id), message.reply_summary));
     if (!message.agent_session_id && message.reply_count !== undefined) counts.set(message.thread_root_id, Math.max(counts.get(message.thread_root_id) ?? 0, message.reply_count));
     if (message.agent_session_id) sessions.set(message.thread_root_id, mergeSessionLinks(sessions.get(message.thread_root_id), [{ id: message.agent_session_id, title: message.text, agent_name: message.author.name }]));
   }
   incoming = [
-    ...incoming.filter(message => !rootsOnly || !message.thread_root_id || message.thread_root_id === message.id),
-    ...[...previous.messages, ...incoming].filter(message => counts.has(message.id) || sessions.has(message.id)).map(message => ({
+    ...incoming.filter(message => !rootsOnly || message.channel_broadcast_sequence || !message.thread_root_id || message.thread_root_id === message.id),
+    ...[...previous.messages, ...incoming].filter(message => counts.has(message.id) || summaries.has(message.id) || sessions.has(message.id)).map(message => ({
       ...message, ...(counts.has(message.id) ? { reply_count: Math.max(message.reply_count ?? 0, counts.get(message.id)!) } : {}),
+      ...(summaries.has(message.id) ? { reply_summary: newestSummary(message.reply_summary, summaries.get(message.id)) } : {}),
       ...(sessions.has(message.id) ? { agent_sessions: mergeSessionLinks(message.agent_sessions, sessions.get(message.id)) } : {}),
     })),
   ];
@@ -59,7 +70,8 @@ export function appendLive(previous: MessagePage, incoming: ChatMessage[], pinne
   for (const message of incoming) {
     // Replay can already contain a tombstone for a creation newer than the loaded window.
     if (message.deleted_at ? BigInt(message.sequence!) > BigInt(previous.newer_cursor ?? '0') :
-      !message.reaction_sequence || message.reaction_sequence === '0') present.add(message.id);
+      !message.reaction_sequence || message.reaction_sequence === '0' ||
+      (rootsOnly && message.channel_broadcast_sequence && BigInt(message.channel_broadcast_sequence) >= BigInt(previous.older_cursor ?? '0'))) present.add(message.id);
   }
   incoming = incoming.filter(message => present.has(message.id));
   if (!incoming.length) return previous;

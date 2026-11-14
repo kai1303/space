@@ -31,4 +31,3 @@
 .access-page .auth-error p,.auth-error p{margin:2px 0 0;color:var(--sp-text-secondary);font-size:12px;line-height:1.5}
 .access-workspace-enter{height:100%;min-height:100dvh}
 @media(max-width:480px){.chat-login.access-page{padding:28px 24px;align-items:start}.access-frame{min-height:0}.access-page .access-heading h1{font-size:30px}.access-progress{margin-top:16px}}
-@media(prefers-reduced-motion:reduce){.access-page .sp-spinner{animation:none}}

@@ -20,6 +20,7 @@ export function Message({
   onReply,
   onAuthorClick,
   replyCount = 0,
+  replyParticipants = [], participantCount = replyParticipants.length, lastReplyAt, hasReplyDraft = false, threadOpen,
   tone = "purple",
   arrival = false,
   actions,
@@ -38,12 +39,19 @@ export function Message({
   onReply?: () => void;
   onAuthorClick?: () => void;
   replyCount?: number;
+  replyParticipants?: { id: string; kind?: string; name: string; image?: string | null }[];
+  participantCount?: number;
+  lastReplyAt?: string | null;
+  hasReplyDraft?: boolean;
+  threadOpen?: boolean;
   tone?: "purple" | "blue" | "green" | "orange";
   arrival?: boolean | "glide" | "fade";
   actions?: MessageActionHandlers;
   footer?: ReactNode;
   grouped?: boolean;
 }) {
+  const replyLabel = [replyCount > 0 && `${replyCount} ${replyCount === 1 ? "reply" : "replies"}`, hasReplyDraft && "1 draft"].filter(Boolean).join(" & ");
+  const lastReply = lastReplyAt ? new Date(lastReplyAt) : null;
   const reduced = useReducedMotion();
   const glide = arrival !== "fade";
   const press = useLongPress();
@@ -83,10 +91,22 @@ export function Message({
             ))}
           </div>
         )}
-        {replyCount > 0 && onReply && (
-          <button type="button" className="sp-thread-link" aria-label={`${replyCount} ${replyCount === 1 ? "reply" : "replies"} View thread`} onClick={onReply}>
-            <ChatCircle size={14} aria-hidden="true" />
-            {replyCount} {replyCount === 1 ? "reply" : "replies"}<span className="sp-thread-link-hint" aria-hidden="true">View thread</span>
+        {replyLabel && onReply && (
+          <button type="button" className="sp-thread-link" aria-label={`${replyLabel} View thread`} aria-expanded={threadOpen} onClick={onReply}>
+            {replyParticipants.length ? <span className="sp-thread-link-faces">
+              {replyParticipants.slice(0, 5).map((person, index) => <span className="sp-thread-link-face" key={`${person.kind}:${person.id}:${person.name}`} title={person.name}>
+                <Avatar name={person.name} initials={person.name.trim().split(/\s+/).slice(0, 2).map(word => word[0]).join("")} image={person.image} size="sm"/>
+                {index === 4 && participantCount > 5 && <span className="sp-thread-link-more">+{participantCount - 5}</span>}
+              </span>)}
+            </span> : <ChatCircle size={16} aria-hidden="true"/>}
+            <strong>{replyLabel}</strong>
+            <span className="sp-thread-link-detail">
+              {lastReply && Number.isFinite(lastReply.getTime()) && <time dateTime={lastReplyAt!} title={lastReply.toLocaleString()}>
+                Last reply {lastReply.toLocaleString(undefined, lastReply.toDateString() === new Date().toDateString()
+                  ? {hour: "numeric", minute: "2-digit"} : {month: "short", day: "numeric", year: lastReply.getFullYear() !== new Date().getFullYear() ? "numeric" : undefined})}
+              </time>}
+              <span className="sp-thread-link-hint" aria-hidden="true">View thread</span>
+            </span>
             <CaretRight className="sp-thread-link-arrow" size={18} aria-hidden="true" />
           </button>
         )}

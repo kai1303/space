@@ -65,6 +65,7 @@ export function registerRealtime(app: FastifyInstance, authenticate: (headers: I
   const sidebarTyping = new TypingListeners();
   const receiveTyping = (event: TypingEvent, peerKey?: string) => {
     typingListeners.publish(event);
+    if (event.thread_id) typingListeners.publish(event, `thread:${event.thread_id}`);
     if (peerKey && !event.thread_id) sidebarTyping.publish(event, peerKey);
   };
   io.on('space.typing',receiveTyping);
@@ -181,7 +182,19 @@ export function registerRealtime(app: FastifyInstance, authenticate: (headers: I
         socket.emit('updates.revoked', { scope: current.scope, id: current.id, ...failure(error) });
       });
       resources.set(key, current);
-      current.stop = subscriptions.add(current.keys!, current.wake);
+      const stopResource = subscriptions.add(current.keys!, current.wake);
+      const stopThreadTyping = next.scope === 'thread' ? typingListeners.subscribe({
+        key, socketId: socket.id, pump: boundedPump, active,
+        authorizeEvents: async events => {
+          const channel = events[0]?.channel_id;
+          if (!channel || channel === subscription?.channel) return [];
+          const access = await chat.typingActor(socket.data.actor,channel,next.id);
+          return access.archived ? [] : events;
+        },
+        emit: event => socket.volatile.emit('chat.typing',event),
+        revoke: () => { if (active()) current.wake(); },
+      }) : undefined;
+      current.stop = () => { stopResource(); stopThreadTyping?.(); };
       setImmediate(current.wake);
       return { scope: next.scope, id: next.id };
     });
@@ -278,9 +291,11 @@ export function registerRealtime(app: FastifyInstance, authenticate: (headers: I
     handle('typing.change', async input=>{
       const value=parseTypingInput(input);
       const current=subscription;
-      if(current?.channel!==value.channel_id)throw new AppError(404,'not_found');
+      const inRoom = current?.channel === value.channel_id;
+      const threadResource = value.thread_id ? resources.get(`thread:${value.thread_id}`) : undefined;
+      if (!inRoom && !threadResource) throw new AppError(404,'not_found');
       const access=await chat.typingActor(socket.data.actor,value.channel_id,value.thread_id);
-      if(!socket.connected||subscription!==current)return value;
+      if (!socket.connected || (inRoom ? subscription !== current : resources.get(`thread:${value.thread_id}`) !== threadResource)) return value;
       if(access.archived&&value.active)throw new AppError(409,'channel_archived');
       const key=value.thread_id??'';
       if(!value.active){stopTyping(value.thread_id);return value;}
@@ -293,7 +308,7 @@ export function registerRealtime(app: FastifyInstance, authenticate: (headers: I
       typing.set(key,{event,timer,peerKey});publishTyping(event,peerKey);return value;
     });
     handle('message.send', async input => {
-      const v = record(input, ['channel_id', 'client_message_id', 'encrypted', 'text', 'thread_id', 'document', 'asset_ids', 'asset_descriptions', 'broadcast_confirmed', 'receipt_id', 'expected_actor']);
+      const v = record(input, ['channel_id', 'client_message_id', 'encrypted', 'text', 'thread_id', 'document', 'asset_ids', 'asset_descriptions', 'broadcast_confirmed', 'also_send_to_channel', 'receipt_id', 'expected_actor']);
       const { channel_id, receipt_id, expected_actor, ...message } = v;
       if (expected_actor !== undefined && uuid(expected_actor) !== socket.data.actor) throw new AppError(409, 'actor_changed');
       const channel = uuid(channel_id);

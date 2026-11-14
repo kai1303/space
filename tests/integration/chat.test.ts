@@ -6,6 +6,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { Pool } from 'pg';
 import { io } from 'socket.io-client';
 import { RedisSocketAdapter } from '@space/redis';
+import { EventBridge } from '@space/event-service/bridge';
 import { bootstrap } from '@space/postgres/bootstrap';
 import { migrate } from '@space/postgres/migrate';
 import { PostgresStore } from '@space/postgres/store';
@@ -21,6 +22,7 @@ if (!url) throw new Error('TEST_DATABASE_URL is required');
 const schema = `chat_${randomBytes(8).toString('hex')}`;
 const admin = new Pool({ connectionString: url });
 const pool = new Pool({ connectionString: url, options: `-c search_path=${schema}`, max: 20 });
+const bridge = new EventBridge({databaseUrl:url,natsUrl:process.env.NATS_URL ?? process.env.TEST_NATS_URL ?? 'nats://127.0.0.1:54222',schema});
 const adapter = new RedisSocketAdapter(process.env.TEST_REDIS_URL, schema);
 const otherAdapter = new RedisSocketAdapter(process.env.TEST_REDIS_URL, schema);
 const store = new PostgresStore(pool), app = createApi(store, { allowDevelopmentTokens: true, realtime: { adapter, } });
@@ -28,11 +30,19 @@ const second = createApi(new PostgresStore(pool), { allowDevelopmentTokens: true
 let address: string, secondAddress: string;
 before(async () => {
   await Promise.all([adapter.connect(), otherAdapter.connect()]);
-  await admin.query(`CREATE SCHEMA ${schema}`); await migrate(pool);
+  await admin.query(`CREATE SCHEMA ${schema}`); await migrate(pool); await bridge.start();
   address = await app.listen({ host: '127.0.0.1', port: 0 });
   secondAddress = await second.listen({ host: '127.0.0.1', port: 0 });
 });
-after(async () => { await app.close(); await second.close(); await pool.end(); await admin.query(`DROP SCHEMA ${schema} CASCADE`); await admin.end(); });
+after(async () => {
+  await app.close(); await second.close(); await bridge.close(); await pool.end();
+  for (let attempt=0; ; attempt++) {
+    try { await admin.query('SELECT pg_drop_replication_slot(slot_name) FROM pg_replication_slots WHERE slot_name=$1',[bridge.slot]); break; }
+    catch (e) { if ((e as {code?:string}).code!=='55006' || attempt>=6) throw e; await delay(50 * 2 ** attempt); }
+  }
+  await admin.query(`DROP PUBLICATION IF EXISTS "${bridge.publication}"`);
+  await admin.query(`DROP SCHEMA ${schema} CASCADE`); await admin.end();
+});
 async function api(token: string, method: 'GET' | 'POST' | 'PUT' | 'DELETE', path: string, body?: object, status = 200) {
   const response = await app.inject({ method, url: `/v1${path}`, headers: { authorization: `Bearer ${token}` }, ...(body ? { payload: body } : {}) });
   assert.equal(response.statusCode, status, `${path}: ${response.body}`);

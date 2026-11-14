@@ -11,8 +11,9 @@
     "start": "node scripts/build-browser-style.cjs && node scripts/build-runner.cjs && electron .",
     "build": "node --check src/main.cjs && node --check src/window.cjs && node --check src/policy.cjs && node --check forge.config.cjs && node scripts/build-browser-style.cjs && node scripts/build-runner.cjs",
     "test": "node --test test/*.test.cjs",
+    "test:vault": "sh test/vault/test.sh",
     "test:smoke": "node test/smoke.cjs",
-    "test:browser": "node scripts/build-browser-style.cjs && node test/smoke.cjs browser",
+    "test:browser": "node scripts/build-browser-style.cjs && node scripts/build-runner.cjs && node test/smoke.cjs browser",
     "test:live": "node test/smoke.cjs live",
     "package": "electron-forge package --platform=darwin",
     "make": "electron-forge make --platform=darwin"
@@ -24,12 +25,14 @@
     "@electron-forge/cli": "8.0.1",
     "@electron-forge/maker-zip": "8.0.1",
     "@fontsource/lato": "^5.3.0",
+    "@modelcontextprotocol/node": "2.1.2",
     "@modelcontextprotocol/server": "2.4.0",
     "@space/ui": "workspace:*",
     "@xterm/xterm": "6.0.0",
     "electron": "45.2.2",
     "esbuild": "0.28.2",
     "motion": "^14.9.0",
+    "tldts": "7",
     "zod": "^4.2.0"
   }
 }

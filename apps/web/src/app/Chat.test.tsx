@@ -757,7 +757,7 @@ it('keeps uploads with their channel and thread drafts across navigation, retrie
   fireEvent.change(view.container.querySelector('.chat-thread input[type="file"]')!, { target: { files: [new File(['data'], 'thread.txt', { type: 'text/plain' })] } });
   await screen.findByRole('button', { name: 'Retry upload thread.txt' });
   await userEvent.click(screen.getByRole('button', { name: 'Close thread' }));
-  await userEvent.click(screen.getByRole('button', { name: 'Reply to Kai' }));
+  await userEvent.click(await screen.findByRole('button', { name: '1 draft View thread' }));
   await userEvent.click(await screen.findByRole('button', { name: 'Retry upload thread.txt' }));
   await waitFor(() => expect(screen.queryByRole('button', { name: 'Retry upload thread.txt' })).toBeNull());
   const buttons = screen.getAllByRole('button', { name: 'Send now' });
@@ -1101,7 +1101,7 @@ it('updates unopened channel badges from authoritative realtime snapshots withou
   await act(async () => { socket.receive('workspace.unread', { workspace_id: 'elsewhere', channels: [] }, vi.fn()); });
   expect(screen.getByLabelText('4 unread')).toBeTruthy();
 });
-it.each([false, true])('marks a channel read beside an agent session only when visible (compact=%s)', async compact => {
+it.each([false, true])('keeps the source channel unread while viewing a dedicated agent session (compact=%s)', async compact => {
   vi.stubGlobal('matchMedia', (media: string) => ({
     media, matches: compact && media === '(max-width: 1150px)',
     addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {},
@@ -1111,17 +1111,15 @@ it.each([false, true])('marks a channel read beside an agent session only when v
     const { fetch, snapshot } = mockUnreadChat();
     render(<Chat />);
     await userEvent.click(await screen.findByRole('button', { name: 'Agent session: Research' }));
-    await screen.findByRole('region', { name: 'Agent session', exact: true });
+    await screen.findByRole('main', { name: 'Agent session', exact: true });
     const socket = mocks.sockets.find(s => s.requests.some((r: any) => r.name === 'workspace.subscribe'));
     await act(async () => { socket.receive('workspace.unread', snapshot, vi.fn()); });
     focus.mockReturnValue(true);
     fireEvent.focus(window);
     const reads = () => fetch.mock.calls.filter(([path]) => path === '/v1/channels/first/read');
-    if (compact) {
-      await act(async () => { await new Promise(resolve => setTimeout(resolve, 350)); });
-      expect(reads()).toHaveLength(0);
-      await userEvent.click(screen.getByRole('button', { name: 'Close agent session' }));
-    }
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 350)); });
+    expect(reads()).toHaveLength(0);
+    await userEvent.click(screen.getByRole('button', { name: 'Close agent session' }));
     await waitFor(() => expect(reads()).toHaveLength(1));
   } finally { focus.mockRestore(); }
 });
@@ -1321,16 +1319,16 @@ it('opens a task inside its unified agent session and clears the session after r
   await userEvent.click(await screen.findByRole('button',{name:'Open agent session'}));
   await screen.findByRole('heading',{name:'Research agent',exact:true,level:1});
   await within(screen.getByRole('log',{name:'Session conversation'})).findByText('The result is saved.');
-  const panel=screen.getByRole('region',{name:'Agent session',exact:true});
+  const panel=screen.getByRole('main',{name:'Agent session',exact:true});
   expect(within(panel).queryByRole('button',{name:'New agent session'})).toBeNull();
   expect(within(panel).queryByRole('navigation',{name:'Sessions in this thread'})).toBeNull();
   await waitFor(()=>expect(screen.queryByRole('region',{name:'Thread',exact:true})).toBeNull());
   expect(screen.queryByRole('tab',{name:'Agent sessions',exact:true})).toBeNull();
   expect(screen.queryByRole('region',{name:'Agent workspace'})).toBeNull();
   await userEvent.click(screen.getByRole('tab',{name:'Preview',exact:true}));await screen.findByText('No preview attached');
-  await act(async()=>{socket.receive('chat.error',{error:'not_found'});});
+  await act(async()=>{for (const connection of mocks.sockets) connection.receive('updates.revoked',{scope:'thread',id:'thread',error:'not_found'});});
   await waitFor(()=>expect(screen.queryByRole('heading',{name:'Research agent',exact:true,level:1})).toBeNull());
-  expect(screen.queryByText('Conversation with an agent task')).toBeNull();
+  expect(screen.queryByText('The result is saved.')).toBeNull();
 });
 it('renders saved agent replies without session action buttons in the channel or thread', async()=>{
   const saved={...paginatedMessage('Saved agent result','3'),task_id:'saved-task',author:{kind:'agent' as const,id:'agent',name:'Research agent'},agent_response:{messages:[{id:'m',text:'The report is ready.',status:'complete' as const}],tools:[],components:[]}};
@@ -1590,7 +1588,7 @@ it('opens a persistent agent session from its channel link without duplicating t
  expect(thread.querySelector('.chat-history-edge--newer')).toBeNull();
  expect(thread.querySelector('.chat-history-edge--older')).toBeNull();
  await userEvent.click(channelLink);
- const sessionPanel=await screen.findByRole('region',{name:'Agent session',exact:true});
+ const sessionPanel=await screen.findByRole('main',{name:'Agent session',exact:true});
  expect(document.activeElement).toBe(sessionPanel);
  await screen.findByRole('textbox',{name:'Message agent session'});
  expect(screen.queryByRole('button',{name:'New agent session'})).toBeNull();
@@ -1603,19 +1601,16 @@ it('opens a persistent agent session from its channel link without duplicating t
  await userEvent.click(await screen.findByRole('button',{name:`Agent session: ${reference.text}`}));
  const editor=await screen.findByRole('textbox',{name:'Message agent session'});
  await userEvent.type(editor,'Retain this session draft');
- await userEvent.click(screen.getByRole('tab',{name:'Preview',exact:true}));
- await screen.findByRole('tabpanel',{name:'Preview',exact:true});
+ await userEvent.click(screen.getByRole('button',{name:/^Artifacts/}));
+ await screen.findByRole('complementary',{name:'Artifacts'});
  await userEvent.click(screen.getByRole('button',{name:'Close agent session'}));
- expect(document.activeElement).toBe(channelLink);
- expect(sessionPanel.hasAttribute('inert')).toBe(true);
- await waitFor(()=>expect(sessionPanel.hidden).toBe(true));
- await userEvent.click(channelLink);
- expect(document.activeElement).toBe(sessionPanel);
- await userEvent.click(within(sessionPanel).getByRole('tab',{name:'Messages',exact:true}));
+ const restoredLink=await screen.findByRole('button',{name:`Agent session: ${reference.text}`});
+ await waitFor(()=>expect(document.activeElement).toBe(restoredLink));
+ expect(screen.queryByRole('main',{name:'Agent session',exact:true})).toBeNull();
+ await userEvent.click(restoredLink);
+ expect(await screen.findByRole('main',{name:'Agent session',exact:true})).toBe(sessionPanel);
  const reopened=await screen.findByRole('textbox',{name:'Message agent session'});
- expect(reopened).toBe(editor);
  expect(reopened.textContent).toContain('Retain this session draft');
- expect(document.activeElement).toBe(within(sessionPanel).getByRole('tab',{name:'Messages',exact:true}));
 });
 it('keeps earlier thread history reachable when the current page contains only hidden session reference records',async()=>{
  const root={...paginatedMessage('Parent outside the current page','1'),agent_sessions:[{id:'session',title:'Research',agent_name:'Codex'}]};
@@ -1893,6 +1888,22 @@ it('restores the selected DM after visiting another rail destination',async()=>{
   await userEvent.click(screen.getByRole('button',{name:'DMs',exact:true}));
   await screen.findByRole('textbox',{name:'Message Kai (you)'});
 });
+it('opens a code channel from the DM inbox and returns to the same DM or its source thread',async()=>{
+  mockDestinationNavigation();render(<Chat/>);await screen.findByText('Destination parent');
+  await userEvent.click(screen.getByRole('button',{name:'DMs',exact:true}));
+  await userEvent.click(await screen.findByRole('button',{name:'Open DM with Kai (you)'}));
+  const source=()=>screen.findByRole('button',{name:'Agent session: Navigation session'});
+  await userEvent.click(await source());
+  await screen.findByRole('heading',{name:'Navigation session',level:1});
+  expect(screen.queryByRole('textbox',{name:'Message Kai (you)'})).toBeNull();
+  await userEvent.click(screen.getByRole('button',{name:'Close agent session'}));
+  await screen.findByRole('textbox',{name:'Message Kai (you)'});
+  await userEvent.click(await source());
+  await screen.findByRole('heading',{name:'Navigation session',level:1});
+  await userEvent.click(screen.getByRole('button',{name:'Back to thread'}));
+  await screen.findByRole('region',{name:'Thread',exact:true});
+  expect(screen.queryByRole('main',{name:'Agent session'})).toBeNull();
+});
 it('restores Activity filters after visiting Home',async()=>{
   mockDestinationNavigation();render(<Chat/>);await screen.findByText('Destination parent');
   await userEvent.click(screen.getByRole('button',{name:'Activity',exact:true}));
@@ -2040,7 +2051,8 @@ it('selects multiple messages and opens a private sidekick handoff without posti
  await user.click(await within(await screen.findByRole('region',{name:'Original message in #first'})).findByRole('button',{name:'Open thread'}));
  expect(screen.queryByRole('region',{name:'My sidekick'})).toBeNull();
  expect(screen.getByRole('region',{name:'Thread'})).toBeTruthy();
- expect(screen.queryByRole('checkbox')).toBeNull();
+ expect(screen.queryByRole('region',{name:'Selected messages'})).toBeNull();
+ expect(screen.queryByRole('button',{name:/^Select message from/})).toBeNull();
 });
 
 it('keeps the thread header free of the sidekick handoff action',async()=>{
@@ -2101,7 +2113,7 @@ it('opens agent sessions below direct messages, retains drafts, and refreshes si
  const user=userEvent.setup();
  mockPaginatedChat(()=>messagePage([paginatedMessage('Channel source','1')]));
  const fallback=vi.mocked(fetch).getMockImplementation()!;
- let session={working:false,id:'00000000-0000-4000-8000-000000000001',channel_id:'first',channel_archived:false,workspace_id:'workspace',origin_thread_id:'session-thread',installation_id:'mine',title:'Launch checklist',state:'active',managed:true,created_by:'user',owner_id:'user',agent_name:'My Codex',created_at:'2026-11-04T00:00:00Z',skill:'codex.run',turn_count:0};
+ let session={code_channel:true,working:false,id:'00000000-0000-4000-8000-000000000001',channel_id:'first',channel_archived:false,workspace_id:'workspace',origin_thread_id:'session-thread',installation_id:'mine',title:'Launch checklist',state:'active',managed:true,created_by:'user',owner_id:'user',agent_name:'My Codex',created_at:'2026-11-04T00:00:00Z',skill:'codex.run',turn_count:0};
  let items=[session];
  let releaseDetail!: () => void;
  const detailReady = new Promise<void>(resolve => { releaseDetail = resolve; });
@@ -2122,15 +2134,15 @@ it('opens agent sessions below direct messages, retains drafts, and refreshes si
  const nav=await screen.findByRole('navigation',{name:'Workspace conversations'});
  const entry=await within(nav).findByRole('button',{name:'Launch checklist',exact:true});
  const headings=within(nav).getAllByRole('button').map(button=>button.textContent);
- expect(headings.indexOf('Agent sessions')).toBeGreaterThan(headings.indexOf('Direct messages'));
- expect(headings.indexOf('Agent sessions')).toBeLessThan(headings.indexOf('Apps'));
+ expect(headings.indexOf('Code channels')).toBeGreaterThan(headings.indexOf('Direct messages'));
+ expect(headings.indexOf('Code channels')).toBeLessThan(headings.indexOf('Apps'));
  const updateActivity=async(working:boolean)=>{
   items=[{...session,working}];
   await act(async()=>{latestChatSocket().receive('updates.changed',{scope:'workspace',id:'workspace'});});
  };
  await updateActivity(true);
  await within(entry).findByRole('img',{name:'My Codex is working'});
- expect(entry.querySelector('.sp-avatar')?.textContent).toBe('MY');
+ expect(entry.querySelector('svg')).toBeTruthy();
  await updateActivity(false);
  await waitFor(()=>expect(within(entry).queryByRole('img',{name:'My Codex is working'})).toBeNull());
  fireEvent.contextMenu(entry);
@@ -2153,16 +2165,17 @@ it('opens agent sessions below direct messages, retains drafts, and refreshes si
  expect(editor.closest('main')).toBe(frame);
  expect(frame?.querySelector('header')).toBe(header);
  await act(async () => releaseDetail());
- await screen.findByRole('heading',{name:'My Codex',exact:true,level:1});
+ await screen.findByRole('heading',{name:'Launch plan',exact:true,level:1});
  await updateActivity(true);
  await within(entry).findByRole('img',{name:'My Codex is working'});
- expect(entry.querySelector('.sp-avatar')?.textContent).toBe('MY');
+ expect(entry.querySelector('svg')).toBeTruthy();
  await updateActivity(false);
  expect(await screen.findByRole('textbox',{name:'Message agent session'})).toBe(editor);
  expect(editor.closest('main')).toBe(frame);
  expect(frame?.querySelector('header')).toBe(header);
  await user.type(editor,'Remember this draft');
- await user.click(screen.getByRole('button',{name:'Rename session'}));
+ await user.click(screen.getByRole('button',{name:'More conversation actions'}));
+ await user.click(screen.getByRole('menuitem',{name:'Rename session'}));
  const headerRename=within(await screen.findByRole('dialog',{name:'Rename session'}));
  const headerTitle=headerRename.getByRole('textbox',{name:'Session title'});
  expect((headerTitle as HTMLInputElement).value).toBe('Launch plan');
@@ -2350,4 +2363,46 @@ it('animates the same sent message body across emoji-only and mixed edits', asyn
     expect(body.textContent).toBe(mixed ? '😂 hi' : '😂');
     expect(body.getAttribute('data-emoji-only')).toBe(mixed ? null : 'true');
   }
+});
+
+it('sends a thread reply to the channel only when its checkbox is selected', async () => {
+  mockPaginatedChat(()=>messagePage([paginatedMessage('Broadcast source','1')]));
+  render(<Chat/>);
+  await screen.findByText('Broadcast source');
+  await userEvent.click(screen.getByRole('button',{name:'Reply to Kai'}));
+  const thread = screen.getByRole('region',{name:'Thread',exact:true});
+  const checkbox = await within(thread).findByRole('checkbox',{name:/Also send to #/});
+  expect((checkbox as HTMLInputElement).checked).toBe(false);
+  await userEvent.click(checkbox);
+  const editor = within(thread).getByRole('textbox',{name:'Message thread'});
+  await userEvent.type(editor,'Share this reply{Enter}');
+  await waitFor(()=>expect(latestChatSocket().requests).toContainEqual(expect.objectContaining({
+    name:'message.send',data:expect.objectContaining({thread_id:'thread',text:'Share this reply',also_send_to_channel:true})
+  })));
+  expect((checkbox as HTMLInputElement).checked).toBe(false);
+});
+
+it('shares an existing owned thread reply through its menu and opens its channel reference', async () => {
+  const user=userEvent.setup();
+  const root={...paginatedMessage('Question to discuss','1'),reply_count:1};
+  const reply={...paginatedMessage('My answer','2'),thread_root_id:root.id};
+  mockPaginatedChat(path=>messagePage(path.includes('/threads/')?[root,reply]:[root]));
+  const fallback=vi.mocked(fetch).getMockImplementation()!;
+  vi.mocked(fetch).mockImplementation(async(input,init)=>{
+    if (String(input).endsWith('/'+reply.id+'/broadcast') && init?.method==='PUT')
+      return {ok:true,json:async()=>({...reply,channel_broadcast_sequence:'3',reaction_sequence:'3'})} as Response;
+    return fallback(input,init);
+  });
+  render(<Chat/>);
+  await screen.findByText(root.text);
+  await user.click(screen.getByRole('button',{name:/1 reply View thread/}));
+  const panel=within(await screen.findByRole('region',{name:'Thread',exact:true}));
+  const row=(await panel.findByText(reply.text)).closest('article')!;
+  await user.click(within(row).getByLabelText('More actions'));
+  await user.click(screen.getByRole('menuitem',{name:'Send reply to this conversation'}));
+  await panel.findByText(/Also sent to #/);
+  await screen.findByRole('button',{name:'Replied to a thread'});
+  expect(screen.getAllByText(reply.text)).toHaveLength(2);
+  await user.click(within(row).getByLabelText('More actions'));
+  expect(screen.queryByRole('menuitem',{name:'Send reply to this conversation'})).toBeNull();
 });
