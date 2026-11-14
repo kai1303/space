@@ -1,4 +1,5 @@
 import { test } from 'node:test';
+import { setTimeout as delay } from 'node:timers/promises';
 import assert from 'node:assert/strict';
 import { randomUUID, randomBytes } from 'node:crypto';
 import { readFile, readdir } from 'node:fs/promises';
@@ -12,6 +13,18 @@ import { provisionUser, initializeWorkspaceOwner } from '@space/postgres/provisi
 
 const url = process.env.TEST_DATABASE_URL;
 if (!url) throw new Error('TEST_DATABASE_URL is required');
+// The wildcard CDC bridge can still be acknowledging fixture events during teardown.
+async function dropFixture(admin: Pool, schema: string) {
+  try {
+    for (let attempt = 0; ; attempt++) {
+      try { await admin.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`); return; }
+      catch (error) {
+        if ((error as {code?: string}).code !== '40P01' || attempt >= 3) throw error;
+        await delay(50 * 2 ** attempt);
+      }
+    }
+  } finally { await admin.end(); }
+}
 test('legacy upgrade preserves membership without granting ownership; operator assignment is explicit and once-only', async () => {
   const schema = `legacy_${randomBytes(8).toString('hex')}`;
   const admin = new Pool({ connectionString: url });
@@ -39,8 +52,7 @@ test('legacy upgrade preserves membership without granting ownership; operator a
     assert.equal((await pool.query('SELECT * FROM schema_migrations')).rowCount, migrationFiles.length);
   } finally {
     await pool.end();
-    await admin.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);
-    await admin.end();
+    await dropFixture(admin, schema);
   }
 });
 
@@ -64,8 +76,7 @@ test('operator provisioning stores only a token hash and rolls back with its sur
     assert.equal((await new UserStore(pool).profile(user.id)).display_name, 'New user');
   } finally {
     await pool.end();
-    await admin.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);
-    await admin.end();
+    await dropFixture(admin, schema);
   }
 });
 
@@ -114,8 +125,7 @@ test('version-three upgrade preserves workspace identities, roles, inactive memb
     assert.equal((await pool.query('SELECT * FROM schema_migrations')).rowCount, migrationFiles.length);
   } finally {
     await pool.end();
-    await admin.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);
-    await admin.end();
+    await dropFixture(admin, schema);
   }
 });
 
@@ -200,7 +210,6 @@ test('version-thirteen upgrade preserves workspace history and roles without res
     await assert.rejects(pool.query('UPDATE workspace_events SET type=$1 WHERE id=$2', ['changed', event]), /append-only/);
   } finally {
     await pool.end();
-    await admin.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);
-    await admin.end();
+    await dropFixture(admin, schema);
   }
 });

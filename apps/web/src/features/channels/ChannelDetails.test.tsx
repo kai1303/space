@@ -374,3 +374,115 @@ it('keeps other agent choices available while a grant is saving', async () => {
   await act(async()=>finishGrant());
   await waitFor(()=>expect(screen.queryByRole('button',{name:'Add Reviewer'})).toBeNull());
 });
+
+it('keeps topic edits made during a save available for a second save', async () => {
+  setup(); render(<ChannelDetails {...props} />);
+  await userEvent.click(await screen.findByRole('button', { name: 'Edit channel topic' }));
+  const dialog = within(screen.getByRole('dialog', { name: 'Edit topic' }));
+  const topic = dialog.getByLabelText('Topic');
+  let finish!: (response: Response) => void;
+  vi.mocked(fetch).mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+  await userEvent.type(topic, ' one');
+  await userEvent.click(dialog.getByRole('button', { name: 'Save', exact: true }));
+  expect(dialog.getByRole('button', { name: 'Saving topic…' })).toHaveProperty('disabled', true);
+  expect(dialog.getByRole('button', { name: 'Close', exact: true })).toHaveProperty('disabled', false);
+  await userEvent.type(topic, ' two');
+  await act(async () => finish(Response.json({ ...channel, topic: 'Milestone one' })));
+  expect(topic).toHaveProperty('value', 'Milestone one two');
+  await userEvent.click(dialog.getByRole('button', { name: 'Save', exact: true }));
+  await waitFor(() => expect(props.onChange).toHaveBeenLastCalledWith(expect.objectContaining({ topic: 'Milestone one two' })));
+});
+
+it('reopens a pending topic without duplicating the save and displays the acknowledged topic', async () => {
+  setup(); render(<ChannelDetails {...props} />);
+  const edit = await screen.findByRole('button', { name: 'Edit channel topic' });
+  await userEvent.click(edit);
+  const dialog = within(screen.getByRole('dialog', { name: 'Edit topic' }));
+  await userEvent.type(dialog.getByLabelText('Topic'), ' update');
+  let finish!: (response: Response) => void;
+  vi.mocked(fetch).mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+  await userEvent.click(dialog.getByRole('button', { name: 'Save', exact: true }));
+  await userEvent.click(dialog.getByRole('button', { name: 'Close', exact: true }));
+  await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Edit topic' })).toBeNull());
+  await userEvent.click(edit);
+  const reopened = within(screen.getByRole('dialog', { name: 'Edit topic' }));
+  expect(reopened.getByRole('button', { name: 'Saving topic…' })).toHaveProperty('disabled', true);
+  await act(async () => finish(Response.json({ ...channel, topic: 'Milestone update' })));
+  expect(reopened.getByLabelText('Topic')).toHaveProperty('value', 'Milestone update');
+  expect(reopened.getByRole('button', { name: 'Save', exact: true })).toHaveProperty('disabled', true);
+});
+
+it.each([
+  ['settings', 'Archive channel for everyone', 'Archive #product?', 'Archive channel', 'Archiving channel…'],
+  ['settings', 'Restore channel', 'Restore #product?', 'Restore channel', 'Restoring channel…'],
+  ['about', 'Leave channel', 'Leave #product?', 'Leave channel', 'Leaving channel…'],
+  ['members', 'Remove Owner from channel', 'Remove Owner?', 'Remove member', 'Removing member…'],
+])('can dismiss and reopen %s / %s without submitting twice', async (tab, opener, title, label, progress) => {
+  const detail = label === 'Restore channel' ? { ...channel, archived_at: '2026-11-01' } : channel;
+  setup(detail);
+  render(<ChannelDetails {...props} viewer="viewer" channel={detail} initialTab={tab} />);
+  const trigger = await screen.findByRole('button', { name: opener, exact: true });
+  await userEvent.click(trigger);
+  const dialog = within(screen.getByRole('dialog', { name: title, exact: true }));
+  let finish!: (response: Response) => void;
+  vi.mocked(fetch).mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+  await userEvent.click(dialog.getByRole('button', { name: label, exact: true }));
+  expect(dialog.getByRole('button', { name: progress })).toHaveProperty('disabled', true);
+  await userEvent.click(dialog.getByRole('button', { name: 'Close', exact: true }));
+  await waitFor(() => expect(screen.queryByRole('dialog', { name: title })).toBeNull());
+  await userEvent.click(trigger);
+  const reopened = within(screen.getByRole('dialog', { name: title }));
+  const button = reopened.getByRole('button', { name: progress });
+  expect(button).toHaveProperty('disabled', true);
+  await userEvent.click(button);
+  expect(vi.mocked(fetch).mock.calls.filter(([, init]) => ['DELETE', 'PATCH'].includes(init?.method ?? ''))).toHaveLength(1);
+  await act(async () => finish(tab === 'settings' ? Response.json({ ...detail, archived_at: label === 'Archive channel' ? '2026-11-02' : null }) : new Response(null, { status: 204 })));
+  await waitFor(() => expect(screen.queryByRole('dialog', { name: title })).toBeNull());
+  if (label === 'Leave channel') expect(props.onLeft).toHaveBeenCalledOnce();
+  else expect(props.onChange).toHaveBeenCalledOnce();
+});
+
+it('reports a failure after dismissal and permits retry', async () => {
+  setup(); render(<ChannelDetails {...props} />);
+  const leave = screen.getByRole('button', { name: 'Leave channel' });
+  await userEvent.click(leave);
+  const confirm = within(screen.getByRole('dialog', { name: 'Leave #product?' }));
+  let fail!: (error: Error) => void;
+  vi.mocked(fetch).mockImplementationOnce(() => new Promise((_, reject) => { fail = reject; }));
+  await userEvent.click(confirm.getByRole('button', { name: 'Leave channel' }));
+  await userEvent.click(confirm.getByRole('button', { name: 'Close dialog' }));
+  await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Leave #product?' })).toBeNull());
+  await act(async () => fail(new Error('offline')));
+  expect(toast.getState().toasts.at(-1)?.title).toContain('offline');
+  expect(props.onLeft).not.toHaveBeenCalled();
+  await userEvent.click(leave);
+  expect(within(screen.getByRole('dialog', { name: 'Leave #product?' })).getByRole('button', { name: 'Leave channel' })).toHaveProperty('disabled', false);
+});
+
+it('keeps member search available and removes the acknowledged row before the membership refresh finishes', async () => {
+  let finishDelete!: (response: Response) => void, finishList!: (response: Response) => void;
+  let memberReads = 0;
+  const teammate = { ...members[0], id: 'teammate', name: 'Teammate' };
+  vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+    if (init?.method === 'DELETE') return new Promise<Response>(resolve => { finishDelete = resolve; });
+    if (url.includes('/members?')) {
+      if (++memberReads > 1) return new Promise<Response>(resolve => { finishList = resolve; });
+      return Response.json({ items: [...members, teammate], next_cursor: null });
+    }
+    return Response.json(channel);
+  }));
+  render(<ChannelDetails {...props} initialTab="members" />);
+  await userEvent.click(await screen.findByRole('button', { name: 'Remove Teammate from channel' }));
+  const dialog = within(screen.getByRole('dialog', { name: 'Remove Teammate?' }));
+  await userEvent.click(dialog.getByRole('button', { name: 'Remove member' }));
+  await userEvent.click(dialog.getByRole('button', { name: 'Close', exact: true }));
+  await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Remove Teammate?' })).toBeNull());
+  const search = screen.getByRole('searchbox', { name: 'Find channel members' });
+  await userEvent.type(search, 'Owner');
+  expect(screen.getByRole('button', { name: 'View Owner’s profile' })).toBeTruthy();
+  await userEvent.clear(search);
+  await act(async () => finishDelete(new Response(null, { status: 204 })));
+  expect(screen.queryByRole('button', { name: 'Remove Teammate from channel' })).toBeNull();
+  expect(toast.getState().toasts.at(-1)?.title).toBe('Teammate removed from #product');
+  await act(async () => finishList(Response.json({ items: members, next_cursor: null })));
+});

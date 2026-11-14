@@ -1,5 +1,5 @@
 import { useMemberProfile } from '../profile/MemberProfile.js';
-import { useEffect, useId, useRef, useState, type FormEvent } from 'react';
+import { useEffect, useId, useLayoutEffect, useRef, useState, type FormEvent } from 'react';
 import { Avatar, Badge, Button, Dialog, ListRowSkeleton, Skeleton, Tabs, toast } from '@space/ui/primitives';
 import { Archive, Copy, Hash, Lock, MagnifyingGlass, UserPlus } from '@phosphor-icons/react';
 import type { ChannelDetails as Details, ChannelMember, ChannelSummary, ChannelPermissionSnapshot, WorkspaceParticipant } from '@space/contracts';
@@ -30,11 +30,15 @@ function DetailsDialog({ channel, viewer, initialTab = 'about', permissions, per
   const [tab, setTab] = useState(initialTab), [query, setQuery] = useState(''), [error, setError] = useState('');
   const [field, setField] = useState<Field>(), [adding, setAdding] = useState(false), [copied, setCopied] = useState(false);
   const editRevision = useRef(0);
+  const [savingFields, setSavingFields] = useState<Field[]>([]);
   const [confirmation, setConfirmation] = useState<'archive' | 'restore' | 'leave' | ChannelMember>();
+  const membershipRevision = useRef(0);
   async function refresh() {
+    const revision = ++membershipRevision.current;
     const [detail, people] = await Promise.all([request<Details>(`/channels/${channel.id}`), listAll<ChannelMember>(`/channels/${channel.id}/members`)]);
-    setDetails(detail); setMembers(people);
-    return detail;
+    if (revision === membershipRevision.current) {
+      setDetails(detail); setMembers(people); onChange(detail);
+    }
   }
   useEffect(() => {
     let active = true;
@@ -50,6 +54,15 @@ function DetailsDialog({ channel, viewer, initialTab = 'about', permissions, per
   }, [channel.id, attempt]);
   useEffect(() => { setDetails(previous => previous ? { ...previous, ...channel } : previous); }, [channel]);
   function saved(detail: Details) { editRevision.current++; setDetails(detail); onChange(detail); }
+  async function saveField(field: Field, value: string) {
+    setSavingFields(fields => [...fields, field]);
+    try {
+      const detail = await request<Details>(`/channels/${channel.id}`, { [field]: value }, undefined, 'PATCH');
+      saved(detail);
+    } finally {
+      setSavingFields(fields => fields.filter(item => item !== field));
+    }
+  }
   const current = details ?? channel, archived = Boolean(current.archived_at);
   const [savedPolicy, setSavedPolicy] = useState<ChannelPermissionSnapshot>();
   const loaded = !details?.permissions || (savedPolicy && BigInt(savedPolicy.revision) > BigInt(details.permissions.revision))
@@ -62,6 +75,7 @@ function DetailsDialog({ channel, viewer, initialTab = 'about', permissions, per
   const filtered = (members ?? []).filter(member => member.name.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
   const memberCount = current.member_count ?? members?.length;
   const loadError = detailError || ((tab === 'members' || (tab === 'about' && policy)) && memberError);
+  const actionKey = confirmation && JSON.stringify([viewer, channel.id, typeof confirmation === 'string' ? confirmation : confirmation.id]);
   return <>
     <Dialog open title={`${current.private ? '🔒' : '#'} ${current.name}`} onClose={onClose}>
       <div className="space-channel-details">
@@ -113,10 +127,11 @@ function DetailsDialog({ channel, viewer, initialTab = 'about', permissions, per
     {agentPicker === 'pick' && !archived && <ChannelAgentPicker key={viewer} channel={channel.id} name={current.name} actor={viewer} revision={agentRevision} onConnect={() => setAgentPicker('connect')} onClose={() => setAgentPicker(undefined)} onAdded={() => setAgentRevision(n => n + 1)}/>}
     {agentPicker === 'connect' && !archived && <WorkspaceMembers open workspace={current.workspace_id} viewer={viewer}
       onClose={() => { setAgentRevision(n => n + 1); setAgentPicker('pick'); }} returnOnPaired/>}
-    {permissionEditor && <ChannelPermissionEditor channel={channel.id} snapshot={permissionEditor.snapshot} members={members ?? []} section={permissionEditor.section} canEdit={can('manage') && !archived} onClose={() => setPermissionEditor(undefined)} onSaved={setSavedPolicy} />}
-    {field && <ChannelEditor field={field} details={current} onClose={() => setField(undefined)} onSaved={saved} />}
-    {adding && can('invite') && !archived && <AddPeople details={current} members={members} memberError={memberError} retryMembers={() => setAttempt(n => n + 1)} onClose={() => setAdding(false)} onAdded={async () => { const detail = await refresh(); onChange(detail); }} />}
-    {confirmation && <ChannelConfirmation
+    {permissionEditor && <ChannelPermissionEditor channel={channel.id} snapshot={permissionEditor.snapshot} members={members ?? []} section={permissionEditor.section} canEdit={can('manage') && !archived} onClose={() => setPermissionEditor(undefined)} onSaved={next => setSavedPolicy(previous => previous && BigInt(previous.revision) > BigInt(next.revision) ? previous : next)} />}
+    {field && <ChannelEditor field={field} details={current} busy={savingFields.includes(field)} canEdit={editable} onClose={() => setField(undefined)} onSave={saveField} />}
+    {adding && can('invite') && !archived && <AddPeople details={current} members={members} memberError={memberError} retryMembers={() => setAttempt(n => n + 1)} onClose={() => setAdding(false)} onAdded={refresh} />}
+    {confirmation && actionKey && <ChannelConfirmation key={actionKey} actionKey={actionKey}
+      pendingLabel={confirmation === 'archive' ? 'Archiving channel…' : confirmation === 'restore' ? 'Restoring channel…' : confirmation === 'leave' ? 'Leaving channel…' : 'Removing member…'}
       title={confirmation === 'leave' ? `Leave #${current.name}?` : confirmation === 'restore' ? `Restore #${current.name}?` : confirmation === 'archive' ? `Archive #${current.name}?` : `Remove ${confirmation.name}?`}
       description={confirmation === 'leave' ? current.private ? 'You will need another member to invite you back to this private channel.' : 'You can rejoin this public channel at any time.' : confirmation === 'restore' ? 'Members will be able to send messages and replies again.' : confirmation === 'archive' ? 'Members can still read message history. New messages and replies will be disabled until this channel is restored.' : `${confirmation.name} will lose access to this channel. ${current.private ? 'They will need an invitation to return.' : 'They can rejoin this public channel.'}`}
       label={confirmation === 'leave' ? 'Leave channel' : confirmation === 'restore' ? 'Restore channel' : confirmation === 'archive' ? 'Archive channel' : 'Remove member'}
@@ -128,10 +143,11 @@ function DetailsDialog({ channel, viewer, initialTab = 'about', permissions, per
           return `#${detail.name} ${detail.archived_at ? 'archived' : 'restored'}`;
         }
         await request(`/channels/${channel.id}/members/${confirmation === 'leave' ? viewer : confirmation.id}`, undefined, undefined, 'DELETE');
-        if (confirmation === 'leave') return `You left #${current.name}`;
-        await refresh().then(onChange).catch(reason => setError(errorText(reason)));
+        if (confirmation === 'leave') { onLeft(); return `You left #${current.name}`; }
+        setMembers(previous => previous?.filter(person => person.id !== confirmation.id));
+        void refresh().catch(reason => setError(errorText(reason)));
         return `${confirmation.name} removed from #${current.name}`;
-      }} onDone={confirmation === 'leave' ? onLeft : undefined} />}
+      }} />}
   </>;
 }
 function WebhookSettings({ channel }: { channel: string }) {
@@ -146,22 +162,54 @@ function WebhookSettings({ channel }: { channel: string }) {
 function MemberAvatar({ member }: { member: ChannelMember }) {
   return member.image ? <img className="space-channel-avatar" src={member.image} alt={member.name} /> : <Avatar name={member.name} initials={member.name.slice(0, 2).toUpperCase()} size="md" presence={member.presence === 'active' ? 'online' : 'away'} />;
 }
-function ChannelEditor({ field, details, onClose, onSaved }: { field: Field; details: ChannelSummary; onClose: () => void; onSaved: (detail: Details) => void }) {
-  const [value, setValue] = useState(details[field]), [open, setOpen] = useState(true), [busy, setBusy] = useState(false), [error, setError] = useState('');
+function ChannelEditor({ field, details, busy, canEdit, onClose, onSave }: {
+  field: Field; details: ChannelSummary; busy: boolean; canEdit: boolean; onClose: () => void;
+  onSave: (field: Field, value: string) => Promise<void>;
+}) {
+  const [value, setValue] = useState(details[field]), [open, setOpen] = useState(true), [error, setError] = useState('');
+  const currentValue = useRef(value), dismissed = useRef(false), submitting = useRef(false);
   const title = field === 'name' ? 'Rename this channel' : field === 'topic' ? 'Edit topic' : 'Edit description';
   const max = field === 'name' ? 80 : field === 'topic' ? 250 : 2000;
+  const baseline = useRef(details[field]);
+  useEffect(() => {
+    const savedValue = details[field];
+    if (currentValue.current === baseline.current && !submitting.current) {
+      currentValue.current = savedValue;
+      setValue(savedValue);
+    }
+    baseline.current = savedValue;
+  }, [details, field]);
   const form = useRef<HTMLFormElement>(null);
   useEffect(() => { form.current?.querySelector<HTMLElement>('input,textarea')?.focus(); }, []);
-  async function save(event: FormEvent) {
-    event.preventDefault(); if (busy) return; setBusy(true); setError('');
-    try { const detail = await request<Details>(`/channels/${details.id}`, { [field]: value }, undefined, 'PATCH'); onSaved(detail); setOpen(false); }
-    catch (e) { setError(errorText(e)); } finally { setBusy(false); }
+  function edit(next: string) {
+    currentValue.current = next;
+    setValue(next);
+    setError('');
   }
-  return <Dialog open={open} title={title} onBeforeClose={() => !busy} onClose={onClose}><form ref={form} className="space-channel-editor" onSubmit={save}>
-    <label>{field === 'name' ? 'Channel name' : field === 'topic' ? 'Topic' : 'Description'}{field === 'name' ? <input autoFocus required maxLength={max} value={value} onChange={e => setValue(e.target.value)} /> : <textarea autoFocus rows={field === 'topic' ? 3 : 5} maxLength={max} value={value} onChange={e => setValue(e.target.value)} />}</label>
+  function dismiss() {
+    dismissed.current = true;
+    setOpen(false);
+  }
+  async function save(event: FormEvent) {
+    event.preventDefault();
+    if (busy || submitting.current || !canEdit || value.trim() === details[field] || (field === 'name' && !value.trim())) return;
+    submitting.current = true;
+    setError('');
+    try {
+      await onSave(field, value);
+      if (currentValue.current === value) setOpen(false);
+    } catch (reason) {
+      if (dismissed.current) toast.error(`Couldn’t save the channel ${field}. ${errorText(reason)}`);
+      else setError(errorText(reason));
+    } finally { submitting.current = false; }
+  }
+  const progress = `Saving ${field}…`;
+  return <Dialog open={open} title={title} onClose={() => { dismissed.current = true; onClose(); }}><form ref={form} className="space-channel-editor" onSubmit={save}>
+    <label>{field === 'name' ? 'Channel name' : field === 'topic' ? 'Topic' : 'Description'}{field === 'name' ? <input autoFocus required maxLength={max} value={value} onChange={e => edit(e.target.value)} /> : <textarea autoFocus rows={field === 'topic' ? 3 : 5} maxLength={max} value={value} onChange={e => edit(e.target.value)} />}</label>
     <div className="space-channel-editor-hint"><span>{field === 'name' ? 'Choose a clear name for your channel.' : field === 'topic' ? `Let people know what #${details.name} is focused on right now. Topics are visible in the header.` : 'Let people know what this channel is for.'}</span><span>{max - value.length}</span></div>
     {error && <p role="alert" className="space-channel-error">{error}</p>}
-    <footer><Button disabled={busy} onClick={() => setOpen(false)}>Cancel</Button><Button variant="primary" type="submit" loading={busy} disabled={value.trim() === details[field] || (field === 'name' && !value.trim())}>{field === 'name' ? 'Save Changes' : 'Save'}</Button></footer>
+    <footer><Button onClick={dismiss}>{busy ? 'Close' : 'Cancel'}</Button><Button variant="primary" type="submit" loading={busy} disabled={!canEdit || value.trim() === details[field] || (field === 'name' && !value.trim())}>{busy ? progress : field === 'name' ? 'Save Changes' : 'Save'}</Button></footer>
+    <span className="sp-sr-only" role="status">{busy && progress}</span>
   </form></Dialog>;
 }
 function AddPeople({ details, members, memberError, retryMembers, onClose, onAdded }: { details: ChannelSummary; members?: ChannelMember[]; memberError: string; retryMembers: () => void; onClose: () => void; onAdded: () => Promise<void> }) {
@@ -199,7 +247,59 @@ function AddPeople({ details, members, memberError, retryMembers, onClose, onAdd
     <footer><Button disabled={busy} onClick={() => setOpen(false)}>Cancel</Button><Button variant="primary" type="submit" loading={busy} disabled={!canAdd}>Add</Button></footer>
   </form></Dialog>;
 }
-export function ChannelConfirmation({ title, description, label, onClose, onConfirm, onDone }: { title: string; description: string; label: string; onClose: () => void; onConfirm: () => Promise<string>; onDone?: () => void }) {
-  const [open, setOpen] = useState(true), [busy, setBusy] = useState(false), [error, setError] = useState(''), [done, setDone] = useState(false);
-  return <Dialog open={open} title={title} onBeforeClose={() => !busy} onClose={() => { onClose(); if (done) onDone?.(); }}><div className="space-channel-editor space-channel-confirm"><p>{description}</p>{error && <p className="space-channel-error" role="alert">{error}</p>}<footer><Button disabled={busy} onClick={() => setOpen(false)}>Cancel</Button><Button variant="primary" loading={busy} onClick={() => { if (busy) return; setBusy(true); setError(''); void onConfirm().then(message => { setDone(true); setOpen(false); toast.success(message); }).catch(e => setError(errorText(e))).finally(() => setBusy(false)); }}>{label}</Button></footer></div></Dialog>;
+
+type ResultListener = (error?: string) => void;
+// A submitted mutation can outlive its dialog and be revisited from another entry point.
+const pending = new Map<string, Set<ResultListener>>();
+
+export function ChannelConfirmation({ actionKey, title, description, label, pendingLabel, onClose, onConfirm }: {
+  actionKey: string; title: string; description: string; label: string; pendingLabel: string;
+  onClose: () => void; onConfirm: () => Promise<string>;
+}) {
+  const [open, setOpen] = useState(true), [busy, setBusy] = useState(() => pending.has(actionKey)), [error, setError] = useState('');
+  const finish = useRef<ResultListener>(message => {
+    setBusy(false);
+    if (message !== undefined) setError(message);
+    else setOpen(false);
+  }).current;
+
+  useLayoutEffect(() => {
+    pending.get(actionKey)?.add(finish);
+    return () => { pending.get(actionKey)?.delete(finish); };
+  }, [actionKey, finish]);
+
+  function dismiss() {
+    pending.get(actionKey)?.delete(finish);
+    return true;
+  }
+  async function confirm() {
+    setError('');
+    setBusy(true);
+    const existing = pending.get(actionKey);
+    if (existing) { existing.add(finish); return; }
+    const listeners = new Set([finish]);
+    pending.set(actionKey, listeners);
+    try {
+      const message = await onConfirm();
+      toast.success(message);
+      for (const notify of listeners) notify();
+    } catch (reason) {
+      const message = errorText(reason);
+      if (!listeners.size) toast.error(`${title.replace(/\?$/, '')}: ${message}`);
+      for (const notify of listeners) notify(message);
+    } finally {
+      pending.delete(actionKey);
+    }
+  }
+  return <Dialog open={open} title={title} onBeforeClose={dismiss} onClose={onClose}>
+    <div className="space-channel-editor space-channel-confirm">
+      <p>{description}</p>
+      {error && <p className="space-channel-error" role="alert">{error}</p>}
+      <footer>
+        <Button onClick={() => { dismiss(); setOpen(false); }}>{busy ? 'Close' : 'Cancel'}</Button>
+        <Button variant="primary" loading={busy} onClick={() => void confirm()}>{busy ? pendingLabel : label}</Button>
+      </footer>
+      <span className="sp-sr-only" role="status">{busy && pendingLabel}</span>
+    </div>
+  </Dialog>;
 }

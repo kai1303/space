@@ -326,13 +326,17 @@ export function WorkspaceChannels({ codeChannelView, onOpenOrigin, onReturnDirec
     channelMutation.current++;
     updateView(view => ({ ...view, channels: view.channels.map(item => item.id === updated.id ? { ...item, ...updated } : item) }));
   }
+  const visibleChannel = useRef<string | undefined>(undefined);
+  useLayoutEffect(() => {
+    visibleChannel.current = !homeDirect && !agentSession && !content ? selected : undefined;
+    return () => { visibleChannel.current = undefined; };
+  }, [selected, workspace, homeDirect, agentSession, content]);
   function leftChannel(channel: Channel) {
     channelMutation.current++;
     onForgetChannel(channel.id);
-    const remaining = channels.filter(item => item.id !== channel.id);
-    const next = remaining.find(item => item.joined) ?? remaining[0];
-    updateView(view => ({ ...view, channels: channel.private ? view.channels.filter(item => item.id !== channel.id) : view.channels.map(item => item.id === channel.id ? { ...item, joined: false } : item), selected: channel.private && view.selected === channel.id ? next?.id ?? '' : view.selected }));
-    if (channel.private && selected === channel.id && !homeDirect && !agentSession && !content) onVisit(next);
+    const fallback = (items: Channel[]) => items.find(item => item.id !== channel.id && item.joined) ?? items.find(item => item.id !== channel.id);
+    updateView(view => ({ ...view, channels: channel.private ? view.channels.filter(item => item.id !== channel.id) : view.channels.map(item => item.id === channel.id ? { ...item, joined: false } : item), selected: channel.private && view.selected === channel.id ? fallback(view.channels)?.id ?? '' : view.selected }));
+    if (channel.private && visibleChannel.current === channel.id) onVisit(fallback(latestChannels.current));
   }
   async function create(event: FormEvent) {
     channelMutation.current++;
@@ -468,16 +472,17 @@ export function WorkspaceChannels({ codeChannelView, onOpenOrigin, onReturnDirec
     </aside>}
     {target && menuDialog?.kind === 'default' && <NotificationPreferences workspace={workspace} onClose={() => { setMenuDialog(undefined); void invalidateUpdates('workspace',workspace); }}/>}
     {target && menuDialog?.kind === 'advanced' && <ChannelNotificationEditor key={target.id} channel={target} onClose={() => setMenuDialog(undefined)} onSave={patch => savePreferences(target.id,patch)}/>}
-    {target && menuDialog?.kind === 'leave' && <ChannelConfirmation title={`Leave #${target.name}?`} label="Leave channel"
+    {target && menuDialog?.kind === 'leave' && <ChannelConfirmation key={target.id} actionKey={JSON.stringify([profile.id, target.id, 'leave'])} pendingLabel="Leaving channel…" title={`Leave #${target.name}?`} label="Leave channel"
       description={target.private ? 'You’ll need an invitation to rejoin this private channel.' : 'You can rejoin this public channel at any time.'}
       onClose={() => setMenuDialog(undefined)} onConfirm={async () => {
         await request(`/channels/${target.id}/members/${profile.id}`, undefined, undefined, 'DELETE');
+        leftChannel(target);
+        setMenuDialog(current => current?.id === target.id && current.kind === 'leave' ? undefined : current);
         return `You left #${target.name}`;
-      }}
-      onDone={() => leftChannel(target)}/>}
+      }}/>}
     {detailsChannel && <ChannelDetails open channel={detailsChannel} viewer={profile.id} permissions={sidebarPermissions.snapshot}
       permissionsPending={!sidebarPermissions.snapshot} onClose={() => setDetailsId(undefined)} onChange={channelChanged}
-      onLeft={() => { leftChannel(detailsChannel); setDetailsId(undefined); }} />}
+      onLeft={() => { leftChannel(detailsChannel); setDetailsId(current => current === detailsChannel.id ? undefined : current); }} />}
     {renameTarget && <RenameSessionDialog key={renameTarget.id} id={renameTarget.id} title={renameTarget.title}
       workspace={workspace} thread={renameTarget.thread} viewerId={profile.id} onClose={()=>setRenameId(undefined)}/>}
     <Dialog open={createOpen} title="Create a channel" onClose={() => setCreateOpen(false)}><form className="chat-form" onSubmit={create}><p>Channels bring the right people and conversations together.</p><label>Channel name<input maxLength={80} placeholder="e.g. product" value={name} required onChange={e => setName(e.target.value)} /></label><label className="chat-checkbox"><input type="checkbox" checked={isPrivate} onChange={e => setPrivate(e.target.checked)} /><span>Make private<small>Only added members can read and send messages.</small></span></label>{error && <p role="alert">{error}</p>}<div className="chat-form-actions"><Button disabled={busy} onClick={() => setCreateOpen(false)}>Cancel</Button><Button variant="primary" type="submit" loading={busy}>Create channel</Button></div></form></Dialog>

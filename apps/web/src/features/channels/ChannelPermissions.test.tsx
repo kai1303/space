@@ -1,5 +1,5 @@
 import { afterEach, beforeAll, expect, it, vi } from 'vitest';
-import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { ChannelPermissionSnapshot } from '@space/contracts';
 import { ChannelPermissionEditor } from './ChannelPermissions.js';
@@ -55,4 +55,48 @@ it('prevents stale retry when conflict reload fails', async () => {
   await userEvent.click(screen.getByRole('button', { name: 'Save' }));
   await screen.findByRole('alert');
   expect(screen.getByRole('button', { name: 'Save' })).toHaveProperty('disabled', true);
+});
+
+it('keeps manager search usable and saves later selections against the returned revision', async () => {
+  let finish!: (result: ChannelPermissionSnapshot) => void;
+  mocks.request.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; })).mockResolvedValue(snapshot);
+  render(<ChannelPermissionEditor {...props} section="managers" />);
+  await userEvent.click(screen.getByRole('checkbox', { name: 'Owner' }));
+  await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+  await userEvent.type(screen.getByRole('searchbox'), 'Own');
+  await userEvent.click(screen.getByRole('checkbox', { name: 'Owner' }));
+  expect(screen.getByRole('button', { name: 'Saving managers…' })).toHaveProperty('disabled', true);
+  await act(async () => finish({ ...snapshot, revision: '8', manager_ids: [] }));
+  expect(screen.getByRole('checkbox', { name: 'Owner' })).toHaveProperty('checked', true);
+  await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+  expect(mocks.request).toHaveBeenLastCalledWith('/channels/channel/permissions', { revision: '8', manager_ids: ['owner'] }, undefined, 'PATCH');
+});
+
+it('keeps changes made during a conflict reload and waits for an explicit save', async () => {
+  let finish!: (value: ChannelPermissionSnapshot) => void;
+  mocks.request.mockRejectedValueOnce(new Error('channel_permissions_conflict')).mockImplementationOnce(() => new Promise(resolve => { finish = resolve; })).mockResolvedValue(snapshot);
+  render(<ChannelPermissionEditor {...props} section="posting" />);
+  await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+  expect(screen.getByRole('button', { name: 'Refreshing permissions…' })).toHaveProperty('disabled', true);
+  await userEvent.click(screen.getByRole('checkbox', { name: 'Allow @everyone, @here and @channel' }));
+  await act(async () => finish({ ...snapshot, revision: '9', posting: 'admins' }));
+  expect(screen.getByRole('radio', { name: 'Admins only' })).toHaveProperty('checked', true);
+  expect(mocks.request).toHaveBeenCalledTimes(2);
+  await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+  expect(mocks.request).toHaveBeenLastCalledWith('/channels/channel/permissions', expect.objectContaining({ revision: '9', allow_broadcast: false, posting: 'admins' }), undefined, 'PATCH');
+});
+
+it('can dismiss a pending member-permission save and still publish the acknowledged change', async () => {
+  let finish!: (value: ChannelPermissionSnapshot) => void;
+  mocks.request.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+  const view = render(<ChannelPermissionEditor {...props} section="actions" />);
+  await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+  await userEvent.click(screen.getByRole('combobox', { name: 'Remove people' }));
+  await userEvent.click(screen.getByRole('option', { name: 'Full members' }));
+  await userEvent.click(screen.getByRole('button', { name: 'Close', exact: true }));
+  await waitFor(() => expect(props.onClose).toHaveBeenCalledOnce());
+  view.unmount();
+  await act(async () => finish(snapshot));
+  expect(props.onSaved).toHaveBeenCalledWith(snapshot);
+  expect(mocks.request).toHaveBeenCalledTimes(1);
 });
