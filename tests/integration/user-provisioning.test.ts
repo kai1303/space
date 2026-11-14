@@ -103,7 +103,13 @@ test('version-three upgrade preserves workspace identities, roles, inactive memb
     assert.equal(inactive.active, false);
     assert.equal(inactive.role, 'admin');
     assert.deepEqual((await pool.query('SELECT * FROM workspace_events WHERE id=$1', [event])).rows[0], oldEvent);
-    assert.deepEqual((await pool.query('SELECT * FROM tasks WHERE id=$1', [task])).rows[0], { ...oldTask, request_document: null });
+    const migratedTask = (await pool.query('SELECT * FROM tasks WHERE id=$1', [task])).rows[0];
+    for (const [column, value] of Object.entries(oldTask)) {
+      assert.deepEqual(migratedTask[column], value, column);
+    }
+    assert.equal(migratedTask.request_document, null);
+    assert.deepEqual(migratedTask.attachments, []);
+    assert.equal(migratedTask.browser_url, null);
     await assert.rejects(pool.query('UPDATE workspace_events SET type=$1 WHERE id=$2', ['changed', event]), /append-only/);
     assert.equal((await pool.query('SELECT * FROM schema_migrations')).rowCount, migrationFiles.length);
   } finally {
