@@ -14,7 +14,7 @@ const repo = 'https://github.com/kai1303/space';
 const catalog = [
   [Hash, 'Channels', 'Give each project a room.'],
   [ChatsCircle, 'Threads', 'Keep replies with the original message.'],
-  [Sparkle, 'Agent sessions', 'Follow a run and ask a follow-up.'],
+  [Sparkle, 'Agent Sessions', 'Follow a run and ask a follow-up.'],
   [FolderOpen, 'Files', 'Browse the files your team has shared.'],
   [FileText, 'Channel memory', 'Keep decisions in Markdown.'],
   [MagnifyingGlass, 'Search', 'Find a message across your workspace.'],

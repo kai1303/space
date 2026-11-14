@@ -58,9 +58,9 @@ export function SessionDiscovery({workspace,viewer,onOpen}: {workspace:string;vi
   }
   const {page,loading,error} = result.url===url ? result : {page:emptyPage,loading:true,error:''};
   return <section className="session-discovery" aria-label="Browse agent sessions">
-    <div className="code-channel-browser-bar"><Tabs label="Browse code channels" value={filters.scope} items={[{id:'all',label:'All sessions'},{id:'workspace',label:'Explore'}]}
+    <div className="code-channel-browser-bar"><Tabs label="Session scope" value={filters.scope} items={[{id:'all',label:'All sessions'},{id:'workspace',label:'Explore'}]}
       onChange={scope=>{const next={...filters,scope};setFilters(next);applyFilters(next);}}/>
-      <Button size="sm" onClick={()=>setCreating(true)}><Plus size={15}/>New code channel</Button></div>
+      <Button size="sm" onClick={()=>setCreating(true)}><Plus size={15}/>New agent session</Button></div>
     {creating && <NewCodeChannel key={workspace+viewer} workspace={workspace} viewer={viewer} onClose={()=>setCreating(false)} onCreated={session=>{
       setCreating(false);
       if(onOpen) onOpen(session); else window.location.assign(sessionPath(session.id)!);

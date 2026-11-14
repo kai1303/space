@@ -30,7 +30,7 @@ it('opens a source session inside the workspace and routes reviewer-only matches
   expect(await screen.findByText('Ship regression fix')).toBeTruthy();
 });
 
-it('creates a code channel for a selected conversation, reusing its identity on retry',async()=>{
+it('creates an agent session for a selected conversation, reusing its identity on retry',async()=>{
   const onOpen=vi.fn();
   let creates=0;
   mocks.read.mockImplementation(async(url:string,body?:Record<string,string>)=>{
@@ -47,15 +47,15 @@ it('creates a code channel for a selected conversation, reusing its identity on 
   render(<SessionDiscovery workspace="w" viewer="u" onOpen={onOpen}/>);
   fireEvent.click(screen.getByRole('tab',{name:'Explore'}));
   await waitFor(()=>expect(mocks.read.mock.calls.some(([url])=>url.endsWith('scope=workspace'))).toBe(true));
-  fireEvent.click(screen.getByRole('button',{name:'New code channel'}));
-  fireEvent.change(await screen.findByLabelText('Channel name'),{target:{value:'Checkout fix'}});
+  fireEvent.click(screen.getByRole('button',{name:'New agent session'}));
+  fireEvent.change(await screen.findByLabelText('Session name'),{target:{value:'Checkout fix'}});
   fireEvent.click(screen.getByRole('combobox',{name:'Source channel'}));
   fireEvent.click(await screen.findByRole('option',{name:'#general'}));
   fireEvent.click(await screen.findByRole('combobox',{name:'Source conversation'}));
   fireEvent.click(await screen.findByRole('option',{name:'Checkout failed'}));
-  fireEvent.click(screen.getByRole('button',{name:'Create code channel'}));
+  fireEvent.click(screen.getByRole('button',{name:'Create agent session'}));
   await screen.findByRole('alert');
-  fireEvent.click(screen.getByRole('button',{name:'Create code channel'}));
+  fireEvent.click(screen.getByRole('button',{name:'Create agent session'}));
   await waitFor(()=>expect(onOpen).toHaveBeenCalledWith(expect.objectContaining({origin_thread_id:'checkout',channel_id:'general'})));
   const calls=mocks.read.mock.calls.filter(([url])=>url==='/threads/checkout/agent-sessions');
   expect(calls).toHaveLength(2);

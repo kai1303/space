@@ -45,7 +45,7 @@ export function DirectTypingIcon({ name, label = `${name} is typing`, size = 20 
   </svg>;
 }
 export type SidebarCustomSection = { id: string; name: string; emoji?: string; collapsed: boolean };
-const builtinNames = { starred: 'Starred', channels: 'Channels', direct: 'Direct messages', sessions: 'Code channels', apps: 'Apps' };
+const builtinNames = { starred: 'Starred', channels: 'Channels', direct: 'Direct messages', sessions: 'Agent Sessions', apps: 'Apps' };
 const builtinIcons = { starred: 'star', channels: 'channels', direct: 'dms', sessions: 'agents', apps: 'apps' } as const;
 type SidebarState = { query: string; expanded: Record<string, boolean> };
 const initialSidebarState: SidebarState = { query: "", expanded: { starred: true, channels: true, direct: true, sessions: true, apps: true } };
@@ -200,7 +200,7 @@ export function WorkspaceSidebar({
           const custom = typeof group === 'object' ? group : undefined;
           const key = typeof group === 'string' ? group : `custom:${group.id}`;
           const items = groups.get(key) ?? [];
-          const name = section === 'sessions' && items.some(row => row.codeChannel === false) ? 'Agent sessions' : typeof group === 'string' ? builtinNames[group] : group.name;
+          const name = typeof group === 'string' ? builtinNames[group] : group.name;
           const acceptsMove = Boolean(moving?.onMoveToSection && !drag?.saving && (custom
             ? moving.customSectionId !== custom.id
             : moving.customSectionId && moving.section === section));

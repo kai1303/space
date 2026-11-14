@@ -103,7 +103,7 @@ it('creates another session and sends only through its own composer with a retry
  await userEvent.click(await screen.findByRole('button',{name:'New agent session'}));
  await userEvent.type(screen.getByRole('textbox',{name:'Session name'}),'Design review');
  await userEvent.click(screen.getByRole('button',{name:'Start session',exact:true}));
- await screen.findByText(/Codex was invited to this code channel/);
+ await screen.findByText(/Codex was invited to this agent session/);
  const composer=await screen.findByRole('textbox',{name:'Message agent session'});
  await userEvent.type(composer,'Follow up');await userEvent.keyboard('{Enter}');
  await waitFor(()=>expect(fetch.mock.calls.some(([path,init])=>path.endsWith('/messages')&&init?.headers&&new Headers(init.headers).get('idempotency-key'))).toBe(true));
@@ -485,9 +485,9 @@ it('clears a remounted composer when its previous pending send is accepted',asyn
  expect(attempt.current).toBeUndefined();
 });
 
-it('shows the code channel introduction, conversation details menu, and file navigation without losing drafts',async()=>{
+it('shows the agent session introduction, conversation details menu, and file navigation without losing drafts',async()=>{
  setup();render(<AgentSessions thread="thread" channel="channel" viewerId="user" initialSessionId="one" onAccessLost={()=>{}}/>);
- const introduction=await screen.findByText(/Codex was invited to this code channel/);
+ const introduction=await screen.findByText(/Codex was invited to this agent session/);
  expect(introduction.closest('.dm-conversation-intro')).toBeTruthy();
  const editor=await screen.findByRole('textbox',{name:'Message agent session'});
  await userEvent.type(editor,'Keep this draft');

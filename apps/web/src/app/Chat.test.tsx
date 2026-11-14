@@ -1323,7 +1323,7 @@ it('opens a task inside its unified agent session and clears the session after r
   expect(within(panel).queryByRole('button',{name:'New agent session'})).toBeNull();
   expect(within(panel).queryByRole('navigation',{name:'Sessions in this thread'})).toBeNull();
   await waitFor(()=>expect(screen.queryByRole('region',{name:'Thread',exact:true})).toBeNull());
-  expect(screen.queryByRole('tab',{name:'Agent sessions',exact:true})).toBeNull();
+  expect(screen.queryByRole('tab',{name:'Agent Sessions',exact:true})).toBeNull();
   expect(screen.queryByRole('region',{name:'Agent workspace'})).toBeNull();
   await userEvent.click(screen.getByRole('tab',{name:'Preview',exact:true}));await screen.findByText('No preview attached');
   await act(async()=>{for (const connection of mocks.sockets) connection.receive('updates.revoked',{scope:'thread',id:'thread',error:'not_found'});});
@@ -1889,7 +1889,7 @@ it('restores the selected DM after visiting another rail destination',async()=>{
   await userEvent.click(screen.getByRole('button',{name:'DMs',exact:true}));
   await screen.findByRole('textbox',{name:'Message Kai (you)'});
 });
-it('opens a code channel from the DM inbox and returns to the same DM or its source thread',async()=>{
+it('opens an agent session from the DM inbox and returns to the same DM or its source thread',async()=>{
   mockDestinationNavigation();render(<Chat/>);await screen.findByText('Destination parent');
   await userEvent.click(screen.getByRole('button',{name:'DMs',exact:true}));
   await userEvent.click(await screen.findByRole('button',{name:'Open DM with Kai (you)'}));
@@ -2135,8 +2135,8 @@ it('opens agent sessions below direct messages, retains drafts, and refreshes si
  const nav=await screen.findByRole('navigation',{name:'Workspace conversations'});
  const entry=await within(nav).findByRole('button',{name:'Launch checklist',exact:true});
  const headings=within(nav).getAllByRole('button').map(button=>button.textContent);
- expect(headings.indexOf('Code channels')).toBeGreaterThan(headings.indexOf('Direct messages'));
- expect(headings.indexOf('Code channels')).toBeLessThan(headings.indexOf('Apps'));
+ expect(headings.indexOf('Agent Sessions')).toBeGreaterThan(headings.indexOf('Direct messages'));
+ expect(headings.indexOf('Agent Sessions')).toBeLessThan(headings.indexOf('Apps'));
  const updateActivity=async(working:boolean)=>{
   items=[{...session,working}];
   await act(async()=>{latestChatSocket().receive('updates.changed',{scope:'workspace',id:'workspace'});});

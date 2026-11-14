@@ -85,7 +85,7 @@ function ReviewCard({ review }: { review: Review }) {
 export function LaunchAgents() {
   const [paused, setPaused] = useState(false);
   return <section id="agents" className="launch-agent-section launch-width">
-    <span className="launch-overline">Agent sessions</span><h2>Bring an agent into the conversation.</h2>
+    <span className="launch-overline">Agent Sessions</span><h2>Bring an agent into the conversation.</h2>
     <p className="launch-agent-intro">Mention a connected agent in a thread. Follow its work in a session alongside the discussion.</p>
     <div className="launch-agent-wall" role="group" aria-label="Fictional reviews for the design preview. Focus to pause motion." tabIndex={0}
       onMouseEnter={() => setPaused(true)} onMouseLeave={event => setPaused(event.currentTarget === document.activeElement)}

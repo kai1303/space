@@ -7,11 +7,11 @@ import type { HistoryDirection } from './history-window.js';
 
 export type TimelineHandle = { reveal: (id: string) => void };
 type TimelineItem = ChatEvent | { id: string; messageId?: string };
-export function MessageTimeline<T extends TimelineItem>({ label, items, page, loading, latestVersion, load, pinned, handle, target, render, children, header, trailing, footer, busy, onAtEndChange, role, hidden }: {
+export function MessageTimeline<T extends TimelineItem>({ label, items, page, loading, latestVersion, load, pinned, handle, target, render, children, header, trailing, footer, endPadding = 16, busy, onAtEndChange, role, hidden }: {
   label: string; items: T[]; page: Pick<MessagePage,'has_older'|'has_newer'> | null; loading: HistoryDirection | null;
   latestVersion: number; load: (direction: HistoryDirection) => unknown;
   pinned: RefObject<boolean>; handle?: RefObject<TimelineHandle | null>; target?: { id: string };
-  render: (event: T, index: number) => ReactNode; children?: ReactNode; header?: ReactNode; trailing?: ReactNode; footer?: ReactNode; busy?: boolean;
+  render: (event: T, index: number) => ReactNode; children?: ReactNode; header?: ReactNode; trailing?: ReactNode; footer?: ReactNode; endPadding?: number; busy?: boolean;
   onAtEndChange?: (atEnd: boolean) => void; role?: 'log'; hidden?: boolean;
 }) {
   const element = useRef<HTMLDivElement>(null), lastOffset = useRef(0);
@@ -31,7 +31,7 @@ export function MessageTimeline<T extends TimelineItem>({ label, items, page, lo
       if ('id' in item) return item.id;
       return item.type === 'message.created' ? `message:${item.payload.id}` : `event:${item.sequence}`;
     },
-    estimateSize: () => 100, overscan: 6, paddingStart: page?.has_older ? 44 : footer ? 16 : 10, paddingEnd: page?.has_newer ? 44 : 16,
+    estimateSize: () => 100, overscan: 6, paddingStart: page?.has_older ? 44 : footer ? 16 : 10, paddingEnd: page?.has_newer ? 44 : endPadding,
     anchorTo: 'end', followOnAppend: !page?.has_newer && loading === null,
     scrollEndThreshold: 80,
     onChange: instance => { if (!hidden && element.current?.clientHeight) pinned.current = instance.isAtEnd(); },

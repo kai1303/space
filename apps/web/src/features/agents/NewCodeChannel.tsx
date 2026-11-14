@@ -66,9 +66,9 @@ export function NewCodeChannel({workspace,viewer,onClose,onCreated}:Props) {
     } catch (cause) { if (present.current) setError(errorText(cause)); }
     finally { submitting.current=false; if (present.current) setBusy(false); }
   }
-  return <Dialog open title="New code channel" description="Choose where to work and which agent to work with." onClose={onClose} onBeforeClose={()=>!submitting.current}>
+  return <Dialog open title="New agent session" description="Choose where to work and which agent to work with." onClose={onClose} onBeforeClose={()=>!submitting.current}>
     <form className="code-channel-create" onSubmit={create}>
-      <label>Channel name<input required autoFocus maxLength={160} value={title} disabled={busy} placeholder="e.g. Fix checkout" onChange={e=>setTitle(e.target.value)}/></label>
+      <label>Session name<input required autoFocus maxLength={160} value={title} disabled={busy} placeholder="e.g. Fix checkout" onChange={e=>setTitle(e.target.value)}/></label>
       <label>Find a source channel<input type="search" value={query} maxLength={100} disabled={busy} placeholder="Search your channels" onChange={e=>{setQuery(e.target.value);selectChannel('');}}/></label>
       <label>Source channel<Select aria-label="Source channel" required value={channel} disabled={busy} onChange={e=>selectChannel(e.target.value)}>
         <option value="">Choose a channel</option>{channels.map(item=><option key={item.id} value={item.id}>#{item.name}</option>)}
@@ -85,7 +85,7 @@ export function NewCodeChannel({workspace,viewer,onClose,onCreated}:Props) {
       {channel && !current && <p role="status">Loading agents and conversations…</p>}
       {(channelError || current?.error) && <p role="alert">{channelError || current?.error} <Button size="sm" type="button" onClick={()=>setRetry(n=>n+1)}>Retry</Button></p>}
       {error && <p role="alert">{error}</p>}
-      <footer><Button type="button" variant="ghost" onClick={onClose} disabled={busy}>Cancel</Button><Button type="submit" disabled={!title.trim() || !candidate || busy || !!channelError}>Create code channel</Button></footer>
+      <footer><Button type="button" variant="ghost" onClick={onClose} disabled={busy}>Cancel</Button><Button type="submit" disabled={!title.trim() || !candidate || busy || !!channelError}>Create agent session</Button></footer>
     </form>
   </Dialog>;
 }
